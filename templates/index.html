@@ -1,0 +1,3907 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Manager - Cloudinator FTP</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            min-height: 100vh;
+            color: #333;
+        }
+
+        /* Header */
+        .header {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 20px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-left h1 {
+            color: white;
+            font-size: 24px;
+            font-weight: 300;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        .user-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 8px 15px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .role-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .role-readwrite {
+            background: #27ae60;
+            color: white;
+        }
+
+        .role-readonly {
+            background: #f39c12;
+            color: white;
+        }
+
+        .logout-btn {
+            color: rgba(255, 255, 255, 0.8);
+            text-decoration: none;
+            padding: 8px 15px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .logout-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+
+        /* Main container */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 30px;
+        }
+
+        /* Breadcrumb */
+        .breadcrumb {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            padding: 15px 20px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .breadcrumb h3 {
+            color: white;
+            font-size: 18px;
+            font-weight: 400;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Controls section - Updated desktop spacing */
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+        }
+
+        .create-folder-form {
+            display: flex;
+            gap: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .create-folder-form input[type="text"] {
+            padding: 10px 15px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 14px;
+            min-width: 200px;
+        }
+
+        .create-folder-form input[type="text"]:focus {
+            outline: none;
+            border-color: #3498db;
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .create-folder-form input[type="text"]::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        /* Bulk Actions */
+        .bulk-actions {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            display: none;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        .bulk-actions.show {
+            display: flex;
+        }
+
+        .bulk-info {
+            color: white;
+            font-weight: 500;
+        }
+
+        .bulk-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            text-decoration: none;
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(52, 152, 219, 0.3);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #27ae60, #229954);
+            color: white;
+        }
+
+        .btn-success:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(39, 174, 96, 0.3);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+            color: white;
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        .btn-danger:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 5px 15px rgba(231, 76, 60, 0.3);
+        }
+
+        .btn-warning {
+            background: linear-gradient(135deg, #f39c12, #e67e22);
+            color: white;
+        }
+
+        .btn-warning:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(243, 156, 18, 0.3);
+        }
+
+        /* File table */
+        .file-table {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            margin-top: 25px;
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .table thead {
+            background: linear-gradient(135deg, #34495e, #2c3e50);
+            color: white;
+        }
+
+        .table th {
+            padding: 18px 20px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .table tbody tr {
+            border-bottom: 1px solid #ecf0f1;
+            transition: all 0.3s ease;
+        }
+
+        .table tbody tr:hover {
+            background: rgba(52, 152, 219, 0.05);
+            transform: scale(1.005);
+        }
+
+        .table tbody tr.selected {
+            background: rgba(52, 152, 219, 0.1);
+            border-left: 4px solid #3498db;
+        }
+
+        .table td {
+            padding: 18px 20px;
+            vertical-align: middle;
+        }
+
+        .file-checkbox {
+            width: 18px;
+            height: 18px;
+            margin-right: 10px;
+            cursor: pointer;
+        }
+
+        .file-icon {
+            font-size: 18px;
+            margin-right: 10px;
+            width: 20px;
+            text-align: center;
+        }
+
+        .folder-icon {
+            color: #f39c12;
+        }
+
+        .file-icon-default {
+            color: #7f8c8d;
+        }
+
+        .file-name {
+            display: flex;
+            align-items: center;
+            font-weight: 500;
+        }
+
+        .file-name a {
+            color: #2c3e50;
+            text-decoration: none;
+            transition: color 0.3s ease;
+        }
+
+        .file-name a:hover {
+            color: #3498db;
+        }
+
+        .file-type {
+            color: #7f8c8d;
+            font-size: 14px;
+        }
+
+        .actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 12px;
+            border-radius: 6px;
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid #3498db;
+            color: #3498db;
+        }
+
+        .btn-outline:hover {
+            background: #3498db;
+            color: white;
+        }
+
+        .btn-danger {
+            background: #e74c3c;
+            color: white;
+            border: 1px solid #e74c3c;
+        }
+
+        .btn-danger:hover {
+            background: #c0392b;
+            border-color: #c0392b;
+        }
+
+        /* Enhanced Upload Section - Perfect spacing match */
+        .upload-section {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            margin: 25px 0;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .upload-section h3 {
+            color: white;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .upload-form {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+
+        .file-input {
+            position: absolute;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+
+        .file-input-display {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 15px 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px dashed rgba(255, 255, 255, 0.4);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: white;
+        }
+
+        .file-input-display:hover {
+            border-color: rgba(255, 255, 255, 0.6);
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        /* Enhanced Upload Queue */
+        .upload-queue {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            display: none;
+        }
+
+        .upload-queue.show {
+            display: block;
+            animation: slideInUp 0.4s ease-out;
+        }
+
+        .queue-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            color: white;
+            font-weight: 600;
+        }
+
+        .queue-stats {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .upload-progress-summary {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            display: none;
+        }
+
+        .upload-progress-summary.show {
+            display: block;
+        }
+
+        .progress-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            color: white;
+            font-size: 14px;
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .stat-value {
+            font-weight: 600;
+            color: #3498db;
+        }
+
+        .overall-progress {
+            margin-top: 15px;
+        }
+
+        .overall-progress-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: white;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+
+        .overall-progress-bar {
+            height: 8px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .overall-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #27ae60, #2ecc71);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .queue-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .file-queue {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .queue-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
+            color: white;
+        }
+
+        .queue-item:last-child {
+            border-bottom: none;
+        }
+
+        .queue-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .queue-item.uploading {
+            background: rgba(52, 152, 219, 0.1);
+            border-left: 4px solid #3498db;
+        }
+
+        .queue-item.completed {
+            background: rgba(39, 174, 96, 0.1);
+            border-left: 4px solid #27ae60;
+            opacity: 0.7;
+        }
+
+        .queue-item.error {
+            background: rgba(231, 76, 60, 0.1);
+            border-left: 4px solid #e74c3c;
+        }
+
+        .file-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-grow: 1;
+            min-width: 0;
+        }
+
+        .file-info-details {
+            min-width: 0;
+            flex-grow: 1;
+        }
+
+        .file-info-name {
+            font-weight: 500;
+            font-size: 14px;
+            margin-bottom: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .file-info-meta {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.7);
+            display: flex;
+            gap: 15px;
+        }
+
+        .file-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 120px;
+            justify-content: flex-end;
+        }
+
+        .status-text {
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .status-pending { color: #f39c12; }
+        .status-uploading { color: #3498db; }
+        .status-completed { color: #27ae60; }
+        .status-error { color: #e74c3c; }
+
+        .remove-btn {
+            background: rgba(231, 76, 60, 0.2);
+            border: 1px solid rgba(231, 76, 60, 0.4);
+            color: #e74c3c;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 12px;
+        }
+
+        .remove-btn:hover {
+            background: rgba(231, 76, 60, 0.3);
+            transform: scale(1.1);
+        }
+
+        .progress-bar-small {
+            width: 80px;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-fill-small {
+            height: 100%;
+            background: linear-gradient(90deg, #3498db, #2980b9);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        /* Upload status */
+        .upload-status {
+            margin-top: 15px;
+            padding: 12px;
+            border-radius: 8px;
+            font-weight: 500;
+            text-align: center;
+            display: none;
+        }
+
+        .upload-status.show {
+            display: block;
+        }
+
+        .upload-status.success {
+            background: rgba(39, 174, 96, 0.2);
+            border: 1px solid rgba(39, 174, 96, 0.4);
+            color: #27ae60;
+        }
+
+        .upload-status.error {
+            background: rgba(231, 76, 60, 0.2);
+            border: 1px solid rgba(231, 76, 60, 0.4);
+            color: #e74c3c;
+        }
+
+        .upload-status.info {
+            background: rgba(52, 152, 219, 0.2);
+            border: 1px solid rgba(52, 152, 219, 0.4);
+            color: #3498db;
+        }
+
+        /* Progress bar */
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #3498db, #2980b9);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(5px);
+        }
+
+        .modal.show {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 30px;
+            width: 90%;
+            max-width: 500px;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .modal-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #7f8c8d;
+            padding: 0;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-close:hover {
+            color: #e74c3c;
+        }
+
+        .modal-body {
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #2c3e50;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 10px 15px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+        }
+
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .empty-state i {
+            font-size: 48px;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+
+        .empty-state h3 {
+            font-size: 20px;
+            margin-bottom: 10px;
+            font-weight: 300;
+        }
+
+        .empty-state p {
+            font-size: 14px;
+        }
+
+        /* Storage Stats */
+        .storage-stats {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 25px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+        }
+
+        .storage-stats h4 {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .stat-card .stat-label {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-card .stat-value {
+            font-size: 18px;
+            font-weight: 600;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .disk-usage-bar {
+            margin-top: 15px;
+        }
+
+        .disk-usage-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+
+        .disk-usage-progress {
+            height: 8px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .disk-usage-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #27ae60, #f39c12, #e74c3c);
+            transition: width 0.3s ease;
+        }
+
+        /* Enhanced Mobile Responsive Design - Fixed Consistent Spacing */
+        @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+                max-width: 100%;
+            }
+
+            .header {
+                padding: 15px;
+                flex-direction: column;
+                gap: 10px;
+                text-align: center;
+                margin-bottom: 18px;
+            }
+
+            .header-left h1 {
+                font-size: 20px;
+            }
+
+            .user-info {
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .user-badge {
+                flex-direction: column;
+                text-align: center;
+                padding: 10px;
+            }
+
+            .breadcrumb {
+                padding: 12px 15px;
+                margin-bottom: 18px;
+            }
+
+            .breadcrumb h3 {
+                font-size: 16px;
+                flex-direction: column;
+                gap: 5px;
+                text-align: center;
+            }
+
+            .storage-stats {
+                padding: 15px;
+                margin-bottom: 18px;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+                gap: 10px;
+            }
+
+            .stat-card {
+                padding: 12px;
+            }
+
+            .stat-card .stat-value {
+                font-size: 16px;
+            }
+
+            .controls {
+                flex-direction: column;
+                gap: 10px;
+                margin-bottom: 18px;
+            }
+
+            .create-folder-form {
+                flex-direction: column;
+                padding: 12px;
+            }
+
+            .create-folder-form input[type="text"] {
+                min-width: auto;
+                width: 100%;
+                margin-bottom: 10px;
+            }
+
+            /* Enhanced file table for mobile */
+            .file-table {
+                margin-bottom: 18px;
+                border-radius: 15px !important;
+                overflow: hidden;
+                -webkit-overflow-scrolling: touch;
+            }
+
+            .table {
+                min-width: 100%;
+                font-size: 14px;
+                border-radius: 15px !important;
+                overflow: hidden;
+            }
+
+            .table tbody tr:last-child td:first-child {
+                border-bottom-left-radius: 15px;
+            }
+
+            .table tbody tr:last-child td:last-child {
+                border-bottom-right-radius: 15px;
+            }
+
+            .table th,
+            .table td {
+                padding: 10px 8px;
+                white-space: nowrap;
+            }
+
+            .table th:first-child,
+            .table td:first-child {
+                position: sticky;
+                left: 0;
+                background: inherit;
+                z-index: 1;
+            }
+
+            .table tbody tr {
+                background: rgba(255, 255, 255, 0.95);
+            }
+
+            .file-name {
+                max-width: 150px;
+            }
+
+            .file-name a,
+            .file-name span {
+                display: block;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .actions {
+                flex-direction: column;
+                gap: 3px;
+                min-width: 80px;
+            }
+
+            .btn-sm {
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+
+            .file-info-meta {
+                flex-direction: column;
+                gap: 2px;
+            }
+
+            /* Mobile upload section */
+            .upload-section {
+                padding: 15px;
+                margin-bottom: 18px;
+            }
+
+            .upload-section h3 {
+                font-size: 18px;
+            }
+
+            .file-input-display {
+                padding: 20px 15px;
+                text-align: center;
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .file-input-display i {
+                font-size: 24px;
+            }
+
+            .queue-actions {
+                flex-direction: column;
+                width: 100%;
+                gap: 8px;
+            }
+
+            .queue-header {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 10px;
+            }
+
+            .queue-stats {
+                text-align: center;
+            }
+
+            .upload-progress-summary {
+                padding: 12px;
+            }
+
+            .progress-stats {
+                grid-template-columns: 1fr;
+                gap: 8px;
+            }
+
+            .file-queue {
+                max-height: 250px;
+            }
+
+            .queue-item {
+                padding: 10px;
+                flex-direction: column;
+                align-items: stretch;
+                gap: 8px;
+            }
+
+            .file-info {
+                order: 1;
+            }
+
+            .file-status {
+                order: 2;
+                justify-content: space-between;
+                min-width: auto;
+            }
+
+            .bulk-actions {
+                flex-direction: column;
+                align-items: stretch;
+                padding: 12px;
+            }
+
+            .bulk-buttons {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+            }
+
+            /* Modal adjustments for mobile */
+            .modal-content {
+                width: 95%;
+                margin: 20px;
+                padding: 20px;
+            }
+
+            .modal-header {
+                flex-direction: column;
+                text-align: center;
+                gap: 10px;
+            }
+
+            .modal-footer {
+                flex-direction: column;
+                gap: 8px;
+            }
+
+            .modal-footer .btn {
+                width: 100%;
+            }
+        }
+
+        /* Tablet specific adjustments */
+        @media (min-width: 769px) and (max-width: 1024px) {
+            /* Uniform spacing for tablets */
+            .header {
+                margin-bottom: 18px;
+            }
+            
+            .breadcrumb {
+                margin-bottom: 18px;
+            }
+            
+            .storage-stats {
+                margin-bottom: 18px;
+            }
+            
+            .controls {
+                margin-bottom: 18px;
+            }
+            
+            .upload-section {
+                margin-bottom: 18px;
+            }
+            
+            .file-table {
+                margin-bottom: 18px;
+                overflow-x: auto;
+            }
+            
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .table {
+                min-width: 800px;
+            }
+
+            .progress-stats {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        /* Very small screens (phones in portrait) */
+        @media (max-width: 480px) {
+            .container {
+                padding: 5px;
+            }
+
+            .header {
+                padding: 10px;
+            }
+
+            .header-left h1 {
+                font-size: 18px;
+            }
+
+            .user-badge {
+                padding: 8px;
+            }
+
+            .breadcrumb {
+                padding: 10px;
+            }
+
+            .storage-stats {
+                padding: 12px;
+            }
+
+            .stat-card {
+                padding: 10px;
+            }
+
+            .file-table {
+                margin: 0 -5px;
+            }
+
+            .table th,
+            .table td {
+                padding: 8px 6px;
+                font-size: 12px;
+            }
+
+            .file-name {
+                max-width: 120px;
+            }
+
+            .btn-sm {
+                padding: 3px 6px;
+                font-size: 10px;
+            }
+
+            .upload-section {
+                padding: 12px;
+            }
+
+            .modal-content {
+                width: 98%;
+                margin: 10px;
+                padding: 15px;
+            }
+        }
+
+        /* Landscape phone orientation */
+        @media (max-width: 768px) and (orientation: landscape) {
+            .header {
+                flex-direction: row;
+                padding: 10px 15px;
+            }
+
+            .user-info {
+                flex-direction: row;
+                gap: 15px;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .file-queue {
+                max-height: 200px;
+            }
+        }
+
+        /* High DPI displays */
+        @media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+            .file-icon,
+            .btn i {
+                font-size: 1.1em;
+            }
+        }
+
+        /* Touch-friendly enhancements */
+        @media (pointer: coarse) {
+            .btn,
+            .file-checkbox,
+            .remove-btn {
+                min-height: 44px;
+                min-width: 44px;
+            }
+
+            .file-checkbox {
+                width: 20px;
+                height: 20px;
+            }
+
+            .table tbody tr {
+                min-height: 50px;
+            }
+
+            .queue-item {
+                min-height: 60px;
+            }
+        }
+
+        /* Animations */
+        .fade-in {
+            animation: fadeIn 0.6s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .slide-in {
+            animation: slideInUp 0.4s ease-out;
+        }
+
+        @keyframes slideInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+
+        /* Scrollbar styling for queue */
+        .file-queue::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .file-queue::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+
+        .file-queue::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 3px;
+        }
+
+        .file-queue::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <a href="/" style="text-decoration: none; color: inherit; cursor: pointer;">
+                <h1><i class="fas fa-cloud-upload-alt"></i> Cloudinator</h1>
+            </a>
+        </div>
+        <div class="user-info">
+            <div class="user-badge">
+                <i class="fas fa-user"></i>
+                <span>{{ session.username }}</span>
+                <span class="role-badge role-{{ role }}">{{ role }}</span>
+            </div>
+            <a href="{{ url_for('logout') }}" class="logout-btn">
+                <i class="fas fa-sign-out-alt"></i> Logout
+            </a>
+        </div>
+    </header>
+
+    <!-- Main container -->
+    <div class="container fade-in">
+        <!-- Breadcrumb -->
+        <div class="breadcrumb">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+                <h3><i class="fas fa-folder-open"></i> /{{ path if path else 'Home' }}</h3>
+                {% if path and path != '' %}
+                    {% if '/' in path %}
+                        {% set parent_path = '/'.join(path.split('/')[:-1]) %}
+                        <a href="{{ url_for('index', path=parent_path) }}" 
+                           class="btn btn-outline btn-sm" style="color: white; border-color: rgba(255,255,255,0.4);">
+                            <i class="fas fa-level-up-alt"></i> Up
+                        </a>
+                    {% else %}
+                        <a href="{{ url_for('index') }}" 
+                           class="btn btn-outline btn-sm" style="color: white; border-color: rgba(255,255,255,0.4);">
+                            <i class="fas fa-level-up-alt"></i> Up
+                        </a>
+                    {% endif %}
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Storage Statistics -->
+        <div class="storage-stats">
+            <h4>
+                <i class="fas fa-chart-pie"></i> Storage Information
+                <button id="retryStorageStats" onclick="retryStorageStats()" style="
+                    background: rgba(255,255,255,0.1); 
+                    border: 1px solid rgba(255,255,255,0.2); 
+                    color: white; 
+                    padding: 4px 8px; 
+                    border-radius: 4px; 
+                    cursor: pointer; 
+                    font-size: 12px;
+                    margin-left: 10px;
+                    display: none;
+                " title="Retry loading storage information">
+                    <i class="fas fa-refresh"></i> Retry
+                </button>
+            </h4>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Total Space</div>
+                    <div class="stat-value">
+                        <i class="fas fa-hdd"></i>
+                        <span id="totalSpace">Loading...</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Free Space</div>
+                    <div class="stat-value">
+                        <i class="fas fa-check-circle" style="color: #27ae60;"></i>
+                        <span id="freeSpace">Loading...</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Used Space</div>
+                    <div class="stat-value">
+                        <i class="fas fa-exclamation-circle" style="color: #f39c12;"></i>
+                        <span id="usedSpace">Loading...</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Files & Folders</div>
+                    <div class="stat-value">
+                        <i class="fas fa-file-alt"></i>
+                        <span id="fileCount">Loading...</span>
+                    </div>
+                </div>
+            </div>
+            <div class="disk-usage-bar">
+                <div class="disk-usage-label">
+                    <span>Disk Usage</span>
+                    <span id="usagePercentage">0%</span>
+                </div>
+                <div class="disk-usage-progress">
+                    <div class="disk-usage-fill" id="diskUsageFill" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        {% if role == 'readwrite' %}
+        <div class="controls">
+            <form id="createFolderForm" class="create-folder-form">
+                <input type="text" id="folderNameInput" name="foldername" placeholder="Enter folder name" required>
+                <input type="hidden" name="path" value="{{ path }}">
+                <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-folder-plus"></i> Create Folder
+                </button>
+            </form>
+        </div>
+
+        <!-- Enhanced Upload section -->
+        <div class="upload-section slide-in">
+            <h3><i class="fas fa-cloud-upload-alt"></i> Upload Files</h3>
+            <div class="upload-form">
+                <div class="file-input-wrapper">
+                    <input type="file" id="fileInput" class="file-input" multiple required>
+                    <div class="file-input-display">
+                        <i class="fas fa-upload" style="font-size: 20px;"></i>
+                        <div>
+                            <strong>Choose files to upload</strong>
+                            <div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">
+                                Click here or drag and drop files (multiple files supported)
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <input type="hidden" id="destPath" value="{{ path }}">
+            </div>
+
+            <!-- Upload Queue -->
+            <div id="uploadQueue" class="upload-queue">
+                <div class="queue-header">
+                    <div>
+                        <i class="fas fa-list"></i> Upload Queue
+                        <span id="queueStats" class="queue-stats">(0 files, 0 B)</span>
+                    </div>
+                    <div class="queue-actions">
+                        <button id="clearAllBtn" class="btn btn-warning btn-sm">
+                            <i class="fas fa-trash-alt"></i> Clear All
+                        </button>
+                        <button id="startUploadBtn" class="btn btn-success" disabled>
+                            <i class="fas fa-upload"></i> Upload All (<span id="uploadCount">0</span>)
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Enhanced Progress Summary -->
+                <div id="uploadProgressSummary" class="upload-progress-summary">
+                    <div class="progress-stats">
+                        <div class="stat-item">
+                            <i class="fas fa-tachometer-alt"></i>
+                            <span>Speed: <span class="stat-value" id="uploadSpeed">0 B/s</span></span>
+                        </div>
+                        <div class="stat-item">
+                            <i class="fas fa-database"></i>
+                            <span>Uploaded: <span class="stat-value" id="uploadedSize">0 B</span></span>
+                        </div>
+                        <div class="stat-item">
+                            <i class="fas fa-weight-hanging"></i>
+                            <span>Total: <span class="stat-value" id="totalSize">0 B</span></span>
+                        </div>
+                        <div class="stat-item">
+                            <i class="fas fa-clock"></i>
+                            <span>ETA: <span class="stat-value" id="eta">--:--</span></span>
+                        </div>
+                    </div>
+                    <div class="overall-progress">
+                        <div class="overall-progress-label">
+                            <span>Overall Progress</span>
+                            <span id="overallPercentage">0%</span>
+                        </div>
+                        <div class="overall-progress-bar">
+                            <div class="overall-progress-fill" id="overallProgressFill"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="fileQueue" class="file-queue">
+                    <!-- Queue items will be populated here -->
+                </div>
+            </div>
+
+            <div id="uploadStatus" class="upload-status"></div>
+        </div>
+        {% endif %}
+
+        <!-- Bulk Actions (appears when files are selected) -->
+        {% if role == 'readwrite' %}
+        <div class="bulk-actions" id="bulkActions">
+            <div class="bulk-info">
+                <i class="fas fa-check-square"></i>
+                <span id="selectedCount">0</span> item(s) selected
+            </div>
+            <div class="bulk-buttons">
+                <button class="btn btn-warning btn-sm" onclick="showMoveModal()">
+                    <i class="fas fa-cut"></i> Move
+                </button>
+                <button class="btn btn-success btn-sm" onclick="showCopyModal()">
+                    <i class="fas fa-copy"></i> Copy
+                </button>
+                <button class="btn btn-danger btn-sm" onclick="bulkDelete()">
+                    <i class="fas fa-trash"></i> Delete
+                </button>
+                <button class="btn btn-outline btn-sm" onclick="clearSelection()" style="color: white; border-color: rgba(255,255,255,0.4);">
+                    <i class="fas fa-times"></i> Clear
+                </button>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- File table -->
+        <div class="file-table slide-in">
+            <table class="table">
+                <thead>
+                    <tr>
+                        {% if role == 'readwrite' %}
+                        <th style="width: 50px;">
+                            <input type="checkbox" id="selectAll" class="file-checkbox" onchange="toggleSelectAll()">
+                        </th>
+                        {% endif %}
+                        <th><i class="fas fa-file"></i> Name</th>
+                        <th><i class="fas fa-weight-hanging"></i> Size</th>
+                        <th><i class="fas fa-tag"></i> Type</th>
+                        <th><i class="fas fa-clock"></i> Modified</th>
+                        <th><i class="fas fa-cogs"></i> Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if path %}
+                    <!-- Parent directory row - always show when not at root -->
+                    <tr style="background: rgba(52, 152, 219, 0.1);">
+                        {% if role == 'readwrite' %}
+                        <td></td>
+                        {% endif %}
+                        <td>
+                            <div class="file-name">
+                                <i class="fas fa-level-up-alt file-icon" style="color: #3498db;"></i>
+                                {% if '/' in path %}
+                                    {% set parent_path = '/'.join(path.split('/')[:-1]) %}
+                                    <a href="{{ url_for('index', path=parent_path) }}" 
+                                       style="color: #3498db; font-weight: 600;">
+                                        .. (Go Up)
+                                    </a>
+                                {% else %}
+                                    <a href="{{ url_for('index') }}" 
+                                       style="color: #3498db; font-weight: 600;">
+                                        .. (Go Up)
+                                    </a>
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td>
+                            <span style="color: #7f8c8d; font-size: 12px;">--</span>
+                        </td>
+                        <td>
+                            <span class="file-type">
+                                <i class="fas fa-arrow-up"></i> Parent Directory
+                            </span>
+                        </td>
+                        <td>
+                            <span style="color: #7f8c8d; font-size: 12px;">--</span>
+                        </td>
+                        <td>
+                            <div class="actions">
+                                <span style="color: #7f8c8d; font-size: 12px;">Navigation</span>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endif %}
+                    
+                    {% if items %}
+                        {% for item in items %}
+                    <tr class="file-row" data-path="{{ (path + '/' + item.name) if path else item.name }}">
+                        {% if role == 'readwrite' %}
+                        <td>
+                            <input type="checkbox" class="file-checkbox item-checkbox" 
+                                   data-path="{{ (path + '/' + item.name) if path else item.name }}"
+                                   data-name="{{ item.name }}"
+                                   data-is-dir="{{ item.is_dir|lower }}"
+                                   onchange="updateSelection()">
+                        </td>
+                        {% endif %}
+                        <td>
+                            <div class="file-name">
+                                {% if item.is_dir %}
+                                    <i class="fas fa-folder file-icon folder-icon"></i>
+                                    <a href="{{ url_for('index', path=path + '/' + item.name if path else item.name) }}">
+                                        {{ item.name }}
+                                    </a>
+                                {% else %}
+                                    <i class="fas fa-file file-icon file-icon-default"></i>
+                                    {{ item.name }}
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td>
+                            {% if item.is_dir %}
+                                <span style="color: #7f8c8d; font-size: 13px;">
+                                    {% if item.item_count %}
+                                        {{ item.item_count.files }} files, {{ item.item_count.dirs }} folders
+                                        {% if item.size > 0 %}
+                                            <br><small style="color: #95a5a6;">
+                                                {% if item.size >= 1024*1024*1024 %}
+                                                    {{ "%.2f"|format(item.size / (1024*1024*1024)) }} GB
+                                                {% elif item.size >= 1024*1024 %}
+                                                    {{ "%.1f"|format(item.size / (1024*1024)) }} MB
+                                                {% else %}
+                                                    {{ "%.1f"|format(item.size / 1024) }} KB
+                                                {% endif %}
+                                            </small>
+                                        {% endif %}
+                                    {% else %}
+                                        --
+                                    {% endif %}
+                                </span>
+                            {% else %}
+                                <span style="color: #2c3e50; font-weight: 500;">
+                                    {% if item.size >= 1024*1024*1024 %}
+                                        {{ "%.2f"|format(item.size / (1024*1024*1024)) }} GB
+                                    {% elif item.size >= 1024*1024 %}
+                                        {{ "%.1f"|format(item.size / (1024*1024)) }} MB
+                                    {% elif item.size >= 1024 %}
+                                        {{ "%.1f"|format(item.size / 1024) }} KB
+                                    {% else %}
+                                        {{ item.size }} bytes
+                                    {% endif %}
+                                </span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="file-type">
+                                {% if item.is_dir %}
+                                    <i class="fas fa-folder"></i> Folder
+                                {% else %}
+                                    <i class="fas fa-file"></i> File
+                                {% endif %}
+                            </span>
+                        </td>
+                        <td>
+                            {% if item.modified %}
+                                <span style="color: #7f8c8d; font-size: 13px; white-space: nowrap;">
+                                    {{ item.modified|int|timestamp_to_date }}
+                                </span>
+                            {% else %}
+                                <span style="color: #95a5a6; font-size: 13px;">--</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="actions">
+                                {% if not item.is_dir %}
+                                <a href="{{ url_for('download', path=(path + '/' + item.name) if path else item.name) }}" 
+                                   class="btn btn-outline btn-sm">
+                                    <i class="fas fa-download"></i> Download
+                                </a>
+                                {% endif %}
+                                
+                                {% if role == 'readwrite' %}
+                                <button type="button" class="btn btn-danger btn-sm delete-btn" 
+                                        data-item-name="{{ item.name }}"
+                                        data-item-path="{{ (path + '/' + item.name) if path else item.name }}">
+                                    <i class="fas fa-trash"></i> Delete
+                                </button>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                        {% endfor %}
+                    {% else %}
+                        <!-- Empty directory message within the table -->
+                        <tr>
+                            <td colspan="{{ 6 if role == 'readwrite' else 5 }}" style="text-align: center; padding: 40px 20px; vertical-align: middle;">
+                                <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 120px;">
+                                    <i class="fas fa-folder-open" style="font-size: 36px; color: #95a5a6; margin-bottom: 15px; opacity: 0.7;"></i>
+                                    <div style="color: #7f8c8d; font-weight: 500; margin-bottom: 8px; font-size: 18px;">This folder is empty</div>
+                                    <div style="color: #95a5a6; font-size: 14px; text-align: center; max-width: 300px;">{% if role == 'readwrite' %}Upload files or create folders to get started{% else %}No files available{% endif %}</div>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Move/Copy Modal -->
+    {% if role == 'readwrite' %}
+    <div id="moveModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title" id="modalTitle">Move Items</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="destinationPath">Destination Path:</label>
+                    <input type="text" id="destinationPath" class="form-control" placeholder="Enter destination path (leave empty for root)">
+                    <small style="color: #7f8c8d; font-size: 12px; margin-top: 5px;">
+                        Examples: "folder1", "folder1/subfolder", "" (for root)
+                    </small>
+                </div>
+                <div id="selectedItems" style="margin-top: 15px;">
+                    <strong>Selected items:</strong>
+                    <ul id="selectedItemsList" style="margin-top: 8px; padding-left: 20px; color: #7f8c8d;">
+                    </ul>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+                <button class="btn btn-primary" id="confirmAction" onclick="confirmMoveOrCopy()">Move</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal" id="deleteModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Confirm Delete</h3>
+                <button class="modal-close" onclick="closeDeleteModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="deleteMessage">Are you sure you want to delete this item?</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeDeleteModal()">Cancel</button>
+                <button class="btn btn-danger" id="confirmDelete" onclick="confirmDelete()">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Modal -->
+    <div class="modal" id="notificationModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title" id="notificationTitle">Notification</h3>
+                <button class="modal-close" onclick="closeNotificationModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="notificationMessage">Operation completed.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" onclick="closeNotificationModal()">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Store Flask template values in HTML data attributes for JavaScript access -->
+    <div id="flask-config" 
+         data-chunk-size="{{ CHUNK_SIZE }}"
+         data-upload-url="{{ url_for('upload') }}"
+         data-current-path="{{ path }}"
+         data-user-role="{{ role }}"
+         style="display: none;"></div>
+         
+    <script>
+        // Read Flask configuration from HTML data attributes (avoids VS Code parsing issues)
+        const configElement = document.getElementById('flask-config');
+        const CHUNK_SIZE = parseInt(configElement.dataset.chunkSize) || 10485760; // 10MB fallback
+        const UPLOAD_URL = configElement.dataset.uploadUrl || "/upload";
+        const CURRENT_PATH = configElement.dataset.currentPath || "";
+        const USER_ROLE = configElement.dataset.userRole || "readonly";
+        
+        // Upload queue management
+        let uploadQueue = [];
+        let isUploading = false;
+        let currentUploadIndex = 0;
+        let uploadStartTime = 0;
+        let totalBytesToUpload = 0;
+        let totalBytesUploaded = 0;
+        
+        // Selection management
+        let selectedItems = new Set();
+        let currentModalAction = '';
+
+        // Storage stats loading with enhanced error handling
+        async function loadStorageStats() {
+            try {
+                console.log('� Loading storage stats...');
+                
+                // Single-phase approach with longer timeout for reliability
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 second timeout
+                
+                let response;
+                try {
+                    // Try the normal authenticated endpoint first
+                    response = await fetch('/api/storage_stats', {
+                        signal: controller.signal,
+                        method: 'GET',
+                        headers: {
+                            'Accept': 'application/json',
+                            'Cache-Control': 'no-cache'
+                        }
+                    });
+                } catch (authError) {
+                    console.log('Auth endpoint failed, trying debug endpoint:', authError);
+                    // If auth fails, try debug endpoint
+                    response = await fetch('/api/storage_stats_debug', {
+                        signal: controller.signal,
+                        method: 'GET',
+                        headers: {
+                            'Accept': 'application/json',
+                            'Cache-Control': 'no-cache'
+                        }
+                    });
+                }
+                
+                clearTimeout(timeoutId);
+                
+                console.log('Storage stats response status:', response.status);
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('✅ Storage stats loaded successfully:', data);
+                    
+                    // Handle both normal and debug response formats
+                    const stats = data.stats || data;
+                    updateStorageDisplay(stats);
+                } else {
+                    console.warn('Failed to load storage stats, status:', response.status);
+                    const errorText = await response.text();
+                    console.warn('Error response:', errorText);
+                    showStorageError('Server Error');
+                }
+            } catch (error) {
+                console.error('Error loading storage stats:', error);
+                if (error.name === 'AbortError') {
+                    console.error('Storage stats request timed out');
+                    showStorageError('Timeout - Try refreshing');
+                } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
+                    console.error('Network error - server might be unreachable');
+                    showStorageError('Network Error');
+                } else {
+                    showStorageError('Error');
+                }
+            }
+        }
+
+        function showStorageError(errorType) {
+            const elements = ['totalSpace', 'freeSpace', 'usedSpace', 'fileCount', 'dirCount'];
+            elements.forEach(id => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.textContent = errorType;
+                    element.style.color = '#ff6b6b';
+                }
+            });
+            
+            // Hide progress bar on error
+            const progressBar = document.querySelector('.progress-bar');
+            if (progressBar) {
+                progressBar.style.display = 'none';
+            }
+            
+            // Show retry button on error
+            const retryButton = document.getElementById('retryStorageStats');
+            if (retryButton) {
+                retryButton.style.display = 'inline-block';
+            }
+        }
+
+        // Retry function for storage stats
+        async function retryStorageStats() {
+            console.log('Retrying storage stats...');
+            
+            // Hide retry button during retry
+            const retryButton = document.getElementById('retryStorageStats');
+            if (retryButton) {
+                retryButton.style.display = 'none';
+            }
+            
+            // Reset loading state
+            const elements = ['totalSpace', 'freeSpace', 'usedSpace', 'fileCount'];
+            elements.forEach(id => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.textContent = 'Loading...';
+                    element.style.color = 'white';
+                }
+            });
+            
+            // Try to reinitialize
+            await initializeStorageStats();
+        }
+
+        function updateStorageDisplay(stats) {
+            console.log('📊 updateStorageDisplay called with:', stats);
+            
+            // Update text displays with null checks
+            const totalSpaceEl = document.getElementById('totalSpace');
+            const freeSpaceEl = document.getElementById('freeSpace');
+            const usedSpaceEl = document.getElementById('usedSpace');
+            const fileCountEl = document.getElementById('fileCount');
+            const dirCountEl = document.getElementById('dirCount');
+            
+            console.log('📊 Found elements:', {
+                totalSpaceEl: !!totalSpaceEl, 
+                freeSpaceEl: !!freeSpaceEl, 
+                usedSpaceEl: !!usedSpaceEl, 
+                fileCountEl: !!fileCountEl
+            });
+            
+            // Update disk space (always numeric)
+            if (totalSpaceEl && typeof stats.total_space === 'number') {
+                if (totalSpaceEl) {
+                    totalSpaceEl.textContent = formatFileSize(stats.total_space || 0);
+                    totalSpaceEl.style.color = 'white';
+                }
+                console.log('✅ Updated totalSpace:', formatFileSize(stats.total_space));
+            } else {
+                console.log('❌ Failed to update totalSpace:', {totalSpaceEl: !!totalSpaceEl, total_space: stats.total_space, type: typeof stats.total_space});
+            }
+            if (freeSpaceEl && typeof stats.free_space === 'number') {
+                if (freeSpaceEl) {
+                    freeSpaceEl.textContent = formatFileSize(stats.free_space || 0);
+                    freeSpaceEl.style.color = 'white';
+                }
+                console.log('✅ Updated freeSpace:', formatFileSize(stats.free_space));
+            }
+            if (usedSpaceEl && typeof stats.used_space === 'number') {
+                if (usedSpaceEl) {
+                    usedSpaceEl.textContent = formatFileSize(stats.used_space || 0);
+                    usedSpaceEl.style.color = 'white';
+                }
+                console.log('✅ Updated usedSpace:', formatFileSize(stats.used_space));
+            }
+            
+            // Handle file counts (should be numbers)
+            if (fileCountEl) {
+                const fileText = `${stats.file_count || 0} files, ${stats.dir_count || 0} folders`;
+                if (fileCountEl) {
+                    fileCountEl.textContent = fileText;
+                    fileCountEl.style.color = 'white';
+                }
+                console.log('✅ Updated fileCount:', fileText);
+            }
+            
+            // Calculate and display usage percentage (only if we have numeric values)
+            if (typeof stats.total_space === 'number' && typeof stats.used_space === 'number') {
+                const usagePercent = stats.total_space > 0 ? (stats.used_space / stats.total_space) * 100 : 0;
+                const usagePercentRounded = Math.round(usagePercent * 10) / 10; // Round to 1 decimal
+                
+                const usagePercentageEl = document.getElementById('usagePercentage');
+                const diskUsageFillEl = document.getElementById('diskUsageFill');
+                
+                if (usagePercentageEl) usagePercentageEl.textContent = `${usagePercentRounded}%`;
+                if (diskUsageFillEl) {
+                    diskUsageFillEl.style.width = `${usagePercent}%`;
+                    
+                    // Change color based on usage
+                    if (usagePercent < 70) {
+                        diskUsageFillEl.style.background = 'linear-gradient(90deg, #27ae60, #2ecc71)';
+                    } else if (usagePercent < 90) {
+                        diskUsageFillEl.style.background = 'linear-gradient(90deg, #f39c12, #e67e22)';
+                    } else {
+                        diskUsageFillEl.style.background = 'linear-gradient(90deg, #e74c3c, #c0392b)';
+                    }
+                    
+                    // Show progress bar on successful load
+                    const progressBar = document.querySelector('.progress-bar');
+                    if (progressBar) {
+                        progressBar.style.display = 'block';
+                    }
+                }
+                
+                // Add content size info to the title
+                if (stats.content_size !== stats.used_space) {
+                    const contentSizeText = `Content: ${formatFileSize(stats.content_size)}`;
+                    const usedSpaceEl = document.getElementById('usedSpace');
+                    if (usedSpaceEl && usedSpaceEl.parentElement) {
+                        usedSpaceEl.parentElement.title = contentSizeText;
+                    }
+                }
+            }
+            
+            // Hide retry button on successful load
+            const retryButton = document.getElementById('retryStorageStats');
+            if (retryButton) {
+                retryButton.style.display = 'none';
+            }
+        }
+
+        window.addEventListener('beforeunload', function(e) {
+            if (isUploading || uploadQueue.some(item => item.status === 'pending')) {
+                // Try immediate cleanup for chunks
+                cleanupUnfinishedChunks().catch(console.error);
+                
+                // Show warning message
+                const message = 'Upload in progress. Leaving will cancel uploads and cleanup temporary files.';
+                e.preventDefault();
+                e.returnValue = message;
+                return message;
+            }
+        });
+
+        // Enhanced page visibility handling with better interruption detection
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState === 'hidden') {
+                // Page is being hidden - cleanup if needed
+                if (!isUploading && uploadQueue.some(item => item.status === 'pending' || item.status === 'error')) {
+                    console.log('🧹 Page hidden - cleaning up abandoned uploads');
+                    cleanupUnfinishedChunks().catch(console.error);
+                }
+            } else if (document.visibilityState === 'visible') {
+                // Page became visible again - check for any server-side cleanup needed
+                console.log('👀 Page visible again - checking upload status');
+                updateManualCleanupButton();
+            }
+        });
+
+        // Better connection handling
+        window.addEventListener('online', function() {
+            console.log('🌐 Connection restored');
+            const failedItems = uploadQueue.filter(item => item.status === 'error');
+            if (failedItems.length > 0) {
+                showUploadStatus(`🌐 Connection restored. ${failedItems.length} failed upload(s) can be retried.`, 'info');
+            }
+        });
+
+        window.addEventListener('offline', function() {
+            console.log('📡 Connection lost');
+            showUploadStatus('📡 Connection lost. Uploads will fail until connection is restored.', 'error');
+        });
+
+        // File input handling
+        document.getElementById('fileInput')?.addEventListener('change', function(e) {
+            const files = Array.from(e.target.files);
+            if (files.length > 0) {
+                addFilesToQueue(files);
+                // Reset input for future selections
+                e.target.value = '';
+            }
+        });
+
+        function addFilesToQueue(files) {
+            console.log('📂 addFilesToQueue called with:', files.length, 'files');
+            let addedCount = 0;
+            
+            files.forEach(file => {
+                console.log('📄 Processing file:', file.name, 'Size:', file.size);
+                const fileId = generateFileId(file);
+                
+                // Check if file already in queue
+                if (uploadQueue.find(item => item.id === fileId)) {
+                    console.log('⚠️ File already in queue:', file.name);
+                    showUploadStatus(`📁 File "${file.name}" is already in the queue`, 'info');
+                    return;
+                }
+
+                const queueItem = {
+                    id: fileId,
+                    file: file,
+                    name: file.name,
+                    size: file.size,
+                    status: 'pending',
+                    progress: 0,
+                    error: null,
+                    uploadedBytes: 0,
+                    createdTime: Date.now()
+                };
+
+                uploadQueue.push(queueItem);
+                addedCount++;
+                console.log('✅ Added to queue:', file.name, 'ID:', fileId);
+            });
+
+            console.log('📊 Queue status - Total items:', uploadQueue.length, 'Added:', addedCount);
+            updateQueueDisplay();
+            showUploadStatus(`➕ Added ${addedCount} file(s) to upload queue`, 'info');
+        }
+
+        function generateFileId(file) {
+            return `${Date.now()}-${file.name}-${file.size}`.replace(/[^a-z0-9\-\.]/gi, '');
+        }
+
+        function removeFromQueue(fileId) {
+            const index = uploadQueue.findIndex(item => item.id === fileId);
+            if (index > -1) {
+                const item = uploadQueue[index];
+                if (item.status === 'uploading') {
+                    showUploadStatus('❌ Cannot remove file currently being uploaded', 'error');
+                    return;
+                }
+                
+                uploadQueue.splice(index, 1);
+                
+                // Try to cleanup chunks for this item
+                if (item.status === 'pending' || item.status === 'error') {
+                    cleanupSingleFile(fileId).catch(console.error);
+                }
+                
+                updateQueueDisplay();
+                showUploadStatus(`🗑️ Removed "${item.name}" from queue`, 'info');
+            }
+        }
+
+        function clearAllQueue() {
+            if (isUploading) {
+                showUploadStatus('❌ Cannot clear queue while uploading', 'error');
+                return;
+            }
+            
+            // Cleanup all pending/error items
+            const itemsToCleanup = uploadQueue.filter(item => 
+                item.status === 'pending' || item.status === 'error'
+            );
+            
+            uploadQueue = [];
+            updateQueueDisplay();
+            
+            // Cleanup chunks in background
+            if (itemsToCleanup.length > 0) {
+                cleanupUnfinishedChunks(itemsToCleanup).catch(console.error);
+            }
+            
+            showUploadStatus('🧹 Upload queue cleared', 'info');
+        }
+
+        // Enhanced cleanup function with retry logic
+        async function cleanupUnfinishedChunks(specificItems = null) {
+            const itemsToClean = specificItems || uploadQueue.filter(item => 
+                item.status === 'pending' || item.status === 'error'
+            );
+            
+            if (itemsToClean.length === 0) return;
+            
+            console.log(`🧹 Cleaning up ${itemsToClean.length} unfinished uploads...`);
+            
+            const cleanupPromises = itemsToClean.map(item => cleanupSingleFile(item.id, item.name));
+            
+            try {
+                await Promise.allSettled(cleanupPromises);
+                console.log('✅ Bulk cleanup completed');
+            } catch (error) {
+                console.error('❌ Error in bulk cleanup:', error);
+            }
+        }
+
+        async function cleanupSingleFile(fileId, fileName = 'unknown') {
+            const maxRetries = 3;
+            let retries = 0;
+            
+            while (retries < maxRetries) {
+                try {
+                    const response = await fetch('/cleanup_chunks', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ file_id: fileId })
+                    });
+                    
+                    if (response.ok) {
+                        console.log(`🧹 Cleaned up chunks for: ${fileName} (${fileId})`);
+                        return;
+                    } else {
+                        const errorData = await response.json();
+                        throw new Error(`HTTP ${response.status}: ${errorData.error || 'Unknown error'}`);
+                    }
+                } catch (error) {
+                    retries++;
+                    console.warn(`🔄 Cleanup retry ${retries}/${maxRetries} for ${fileId}:`, error.message);
+                    
+                    if (retries < maxRetries) {
+                        // Wait before retrying (exponential backoff)
+                        await new Promise(resolve => setTimeout(resolve, Math.pow(2, retries) * 1000));
+                    } else {
+                        console.error(`❌ Failed to cleanup chunks for ${fileId} after ${maxRetries} attempts:`, error.message);
+                        throw error;
+                    }
+                }
+            }
+        }
+
+        function updateQueueDisplay() {
+            const queueContainer = document.getElementById('uploadQueue');
+            const queueElement = document.getElementById('fileQueue');
+            const statsElement = document.getElementById('queueStats');
+            const uploadBtn = document.getElementById('startUploadBtn');
+            const countElement = document.getElementById('uploadCount');
+            const progressSummary = document.getElementById('uploadProgressSummary');
+
+            if (!queueContainer) return;
+
+            if (uploadQueue.length === 0) {
+                queueContainer.classList.remove('show');
+                if (uploadBtn) uploadBtn.disabled = true;
+                if (progressSummary) progressSummary.classList.remove('show');
+                return;
+            }
+
+            queueContainer.classList.add('show');
+
+            // Update stats
+            const totalSize = uploadQueue.reduce((sum, item) => sum + item.size, 0);
+            const pendingCount = uploadQueue.filter(item => item.status === 'pending').length;
+            
+            if (statsElement) statsElement.textContent = `(${uploadQueue.length} files, ${formatFileSize(totalSize)})`;
+            if (countElement) countElement.textContent = pendingCount;
+            if (uploadBtn) uploadBtn.disabled = pendingCount === 0 || isUploading;
+
+            // Show progress summary if uploading
+            if (isUploading && progressSummary) {
+                progressSummary.classList.add('show');
+                updateProgressSummary();
+            }
+
+            // Update queue items
+            if (queueElement) {
+                queueElement.innerHTML = '';
+                uploadQueue.forEach(item => {
+                    const queueItemElement = createQueueItemElement(item);
+                    queueElement.appendChild(queueItemElement);
+                });
+            }
+        }
+
+        function createQueueItemElement(item) {
+            const div = document.createElement('div');
+            div.className = `queue-item ${item.status}`;
+            div.dataset.fileId = item.id;
+
+            const statusIcons = {
+                pending: 'fas fa-clock',
+                uploading: 'fas fa-spinner fa-spin',
+                completed: 'fas fa-check-circle',
+                error: 'fas fa-exclamation-circle'
+            };
+
+            const statusLabels = {
+                pending: 'Queued',
+                uploading: 'Uploading',
+                completed: 'Completed',
+                error: 'Failed'
+            };
+
+            const statusIcon = statusIcons[item.status] || 'fas fa-question-circle';
+            const statusLabel = statusLabels[item.status] || item.status.charAt(0).toUpperCase() + item.status.slice(1);
+            
+            console.log(`🏷️ Creating queue item for ${item.name}: status=${item.status}, label=${statusLabel}`);
+            
+            // Calculate age for display
+            const ageInSeconds = Math.floor((Date.now() - (item.createdTime || Date.now())) / 1000);
+            const ageDisplay = ageInSeconds < 60 ? `${ageInSeconds}s` : 
+                            ageInSeconds < 3600 ? `${Math.floor(ageInSeconds/60)}m` : 
+                            `${Math.floor(ageInSeconds/3600)}h`;
+            
+            div.innerHTML = `
+                <div class="file-info">
+                    <i class="${getFileIcon(item.name)}" style="color: ${getFileColor(item.name)};"></i>
+                    <div class="file-info-details">
+                        <div class="file-info-name">${item.name}</div>
+                        <div class="file-info-meta">
+                            <span><i class="fas fa-weight-hanging"></i> ${formatFileSize(item.size)}</span>
+                            <span><i class="fas fa-clock"></i> ${ageDisplay}</span>
+                            ${item.status === 'uploading' ? `<span><i class="fas fa-percentage"></i> ${item.progress}%</span>` : ''}
+                            ${item.error ? `<span><i class="fas fa-exclamation"></i> ${item.error}</span>` : ''}
+                        </div>
+                    </div>
+                </div>
+                <div class="file-status">
+                    ${item.status === 'uploading' ? `
+                        <div class="progress-bar-small">
+                            <div class="progress-fill-small" style="width: ${item.progress}%"></div>
+                        </div>
+                    ` : ''}
+                    <span class="status-text status-${item.status}">
+                        <i class="${statusIcon}"></i> ${statusLabel}
+                    </span>
+                    ${item.status === 'pending' || item.status === 'error' ? `
+                        <button class="remove-btn" onclick="removeFromQueue('${item.id}')" title="Remove from queue">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    ` : ''}
+                </div>
+            `;
+
+            return div;
+        }
+
+        function updateProgressSummary() {
+            const totalSizeElement = document.getElementById('totalSize');
+            const uploadedSizeElement = document.getElementById('uploadedSize');
+            const uploadSpeedElement = document.getElementById('uploadSpeed');
+            const etaElement = document.getElementById('eta');
+            const overallPercentageElement = document.getElementById('overallPercentage');
+            const overallProgressFill = document.getElementById('overallProgressFill');
+
+            if (totalBytesToUpload === 0) return;
+
+            const currentTime = Date.now();
+            const elapsedTime = (currentTime - uploadStartTime) / 1000; // seconds
+            const uploadSpeed = elapsedTime > 0 ? totalBytesUploaded / elapsedTime : 0;
+            const remainingBytes = totalBytesToUpload - totalBytesUploaded;
+            const eta = uploadSpeed > 0 ? remainingBytes / uploadSpeed : 0;
+            const overallProgress = (totalBytesUploaded / totalBytesToUpload) * 100;
+
+            if (totalSizeElement) totalSizeElement.textContent = formatFileSize(totalBytesToUpload);
+            if (uploadedSizeElement) uploadedSizeElement.textContent = formatFileSize(totalBytesUploaded);
+            if (uploadSpeedElement) uploadSpeedElement.textContent = formatFileSize(uploadSpeed) + '/s';
+            if (etaElement) etaElement.textContent = formatTime(eta);
+            if (overallPercentageElement) overallPercentageElement.textContent = Math.round(overallProgress) + '%';
+            if (overallProgressFill) overallProgressFill.style.width = overallProgress + '%';
+        }
+
+        function formatTime(seconds) {
+            if (!seconds || seconds === Infinity) return '--:--';
+            
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            
+            if (hours > 0) {
+                return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            } else {
+                return `${minutes}:${secs.toString().padStart(2, '0')}`;
+            }
+        }
+
+        function getFileIcon(filename) {
+            const extension = filename.split('.').pop().toLowerCase();
+            const iconMap = {
+                pdf: 'fas fa-file-pdf',
+                doc: 'fas fa-file-word', docx: 'fas fa-file-word',
+                xls: 'fas fa-file-excel', xlsx: 'fas fa-file-excel',
+                ppt: 'fas fa-file-powerpoint', pptx: 'fas fa-file-powerpoint',
+                jpg: 'fas fa-file-image', jpeg: 'fas fa-file-image', png: 'fas fa-file-image', 
+                gif: 'fas fa-file-image', bmp: 'fas fa-file-image', svg: 'fas fa-file-image',
+                mp4: 'fas fa-file-video', avi: 'fas fa-file-video', mkv: 'fas fa-file-video',
+                mov: 'fas fa-file-video', wmv: 'fas fa-file-video',
+                mp3: 'fas fa-file-audio', wav: 'fas fa-file-audio', flac: 'fas fa-file-audio',
+                zip: 'fas fa-file-archive', rar: 'fas fa-file-archive', '7z': 'fas fa-file-archive',
+                txt: 'fas fa-file-alt', md: 'fas fa-file-alt',
+                html: 'fas fa-file-code', css: 'fas fa-file-code', js: 'fas fa-file-code',
+                py: 'fas fa-file-code', java: 'fas fa-file-code'
+            };
+            return iconMap[extension] || 'fas fa-file';
+        }
+
+        function getFileColor(filename) {
+            const extension = filename.split('.').pop().toLowerCase();
+            const colorMap = {
+                pdf: '#e74c3c',
+                doc: '#3498db', docx: '#3498db',
+                xls: '#27ae60', xlsx: '#27ae60',
+                ppt: '#e67e22', pptx: '#e67e22',
+                jpg: '#9b59b6', jpeg: '#9b59b6', png: '#9b59b6', 
+                gif: '#9b59b6', bmp: '#9b59b6', svg: '#9b59b6',
+                mp4: '#e74c3c', avi: '#e74c3c', mkv: '#e74c3c',
+                mp3: '#f39c12', wav: '#f39c12', flac: '#f39c12',
+                zip: '#95a5a6', rar: '#95a5a6', '7z': '#95a5a6',
+                txt: '#34495e', md: '#34495e',
+                html: '#2ecc71', css: '#2ecc71', js: '#2ecc71',
+                py: '#2ecc71', java: '#2ecc71'
+            };
+            return colorMap[extension] || '#7f8c8d';
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            if (bytes === null || bytes === undefined || isNaN(bytes)) return '0 Bytes';
+            
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            
+            // Ensure we don't exceed the sizes array
+            const sizeIndex = Math.min(i, sizes.length - 1);
+            const value = bytes / Math.pow(k, sizeIndex);
+            
+            // Round to 2 decimal places and ensure it's a valid number
+            const formattedValue = Math.round(value * 100) / 100;
+            
+            return `${formattedValue} ${sizes[sizeIndex]}`;
+        }
+
+        function showUploadStatus(message, type = 'info') {
+            const status = document.getElementById('uploadStatus');
+            if (status) {
+                status.className = `upload-status show ${type}`;
+                status.innerHTML = message;
+                
+                // Auto-hide info and success messages after a delay
+                if (type === 'info' || type === 'success') {
+                    const hideDelay = type === 'success' ? 3000 : 5000; // Success messages hide after 3 seconds, info after 5
+                    setTimeout(() => {
+                        status.classList.remove('show');
+                    }, hideDelay);
+                }
+            }
+        }
+
+        function updateItemProgress(fileId, progress, uploadedBytes = 0) {
+            const item = uploadQueue.find(item => item.id === fileId);
+            if (item) {
+                item.progress = progress;
+                item.uploadedBytes = uploadedBytes;
+                
+                // Update UI
+                const element = document.querySelector(`[data-file-id="${fileId}"]`);
+                if (element) {
+                    const progressBar = element.querySelector('.progress-fill-small');
+                    const progressText = element.querySelector('.file-info-meta span:nth-child(3)');
+                    
+                    if (progressBar) {
+                        progressBar.style.width = progress + '%';
+                    }
+                    if (progressText) {
+                        progressText.innerHTML = `<i class="fas fa-percentage"></i> ${progress}%`;
+                    }
+                }
+                
+                // Update overall progress
+                updateOverallProgress();
+            }
+        }
+
+        function updateOverallProgress() {
+            totalBytesUploaded = uploadQueue.reduce((sum, item) => sum + item.uploadedBytes, 0);
+            updateProgressSummary();
+        }
+
+        function updateItemStatus(fileId, status, error = null) {
+            console.log(`🔄 updateItemStatus called: ${fileId} -> ${status}`, error);
+            const item = uploadQueue.find(item => item.id === fileId);
+            if (item) {
+                console.log(`✅ Found item for status update: ${item.name}, old status: ${item.status}, new status: ${status}`);
+                item.status = status;
+                item.error = error;
+                
+                // Mark completion time for cleanup
+                if (status === 'completed' || status === 'error') {
+                    item.completedTime = Date.now();
+                    console.log(`⏰ Set completion time for ${item.name}: ${item.completedTime}`);
+                    
+                    // Auto-remove completed items after 5 seconds
+                    setTimeout(() => {
+                        console.log(`🧹 Auto-removing completed item: ${item.name}`);
+                        removeFromQueue(item.id);
+                    }, 5000);
+                }
+                
+                console.log(`🔄 Calling updateQueueDisplay after status update`);
+                updateQueueDisplay();
+                console.log(`✅ updateQueueDisplay completed for ${item.name}`);
+            } else {
+                console.error(`❌ Item not found for status update: ${fileId}`);
+            }
+        }
+
+        // AJAX function to refresh file table without page reload
+        async function refreshFileTable() {
+            try {
+                showUploadStatus('🔄 Refreshing file list...', 'info');
+                
+                const currentPath = CURRENT_PATH || '';
+                const response = await fetch(`/api/files/${currentPath}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.error || 'Failed to load files');
+                }
+                
+                // Update the file table with new data
+                updateFileTableContent(data.files);
+                
+                showUploadStatus('✅ File list updated!', 'success');
+                
+                console.log('✅ File table refreshed successfully');
+                
+            } catch (error) {
+                console.error('❌ Failed to refresh file table:', error);
+                showUploadStatus('❌ Failed to refresh file list, reloading page...', 'error');
+                // Fallback to page reload if AJAX fails
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000);
+            }
+        }
+
+        // Function to update file table content
+        function updateFileTableContent(files) {
+            const tbody = document.querySelector('.table tbody');
+            if (!tbody) {
+                console.error('❌ File table tbody not found');
+                return;
+            }
+            
+            // Clear existing content
+            tbody.innerHTML = '';
+            
+            // Reset all selection state when updating table content
+            selectedItems.clear();
+            const selectAllCheckbox = document.getElementById('selectAll');
+            if (selectAllCheckbox) {
+                selectAllCheckbox.checked = false;
+                selectAllCheckbox.indeterminate = false;
+            }
+            const bulkActions = document.getElementById('bulkActions');
+            if (bulkActions) {
+                bulkActions.classList.remove('show');
+            }
+            
+            // Add "Go Up" row if we're not at root
+            if (CURRENT_PATH) {
+                const parentPath = CURRENT_PATH.includes('/') 
+                    ? CURRENT_PATH.split('/').slice(0, -1).join('/') 
+                    : '';
+                
+                const goUpRow = document.createElement('tr');
+                goUpRow.style.background = 'rgba(52, 152, 219, 0.1)';
+                goUpRow.innerHTML = `
+                    ${USER_ROLE === 'readwrite' ? '<td></td>' : ''}
+                    <td>
+                        <div class="file-name">
+                            <i class="fas fa-level-up-alt file-icon" style="color: #3498db;"></i>
+                            <a href="${parentPath ? '/' + parentPath : '/'}" style="color: #3498db; font-weight: 600;">
+                                .. (Go Up)
+                            </a>
+                        </div>
+                    </td>
+                    <td><span style="color: #7f8c8d; font-size: 12px;">--</span></td>
+                    <td><span class="file-type"><i class="fas fa-arrow-up"></i> Parent Directory</span></td>
+                    <td><span style="color: #7f8c8d; font-size: 12px;">--</span></td>
+                    <td><div class="actions"><span style="color: #7f8c8d; font-size: 12px;">Navigation</span></div></td>
+                `;
+                tbody.appendChild(goUpRow);
+            }
+            
+            if (files.length === 0) {
+                // Show empty state
+                const colspan = USER_ROLE === 'readwrite' ? '6' : '5';
+                tbody.innerHTML += `
+                    <tr>
+                        <td colspan="${colspan}" style="text-align: center; padding: 40px 20px; vertical-align: middle;">
+                            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 120px;">
+                                <i class="fas fa-folder-open" style="font-size: 36px; color: #95a5a6; margin-bottom: 15px; opacity: 0.7;"></i>
+                                <div style="color: #7f8c8d; font-weight: 500; margin-bottom: 8px; font-size: 18px;">This folder is empty</div>
+                                <div style="color: #95a5a6; font-size: 14px; text-align: center; max-width: 300px;">
+                                    ${USER_ROLE === 'readwrite' ? 'Upload files or create folders to get started' : 'No files available'}
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            // Add files to table
+            files.forEach(file => {
+                const row = document.createElement('tr');
+                row.className = 'file-row';
+                row.setAttribute('data-path', CURRENT_PATH ? `${CURRENT_PATH}/${file.name}` : file.name);
+                
+                let iconHtml, sizeHtml, typeHtml, actionsHtml;
+                
+                if (file.is_dir || file.type === 'dir') {
+                    // Directory
+                    iconHtml = `<i class="fas fa-folder file-icon folder-icon"></i>
+                                <a href="/${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}">${file.name}</a>`;
+                    
+                    sizeHtml = `<span style="color: #7f8c8d; font-size: 13px;">
+                        ${file.item_count ? `${file.item_count.files || 0} files, ${file.item_count.dirs || 0} folders` : '--'}
+                    </span>`;
+                    
+                    typeHtml = `<i class="fas fa-folder"></i> Folder`;
+                    actionsHtml = USER_ROLE === 'readwrite' ? `
+                        <button type="button" class="btn btn-danger btn-sm delete-btn" 
+                                data-item-name="${file.name}"
+                                data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}">
+                            <i class="fas fa-trash"></i> Delete
+                        </button>
+                    ` : '';
+                } else {
+                    // File
+                    iconHtml = `<i class="fas fa-file file-icon file-icon-default"></i>${file.name}`;
+                    sizeHtml = `<span style="color: #2c3e50; font-weight: 500;">${formatFileSize(file.size)}</span>`;
+                    typeHtml = `<i class="fas fa-file"></i> File`;
+                    actionsHtml = `
+                        <a href="/download/${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}" class="btn btn-outline btn-sm">
+                            <i class="fas fa-download"></i> Download
+                        </a>
+                        ${USER_ROLE === 'readwrite' ? `
+                            <button type="button" class="btn btn-danger btn-sm delete-btn" 
+                                    data-item-name="${file.name}"
+                                    data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}">
+                                <i class="fas fa-trash"></i> Delete
+                            </button>
+                        ` : ''}
+                    `;
+                }
+                
+                row.innerHTML = `
+                    ${USER_ROLE === 'readwrite' ? `
+                        <td>
+                            <input type="checkbox" class="file-checkbox item-checkbox" 
+                                   data-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}" 
+                                   data-name="${file.name}" 
+                                   data-is-dir="${file.is_dir || file.type === 'dir' ? 'true' : 'false'}" 
+                                   onchange="updateSelection()">
+                        </td>
+                    ` : ''}
+                    <td>
+                        <div class="file-name">
+                            ${iconHtml}
+                        </div>
+                    </td>
+                    <td>${sizeHtml}</td>
+                    <td><span class="file-type">${typeHtml}</span></td>
+                    <td>
+                        ${file.modified ? 
+                            `<span style="color: #7f8c8d; font-size: 13px; white-space: nowrap;">${formatTimestamp(file.modified)}</span>` : 
+                            `<span style="color: #95a5a6; font-size: 13px;">--</span>`
+                        }
+                    </td>
+                    <td>
+                        <div class="actions">
+                            ${actionsHtml}
+                        </div>
+                    </td>
+                `;
+                
+                tbody.appendChild(row);
+            });
+            
+            // Add event listeners to dynamically created delete buttons
+            if (USER_ROLE === 'readwrite') {
+                document.querySelectorAll('.delete-btn').forEach(button => {
+                    button.removeEventListener('click', handleDeleteClick); // Remove existing listener to avoid duplicates
+                    button.addEventListener('click', handleDeleteClick);
+                });
+                
+                // Add event listeners to checkboxes
+                document.querySelectorAll('.item-checkbox').forEach(checkbox => {
+                    checkbox.addEventListener('change', updateSelection);
+                });
+            }
+            
+            // Update selection state to ensure UI is in sync
+            updateSelection();
+        }
+
+        // Handle delete button clicks
+        function handleDeleteClick(event) {
+            console.log('🗑️ handleDeleteClick function called');
+            const itemName = this.getAttribute('data-item-name');
+            const itemPath = this.getAttribute('data-item-path');
+            console.log('Delete button clicked:', itemName, itemPath);
+            showDeleteModal(itemName, () => deleteItem(itemPath, itemName));
+        }
+
+        // Helper function to get file extension
+        function getFileExtension(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            return ext !== filename ? ext : 'file';
+        }
+
+        // Helper function to format file size
+        function formatFileSize(bytes) {
+            if (!bytes || bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        // Helper function to format timestamp  
+        function formatTimestamp(timestamp) {
+            try {
+                const date = new Date(timestamp * 1000);
+                return date.toLocaleDateString('en-US') + ' ' + 
+                       date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+            } catch (e) {
+                return '--';
+            }
+        }
+
+        async function startBatchUpload() {
+            console.log('🚀 startBatchUpload called, isUploading:', isUploading);
+            
+            if (isUploading) {
+                console.log('❌ Already uploading, returning');
+                return;
+            }
+            
+            const pendingFiles = uploadQueue.filter(item => item.status === 'pending');
+            console.log('📋 Pending files count:', pendingFiles.length);
+            console.log('📋 Total queue size:', uploadQueue.length);
+            
+            if (pendingFiles.length === 0) {
+                console.log('❌ No files to upload');
+                showUploadStatus('❌ No files to upload', 'error');
+                return;
+            }
+
+            console.log('✅ Starting upload process...');
+            isUploading = true;
+            currentUploadIndex = 0;
+            uploadStartTime = Date.now();
+            totalBytesToUpload = pendingFiles.reduce((sum, item) => sum + item.size, 0);
+            totalBytesUploaded = 0;
+            
+            const uploadBtn = document.getElementById('startUploadBtn');
+            const clearBtn = document.getElementById('clearAllBtn');
+            
+            console.log('🔧 Upload button element:', uploadBtn);
+            
+            if (uploadBtn) {
+                uploadBtn.disabled = true;
+                uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
+            }
+            if (clearBtn) clearBtn.disabled = true;
+
+            // Hide manual cleanup button during upload
+            updateManualCleanupButton();
+
+            try {
+                showUploadStatus(`🚀 Starting batch upload of ${pendingFiles.length} files...`, 'info');
+
+                for (let i = 0; i < pendingFiles.length; i++) {
+                    const item = pendingFiles[i];
+                    currentUploadIndex = i + 1;
+                    
+                    console.log(`📤 Processing file ${i + 1}/${pendingFiles.length}: ${item.name}`);
+                    
+                    // Update status to uploading
+                    updateItemStatus(item.id, 'uploading');
+                    
+                    showUploadStatus(
+                        `⬆️ Uploading "${item.name}" (${currentUploadIndex}/${pendingFiles.length})`, 
+                        'info'
+                    );
+
+                    try {
+                        console.log(`📤 Starting upload for: ${item.name}`);
+                        await uploadSingleFile(item);
+                        console.log(`✅ Upload completed for: ${item.name}`);
+                        console.log(`🔄 About to call updateItemStatus with 'completed' for: ${item.name} (${item.id})`);
+                        updateItemStatus(item.id, 'completed');
+                        console.log(`✅ updateItemStatus called for: ${item.name}`);
+                        
+                        showUploadStatus(
+                            `✅ "${item.name}" uploaded successfully (${currentUploadIndex}/${pendingFiles.length})`, 
+                            'success'
+                        );
+                        
+                    } catch (error) {
+                        console.error(`❌ Upload failed for ${item.name}:`, error);
+                        updateItemStatus(item.id, 'error', error.message);
+                        
+                        showUploadStatus(
+                            `❌ Failed to upload "${item.name}": ${error.message}`, 
+                            'error'
+                        );
+                        
+                        // Ask user if they want to continue with remaining files
+                        if (i < pendingFiles.length - 1) {
+                            const continueUpload = confirm(`Upload failed for "${item.name}". Continue with remaining files?`);
+                            if (!continueUpload) {
+                                console.log('🛑 User chose to stop upload');
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                const completedCount = uploadQueue.filter(item => item.status === 'completed').length;
+                const errorCount = uploadQueue.filter(item => item.status === 'error').length;
+                const pendingCount = uploadQueue.filter(item => item.status === 'pending').length;
+                
+                if (errorCount === 0) {
+                    showUploadStatus(
+                        `🎉 All files uploaded successfully! (${completedCount} files)`, 
+                        'success'
+                    );
+                    
+                    // Refresh file table via AJAX instead of page reload
+                    setTimeout(() => {
+                        refreshFileTable();
+                    }, 1000);
+                } else {
+                    showUploadStatus(
+                        `📊 Batch upload completed: ${completedCount} successful, ${errorCount} failed`, 
+                        'info'
+                    );
+                }
+
+                // Auto-clear completed items after upload batch finishes
+                console.log('🧹 Auto-clearing completed items in 3 seconds...');
+                setTimeout(() => {
+                    // Remove completed and error items
+                    const itemsToRemove = uploadQueue.filter(item => 
+                        item.status === 'completed' || item.status === 'error'
+                    );
+                    
+                    itemsToRemove.forEach(item => {
+                        removeFromQueue(item.id);
+                    });
+                    
+                    console.log(`🧹 Auto-cleared ${itemsToRemove.length} finished items from queue`);
+                    
+                    // Only show message if queue is completely empty
+                    if (uploadQueue.length === 0) {
+                        showUploadStatus('✨ Upload queue cleared automatically', 'success');
+                    } else {
+                        const remainingPending = uploadQueue.filter(item => item.status === 'pending').length;
+                        console.log(`📋 ${remainingPending} files still pending in queue`);
+                    }
+                }, 3000); // Wait 3 seconds to let user see the completed status
+
+            } catch (error) {
+                console.error('❌ Batch upload error:', error);
+                showUploadStatus(`❌ Batch upload failed: ${error.message}`, 'error');
+            } finally {
+                isUploading = false;
+                if (uploadBtn) {
+                    uploadBtn.disabled = false;
+                    uploadBtn.innerHTML = '<i class="fas fa-upload"></i> Upload All (<span id="uploadCount">0</span>)';
+                }
+                if (clearBtn) clearBtn.disabled = false;
+                
+                // Show manual cleanup button after upload completes
+                updateManualCleanupButton();
+                
+                updateQueueDisplay();
+            }
+        }
+
+        async function uploadSingleFile(item) {
+            console.log('🚀 Starting upload for:', item.name, 'Size:', item.file.size, 'Chunk size:', CHUNK_SIZE);
+            
+            const file = item.file;
+            const destPath = document.getElementById('destPath').value || '';
+            
+            try {
+                if (file.size <= CHUNK_SIZE) {
+                    console.log('📦 Using whole file upload for:', item.name);
+                    // Upload whole file
+                    const formData = new FormData();
+                    formData.append('filename', file.name);
+                    formData.append('dest_path', destPath);
+                    formData.append('file', file);
+
+                    const response = await fetch(UPLOAD_URL, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    console.log('📦 Upload response status for', item.name, ':', response.status);
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        console.error('❌ Upload error response for', item.name, ':', errorText);
+                        throw new Error(errorText);
+                    }
+                    
+                    updateItemProgress(item.id, 100, file.size);
+                    console.log('✅ Whole file upload completed for:', item.name, 'Progress set to 100%');
+                    
+                } else {
+                    console.log('🧩 Using chunked upload for:', item.name);
+                    // Chunked upload
+                    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+                    console.log('🧩 Total chunks for', item.name, ':', totalChunks);
+                    
+                    for (let i = 0; i < totalChunks; i++) {
+                        const start = i * CHUNK_SIZE;
+                        const end = Math.min(file.size, start + CHUNK_SIZE);
+                        const chunk = file.slice(start, end);
+
+                        console.log(`📤 Uploading chunk ${i + 1}/${totalChunks} for ${item.name}, size: ${chunk.size}`);
+
+                        const formData = new FormData();
+                        formData.append('file_id', item.id);
+                        formData.append('chunk_num', i);
+                        formData.append('total_chunks', totalChunks);
+                        formData.append('filename', file.name);
+                        formData.append('dest_path', destPath);
+                        formData.append('chunk', chunk);
+
+                        const response = await fetch(UPLOAD_URL, {
+                            method: 'POST',
+                            body: formData
+                        });
+
+                        console.log(`📤 Chunk ${i + 1} response status for ${item.name}:`, response.status);
+
+                        if (!response.ok) {
+                            const errorText = await response.text();
+                            console.error(`❌ Chunk ${i + 1} error for ${item.name}:`, errorText);
+                            throw new Error(`Chunk ${i + 1}/${totalChunks}: ${errorText}`);
+                        }
+
+                        const progress = Math.round(((i + 1) / totalChunks) * 100);
+                        const uploadedBytes = end;
+                        updateItemProgress(item.id, progress, uploadedBytes);
+                        console.log(`✅ Chunk ${i + 1} completed for ${item.name}, progress: ${progress}%`);
+                    }
+                    
+                    console.log('🎉 Chunked upload completed for:', item.name, 'All chunks processed');
+                }
+                console.log('✅ uploadSingleFile function completing successfully for:', item.name);
+            } catch (error) {
+                console.error('❌ Upload failed for:', item.name, error);
+                throw error;
+            }
+        }
+
+        // Auto-cleanup old items periodically (safety net)
+        setInterval(() => {
+            if (!isUploading) {
+                const now = Date.now();
+                const itemsToRemove = [];
+                
+                uploadQueue.forEach((item, index) => {
+                    // Remove very old completed items (over 2 minutes) as safety net
+                    if ((item.status === 'completed' || item.status === 'error') && item.completedTime) {
+                        if (now - item.completedTime > 120000) { // 2 minutes
+                            itemsToRemove.push(index);
+                        }
+                    }
+                    
+                    // Remove very old pending items (stale for 5+ minutes)
+                    if (item.status === 'pending' && item.createdTime) {
+                        const age = now - item.createdTime;
+                        if (age > 300000) { // 5 minutes
+                            console.log(`🧹 Removing stale pending item: ${item.name} (${Math.round(age/60000)}min old)`);
+                            itemsToRemove.push(index);
+                            // Try to cleanup its chunks
+                            cleanupSingleFile(item.id, item.name).catch(console.error);
+                        }
+                    }
+                });
+                
+                // Remove items in reverse order to maintain indices
+                itemsToRemove.reverse().forEach(index => {
+                    uploadQueue.splice(index, 1);
+                });
+                
+                if (itemsToRemove.length > 0) {
+                    console.log(`🧹 Safety cleanup removed ${itemsToRemove.length} old items`);
+                    updateQueueDisplay();
+                }
+            }
+        }, 60000); // Check every 60 seconds
+
+        // Selection Management Functions
+        function toggleSelectAll() {
+            const selectAllCheckbox = document.getElementById('selectAll');
+            const itemCheckboxes = document.querySelectorAll('.item-checkbox');
+            
+            if (!selectAllCheckbox || itemCheckboxes.length === 0) {
+                console.warn('⚠️ Select all checkbox or item checkboxes not found');
+                return;
+            }
+            
+            // The checkbox state has already been changed by the browser when this function is called
+            const isNowChecked = selectAllCheckbox.checked;
+            const wasIndeterminate = selectAllCheckbox.indeterminate;
+            
+            console.log('🔄 toggleSelectAll called, new checkbox state:', {
+                checked: isNowChecked,
+                wasIndeterminate: wasIndeterminate
+            });
+            
+            // Clear indeterminate state since we're making a definitive selection
+            selectAllCheckbox.indeterminate = false;
+            
+            // Apply the same state to all item checkboxes
+            selectedItems.clear();
+            
+            itemCheckboxes.forEach(checkbox => {
+                checkbox.checked = isNowChecked;
+                const row = checkbox.closest('tr');
+                if (isNowChecked) {
+                    row.classList.add('selected');
+                    selectedItems.add(checkbox.dataset.path);
+                } else {
+                    row.classList.remove('selected');
+                }
+            });
+            
+            // Update the bulk actions UI
+            const selectedCount = document.getElementById('selectedCount');
+            const bulkActions = document.getElementById('bulkActions');
+            
+            if (selectedCount) selectedCount.textContent = selectedItems.size;
+            
+            if (bulkActions) {
+                if (selectedItems.size > 0) {
+                    bulkActions.classList.add('show');
+                } else {
+                    bulkActions.classList.remove('show');
+                }
+            }
+            
+            console.log(`✅ ${isNowChecked ? 'Selected' : 'Deselected'} all ${itemCheckboxes.length} items`);
+        }
+
+        function updateSelection() {
+            const itemCheckboxes = document.querySelectorAll('.item-checkbox');
+            const selectAllCheckbox = document.getElementById('selectAll');
+            const bulkActions = document.getElementById('bulkActions');
+            const selectedCount = document.getElementById('selectedCount');
+            
+            selectedItems.clear();
+            let checkedCount = 0;
+            
+            itemCheckboxes.forEach(checkbox => {
+                const row = checkbox.closest('tr');
+                if (checkbox.checked) {
+                    checkedCount++;
+                    selectedItems.add(checkbox.dataset.path);
+                    row.classList.add('selected');
+                } else {
+                    row.classList.remove('selected');
+                }
+            });
+            
+            console.log(`📊 Selection update: ${checkedCount}/${itemCheckboxes.length} items selected`);
+            
+            if (selectAllCheckbox) {
+                if (checkedCount === 0) {
+                    selectAllCheckbox.checked = false;
+                    selectAllCheckbox.indeterminate = false;
+                } else if (checkedCount === itemCheckboxes.length) {
+                    selectAllCheckbox.checked = true;
+                    selectAllCheckbox.indeterminate = false;
+                } else {
+                    selectAllCheckbox.checked = false;
+                    selectAllCheckbox.indeterminate = true;
+                }
+            }
+            
+            if (selectedCount) selectedCount.textContent = checkedCount;
+            
+            if (bulkActions) {
+                if (checkedCount > 0) {
+                    bulkActions.classList.add('show');
+                } else {
+                    bulkActions.classList.remove('show');
+                }
+            }
+        }
+
+        function clearSelection() {
+            selectedItems.clear();
+            document.querySelectorAll('.item-checkbox').forEach(checkbox => {
+                checkbox.checked = false;
+                checkbox.closest('tr').classList.remove('selected');
+            });
+            
+            const selectAllCheckbox = document.getElementById('selectAll');
+            if (selectAllCheckbox) {
+                selectAllCheckbox.checked = false;
+                selectAllCheckbox.indeterminate = false;
+            }
+            
+            // Update the selection UI
+            updateSelection();
+            
+            console.log('✅ Selection cleared successfully');
+        }
+
+        // Modal Functions
+        function showMoveModal() {
+            if (selectedItems.size === 0) return;
+            
+            currentModalAction = 'move';
+            const modal = document.getElementById('moveModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const confirmBtn = document.getElementById('confirmAction');
+            const selectedItemsList = document.getElementById('selectedItemsList');
+            
+            if (modalTitle) modalTitle.textContent = 'Move Items';
+            if (confirmBtn) {
+                confirmBtn.textContent = 'Move';
+                confirmBtn.className = 'btn btn-warning';
+            }
+            
+            // Populate selected items list
+            if (selectedItemsList) {
+                selectedItemsList.innerHTML = '';
+                selectedItems.forEach(path => {
+                    const li = document.createElement('li');
+                    li.textContent = path.split('/').pop(); // Show just filename
+                    selectedItemsList.appendChild(li);
+                });
+            }
+            
+            if (modal) modal.classList.add('show');
+        }
+
+        function showCopyModal() {
+            if (selectedItems.size === 0) return;
+            
+            currentModalAction = 'copy';
+            const modal = document.getElementById('moveModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const confirmBtn = document.getElementById('confirmAction');
+            const selectedItemsList = document.getElementById('selectedItemsList');
+            
+            if (modalTitle) modalTitle.textContent = 'Copy Items';
+            if (confirmBtn) {
+                confirmBtn.textContent = 'Copy';
+                confirmBtn.className = 'btn btn-success';
+            }
+            
+            // Populate selected items list
+            if (selectedItemsList) {
+                selectedItemsList.innerHTML = '';
+                selectedItems.forEach(path => {
+                    const li = document.createElement('li');
+                    li.textContent = path.split('/').pop(); // Show just filename
+                    selectedItemsList.appendChild(li);
+                });
+            }
+            
+            if (modal) modal.classList.add('show');
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('moveModal');
+            if (modal) modal.classList.remove('show');
+            
+            // Reset form
+            const destinationPath = document.getElementById('destinationPath');
+            if (destinationPath) destinationPath.value = '';
+        }
+
+        function confirmMoveOrCopy() {
+            const destinationPath = document.getElementById('destinationPath').value.trim();
+            const selectedPaths = Array.from(selectedItems);
+            
+            if (selectedPaths.length === 0) {
+                showNotification('No Selection', 'No items selected', 'error');
+                return;
+            }
+            
+            // Validate destination path
+            if (destinationPath && !isValidPath(destinationPath)) {
+                showNotification('Invalid Path', 'Invalid destination path. Use forward slashes and avoid special characters.', 'error');
+                return;
+            }
+            
+            // Perform the action
+            if (currentModalAction === 'move') {
+                performBulkMove(selectedPaths, destinationPath);
+            } else if (currentModalAction === 'copy') {
+                performBulkCopy(selectedPaths, destinationPath);
+            }
+            
+            closeModal();
+        }
+
+        function isValidPath(path) {
+            // Basic path validation
+            return !/[<>:"|?*\\]/.test(path) && !path.includes('..');
+        }
+
+        async function performBulkMove(paths, destination) {
+            try {
+                const response = await fetch('/bulk_move', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        paths: paths,
+                        destination: destination,
+                        current_path: CURRENT_PATH
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showNotification('Move Successful', `Successfully moved ${result.moved_count} item(s)`, 'success');
+                    // Clear selection first, then refresh file table
+                    clearSelection();
+                    await refreshFileTable();
+                } else {
+                    showNotification('Move Failed', result.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Move Failed', error.message, 'error');
+            }
+        }
+
+        async function performBulkCopy(paths, destination) {
+            try {
+                const response = await fetch('/bulk_copy', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        paths: paths,
+                        destination: destination,
+                        current_path: CURRENT_PATH
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showNotification('Copy Successful', `Successfully copied ${result.copied_count} item(s)`, 'success');
+                    // Clear selection first, then refresh file table
+                    clearSelection();
+                    await refreshFileTable();
+                } else {
+                    showNotification('Copy Failed', result.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Copy Failed', error.message, 'error');
+            }
+        }
+
+        function bulkDelete() {
+            const selectedPaths = Array.from(selectedItems);
+            
+            if (selectedPaths.length === 0) {
+                showNotification('No Selection', 'No items selected', 'error');
+                return;
+            }
+            
+            showDeleteModal('', () => performBulkDelete(selectedPaths), 'bulk');
+        }
+
+        async function performBulkDelete(paths) {
+            try {
+                const response = await fetch('/bulk_delete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        paths: paths
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showNotification('Delete Successful', `Successfully deleted ${result.deleted_count} item(s)`, 'success');
+                    // Clear selection first, then refresh file table
+                    clearSelection();
+                    await refreshFileTable();
+                } else {
+                    showNotification('Delete Failed', result.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Delete Failed', error.message, 'error');
+            }
+        }
+
+        // Create Folder Function
+        async function createFolder(folderName, path) {
+            try {
+                const formData = new FormData();
+                formData.append('foldername', folderName);
+                formData.append('path', path);
+
+                const response = await fetch('/mkdir', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showNotification('Folder Created', result.message, 'success');
+                    // Clear the input field
+                    document.getElementById('folderNameInput').value = '';
+                    // Refresh the file table
+                    await refreshFileTable();
+                } else {
+                    showNotification('Create Folder Failed', result.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Create Folder Failed', error.message, 'error');
+            }
+        }
+
+        // Delete Modal Functions
+        let currentDeleteTarget = null;
+        let currentDeleteType = 'individual'; // 'individual' or 'bulk'
+
+        function showDeleteModal(itemName, deleteCallback, type = 'individual') {
+            console.log('showDeleteModal called:', itemName, type);
+            currentDeleteTarget = deleteCallback;
+            currentDeleteType = type;
+            
+            const modal = document.getElementById('deleteModal');
+            const message = document.getElementById('deleteMessage');
+            
+            if (type === 'bulk') {
+                const selectedPaths = Array.from(selectedItems);
+                message.textContent = `Are you sure you want to delete ${selectedPaths.length} selected item(s)? This action cannot be undone.`;
+            } else {
+                message.textContent = `Are you sure you want to delete "${itemName}"? This action cannot be undone.`;
+            }
+            
+            modal.classList.add('show');
+        }
+
+        function closeDeleteModal() {
+            const modal = document.getElementById('deleteModal');
+            modal.classList.remove('show');
+            currentDeleteTarget = null;
+            currentDeleteType = 'individual';
+        }
+
+        function confirmDelete() {
+            if (currentDeleteTarget) {
+                currentDeleteTarget();
+            }
+            closeDeleteModal();
+        }
+
+        // Notification Modal Functions
+        function showNotification(title, message, type = 'info') {
+            const modal = document.getElementById('notificationModal');
+            const titleElement = document.getElementById('notificationTitle');
+            const messageElement = document.getElementById('notificationMessage');
+            
+            titleElement.textContent = title;
+            messageElement.textContent = message;
+            
+            // Add appropriate icon based on type
+            const icon = type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️';
+            titleElement.textContent = `${icon} ${title}`;
+            
+            modal.classList.add('show');
+        }
+
+        function closeNotificationModal() {
+            const modal = document.getElementById('notificationModal');
+            modal.classList.remove('show');
+        }
+
+        // Individual Delete Function
+        async function deleteItem(itemPath, itemName) {
+            console.log('deleteItem called:', itemPath, itemName);
+            try {
+                const response = await fetch('/delete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `target_path=${encodeURIComponent(itemPath)}`
+                });
+                
+                console.log('Delete response:', response.status);
+                
+                if (response.ok) {
+                    showNotification('Delete Successful', `Successfully deleted "${itemName}"`, 'success');
+                    // Clear selection and refresh file table
+                    clearSelection();
+                    await refreshFileTable();
+                } else {
+                    const errorText = await response.text();
+                    showNotification('Delete Failed', errorText || 'Failed to delete item', 'error');
+                }
+            } catch (error) {
+                console.error('Delete error:', error);
+                showNotification('Delete Failed', error.message, 'error');
+            }
+        }
+
+        // Add manual cleanup button for debugging/admin use
+        function addManualCleanupButton() {
+            const controls = document.querySelector('.controls');
+            if (controls && USER_ROLE === 'readwrite') {
+                const cleanupBtn = document.createElement('button');
+                cleanupBtn.id = 'manualCleanupBtn';
+                cleanupBtn.className = 'btn btn-warning btn-sm';
+                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Manual Cleanup';
+                cleanupBtn.style.marginLeft = '10px';
+                cleanupBtn.onclick = async function() {
+                    try {
+                        cleanupBtn.disabled = true;
+                        cleanupBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Cleaning...';
+                        
+                        const response = await fetch('/admin/cleanup_chunks', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' }
+                        });
+                        
+                        const result = await response.json();
+                        if (response.ok) {
+                            showUploadStatus('🧹 Manual cleanup completed successfully', 'success');
+                            console.log('Cleanup stats:', result);
+                        } else {
+                            throw new Error(result.error || 'Cleanup failed');
+                        }
+                    } catch (error) {
+                        showUploadStatus(`❌ Manual cleanup failed: ${error.message}`, 'error');
+                    } finally {
+                        cleanupBtn.disabled = false;
+                        cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Manual Cleanup';
+                    }
+                };
+                
+                controls.appendChild(cleanupBtn);
+            }
+        }
+
+        // Function to update manual cleanup button visibility
+        async function updateManualCleanupButton() {
+            const cleanupBtn = document.getElementById('manualCleanupBtn');
+            if (!cleanupBtn) return;
+            
+            try {
+                const response = await fetch('/admin/upload_status');
+                if (response.ok) {
+                    const status = await response.json();
+                    
+                    // Only disable during ACTUAL active uploads, not just chunk existence
+                    if (isUploading) {
+                        cleanupBtn.style.display = 'none';
+                        cleanupBtn.title = 'Manual cleanup disabled during active uploads';
+                    } else {
+                        cleanupBtn.style.display = 'inline-flex';
+                        // Update title based on whether chunks exist
+                        if (status.has_active_uploads) {
+                            cleanupBtn.title = `Clean up ${status.chunk_count || 'temporary'} chunk files (Safe - no active uploads)`;
+                            cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Manual Cleanup (' + (status.chunk_count || '?') + ')';
+                        } else {
+                            cleanupBtn.title = 'Clean up temporary chunk files';
+                            cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Manual Cleanup';
+                        }
+                    }
+                } else {
+                    // If we can't check status, show button but with warning
+                    cleanupBtn.style.display = 'inline-flex';
+                    cleanupBtn.title = 'Clean up temporary chunk files (Status check failed)';
+                    cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Manual Cleanup';
+                }
+            } catch (error) {
+                console.warn('Failed to check upload status:', error);
+                // On error, still show the button - user can decide
+                cleanupBtn.style.display = 'inline-flex';
+                cleanupBtn.title = 'Clean up temporary chunk files (Status check failed)';
+                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Manual Cleanup';
+            }
+        }
+
+        // Event listeners and initialization
+        document.addEventListener('DOMContentLoaded', function() {
+            const clearBtn = document.getElementById('clearAllBtn');
+            const uploadBtn = document.getElementById('startUploadBtn');
+            const fileInput = document.getElementById('fileInput');
+            const fileInputDisplay = document.querySelector('.file-input-display');
+
+            // Add event listeners with null checks
+            if (clearBtn) {
+                console.log('🔧 Setting up clear button event listener');
+                clearBtn.addEventListener('click', clearAllQueue);
+            } else {
+                console.warn('⚠️ Clear button not found');
+            }
+            
+            if (uploadBtn) {
+                console.log('🔧 Setting up upload button event listener');
+                uploadBtn.addEventListener('click', startBatchUpload);
+            } else {
+                console.warn('⚠️ Upload button not found');
+            }
+
+            // Create folder form event listener
+            const createFolderForm = document.getElementById('createFolderForm');
+            if (createFolderForm) {
+                createFolderForm.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    const folderName = document.getElementById('folderNameInput').value.trim();
+                    const path = e.target.querySelector('input[name="path"]').value;
+                    
+                    if (folderName) {
+                        createFolder(folderName, path);
+                    }
+                });
+            }
+
+            // Drag and drop functionality
+            if (fileInputDisplay && fileInput) {
+                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                    fileInputDisplay.addEventListener(eventName, preventDefaults, false);
+                    document.body.addEventListener(eventName, preventDefaults, false);
+                });
+
+                ['dragenter', 'dragover'].forEach(eventName => {
+                    fileInputDisplay.addEventListener(eventName, highlight, false);
+                });
+
+                ['dragleave', 'drop'].forEach(eventName => {
+                    fileInputDisplay.addEventListener(eventName, unhighlight, false);
+                });
+
+                fileInputDisplay.addEventListener('drop', handleDrop, false);
+
+                // Add click functionality to trigger file input
+                fileInputDisplay.addEventListener('click', function() {
+                    fileInput.click();
+                });
+
+                // Update file input display when files are selected
+                fileInput.addEventListener('change', function(e) {
+                    const files = Array.from(e.target.files);
+                    if (files.length > 0) {
+                        const display = document.querySelector('.file-input-display');
+                        if (display) {
+                            display.innerHTML = `
+                                <i class="fas fa-plus-circle" style="font-size: 20px; color: #27ae60;"></i>
+                                <div>
+                                    <strong>Added ${files.length} file(s) to queue</strong>
+                                    <div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">
+                                        Click again to add more files
+                                    </div>
+                                </div>
+                            `;
+                            display.style.borderColor = '#27ae60';
+                            display.style.backgroundColor = 'rgba(39, 174, 96, 0.1)';
+                            
+                            // Reset after 2 seconds
+                            setTimeout(() => {
+                                display.innerHTML = `
+                                    <i class="fas fa-upload" style="font-size: 20px;"></i>
+                                    <div>
+                                        <strong>Choose files to upload</strong>
+                                        <div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">
+                                            Click here or drag and drop files (multiple files supported)
+                                        </div>
+                                    </div>
+                                `;
+                                display.style.borderColor = 'rgba(255, 255, 255, 0.4)';
+                                display.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+                            }, 2000);
+                        }
+                    }
+                });
+            }
+
+            // Add dynamic file type icons for existing files
+            document.querySelectorAll('.file-icon-default').forEach(icon => {
+                const fileNameElement = icon.parentElement.querySelector('a, span');
+                if (fileNameElement) {
+                    const fileName = fileNameElement.textContent.trim();
+                    const iconClass = getFileIcon(fileName);
+                    const color = getFileColor(fileName);
+                    
+                    icon.className = iconClass + ' file-icon';
+                    icon.style.color = color;
+                }
+            });
+
+            // Initialize selection handlers
+            if (USER_ROLE === 'readwrite') {
+                document.querySelectorAll('.item-checkbox').forEach(checkbox => {
+                    checkbox.addEventListener('change', updateSelection);
+                });
+                
+                // Add delete button event listeners
+                document.querySelectorAll('.delete-btn').forEach(button => {
+                    console.log('🔧 Adding delete event listener to button:', button);
+                    button.addEventListener('click', handleDeleteClick);
+                });
+            }
+
+            // Add manual cleanup button for debugging
+            addManualCleanupButton();
+
+            // Initial cleanup button state check
+            setTimeout(() => {
+                updateManualCleanupButton();
+            }, 1000);
+
+            // Check server connectivity first
+            async function checkConnectivity() {
+                try {
+                    const response = await fetch('/api/health_check', {
+                        method: 'GET',
+                        headers: { 'Accept': 'application/json' }
+                    });
+                    
+                    if (response.ok) {
+                        const health = await response.json();
+                        console.log('Server connectivity OK:', health);
+                        return true;
+                    } else {
+                        console.warn('Server connectivity issue, status:', response.status);
+                        return false;
+                    }
+                } catch (error) {
+                    console.error('Server connectivity check failed:', error);
+                    return false;
+                }
+            }
+
+            // Load storage statistics with connectivity check
+            async function initializeStorageStats() {
+                console.log('Initializing storage stats...');
+                
+                // First check if server is reachable
+                const isConnected = await checkConnectivity();
+                if (!isConnected) {
+                    console.error('Server not reachable, showing connectivity error');
+                    showStorageError('Connection Failed');
+                    return;
+                }
+                
+                // Try to load storage stats
+                await loadStorageStats();
+            }
+
+            // Initialize storage stats
+            initializeStorageStats();
+
+            // Refresh storage stats every 30 seconds
+            setInterval(loadStorageStats, 30000);
+
+            // Show enhanced upload hints
+            showUploadStatus(
+                '<i class="fas fa-info-circle"></i> Enhanced server-sided cleanup active: chunks auto-cleanup on page refresh, connection loss, and periodically', 
+                'info'
+            );
+            
+            // Cleanup any stale items from previous sessions on page load
+            setTimeout(() => {
+                cleanupUnfinishedChunks().catch(console.error);
+            }, 2000);
+
+            // Debug info
+            console.log('🚀 Cloudinator Enhanced initialized');
+            console.log('📤 Upload URL:', UPLOAD_URL);
+            console.log('📦 Chunk size:', CHUNK_SIZE, 'bytes (' + Math.round(CHUNK_SIZE / (1024*1024)) + 'MB)');
+            console.log('🧹 Enhanced cleanup system active');
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        function highlight(e) {
+            const fileInputDisplay = document.querySelector('.file-input-display');
+            if (fileInputDisplay) {
+                fileInputDisplay.style.borderColor = '#2ecc71';
+                fileInputDisplay.style.backgroundColor = 'rgba(46, 204, 113, 0.1)';
+                fileInputDisplay.style.transform = 'scale(1.02)';
+            }
+        }
+
+        function unhighlight(e) {
+            const fileInputDisplay = document.querySelector('.file-input-display');
+            if (fileInputDisplay) {
+                fileInputDisplay.style.borderColor = 'rgba(255, 255, 255, 0.4)';
+                fileInputDisplay.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+                fileInputDisplay.style.transform = 'scale(1)';
+            }
+        }
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = Array.from(dt.files);
+            
+            if (files.length > 0) {
+                addFilesToQueue(files);
+            }
+        }
+
+        // Enhanced keyboard shortcuts
+        document.addEventListener('keydown', function(e) {
+            // Ctrl/Cmd + U for upload file selection
+            if ((e.ctrlKey || e.metaKey) && e.key === 'u' && !isUploading) {
+                e.preventDefault();
+                const fileInput = document.getElementById('fileInput');
+                if (fileInput) fileInput.click();
+            }
+            
+            // Ctrl/Cmd + Enter to start upload
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !isUploading) {
+                e.preventDefault();
+                if (uploadQueue.filter(item => item.status === 'pending').length > 0) {
+                    startBatchUpload();
+                }
+            }
+            
+            // Escape to clear queue or close modal
+            if (e.key === 'Escape') {
+                const modal = document.getElementById('moveModal');
+                if (modal && modal.classList.contains('show')) {
+                    closeModal();
+                } else if (!isUploading && uploadQueue.length > 0) {
+                    clearAllQueue();
+                }
+            }
+            
+            // Delete key to remove completed/failed items or bulk delete
+            if (e.key === 'Delete' && !isUploading) {
+                if (selectedItems.size > 0) {
+                    bulkDelete();
+                } else {
+                    const completedItems = uploadQueue.filter(item => 
+                        item.status === 'completed' || item.status === 'error'
+                    );
+                    completedItems.forEach(item => removeFromQueue(item.id));
+                }
+            }
+            
+            // Ctrl/Cmd + A to select all files
+            if ((e.ctrlKey || e.metaKey) && e.key === 'a' && USER_ROLE === 'readwrite') {
+                e.preventDefault();
+                const selectAllCheckbox = document.getElementById('selectAll');
+                if (selectAllCheckbox) {
+                    selectAllCheckbox.checked = true;
+                    toggleSelectAll();
+                }
+            }
+            
+            // Backspace or Alt + Left Arrow to go up one level
+            if ((e.key === 'Backspace' || (e.altKey && e.key === 'ArrowLeft')) && window.location.pathname !== '/') {
+                e.preventDefault();
+                const currentPath = CURRENT_PATH;
+                if (currentPath) {
+                    const pathParts = currentPath.split('/');
+                    pathParts.pop();
+                    const parentPath = pathParts.join('/');
+                    window.location.href = parentPath ? `/${parentPath}` : '/';
+                }
+            }
+
+            // F5 or Ctrl/Cmd + R - Enhanced refresh with cleanup warning
+            if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && e.key === 'r')) {
+                if (isUploading || uploadQueue.some(item => item.status === 'pending')) {
+                    e.preventDefault();
+                    const shouldRefresh = confirm('⚠️ Upload in progress. Refreshing will cancel uploads and cleanup temporary files. Continue?');
+                    if (shouldRefresh) {
+                        // Try cleanup before refresh
+                        cleanupUnfinishedChunks().finally(() => {
+                            window.location.reload();
+                        });
+                    }
+                }
+            }
+        });
+
+        // Modal close on outside click
+        document.addEventListener('click', function(e) {
+            const modal = document.getElementById('moveModal');
+            if (modal && e.target === modal) {
+                closeModal();
+            }
+        });
+
+        // Update progress every second during upload
+        setInterval(() => {
+            if (isUploading) {
+                updateProgressSummary();
+            }
+        }, 1000);
+
+        // Check cleanup button state periodically
+        setInterval(() => {
+            updateManualCleanupButton();
+        }, 5000); // Check every 5 seconds
+
+        // Enhanced connection monitoring
+        let isOnline = navigator.onLine;
+        let connectionLostTime = null;
+
+        function updateConnectionStatus() {
+            const wasOnline = isOnline;
+            isOnline = navigator.onLine;
+            
+            if (!wasOnline && isOnline) {
+                // Connection restored
+                console.log('🌐 Connection restored');
+                if (connectionLostTime) {
+                    const outageTime = Math.round((Date.now() - connectionLostTime) / 1000);
+                    showUploadStatus(`🌐 Connection restored after ${outageTime}s outage`, 'success');
+                    connectionLostTime = null;
+                }
+            } else if (wasOnline && !isOnline) {
+                // Connection lost
+                console.log('📡 Connection lost');
+                connectionLostTime = Date.now();
+                showUploadStatus('📡 Connection lost - uploads will fail', 'error');
+            }
+        }
+
+        // Monitor connection changes
+        window.addEventListener('online', updateConnectionStatus);
+        window.addEventListener('offline', updateConnectionStatus);
+
+        // Ping server periodically to detect connection issues
+        setInterval(async () => {
+            if (isUploading) {
+                try {
+                    const response = await fetch('/admin/chunk_stats', {
+                        method: 'GET',
+                        cache: 'no-cache'
+                    });
+                    
+                    if (!response.ok && isOnline) {
+                        console.warn('⚠️ Server connection issues detected');
+                        showUploadStatus('⚠️ Server connection unstable', 'error');
+                    }
+                } catch (error) {
+                    if (isOnline) {
+                        console.warn('⚠️ Network connectivity issues:', error);
+                    }
+                }
+            }
+        }, 30000); // Check every 30 seconds during upload
+
+        // Global error handler for unhandled promise rejections
+        window.addEventListener('unhandledrejection', function(event) {
+            console.error('🚨 Unhandled promise rejection:', event.reason);
+            
+            // If it's related to cleanup, try to handle gracefully
+            if (event.reason && event.reason.message && event.reason.message.includes('cleanup')) {
+                showUploadStatus('⚠️ Cleanup operation failed - some temporary files may remain', 'error');
+                event.preventDefault();
+            }
+        });
+
+        // Utility functions
+        function logout() {
+            // Cleanup before logout
+            cleanupUnfinishedChunks().finally(() => {
+                window.location.href = "{{ url_for('logout') }}";
+            });
+        }
+
+        // Export functions for global access
+        window.CloudinatorUpload = {
+            addFilesToQueue,
+            startBatchUpload,
+            clearAllQueue,
+            cleanupUnfinishedChunks,
+            showMoveModal,
+            showCopyModal,
+            bulkDelete,
+            clearSelection,
+            closeModal,
+            confirmMoveOrCopy,
+            toggleSelectAll,
+            updateSelection
+        };
+
+        console.log('✅ Cloudinator Enhanced Upload System Ready');
+    </script>
+</body>
+</html>
