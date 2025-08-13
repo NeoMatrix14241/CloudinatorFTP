@@ -357,9 +357,16 @@
         @media (min-width: 769px) {
             .table th:nth-child(2),
             .table td:nth-child(2) {
-                width: 35%;
+                width: 30%; /* Reduced to make room for actions */
                 max-width: 350px;
                 min-width: 200px;
+            }
+
+            /* Actions column for desktop - accommodate text buttons */
+            .table th:last-child,
+            .table td:last-child {
+                width: 25%; /* Increased width for text buttons */
+                min-width: 300px;
             }
 
             .table tbody tr {
@@ -376,14 +383,32 @@
 
         .actions {
             display: flex;
-            gap: 8px;
+            gap: 6px;
             align-items: center;
+            flex-wrap: wrap;
+            justify-content: flex-start;
         }
 
         .btn-sm {
-            padding: 6px 12px;
-            font-size: 12px;
-            border-radius: 6px;
+            padding: 5px 10px;
+            font-size: 11px;
+            border-radius: 4px;
+            min-width: auto;
+            text-align: center;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+
+        /* Individual action button styling */
+        .actions .btn-sm {
+            padding: 4px 8px;
+            margin: 1px;
+            font-size: 10px;
+        }
+
+        .actions .btn-sm i {
+            font-size: 10px;
+            margin-right: 3px;
         }
 
         .btn-outline {
@@ -1304,20 +1329,39 @@
                 min-width: 49px; /* 30% smaller: 70px -> 49px */
             }
 
-            /* Actions column - REMOVED STICKY POSITIONING */
+            /* Actions column */
             .table th:last-child,
             .table td:last-child {
-                min-width: 70px; /* 30% smaller: 100px -> 70px */
-                /* Removed sticky positioning and shadows */
+                min-width: 200px; /* Increased to accommodate text buttons */
+                white-space: nowrap;
             }
 
             .actions {
                 display: flex;
-                flex-direction: row;
-                gap: 2px; /* 30% smaller: 3px -> 2px */
-                min-width: 63px; /* 30% smaller: 90px -> 63px */
+                flex-direction: column;
+                gap: 2px;
+                min-width: 190px;
                 justify-content: flex-start;
-                flex-wrap: nowrap; /* Prevent wrapping on mobile */
+                flex-wrap: nowrap;
+            }
+
+            .actions .btn-sm {
+                padding: 3px 6px;
+                font-size: 9px;
+                min-width: auto;
+                height: 22px;
+                border-radius: 3px;
+                text-align: left;
+                display: flex;
+                align-items: center;
+                justify-content: flex-start;
+            }
+
+            .actions .btn-sm i {
+                font-size: 8px;
+                margin-right: 4px;
+                width: 12px;
+                text-align: center;
             }
 
             .file-info-meta {
@@ -1454,6 +1498,21 @@
                 margin: 18px 0; /* Changed from margin-bottom to full margin */
                 overflow-x: auto;
                 -webkit-overflow-scrolling: touch;
+            }
+
+            /* Tablet-specific actions column */
+            .table th:last-child,
+            .table td:last-child {
+                min-width: 280px; /* Slightly smaller than desktop but still accommodates text */
+            }
+
+            .actions {
+                gap: 4px;
+            }
+
+            .actions .btn-sm {
+                padding: 3px 6px;
+                font-size: 10px;
             }
             
             .stats-grid {
@@ -1739,7 +1798,7 @@
     <header class="header">
         <div class="header-left">
             <a href="/" style="text-decoration: none; color: inherit; cursor: pointer;">
-                <h1><i class="fas fa-cloud-upload-alt"></i> Cloudinator</h1>
+                <h1><i class="fas fa-cloud-upload-alt"></i> Cloudinator FTP</h1>
             </a>
         </div>
         <div class="user-info">
@@ -1938,6 +1997,9 @@
                 <button class="btn btn-success btn-sm" onclick="showCopyModal()">
                     <i class="fas fa-copy"></i> Copy
                 </button>
+                <button class="btn btn-primary btn-sm" onclick="showRenameModal()">
+                    <i class="fas fa-edit"></i> Rename
+                </button>
                 <button class="btn btn-danger btn-sm" onclick="bulkDelete()">
                     <i class="fas fa-trash"></i> Delete
                 </button>
@@ -2096,16 +2158,44 @@
                         <td>
                             <div class="actions">
                                 {% if not item.is_dir %}
-                                <a href="{{ url_for('download', path=(path + '/' + item.name) if path else item.name) }}" 
-                                   class="btn btn-outline btn-sm">
+                                <button type="button" class="btn btn-outline btn-sm download-btn" 
+                                        data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
+                                        onclick="downloadItem('{{ (path + '/' + item.name) if path else item.name }}')"
+                                        title="Download file">
                                     <i class="fas fa-download"></i> Download
-                                </a>
+                                </button>
                                 {% endif %}
                                 
                                 {% if role == 'readwrite' %}
+                                <button type="button" class="btn btn-warning btn-sm move-btn" 
+                                        data-item-name="{{ item.name }}"
+                                        data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
+                                        onclick="showSingleMoveModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
+                                        title="Move item">
+                                    <i class="fas fa-cut"></i> Move
+                                </button>
+                                
+                                <button type="button" class="btn btn-success btn-sm copy-btn" 
+                                        data-item-name="{{ item.name }}"
+                                        data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
+                                        onclick="showSingleCopyModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
+                                        title="Copy item">
+                                    <i class="fas fa-copy"></i> Copy
+                                </button>
+                                
+                                <button type="button" class="btn btn-primary btn-sm rename-btn" 
+                                        data-item-name="{{ item.name }}"
+                                        data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
+                                        onclick="showSingleRenameModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
+                                        title="Rename item">
+                                    <i class="fas fa-edit"></i> Rename
+                                </button>
+                                
                                 <button type="button" class="btn btn-danger btn-sm delete-btn" 
                                         data-item-name="{{ item.name }}"
-                                        data-item-path="{{ (path + '/' + item.name) if path else item.name }}">
+                                        data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
+                                        onclick="showSingleDeleteModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
+                                        title="Delete item">
                                     <i class="fas fa-trash"></i> Delete
                                 </button>
                                 {% endif %}
@@ -2155,6 +2245,36 @@
             <div class="modal-footer">
                 <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
                 <button class="btn btn-primary" id="confirmAction" onclick="confirmMoveOrCopy()">Move</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Rename Modal -->
+    {% if role == 'readwrite' %}
+    <div id="renameModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Rename Item</h3>
+                <button class="modal-close" onclick="closeRenameModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="newItemName">New Name:</label>
+                    <input type="text" id="newItemName" class="form-control" placeholder="Enter new name">
+                    <small style="color: #7f8c8d; font-size: 12px; margin-top: 5px;">
+                        Note: Only one item can be renamed at a time
+                    </small>
+                </div>
+                <div id="renameItemInfo" style="margin-top: 15px;">
+                    <strong>Renaming:</strong>
+                    <div id="currentItemName" style="margin-top: 8px; padding: 10px; background: rgba(52, 152, 219, 0.1); border-radius: 8px; color: #2c3e50;">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeRenameModal()">Cancel</button>
+                <button class="btn btn-primary" id="confirmRename" onclick="confirmRename()">Rename</button>
             </div>
         </div>
     </div>
@@ -3001,9 +3121,35 @@
                     
                     typeHtml = `<i class="fas fa-folder"></i> Folder`;
                     actionsHtml = USER_ROLE === 'readwrite' ? `
+                        <button type="button" class="btn btn-warning btn-sm move-btn" 
+                                data-item-name="${file.name}"
+                                data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
+                                onclick="showSingleMoveModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                title="Move item">
+                            <i class="fas fa-cut"></i> Move
+                        </button>
+                        
+                        <button type="button" class="btn btn-success btn-sm copy-btn" 
+                                data-item-name="${file.name}"
+                                data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
+                                onclick="showSingleCopyModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                title="Copy item">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                        
+                        <button type="button" class="btn btn-primary btn-sm rename-btn" 
+                                data-item-name="${file.name}"
+                                data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
+                                onclick="showSingleRenameModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                title="Rename item">
+                            <i class="fas fa-edit"></i> Rename
+                        </button>
+                        
                         <button type="button" class="btn btn-danger btn-sm delete-btn" 
                                 data-item-name="${file.name}"
-                                data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}">
+                                data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
+                                onclick="showSingleDeleteModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                title="Delete item">
                             <i class="fas fa-trash"></i> Delete
                         </button>
                     ` : '';
@@ -3013,13 +3159,42 @@
                     sizeHtml = `<span style="color: #2c3e50; font-weight: 500;">${formatFileSize(file.size)}</span>`;
                     typeHtml = `<i class="fas fa-file"></i> File`;
                     actionsHtml = `
-                        <a href="/download/${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}" class="btn btn-outline btn-sm">
+                        <button type="button" class="btn btn-outline btn-sm download-btn" 
+                                data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
+                                onclick="downloadItem('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}')"
+                                title="Download file">
                             <i class="fas fa-download"></i> Download
-                        </a>
+                        </button>
                         ${USER_ROLE === 'readwrite' ? `
+                            <button type="button" class="btn btn-warning btn-sm move-btn" 
+                                    data-item-name="${file.name}"
+                                    data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
+                                    onclick="showSingleMoveModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                    title="Move item">
+                                <i class="fas fa-cut"></i> Move
+                            </button>
+                            
+                            <button type="button" class="btn btn-success btn-sm copy-btn" 
+                                    data-item-name="${file.name}"
+                                    data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
+                                    onclick="showSingleCopyModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                    title="Copy item">
+                                <i class="fas fa-copy"></i> Copy
+                            </button>
+                            
+                            <button type="button" class="btn btn-primary btn-sm rename-btn" 
+                                    data-item-name="${file.name}"
+                                    data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
+                                    onclick="showSingleRenameModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                    title="Rename item">
+                                <i class="fas fa-edit"></i> Rename
+                            </button>
+                            
                             <button type="button" class="btn btn-danger btn-sm delete-btn" 
                                     data-item-name="${file.name}"
-                                    data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}">
+                                    data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
+                                    onclick="showSingleDeleteModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                    title="Delete item">
                                 <i class="fas fa-trash"></i> Delete
                             </button>
                         ` : ''}
@@ -3059,11 +3234,39 @@
                 tbody.appendChild(row);
             });
             
-            // Add event listeners to dynamically created delete buttons
+            // Add event listeners to dynamically created action buttons
             if (USER_ROLE === 'readwrite') {
+                // Delete buttons
                 document.querySelectorAll('.delete-btn').forEach(button => {
-                    button.removeEventListener('click', handleDeleteClick); // Remove existing listener to avoid duplicates
+                    button.removeEventListener('click', handleDeleteClick);
                     button.addEventListener('click', handleDeleteClick);
+                });
+                
+                // Move buttons  
+                document.querySelectorAll('.move-btn').forEach(button => {
+                    button.addEventListener('click', function() {
+                        const itemName = this.getAttribute('data-item-name');
+                        const itemPath = this.getAttribute('data-item-path');
+                        showSingleMoveModal(itemPath, itemName);
+                    });
+                });
+                
+                // Copy buttons
+                document.querySelectorAll('.copy-btn').forEach(button => {
+                    button.addEventListener('click', function() {
+                        const itemName = this.getAttribute('data-item-name');
+                        const itemPath = this.getAttribute('data-item-path');
+                        showSingleCopyModal(itemPath, itemName);
+                    });
+                });
+                
+                // Rename buttons
+                document.querySelectorAll('.rename-btn').forEach(button => {
+                    button.addEventListener('click', function() {
+                        const itemName = this.getAttribute('data-item-name');
+                        const itemPath = this.getAttribute('data-item-path');
+                        showSingleRenameModal(itemPath, itemName);
+                    });
                 });
                 
                 // Add event listeners to checkboxes
@@ -3071,6 +3274,14 @@
                     checkbox.addEventListener('change', updateSelection);
                 });
             }
+            
+            // Download buttons (available for all roles)
+            document.querySelectorAll('.download-btn').forEach(button => {
+                button.addEventListener('click', function() {
+                    const itemPath = this.getAttribute('data-item-path');
+                    downloadItem(itemPath);
+                });
+            });
             
             // Update selection state to ensure UI is in sync
             updateSelection();
@@ -3430,6 +3641,18 @@
             
             if (selectedCount) selectedCount.textContent = selectedItems.size;
             
+            // Show/hide rename button based on selection count
+            const renameButton = document.querySelector('.bulk-buttons button[onclick*="showRenameModal"]');
+            if (renameButton) {
+                if (selectedItems.size === 1) {
+                    renameButton.style.display = 'flex';
+                    renameButton.disabled = false;
+                } else {
+                    renameButton.style.display = 'none';
+                    renameButton.disabled = true;
+                }
+            }
+            
             if (bulkActions) {
                 if (selectedItems.size > 0) {
                     bulkActions.classList.add('show');
@@ -3478,12 +3701,35 @@
             
             if (selectedCount) selectedCount.textContent = checkedCount;
             
+            // Show/hide rename button based on selection count
+            const renameButton = document.querySelector('.bulk-buttons button[onclick*="showRenameModal"]');
+            if (renameButton) {
+                if (checkedCount === 1) {
+                    renameButton.style.display = 'flex';
+                    renameButton.disabled = false;
+                } else {
+                    renameButton.style.display = 'none';
+                    renameButton.disabled = true;
+                }
+            }
+            
             if (bulkActions) {
                 if (checkedCount > 0) {
                     bulkActions.classList.add('show');
                 } else {
                     bulkActions.classList.remove('show');
                 }
+            }
+        }
+
+        function initializeRenameButtonVisibility() {
+            // Set initial rename button visibility based on current selection
+            const renameButton = document.querySelector('.bulk-buttons button[onclick*="showRenameModal"]');
+            if (renameButton) {
+                // On page load, no items should be selected, so hide rename button
+                renameButton.style.display = 'none';
+                renameButton.disabled = true;
+                console.log('🔧 Initialized rename button visibility - hidden on page load');
             }
         }
 
@@ -3570,6 +3816,208 @@
             // Reset form
             const destinationPath = document.getElementById('destinationPath');
             if (destinationPath) destinationPath.value = '';
+        }
+
+        function showRenameModal() {
+            if (selectedItems.size === 0) {
+                showNotification('No Selection', 'Please select an item to rename', 'error');
+                return;
+            }
+            
+            if (selectedItems.size > 1) {
+                showNotification('Multiple Selection', 'Only one item can be renamed at a time. Please select a single item.', 'error');
+                return;
+            }
+            
+            const selectedPath = Array.from(selectedItems)[0];
+            const itemName = selectedPath.split('/').pop(); // Get just the filename
+            
+            const modal = document.getElementById('renameModal');
+            const newItemNameInput = document.getElementById('newItemName');
+            const currentItemNameDiv = document.getElementById('currentItemName');
+            
+            if (newItemNameInput) {
+                newItemNameInput.value = itemName; // Pre-fill with current name
+                newItemNameInput.focus();
+                // Select the name part without extension for easy editing
+                const lastDotIndex = itemName.lastIndexOf('.');
+                if (lastDotIndex > 0) {
+                    newItemNameInput.setSelectionRange(0, lastDotIndex);
+                } else {
+                    newItemNameInput.select();
+                }
+            }
+            
+            if (currentItemNameDiv) {
+                currentItemNameDiv.innerHTML = `<i class="fas fa-file"></i> ${itemName}`;
+            }
+            
+            if (modal) modal.classList.add('show');
+        }
+
+        function closeRenameModal() {
+            const modal = document.getElementById('renameModal');
+            if (modal) modal.classList.remove('show');
+            
+            // Reset form
+            const newItemNameInput = document.getElementById('newItemName');
+            if (newItemNameInput) newItemNameInput.value = '';
+        }
+
+        async function confirmRename() {
+            const newName = document.getElementById('newItemName').value.trim();
+            const selectedPath = Array.from(selectedItems)[0];
+            
+            if (!newName) {
+                showNotification('Invalid Name', 'Please enter a valid name', 'error');
+                return;
+            }
+            
+            if (newName === selectedPath.split('/').pop()) {
+                showNotification('Same Name', 'The new name is the same as the current name', 'info');
+                closeRenameModal();
+                return;
+            }
+            
+            // Validate new name
+            if (!isValidFilename(newName)) {
+                showNotification('Invalid Name', 'Invalid filename. Avoid special characters like <, >, :, ", |, ?, *, \\', 'error');
+                return;
+            }
+            
+            await performRename(selectedPath, newName);
+            closeRenameModal();
+        }
+
+        function isValidFilename(filename) {
+            // Check for invalid filename characters
+            return !/[<>:"|?*\\\/]/.test(filename) && filename !== '.' && filename !== '..';
+        }
+
+        async function performRename(oldPath, newName) {
+            try {
+                showUploadStatus('🔄 Renaming item...', 'info');
+                
+                const response = await fetch('/rename', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        old_path: oldPath,
+                        new_name: newName
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showUploadStatus(`✅ Successfully renamed to "${newName}"`, 'success');
+                    
+                    // Clear selection and refresh
+                    clearSelection();
+                    await refreshFileTable();
+                } else {
+                    showUploadStatus(`❌ Rename failed: ${result.error}`, 'error');
+                }
+            } catch (error) {
+                console.error('Rename error:', error);
+                showUploadStatus('❌ Network error during rename', 'error');
+            }
+        }
+
+        // Single-item action functions for individual action buttons
+        function downloadItem(itemPath) {
+            window.location.href = `/download/${itemPath}`;
+        }
+
+        function showSingleMoveModal(itemPath, itemName) {
+            // Clear any existing selection and select this item
+            clearSelection();
+            selectedItems.add(itemPath);
+            
+            // Set the checkbox as checked
+            const checkbox = document.querySelector(`input[data-path="${itemPath}"]`);
+            if (checkbox) {
+                checkbox.checked = true;
+                checkbox.closest('tr').classList.add('selected');
+            }
+            
+            // Update the UI and show the modal
+            updateSelection();
+            showMoveModal();
+        }
+
+        function showSingleCopyModal(itemPath, itemName) {
+            // Clear any existing selection and select this item
+            clearSelection();
+            selectedItems.add(itemPath);
+            
+            // Set the checkbox as checked
+            const checkbox = document.querySelector(`input[data-path="${itemPath}"]`);
+            if (checkbox) {
+                checkbox.checked = true;
+                checkbox.closest('tr').classList.add('selected');
+            }
+            
+            // Update the UI and show the modal
+            updateSelection();
+            showCopyModal();
+        }
+
+        function showSingleRenameModal(itemPath, itemName) {
+            // Clear any existing selection and select this item
+            clearSelection();
+            selectedItems.add(itemPath);
+            
+            // Set the checkbox as checked
+            const checkbox = document.querySelector(`input[data-path="${itemPath}"]`);
+            if (checkbox) {
+                checkbox.checked = true;
+                checkbox.closest('tr').classList.add('selected');
+            }
+            
+            // Update the UI and show the modal
+            updateSelection();
+            showRenameModal();
+        }
+
+        function showSingleDeleteModal(itemPath, itemName) {
+            // Show delete confirmation directly for single item
+            showDeleteModal(itemName, () => {
+                performSingleDelete(itemPath, itemName);
+            }, 'individual');
+        }
+
+        async function performSingleDelete(itemPath, itemName) {
+            try {
+                showUploadStatus('🔄 Deleting item...', 'info');
+                
+                const response = await fetch('/bulk_delete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        paths: [itemPath]
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success || result.deleted_count > 0) {
+                    showUploadStatus(`✅ Successfully deleted "${itemName}"`, 'success');
+                    await refreshFileTable();
+                } else {
+                    const errorMsg = result.error || (result.errors && result.errors[0]) || 'Unknown error';
+                    showUploadStatus(`❌ Delete failed: ${errorMsg}`, 'error');
+                }
+            } catch (error) {
+                console.error('Delete error:', error);
+                showUploadStatus('❌ Network error during delete', 'error');
+            } finally {
+                closeDeleteModal();
+            }
         }
 
         function confirmMoveOrCopy() {
@@ -3925,6 +4373,25 @@
                 });
             }
 
+            // Rename modal Enter key support and Ctrl+A support
+            const newItemNameInput = document.getElementById('newItemName');
+            if (newItemNameInput) {
+                newItemNameInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        confirmRename();
+                    }
+                });
+
+                // Add Ctrl+A support for select all
+                newItemNameInput.addEventListener('keydown', function(e) {
+                    if (e.ctrlKey && e.key === 'a') {
+                        e.preventDefault();
+                        this.select();
+                    }
+                });
+            }
+
             // Drag and drop functionality
             if (fileInputDisplay && fileInput) {
                 ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -4008,6 +4475,11 @@
                     console.log('🔧 Adding delete event listener to button:', button);
                     button.addEventListener('click', handleDeleteClick);
                 });
+
+                // Initialize rename button visibility on page load
+                setTimeout(() => {
+                    initializeRenameButtonVisibility();
+                }, 100);
             }
 
             // Add manual cleanup button for debugging

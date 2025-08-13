@@ -922,6 +922,66 @@ def bulk_delete():
     except Exception as e:
         return jsonify({'error': f'Bulk delete error: {str(e)}'}), 500
 
+@app.route('/rename', methods=['POST'])
+@login_required
+def rename_item():
+    """Rename a single file or folder"""
+    try:
+        role = get_role(current_user())
+        if role != 'readwrite':
+            return jsonify({'error': 'Permission denied'}), 403
+
+        data = request.get_json()
+        if not data or 'old_path' not in data or 'new_name' not in data:
+            return jsonify({'error': 'Old path and new name are required'}), 400
+
+        old_path = data['old_path']
+        new_name = data['new_name'].strip()
+
+        # Validate inputs
+        if not new_name:
+            return jsonify({'error': 'New name cannot be empty'}), 400
+
+        # Security checks
+        if not storage.is_safe_path(old_path):
+            return jsonify({'error': 'Invalid old path'}), 400
+
+        # Validate new name doesn't contain path separators or invalid characters
+        if '/' in new_name or '\\' in new_name or any(char in new_name for char in '<>:"|?*'):
+            return jsonify({'error': 'Invalid characters in new name'}), 400
+
+        # Check if old path exists
+        old_full_path = os.path.join(ROOT_DIR, old_path)
+        if not os.path.exists(old_full_path):
+            return jsonify({'error': 'Item not found'}), 404
+
+        # Get the directory of the old path
+        parent_dir = os.path.dirname(old_path)
+        
+        # Create new path
+        new_path = os.path.join(parent_dir, new_name) if parent_dir else new_name
+        new_full_path = os.path.join(ROOT_DIR, new_path)
+
+        # Check if destination already exists
+        if os.path.exists(new_full_path):
+            return jsonify({'error': 'An item with that name already exists'}), 409
+
+        # Perform the rename
+        try:
+            os.rename(old_full_path, new_full_path)
+            return jsonify({
+                'success': True,
+                'message': f'Successfully renamed to "{new_name}"',
+                'old_path': old_path,
+                'new_path': new_path,
+                'new_name': new_name
+            }), 200
+        except OSError as e:
+            return jsonify({'error': f'Failed to rename: {str(e)}'}), 500
+
+    except Exception as e:
+        return jsonify({'error': f'Rename error: {str(e)}'}), 500
+
 @app.route('/mkdir', methods=['POST'])
 @login_required
 def mkdir():
