@@ -975,74 +975,206 @@
                 margin-bottom: 10px;
             }
 
-            /* Enhanced file table for mobile */
+            /* Enhanced file table for mobile - SIMPLIFIED APPROACH */
             .file-table {
-                margin: 18px 0; /* Changed from margin-bottom to match other containers */
+                margin: 18px 0;
                 border-radius: 12px !important;
                 overflow-x: auto;
-                overflow-y: visible;
                 -webkit-overflow-scrolling: touch;
-                /* Add scrollbar styling for mobile */
-                scrollbar-width: thin;
-                scrollbar-color: rgba(52, 152, 219, 0.3) rgba(255, 255, 255, 0.1);
+                width: 100%;
+                background: white;
             }
 
+            .table {
+                width: 100%;
+                min-width: 500px; /* Minimum width to prevent cramping */
+                table-layout: auto;
+                border-collapse: collapse;
+                font-size: 14px;
+            }
+
+            /* Keep all columns visible but make them smaller on mobile */
+            .table th,
+            .table td {
+                padding: 10px 8px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+
+            /* Specific column widths for mobile */
+            .table th:nth-child(1), /* Checkbox */
+            .table td:nth-child(1) {
+                width: 35px;
+                text-align: center;
+                vertical-align: middle;
+                padding: 10px 4px;
+            }
+
+            .table th:nth-child(2), /* Name */
+            .table td:nth-child(2) {
+                width: 40%;
+                min-width: 150px;
+            }
+
+            .table th:nth-child(3), /* Size */
+            .table td:nth-child(3) {
+                width: 80px;
+                font-size: 12px;
+            }
+
+            .table th:nth-child(4), /* Type */
+            .table td:nth-child(4) {
+                width: 80px;
+                font-size: 12px;
+            }
+
+            .table th:nth-child(5), /* Modified */
+            .table td:nth-child(5) {
+                width: 100px;
+                font-size: 11px;
+            }
+
+            .table th:nth-child(6), /* Actions */
+            .table td:nth-child(6) {
+                width: 120px;
+                text-align: center;
+            }
+
+            /* Make buttons smaller for mobile */
+            .btn-sm {
+                font-size: 11px !important;
+                padding: 4px 8px !important;
+                margin: 0 2px;
+            }
+
+            /* File name improvements */
+            .file-name a {
+                display: block;
+                max-width: 100%;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            /* Actions container */
+            .actions {
+                display: flex;
+                gap: 4px;
+                justify-content: center;
+                align-items: center;
+            }
+
+            /* Adjust padding for mobile */
+            .table th,
+            .table td {
+                padding: 12px 8px;
+                font-size: 12px;
+                line-height: 1.4;
+            }
+
+            /* File name styling for mobile */
+            .file-name {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                max-width: 100%;
+            }
+
+            .file-name a {
+                font-size: 13px;
+                line-height: 1.3;
+                text-decoration: none;
+                color: #2c3e50;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                max-width: 100%;
+            }
+
+            .file-name a:hover {
+                color: #3498db;
+            }
+
+            /* Icon sizing for mobile */
+            .file-icon {
+                font-size: 14px;
+                width: 16px;
+                flex-shrink: 0;
+            }
+
+            /* Checkbox styling for mobile */
+            .file-checkbox {
+                width: 14px !important;
+                height: 14px !important;
+                margin: 0 auto !important;
+                cursor: pointer;
+                display: block;
+                transform: scale(0.4); /* Make it even smaller */
+            }
+
+            /* Also apply to the select all checkbox in header */
+            #selectAll {
+                width: 14px !important;
+                height: 14px !important;
+                margin: 0 auto !important;
+                display: block;
+                transform: scale(0.4); /* Make it even smaller */
+            }
+
+            /* Add horizontal scroll indicator */
             .file-table::-webkit-scrollbar {
-                height: 6px;
+                height: 8px;
             }
 
             .file-table::-webkit-scrollbar-track {
                 background: rgba(255, 255, 255, 0.1);
-                border-radius: 3px;
+                border-radius: 4px;
             }
 
             .file-table::-webkit-scrollbar-thumb {
                 background: rgba(52, 152, 219, 0.5);
-                border-radius: 3px;
+                border-radius: 4px;
             }
 
-            .file-table::-webkit-scrollbar-thumb:hover {
-                background: rgba(52, 152, 219, 0.7);
-            }
-
-            .table {
-                min-width: 350px; /* 30% smaller: 500px -> 350px */
-                font-size: 10px; /* 30% smaller: 12px -> ~10px */
-                border-radius: 12px !important;
-                width: auto; /* Allow table to expand */
-            }
-
-            /* Uniform font sizes for ALL table elements */
-            .table th,
-            .table td,
-            .table th *,
-            .table td * {
-                font-size: 10px !important; /* Force uniform font size */
-            }
-
-            /* Override specific elements that need consistent sizing */
-            .file-name a,
-            .file-name span,
-            .table .badge,
-            .breadcrumb-item,
-            .breadcrumb-item a {
-                font-size: 10px !important;
-            }
-
-            /* Smaller checkboxes for mobile */
-            .file-checkbox {
-                width: 10px !important;
-                height: 10px !important;
-                margin-right: 4px !important;
-            }
-
-            /* Button text sizing */
-            .btn-sm,
-            .btn-sm * {
-                font-size: 10px !important; /* Match table font size */
-                padding: 3px 4px; /* 30% smaller: 4px 6px -> 3px 4px */
+            /* Modified date styling */
+            .table td:nth-child(5) {
+                font-size: 10px;
                 white-space: nowrap;
-                flex-shrink: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+
+            /* Compact empty table for mobile - target the actual HTML structure */
+            .table td[colspan] {
+                padding: 10px 20px !important; /* Much smaller padding */
+            }
+
+            .table td[colspan] > div {
+                min-height: 40px !important; /* Much smaller min-height */
+            }
+
+            .table td[colspan] i {
+                font-size: 20px !important; /* Smaller icon */
+                margin-bottom: 5px !important;
+            }
+
+            .table td[colspan] div[style*="font-size: 18px"] {
+                font-size: 12px !important; /* Smaller title */
+                margin-bottom: 4px !important;
+            }
+
+            .table td[colspan] div[style*="font-size: 14px"] {
+                font-size: 10px !important; /* Smaller description */
+            }
+
+            /* Force the table itself to be smaller */
+            .file-table .table {
+                min-height: 60px !important;
+            }
+
+            .file-table {
+                min-height: 60px !important;
             }
 
             .table tbody tr:last-child td:first-child {
@@ -1055,7 +1187,7 @@
 
             .table th,
             .table td {
-                padding: 6px 4px; /* 30% smaller: 8px 6px -> 6px 4px */
+                padding: 8px 6px !important; /* Increased padding for less cramped look */
                 white-space: nowrap;
                 vertical-align: middle;
             }
@@ -1068,8 +1200,15 @@
                 background: rgba(255, 255, 255, 0.98);
                 z-index: 2;
                 box-shadow: 2px 0 4px rgba(0, 0, 0, 0.1);
-                min-width: 25px; /* 30% smaller: 35px -> 25px */
+                width: 8% !important; /* Fixed width for checkbox column */
             }
+
+            /* Set fixed widths for all columns to prevent overflow */
+            .table th:nth-child(2), .table td:nth-child(2) { width: 38% !important; } /* Name - increased */
+            .table th:nth-child(3), .table td:nth-child(3) { width: 14% !important; } /* Size */
+            .table th:nth-child(4), .table td:nth-child(4) { width: 14% !important; } /* Type */
+            .table th:nth-child(5), .table td:nth-child(5) { width: 16% !important; } /* Modified */
+            .table th:nth-child(6), .table td:nth-child(6) { width: 10% !important; } /* Actions - reduced */
 
             .table thead th:first-child {
                 background: linear-gradient(135deg, #34495e, #2c3e50);
@@ -1082,11 +1221,9 @@
 
             /* File name column adjustments */
             .file-name {
-                min-width: 70px; /* 30% smaller: 100px -> 70px */
-                max-width: 98px; /* 30% smaller: 140px -> 98px */
                 display: flex;
                 align-items: center;
-                gap: 3px; /* 30% smaller: 4px -> 3px */
+                gap: 4px; /* Increased from 3px for better spacing */
             }
 
             .file-name a,
@@ -1509,6 +1646,41 @@
         .file-queue::-webkit-scrollbar-thumb:hover {
             background: rgba(255, 255, 255, 0.5);
         }
+
+        /* Extra small mobile devices (portrait phones) */
+        @media (max-width: 480px) {
+            .container {
+                padding: 10px;
+            }
+
+            /* Make table even more compact on small screens */
+            .table {
+                font-size: 12px;
+                min-width: 450px; /* Slightly smaller minimum width */
+            }
+
+            .table th,
+            .table td {
+                padding: 8px 6px;
+            }
+
+            /* Make buttons smaller */
+            .btn-sm {
+                font-size: 10px !important;
+                padding: 3px 6px !important;
+            }
+
+            /* Compact file names */
+            .file-name a {
+                font-size: 12px;
+            }
+
+            /* Smaller icons */
+            .file-icon {
+                font-size: 12px;
+                width: 14px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -1728,14 +1900,14 @@
         <!-- Mobile scroll hint (only visible on mobile) -->
         <div class="mobile-scroll-hint" style="display: none;">
             <div style="background: rgba(52, 152, 219, 0.08); border-radius: 6px; padding: 8px; margin-bottom: 8px; border-left: 2px solid #3498db;">
-                <i class="fas fa-hand-point-right" style="color: #3498db; margin-right: 6px; font-size: 12px;"></i>
-                <span style="color: white; font-size: 12px;">Swipe to view all columns</span>
+                <i class="fas fa-info-circle" style="color: #3498db; margin-right: 6px; font-size: 12px;"></i>
+                <span style="color: white; font-size: 12px;">Mobile view - Some columns hidden for better viewing</span>
             </div>
         </div>
 
         <!-- File table -->
         <div class="file-table slide-in">
-            <table class="table">
+            <table class="table table-{{ role }}">
                 <thead>
                     <tr>
                         {% if role == 'readwrite' %}
