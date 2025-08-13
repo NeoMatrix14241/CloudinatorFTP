@@ -24,7 +24,7 @@
             background: rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(20px);
             border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-            padding: 20px 30px;
+            padding: 12px 20px; /* Reduced from 20px 30px */
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -35,34 +35,34 @@
 
         .header-left h1 {
             color: white;
-            font-size: 24px;
+            font-size: 20px; /* Reduced from 24px */
             font-weight: 300;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px; /* Reduced from 10px */
         }
 
         .user-info {
             display: flex;
             align-items: center;
-            gap: 20px;
+            gap: 15px; /* Reduced from 20px */
             color: rgba(255, 255, 255, 0.9);
         }
 
         .user-badge {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px; /* Reduced from 8px */
             background: rgba(255, 255, 255, 0.1);
-            padding: 8px 15px;
-            border-radius: 20px;
+            padding: 6px 12px; /* Reduced from 8px 15px */
+            border-radius: 16px; /* Reduced from 20px */
             border: 1px solid rgba(255, 255, 255, 0.2);
         }
 
         .role-badge {
-            padding: 4px 10px;
-            border-radius: 12px;
-            font-size: 12px;
+            padding: 3px 8px; /* Reduced from 4px 10px */
+            border-radius: 10px; /* Reduced from 12px */
+            font-size: 11px; /* Reduced from 12px */
             font-weight: 600;
             text-transform: uppercase;
         }
@@ -80,10 +80,11 @@
         .logout-btn {
             color: rgba(255, 255, 255, 0.8);
             text-decoration: none;
-            padding: 8px 15px;
-            border-radius: 8px;
+            padding: 6px 12px; /* Reduced from 8px 15px */
+            border-radius: 6px; /* Reduced from 8px */
             transition: all 0.3s ease;
             border: 1px solid rgba(255, 255, 255, 0.3);
+            font-size: 13px; /* Added smaller font size */
         }
 
         .logout-btn:hover {
@@ -244,11 +245,11 @@
         /* File table */
         .file-table {
             background: rgba(255, 255, 255, 0.95);
-            border-radius: 15px;
+            border-radius: 12px;
             overflow: hidden;
             box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
             border: 1px solid rgba(255, 255, 255, 0.2);
-            margin-top: 25px;
+            margin: 25px 0;
         }
 
         .table {
@@ -881,32 +882,50 @@
 
         /* Enhanced Mobile Responsive Design - Fixed Consistent Spacing */
         @media (max-width: 768px) {
+            /* Show mobile scroll hint */
+            .mobile-scroll-hint {
+                display: block !important;
+            }
+
             .container {
                 padding: 15px;
                 max-width: 100%;
             }
 
             .header {
-                padding: 15px;
-                flex-direction: column;
-                gap: 10px;
-                text-align: center;
-                margin-bottom: 18px;
+                padding: 8px 12px; /* Much more compact */
+                flex-direction: row; /* Keep horizontal layout */
+                gap: 8px;
+                text-align: left;
+                margin-bottom: 12px; /* Reduced from 18px */
             }
 
             .header-left h1 {
-                font-size: 20px;
+                font-size: 16px; /* Reduced from 20px */
+                gap: 6px;
             }
 
             .user-info {
-                flex-direction: column;
-                gap: 10px;
+                flex-direction: row; /* Keep horizontal */
+                gap: 8px; /* Reduced from 10px */
+                font-size: 13px;
             }
 
             .user-badge {
-                flex-direction: column;
-                text-align: center;
-                padding: 10px;
+                flex-direction: row; /* Keep horizontal */
+                text-align: left;
+                padding: 4px 8px; /* Much smaller padding */
+                font-size: 12px;
+            }
+
+            .role-badge {
+                padding: 2px 6px; /* Even smaller */
+                font-size: 10px;
+            }
+
+            .logout-btn {
+                padding: 4px 8px; /* Smaller logout button */
+                font-size: 11px;
             }
 
             .breadcrumb {
@@ -958,66 +977,159 @@
 
             /* Enhanced file table for mobile */
             .file-table {
-                margin-bottom: 18px;
-                border-radius: 15px !important;
-                overflow: hidden;
+                margin: 18px 0; /* Changed from margin-bottom to match other containers */
+                border-radius: 12px !important;
+                overflow-x: auto;
+                overflow-y: visible;
                 -webkit-overflow-scrolling: touch;
+                /* Add scrollbar styling for mobile */
+                scrollbar-width: thin;
+                scrollbar-color: rgba(52, 152, 219, 0.3) rgba(255, 255, 255, 0.1);
+            }
+
+            .file-table::-webkit-scrollbar {
+                height: 6px;
+            }
+
+            .file-table::-webkit-scrollbar-track {
+                background: rgba(255, 255, 255, 0.1);
+                border-radius: 3px;
+            }
+
+            .file-table::-webkit-scrollbar-thumb {
+                background: rgba(52, 152, 219, 0.5);
+                border-radius: 3px;
+            }
+
+            .file-table::-webkit-scrollbar-thumb:hover {
+                background: rgba(52, 152, 219, 0.7);
             }
 
             .table {
-                min-width: 100%;
-                font-size: 14px;
-                border-radius: 15px !important;
-                overflow: hidden;
+                min-width: 350px; /* 30% smaller: 500px -> 350px */
+                font-size: 10px; /* 30% smaller: 12px -> ~10px */
+                border-radius: 12px !important;
+                width: auto; /* Allow table to expand */
+            }
+
+            /* Uniform font sizes for ALL table elements */
+            .table th,
+            .table td,
+            .table th *,
+            .table td * {
+                font-size: 10px !important; /* Force uniform font size */
+            }
+
+            /* Override specific elements that need consistent sizing */
+            .file-name a,
+            .file-name span,
+            .table .badge,
+            .breadcrumb-item,
+            .breadcrumb-item a {
+                font-size: 10px !important;
+            }
+
+            /* Smaller checkboxes for mobile */
+            .file-checkbox {
+                width: 10px !important;
+                height: 10px !important;
+                margin-right: 4px !important;
+            }
+
+            /* Button text sizing */
+            .btn-sm,
+            .btn-sm * {
+                font-size: 10px !important; /* Match table font size */
+                padding: 3px 4px; /* 30% smaller: 4px 6px -> 3px 4px */
+                white-space: nowrap;
+                flex-shrink: 0;
             }
 
             .table tbody tr:last-child td:first-child {
-                border-bottom-left-radius: 15px;
+                border-bottom-left-radius: 12px;
             }
 
             .table tbody tr:last-child td:last-child {
-                border-bottom-right-radius: 15px;
+                border-bottom-right-radius: 12px;
             }
 
             .table th,
             .table td {
-                padding: 10px 8px;
+                padding: 6px 4px; /* 30% smaller: 8px 6px -> 6px 4px */
                 white-space: nowrap;
+                vertical-align: middle;
             }
 
+            /* Make only first column sticky for better UX */
             .table th:first-child,
             .table td:first-child {
                 position: sticky;
                 left: 0;
-                background: inherit;
-                z-index: 1;
+                background: rgba(255, 255, 255, 0.98);
+                z-index: 2;
+                box-shadow: 2px 0 4px rgba(0, 0, 0, 0.1);
+                min-width: 25px; /* 30% smaller: 35px -> 25px */
+            }
+
+            .table thead th:first-child {
+                background: linear-gradient(135deg, #34495e, #2c3e50);
+                color: white;
             }
 
             .table tbody tr {
                 background: rgba(255, 255, 255, 0.95);
             }
 
+            /* File name column adjustments */
             .file-name {
-                max-width: 150px;
+                min-width: 70px; /* 30% smaller: 100px -> 70px */
+                max-width: 98px; /* 30% smaller: 140px -> 98px */
+                display: flex;
+                align-items: center;
+                gap: 3px; /* 30% smaller: 4px -> 3px */
             }
 
             .file-name a,
             .file-name span {
-                display: block;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
+                flex: 1;
+            }
+
+            /* Size column */
+            .table th:nth-child(3),
+            .table td:nth-child(3) {
+                min-width: 42px; /* 30% smaller: 60px -> 42px */
+                text-align: right;
+            }
+
+            /* Type column */
+            .table th:nth-child(4),
+            .table td:nth-child(4) {
+                min-width: 38px; /* 30% smaller: 55px -> 38px */
+            }
+
+            /* Modified column */
+            .table th:nth-child(5),
+            .table td:nth-child(5) {
+                min-width: 49px; /* 30% smaller: 70px -> 49px */
+            }
+
+            /* Actions column - REMOVED STICKY POSITIONING */
+            .table th:last-child,
+            .table td:last-child {
+                min-width: 70px; /* 30% smaller: 100px -> 70px */
+                /* Removed sticky positioning and shadows */
             }
 
             .actions {
-                flex-direction: column;
-                gap: 3px;
-                min-width: 80px;
-            }
-
-            .btn-sm {
-                padding: 4px 8px;
-                font-size: 11px;
+                display: flex;
+                flex-direction: row;
+                gap: 2px; /* 30% smaller: 3px -> 2px */
+                min-width: 63px; /* 30% smaller: 90px -> 63px */
+                justify-content: flex-start;
+                flex-wrap: nowrap; /* Prevent wrapping on mobile */
             }
 
             .file-info-meta {
@@ -1151,8 +1263,9 @@
             }
             
             .file-table {
-                margin-bottom: 18px;
+                margin: 18px 0; /* Changed from margin-bottom to full margin */
                 overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
             }
             
             .stats-grid {
@@ -1160,7 +1273,7 @@
             }
 
             .table {
-                min-width: 800px;
+                min-width: 490px; /* 30% smaller: 700px -> 490px */
             }
 
             .progress-stats {
@@ -1175,15 +1288,30 @@
             }
 
             .header {
-                padding: 10px;
+                padding: 6px 8px; /* Ultra-compact padding */
             }
 
             .header-left h1 {
-                font-size: 18px;
+                font-size: 14px; /* Much smaller title */
             }
 
             .user-badge {
-                padding: 8px;
+                padding: 3px 6px; /* Minimal padding */
+                font-size: 11px;
+            }
+
+            .user-info {
+                gap: 6px; /* Smaller gaps */
+            }
+
+            .role-badge {
+                padding: 1px 4px; /* Tiny role badge */
+                font-size: 9px;
+            }
+
+            .logout-btn {
+                padding: 3px 6px; /* Tiny logout button */
+                font-size: 10px;
             }
 
             .breadcrumb {
@@ -1199,22 +1327,61 @@
             }
 
             .file-table {
-                margin: 0 -5px;
+                margin: 12px 0; /* Changed from negative margins to positive */
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                border-radius: 10px !important;
+            }
+
+            .table {
+                min-width: 315px; /* 30% smaller: 450px -> 315px */
+                font-size: 8px; /* 30% smaller: 10px -> 8px */
+                border-radius: 10px !important;
             }
 
             .table th,
             .table td {
-                padding: 8px 6px;
-                font-size: 12px;
+                padding: 4px 3px; /* 30% smaller: 5px 4px -> 4px 3px */
+            }
+
+            /* Adjust sticky columns for very small screens */
+            .table th:first-child,
+            .table td:first-child {
+                min-width: 21px; /* 30% smaller: 30px -> 21px */
             }
 
             .file-name {
-                max-width: 120px;
+                min-width: 56px; /* 30% smaller: 80px -> 56px */
+                max-width: 77px; /* 30% smaller: 110px -> 77px */
+            }
+
+            .table th:nth-child(3),
+            .table td:nth-child(3) {
+                min-width: 35px; /* 30% smaller: 50px -> 35px */
+            }
+
+            .table th:nth-child(4),
+            .table td:nth-child(4) {
+                min-width: 32px; /* 30% smaller: 45px -> 32px */
+            }
+
+            .table th:nth-child(5),
+            .table td:nth-child(5) {
+                min-width: 42px; /* 30% smaller: 60px -> 42px */
+            }
+
+            .table th:last-child,
+            .table td:last-child {
+                min-width: 60px; /* 30% smaller: 85px -> 60px */
             }
 
             .btn-sm {
-                padding: 3px 6px;
-                font-size: 10px;
+                padding: 1px 3px; /* 30% smaller: 2px 4px -> 1px 3px */
+                font-size: 7px; /* 30% smaller: 8px -> 7px */
+            }
+
+            .actions {
+                gap: 1px; /* 30% smaller: 2px -> 1px */
             }
 
             .upload-section {
@@ -1232,12 +1399,16 @@
         @media (max-width: 768px) and (orientation: landscape) {
             .header {
                 flex-direction: row;
-                padding: 10px 15px;
+                padding: 6px 12px; /* More compact for landscape */
             }
 
             .user-info {
                 flex-direction: row;
-                gap: 15px;
+                gap: 8px; /* Smaller gap for landscape */
+            }
+
+            .header-left h1 {
+                font-size: 15px; /* Smaller for landscape */
             }
 
             .stats-grid {
@@ -1553,6 +1724,14 @@
             </div>
         </div>
         {% endif %}
+
+        <!-- Mobile scroll hint (only visible on mobile) -->
+        <div class="mobile-scroll-hint" style="display: none;">
+            <div style="background: rgba(52, 152, 219, 0.08); border-radius: 6px; padding: 8px; margin-bottom: 8px; border-left: 2px solid #3498db;">
+                <i class="fas fa-hand-point-right" style="color: #3498db; margin-right: 6px; font-size: 12px;"></i>
+                <span style="color: white; font-size: 12px;">Swipe to view all columns</span>
+            </div>
+        </div>
 
         <!-- File table -->
         <div class="file-table slide-in">
