@@ -157,6 +157,11 @@
             color: rgba(255, 255, 255, 0.6);
         }
 
+        /* Manual cleanup button styling */
+        .manual-cleanup-btn {
+            margin-left: 10px;
+        }
+
         /* Bulk Actions */
         .bulk-actions {
             background: rgba(255, 255, 255, 0.1);
@@ -376,7 +381,7 @@
             backdrop-filter: blur(10px);
             border-radius: 15px;
             padding: 25px;
-            margin: 25px 0;
+            margin-bottom: 25px;
             border: 1px solid rgba(255, 255, 255, 0.2);
         }
 
@@ -977,6 +982,11 @@
                 margin-bottom: 10px;
             }
 
+            /* Reduce manual cleanup button margin in mobile */
+            .manual-cleanup-btn {
+                margin-left: 5px;
+            }
+
             /* Enhanced file table for mobile - SIMPLIFIED APPROACH */
             .file-table {
                 margin: 18px 0;
@@ -1279,7 +1289,7 @@
             /* Mobile upload section */
             .upload-section {
                 padding: 15px;
-                margin-bottom: 18px;
+                margin: 0 0 18px 0;
             }
 
             .upload-section h3 {
@@ -2756,24 +2766,6 @@
             return colorMap[extension] || '#7f8c8d';
         }
 
-        function formatFileSize(bytes) {
-            if (bytes === 0) return '0 Bytes';
-            if (bytes === null || bytes === undefined || isNaN(bytes)) return '0 Bytes';
-            
-            const k = 1024;
-            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            
-            // Ensure we don't exceed the sizes array
-            const sizeIndex = Math.min(i, sizes.length - 1);
-            const value = bytes / Math.pow(k, sizeIndex);
-            
-            // Round to 2 decimal places and ensure it's a valid number
-            const formattedValue = Math.round(value * 100) / 100;
-            
-            return `${formattedValue} ${sizes[sizeIndex]}`;
-        }
-
         function showUploadStatus(message, type = 'info') {
             const status = document.getElementById('uploadStatus');
             if (status) {
@@ -3064,9 +3056,17 @@
         function formatFileSize(bytes) {
             if (!bytes || bytes === 0) return '0 B';
             const k = 1024;
-            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+            
+            // Ensure we don't exceed the sizes array
+            const sizeIndex = Math.min(i, sizes.length - 1);
+            const value = bytes / Math.pow(k, sizeIndex);
+            
+            // Round to 1 decimal place and ensure it's a valid number
+            const formattedValue = Math.round(value * 10) / 10;
+            
+            return `${formattedValue} ${sizes[sizeIndex]}`;
         }
 
         // Helper function to format timestamp  
@@ -3779,9 +3779,8 @@
             if (controls && USER_ROLE === 'readwrite') {
                 const cleanupBtn = document.createElement('button');
                 cleanupBtn.id = 'manualCleanupBtn';
-                cleanupBtn.className = 'btn btn-warning btn-sm';
-                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Manual Cleanup';
-                cleanupBtn.style.marginLeft = '10px';
+                cleanupBtn.className = 'btn btn-warning btn-sm manual-cleanup-btn';
+                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Temp Files';
                 cleanupBtn.onclick = async function() {
                     try {
                         cleanupBtn.disabled = true;
@@ -3803,7 +3802,7 @@
                         showUploadStatus(`❌ Manual cleanup failed: ${error.message}`, 'error');
                     } finally {
                         cleanupBtn.disabled = false;
-                        cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Manual Cleanup';
+                        cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Temp Files';
                     }
                 };
                 
@@ -3830,24 +3829,24 @@
                         // Update title based on whether chunks exist
                         if (status.has_active_uploads) {
                             cleanupBtn.title = `Clean up ${status.chunk_count || 'temporary'} chunk files (Safe - no active uploads)`;
-                            cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Manual Cleanup (' + (status.chunk_count || '?') + ')';
+                            cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Temp Files (' + (status.chunk_count || '?') + ')';
                         } else {
                             cleanupBtn.title = 'Clean up temporary chunk files';
-                            cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Manual Cleanup';
+                            cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Temp Files';
                         }
                     }
                 } else {
                     // If we can't check status, show button but with warning
                     cleanupBtn.style.display = 'inline-flex';
                     cleanupBtn.title = 'Clean up temporary chunk files (Status check failed)';
-                    cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Manual Cleanup';
+                    cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Temp Files';
                 }
             } catch (error) {
                 console.warn('Failed to check upload status:', error);
                 // On error, still show the button - user can decide
                 cleanupBtn.style.display = 'inline-flex';
                 cleanupBtn.title = 'Clean up temporary chunk files (Status check failed)';
-                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Manual Cleanup';
+                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Temp Files';
             }
         }
 
