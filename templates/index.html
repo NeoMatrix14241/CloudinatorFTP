@@ -1113,16 +1113,19 @@
 
             .table th:nth-child(6), /* Actions */
             .table td:nth-child(6) {
-                width: 120px;
+                width: 300px; /* Increased from 220px to ensure all 5 buttons fit */
                 text-align: center;
                 white-space: nowrap;
             }
 
             /* Make buttons smaller for mobile */
             .btn-sm {
-                font-size: 11px !important;
-                padding: 4px 8px !important;
-                margin: 0 2px;
+                font-size: 8px !important; /* Slightly larger for readability */
+                padding: 2px 3px !important; /* Compact padding */
+                margin: 0 1px; /* Reduced margin */
+                min-width: 28px; /* Smaller minimum width for mobile */
+                flex-shrink: 0 !important; /* Prevent buttons from shrinking */
+                white-space: nowrap !important; /* Prevent text wrapping */
             }
 
             /* File name improvements */
@@ -1136,10 +1139,14 @@
 
             /* Actions container */
             .actions {
-                display: flex;
-                gap: 4px;
+                display: flex !important;
+                gap: 1px; /* Tight spacing for mobile */
                 justify-content: center;
                 align-items: center;
+                flex-wrap: nowrap !important; /* Force single row */
+                flex-direction: row !important; /* Force horizontal */
+                width: 100%;
+                overflow: visible !important;
             }
 
             /* Adjust padding for mobile */
@@ -1280,11 +1287,11 @@
             }
 
             /* Set fixed widths for all columns to prevent overflow */
-            .table th:nth-child(2), .table td:nth-child(2) { width: 38% !important; } /* Name - increased */
-            .table th:nth-child(3), .table td:nth-child(3) { width: 14% !important; } /* Size */
-            .table th:nth-child(4), .table td:nth-child(4) { width: 14% !important; } /* Type */
-            .table th:nth-child(5), .table td:nth-child(5) { width: 16% !important; } /* Modified */
-            .table th:nth-child(6), .table td:nth-child(6) { width: 10% !important; } /* Actions - reduced */
+            .table th:nth-child(2), .table td:nth-child(2) { width: 30% !important; } /* Name - reduced */
+            .table th:nth-child(3), .table td:nth-child(3) { width: 12% !important; } /* Size */
+            .table th:nth-child(4), .table td:nth-child(4) { width: 12% !important; } /* Type */
+            .table th:nth-child(5), .table td:nth-child(5) { width: 14% !important; } /* Modified */
+            .table th:nth-child(6), .table td:nth-child(6) { width: 24% !important; } /* Actions - increased significantly */
 
             .table thead th:first-child {
                 background: linear-gradient(135deg, #34495e, #2c3e50);
@@ -1503,7 +1510,7 @@
             /* Tablet-specific actions column */
             .table th:last-child,
             .table td:last-child {
-                min-width: 280px; /* Slightly smaller than desktop but still accommodates text */
+                min-width: 350px; /* Increased from 280px for better button spacing */
             }
 
             .actions {
@@ -1525,6 +1532,24 @@
 
             .progress-stats {
                 grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        /* Medium mobile screens (between very small and tablet) */
+        @media (min-width: 481px) and (max-width: 768px) {
+            .table th:nth-child(6), /* Actions */
+            .table td:nth-child(6) {
+                width: 320px; /* Increased from 250px for more space */
+            }
+
+            .btn-sm {
+                font-size: 8px !important; /* Slightly larger than very small screens */
+                padding: 2px 4px !important;
+                min-width: 30px;
+            }
+
+            .actions {
+                gap: 2px;
             }
         }
 
@@ -1619,16 +1644,27 @@
 
             .table th:last-child,
             .table td:last-child {
-                min-width: 60px; /* 30% smaller: 85px -> 60px */
+                min-width: 180px; /* Increased from 120px for more space */
             }
 
             .btn-sm {
-                padding: 1px 3px; /* 30% smaller: 2px 4px -> 1px 3px */
-                font-size: 7px; /* 30% smaller: 8px -> 7px */
+                padding: 1px 2px; /* Reduced padding for tiny buttons */
+                font-size: 6px; /* Reduced font size */
+                min-width: 20px; /* Set minimum width */
+            }
+
+            /* Hide button text on very small screens, show icons only */
+            .actions .btn-sm {
+                font-size: 0; /* Hide text */
+            }
+
+            .actions .btn-sm i {
+                font-size: 8px; /* Show only icons, slightly larger */
             }
 
             .actions {
-                gap: 1px; /* 30% smaller: 2px -> 1px */
+                gap: 1px; /* Keep tight spacing */
+                flex-wrap: nowrap; /* Ensure no wrapping */
             }
 
             .upload-section {
