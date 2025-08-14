@@ -2134,11 +2134,14 @@
             <table class="table table-{{ role }}">
                 <thead>
                     <tr>
-                        {% if role == 'readwrite' %}
                         <th style="width: 50px;">
+                            {% if role == 'readwrite' %}
                             <input type="checkbox" id="selectAll" class="file-checkbox" onchange="toggleSelectAll()">
+                            {% else %}
+                            <!-- Empty checkbox column for layout consistency -->
+                            <span style="visibility: hidden;">□</span>
+                            {% endif %}
                         </th>
-                        {% endif %}
                         <th><i class="fas fa-file"></i> Name</th>
                         <th><i class="fas fa-weight-hanging"></i> Size</th>
                         <th><i class="fas fa-tag"></i> Type</th>
@@ -2150,9 +2153,7 @@
                     {% if path %}
                     <!-- Parent directory row - always show when not at root -->
                     <tr style="background: rgba(52, 152, 219, 0.1);">
-                        {% if role == 'readwrite' %}
-                        <td></td>
-                        {% endif %}
+                        <td></td> <!-- Empty checkbox column for consistency -->
                         <td>
                             <div class="file-name">
                                 <i class="fas fa-level-up-alt file-icon" style="color: #3498db;"></i>
@@ -2192,15 +2193,17 @@
                     {% if items %}
                         {% for item in items %}
                     <tr class="file-row" data-path="{{ (path + '/' + item.name) if path else item.name }}">
-                        {% if role == 'readwrite' %}
                         <td>
+                            {% if role == 'readwrite' %}
                             <input type="checkbox" class="file-checkbox item-checkbox" 
                                    data-path="{{ (path + '/' + item.name) if path else item.name }}"
                                    data-name="{{ item.name }}"
                                    data-is-dir="{{ item.is_dir|lower }}"
                                    onchange="updateSelection()">
+                            {% else %}
+                            <!-- Empty checkbox column for layout consistency -->
+                            {% endif %}
                         </td>
-                        {% endif %}
                         <td>
                             <div class="file-name">
                                 {% if item.is_dir %}
@@ -2317,7 +2320,7 @@
                     {% else %}
                         <!-- Empty directory message within the table -->
                         <tr>
-                            <td colspan="{{ 6 if role == 'readwrite' else 5 }}" style="text-align: center; padding: 40px 20px; vertical-align: middle;">
+                            <td colspan="6" style="text-align: center; padding: 40px 20px; vertical-align: middle;">
                                 <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 120px;">
                                     <i class="fas fa-folder-open" style="font-size: 36px; color: #95a5a6; margin-bottom: 15px; opacity: 0.7;"></i>
                                     <div style="color: #7f8c8d; font-weight: 500; margin-bottom: 8px; font-size: 18px;">This folder is empty</div>
@@ -3177,7 +3180,7 @@
                 const goUpRow = document.createElement('tr');
                 goUpRow.style.background = 'rgba(52, 152, 219, 0.1)';
                 goUpRow.innerHTML = `
-                    ${USER_ROLE === 'readwrite' ? '<td></td>' : ''}
+                    <td></td>
                     <td>
                         <div class="file-name">
                             <i class="fas fa-level-up-alt file-icon" style="color: #3498db;"></i>
@@ -3196,7 +3199,7 @@
             
             if (files.length === 0) {
                 // Show empty state
-                const colspan = USER_ROLE === 'readwrite' ? '6' : '5';
+                const colspan = '6'; // Always 6 columns for consistent layout
                 tbody.innerHTML += `
                     <tr>
                         <td colspan="${colspan}" style="text-align: center; padding: 40px 20px; vertical-align: middle;">
@@ -3314,15 +3317,15 @@
                 }
                 
                 row.innerHTML = `
-                    ${USER_ROLE === 'readwrite' ? `
-                        <td>
+                    <td>
+                        ${USER_ROLE === 'readwrite' ? `
                             <input type="checkbox" class="file-checkbox item-checkbox" 
                                    data-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}" 
                                    data-name="${file.name}" 
                                    data-is-dir="${file.is_dir || file.type === 'dir' ? 'true' : 'false'}" 
                                    onchange="updateSelection()">
-                        </td>
-                    ` : ''}
+                        ` : ''}
+                    </td>
                     <td>
                         <div class="file-name">
                             ${iconHtml}
