@@ -469,6 +469,63 @@ def cleanup_chunks():
         print(f"❌ Cleanup error: {e}")
         return jsonify({'error': f'Cleanup error: {str(e)}'}), 500
 
+@app.route('/cancel_upload', methods=['POST'])
+@login_required
+def cancel_upload():
+    """Cancel an ongoing upload and clean up its chunks"""
+    session_id = session.get('session_id')
+    
+    try:
+        role = get_role(current_user())
+        if role != 'readwrite':
+            return jsonify({'error': 'Permission denied'}), 403
+
+        data = request.get_json()
+        if not data or 'file_id' not in data:
+            return jsonify({'error': 'File ID is required'}), 400
+
+        file_id = data['file_id']
+        filename = data.get('filename', 'Unknown file')
+        
+        print(f"🚫 Cancelling upload: {file_id} ({filename})")
+        
+        # Untrack the upload
+        chunk_tracker.untrack_upload(session_id, file_id)
+        
+        # Clean up chunks directory for this file_id
+        chunks_dir = os.path.join(ROOT_DIR, '.chunks', file_id)
+        if os.path.exists(chunks_dir):
+            try:
+                # Use Windows-safe deletion
+                storage.safe_rmtree(chunks_dir)
+                print(f"🧹 Cancelled upload cleanup completed for: {file_id}")
+                
+                # Try to remove parent chunks directory if empty
+                parent_chunks_dir = os.path.join(ROOT_DIR, '.chunks')
+                if os.path.exists(parent_chunks_dir) and not os.listdir(parent_chunks_dir):
+                    os.rmdir(parent_chunks_dir)
+                    print("🧹 Removed empty chunks directory")
+                    
+                return jsonify({
+                    'success': True, 
+                    'message': f'Upload cancelled and cleaned up for {filename}',
+                    'file_id': file_id
+                }), 200
+            except Exception as e:
+                print(f"❌ Failed to cleanup cancelled upload {file_id}: {e}")
+                return jsonify({'error': f'Failed to cleanup cancelled upload: {str(e)}'}), 500
+        else:
+            # Upload was cancelled before any chunks were created
+            return jsonify({
+                'success': True, 
+                'message': f'Upload cancelled for {filename}',
+                'file_id': file_id
+            }), 200
+
+    except Exception as e:
+        print(f"❌ Cancel upload error: {e}")
+        return jsonify({'error': f'Cancel upload error: {str(e)}'}), 500
+
 @app.route('/admin/cleanup_chunks', methods=['POST'])
 @login_required
 def admin_cleanup_chunks():

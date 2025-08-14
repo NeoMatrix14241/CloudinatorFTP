@@ -687,6 +687,12 @@
             border-left: 4px solid #e74c3c;
         }
 
+        .queue-item.cancelled {
+            background: rgba(255, 152, 0, 0.1);
+            border-left: 4px solid #ff9800;
+            opacity: 0.7;
+        }
+
         .file-info {
             display: flex;
             align-items: center;
@@ -733,6 +739,7 @@
         .status-uploading { color: #3498db; }
         .status-completed { color: #27ae60; }
         .status-error { color: #e74c3c; }
+        .status-cancelled { color: #ff9800; }
 
         .remove-btn {
             background: rgba(231, 76, 60, 0.2);
@@ -752,6 +759,17 @@
         .remove-btn:hover {
             background: rgba(231, 76, 60, 0.3);
             transform: scale(1.1);
+        }
+
+        .cancel-btn {
+            background: rgba(255, 152, 0, 0.2) !important;
+            border: 1px solid rgba(255, 152, 0, 0.4) !important;
+            color: #ff9800 !important;
+        }
+
+        .cancel-btn:hover {
+            background: rgba(255, 152, 0, 0.3) !important;
+            border: 1px solid rgba(255, 152, 0, 0.6) !important;
         }
 
         .progress-bar-small {
@@ -2447,6 +2465,8 @@
         let uploadQueue = [];
         let isUploading = false;
         let currentUploadIndex = 0;
+        let currentUploadingFile = null;
+        let cancelledUploads = new Set(); // Track cancelled upload IDs
         let uploadStartTime = 0;
         let totalBytesToUpload = 0;
         let totalBytesUploaded = 0;
@@ -2768,12 +2788,91 @@
                 uploadQueue.splice(index, 1);
                 
                 // Try to cleanup chunks for this item
-                if (item.status === 'pending' || item.status === 'error') {
+                if (item.status === 'pending' || item.status === 'error' || item.status === 'cancelled') {
                     cleanupSingleFile(fileId).catch(console.error);
                 }
                 
                 updateQueueDisplay();
                 showUploadStatus(`🗑️ Removed "${item.name}" from queue`, 'info');
+            }
+        }
+
+        async function cancelUpload(fileId) {
+            console.log(`🚫 Cancelling upload for file: ${fileId}`);
+            
+            // Immediately mark as cancelled to stop ongoing processes
+            cancelledUploads.add(fileId);
+            
+            const index = uploadQueue.findIndex(item => item.id === fileId);
+            if (index === -1) {
+                console.error(`❌ File ${fileId} not found in queue`);
+                return;
+            }
+            
+            const item = uploadQueue[index];
+            if (item.status !== 'uploading') {
+                console.error(`❌ File ${fileId} is not currently uploading (status: ${item.status})`);
+                return;
+            }
+            
+            try {
+                showUploadStatus(`🚫 Cancelling upload of "${item.name}"...`, 'info');
+                
+                // Mark as cancelled immediately
+                item.status = 'cancelled';
+                item.error = 'Upload cancelled by user';
+                updateQueueDisplay();
+                
+                // Call the cancel endpoint to clean up server-side chunks
+                const response = await fetch('/cancel_upload', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        file_id: fileId,
+                        filename: item.name
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    console.log(`✅ Successfully cancelled upload: ${result.message}`);
+                    showUploadStatus(`🚫 Cancelled: ${item.name}`, 'warning');
+                    
+                    // Update global state
+                    if (currentUploadingFile === fileId) {
+                        currentUploadingFile = null;
+                        isUploading = false;
+                    }
+                    
+                    // Continue with next file if we were batch uploading
+                    if (uploadQueue.some(item => item.status === 'pending') && !isUploading) {
+                        setTimeout(() => {
+                            startBatchUpload();
+                        }, 500);
+                    }
+                } else {
+                    console.error(`❌ Failed to cancel upload: ${result.error}`);
+                    showUploadStatus(`❌ Failed to cancel upload: ${result.error}`, 'error');
+                    
+                    // Revert status for retry
+                    item.status = 'error';
+                    item.error = 'Cancel failed: ' + result.error;
+                    cancelledUploads.delete(fileId); // Remove from cancelled set
+                    updateQueueDisplay();
+                }
+                
+            } catch (error) {
+                console.error('❌ Cancel upload error:', error);
+                showUploadStatus(`❌ Cancel upload error: ${error.message}`, 'error');
+                
+                // Revert status for retry
+                item.status = 'error';
+                item.error = 'Cancel error: ' + error.message;
+                cancelledUploads.delete(fileId); // Remove from cancelled set
+                updateQueueDisplay();
             }
         }
 
@@ -2907,14 +3006,16 @@
                 pending: 'fas fa-clock',
                 uploading: 'fas fa-spinner fa-spin',
                 completed: 'fas fa-check-circle',
-                error: 'fas fa-exclamation-circle'
+                error: 'fas fa-exclamation-circle',
+                cancelled: 'fas fa-ban'
             };
 
             const statusLabels = {
                 pending: 'Queued',
                 uploading: 'Uploading',
                 completed: 'Completed',
-                error: 'Failed'
+                error: 'Failed',
+                cancelled: 'Cancelled'
             };
 
             const statusIcon = statusIcons[item.status] || 'fas fa-question-circle';
@@ -2950,9 +3051,14 @@
                     <span class="status-text status-${item.status}">
                         <i class="${statusIcon}"></i> ${statusLabel}
                     </span>
-                    ${item.status === 'pending' || item.status === 'error' ? `
+                    ${item.status === 'pending' || item.status === 'error' || item.status === 'cancelled' ? `
                         <button class="remove-btn" onclick="removeFromQueue('${item.id}')" title="Remove from queue">
                             <i class="fas fa-times"></i>
+                        </button>
+                    ` : ''}
+                    ${item.status === 'uploading' ? `
+                        <button class="remove-btn cancel-btn" onclick="cancelUpload('${item.id}')" title="Cancel upload">
+                            <i class="fas fa-ban"></i>
                         </button>
                     ` : ''}
                 </div>
@@ -3495,6 +3601,7 @@
                     
                     // Update status to uploading
                     updateItemStatus(item.id, 'uploading');
+                    currentUploadingFile = item.id;
                     
                     showUploadStatus(
                         `⬆️ Uploading "${item.name}" (${currentUploadIndex}/${pendingFiles.length})`, 
@@ -3507,6 +3614,8 @@
                         console.log(`✅ Upload completed for: ${item.name}`);
                         console.log(`🔄 About to call updateItemStatus with 'completed' for: ${item.name} (${item.id})`);
                         updateItemStatus(item.id, 'completed');
+                        currentUploadingFile = null;
+                        cancelledUploads.delete(item.id); // Clean up cancellation flag
                         console.log(`✅ updateItemStatus called for: ${item.name}`);
                         
                         showUploadStatus(
@@ -3517,6 +3626,8 @@
                     } catch (error) {
                         console.error(`❌ Upload failed for ${item.name}:`, error);
                         updateItemStatus(item.id, 'error', error.message);
+                        currentUploadingFile = null;
+                        cancelledUploads.delete(item.id); // Clean up cancellation flag
                         
                         showUploadStatus(
                             `❌ Failed to upload "${item.name}": ${error.message}`, 
@@ -3599,6 +3710,12 @@
         async function uploadSingleFile(item) {
             console.log('🚀 Starting upload for:', item.name, 'Size:', item.file.size, 'Chunk size:', CHUNK_SIZE);
             
+            // Check for cancellation before starting
+            if (cancelledUploads.has(item.id)) {
+                console.log(`🚫 Upload already cancelled for ${item.name}`);
+                throw new Error('Upload cancelled by user');
+            }
+            
             const file = item.file;
             const destPath = document.getElementById('destPath').value || '';
             
@@ -3634,6 +3751,18 @@
                     console.log('🧩 Total chunks for', item.name, ':', totalChunks);
                     
                     for (let i = 0; i < totalChunks; i++) {
+                        // Check if upload was cancelled (multiple checks for responsiveness)
+                        if (cancelledUploads.has(item.id)) {
+                            console.log(`🚫 Upload cancelled for ${item.name} at chunk ${i + 1}/${totalChunks}`);
+                            throw new Error('Upload cancelled by user');
+                        }
+                        
+                        const currentItem = uploadQueue.find(queueItem => queueItem.id === item.id);
+                        if (!currentItem || currentItem.status === 'cancelled') {
+                            console.log(`🚫 Upload cancelled for ${item.name} at chunk ${i + 1}/${totalChunks}`);
+                            throw new Error('Upload cancelled by user');
+                        }
+                        
                         const start = i * CHUNK_SIZE;
                         const end = Math.min(file.size, start + CHUNK_SIZE);
                         const chunk = file.slice(start, end);
@@ -3647,6 +3776,12 @@
                         formData.append('filename', file.name);
                         formData.append('dest_path', destPath);
                         formData.append('chunk', chunk);
+
+                        // Final check before sending chunk
+                        if (cancelledUploads.has(item.id)) {
+                            console.log(`🚫 Upload cancelled for ${item.name} before sending chunk ${i + 1}/${totalChunks}`);
+                            throw new Error('Upload cancelled by user');
+                        }
 
                         const response = await fetch(UPLOAD_URL, {
                             method: 'POST',
@@ -4430,8 +4565,13 @@
                         cleanupBtn.style.display = 'inline-flex';
                         // Update title based on whether chunks exist
                         if (status.has_active_uploads) {
-                            cleanupBtn.title = `Clean up ${status.chunk_count || 'temporary'} chunk files (Safe - no active uploads)`;
-                            cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Temp Files (' + (status.chunk_count || '?') + ')';
+                            const chunkCount = typeof status.chunk_count === 'number' ? status.chunk_count : 0;
+                            cleanupBtn.title = `Clean up ${chunkCount || 'temporary'} chunk files (Safe - no active uploads)`;
+                            if (chunkCount > 0) {
+                                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Temp Files (' + chunkCount + ')';
+                            } else {
+                                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Temp Files';
+                            }
                         } else {
                             cleanupBtn.title = 'Clean up temporary chunk files';
                             cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Temp Files';
