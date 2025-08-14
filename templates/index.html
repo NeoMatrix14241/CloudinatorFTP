@@ -334,13 +334,15 @@
             text-decoration: none;
             transition: color 0.3s ease;
             word-break: break-word;
+            overflow-wrap: break-word;
             white-space: normal;
             line-height: 1.4;
             max-width: 100%;
             overflow: hidden;
             text-overflow: ellipsis;
             display: -webkit-box;
-            -webkit-line-clamp: 2;
+            -webkit-line-clamp: 5;
+            line-clamp: 5;
             -webkit-box-orient: vertical;
         }
 
@@ -351,33 +353,96 @@
         .file-type {
             color: #7f8c8d;
             font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
         }
 
         /* Desktop-specific table styling for better file name handling */
         @media (min-width: 769px) {
             .table th:nth-child(2),
             .table td:nth-child(2) {
-                width: 30%; /* Reduced to make room for actions */
-                max-width: 350px;
-                min-width: 200px;
+                width: 35%; /* Balanced width */
+                max-width: 400px; 
+                min-width: 220px; 
+            }
+
+            /* Size column for desktop - ensure proper formatting */
+            .table th:nth-child(3),
+            .table td:nth-child(3) {
+                width: 140px; /* Increased width for proper display */
+                min-width: 140px;
+                white-space: normal;
+                line-height: 1.3;
             }
 
             /* Actions column for desktop - accommodate text buttons */
             .table th:last-child,
             .table td:last-child {
-                width: 25%; /* Increased width for text buttons */
-                min-width: 300px;
+                width: 30%; /* More space for actions and SIZE */
+                min-width: 320px; 
             }
 
             .table tbody tr {
-                max-height: 80px;
+                max-height: 250px; /* Even larger for 5 lines */
                 overflow: hidden;
             }
 
             /* Ensure file names don't make rows too tall */
             .file-name {
-                max-height: 50px;
+                max-height: 200px; /* Much larger for 5 lines */
                 overflow: hidden;
+            }
+        }
+
+        /* Mobile-specific styling for file names */
+        @media (max-width: 768px) {
+            /* Enable horizontal scrolling for better name display */
+            .file-table {
+                overflow-x: auto !important;
+                -webkit-overflow-scrolling: touch !important;
+            }
+            
+            .table {
+                min-width: 600px !important; /* Smaller table width to fit better on mobile */
+            }
+            
+            /* Override all previous name column rules */
+            .file-table .table th:nth-child(2),
+            .file-table .table td:nth-child(2) {
+                width: 220px !important; /* Good balance - not too small, not too wide */
+                min-width: 220px !important; 
+                max-width: 220px !important;
+            }
+            
+            /* Override file-name container */
+            .file-table .table .file-name {
+                max-width: 220px !important;
+                max-height: unset !important;
+                overflow: visible !important;
+                display: flex !important; /* Keep icon and name side by side */
+                align-items: flex-start !important;
+                gap: 8px !important;
+            }
+            
+            /* Override all previous file name styling with maximum specificity */
+            .file-table .table td:nth-child(2) .file-name a,
+            .file-table .table td:nth-child(2) .file-name span,
+            .file-table .table .file-name a,
+            .file-table .table .file-name span {
+                white-space: normal !important; /* Allow line breaks */
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+                display: -webkit-box !important; /* Use webkit-box for multi-line */
+                line-height: 1.3 !important;
+                word-break: break-word !important; /* Break long words */
+                -webkit-line-clamp: 6 !important; /* Increased to 6 lines for more content */
+                line-clamp: 6 !important;
+                -webkit-box-orient: vertical !important;
+                max-height: 7.8em !important; /* About 6 lines */
+                width: 100% !important; /* Use full available width */
+                max-width: none !important; /* Remove width restrictions */
+                flex: 1 !important; /* Take remaining space */
             }
         }
 
@@ -1092,9 +1157,10 @@
 
             .table th:nth-child(3), /* Size */
             .table td:nth-child(3) {
-                width: 80px;
+                width: 120px;
                 font-size: 12px;
-                white-space: nowrap;
+                white-space: normal;
+                line-height: 1.3;
             }
 
             .table th:nth-child(4), /* Type */
@@ -1275,6 +1341,13 @@
                 vertical-align: middle;
             }
 
+            /* Override white-space for size column to keep content together */
+            .table th:nth-child(3),
+            .table td:nth-child(3) {
+                white-space: nowrap !important; /* Keep files/folders together */
+                font-size: 11px !important;
+            }
+
             /* Make only first column sticky for better UX */
             .table th:first-child,
             .table td:first-child {
@@ -1286,12 +1359,12 @@
                 width: 8% !important; /* Fixed width for checkbox column */
             }
 
-            /* Set fixed widths for all columns to prevent overflow */
-            .table th:nth-child(2), .table td:nth-child(2) { width: 30% !important; } /* Name - reduced */
-            .table th:nth-child(3), .table td:nth-child(3) { width: 12% !important; } /* Size */
-            .table th:nth-child(4), .table td:nth-child(4) { width: 12% !important; } /* Type */
-            .table th:nth-child(5), .table td:nth-child(5) { width: 14% !important; } /* Modified */
-            .table th:nth-child(6), .table td:nth-child(6) { width: 24% !important; } /* Actions - increased significantly */
+            /* Set fixed widths for all columns for horizontal scrolling */
+            .file-table .table th:nth-child(2), .file-table .table td:nth-child(2) { width: 220px !important; min-width: 220px !important; max-width: 220px !important; } /* Name - balanced size */
+            .file-table .table th:nth-child(3), .file-table .table td:nth-child(3) { width: 120px !important; white-space: nowrap !important; min-width: 120px !important; } /* Size - compact */
+            .file-table .table th:nth-child(4), .file-table .table td:nth-child(4) { width: 80px !important; min-width: 80px !important; } /* Type - smaller */
+            .file-table .table th:nth-child(5), .file-table .table td:nth-child(5) { width: 100px !important; min-width: 100px !important; } /* Modified - smaller */
+            .file-table .table th:nth-child(6), .file-table .table td:nth-child(6) { width: 160px !important; min-width: 160px !important; } /* Actions - smaller */
 
             .table thead th:first-child {
                 background: linear-gradient(135deg, #34495e, #2c3e50);
@@ -1320,8 +1393,10 @@
             /* Size column */
             .table th:nth-child(3),
             .table td:nth-child(3) {
-                min-width: 42px; /* 30% smaller: 60px -> 42px */
-                text-align: right;
+                min-width: 120px; /* Increased for proper mobile display */
+                text-align: left; /* Left align for better mobile readability */
+                font-size: 11px; /* Smaller font to fit content */
+                white-space: nowrap; /* Keep files/folders on same line */
             }
 
             /* Type column */
@@ -3152,7 +3227,8 @@
                                 <a href="/${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}">${file.name}</a>`;
                     
                     sizeHtml = `<span style="color: #7f8c8d; font-size: 13px;">
-                        ${file.item_count ? `${file.item_count.files || 0} files, ${file.item_count.dirs || 0} folders` : '--'}
+                        ${file.item_count ? `${file.item_count.files || 0} files, ${file.item_count.dirs || 0} folders` : '--'}<br>
+                        ${file.size ? formatFileSize(file.size) : '--'}
                     </span>`;
                     
                     typeHtml = `<i class="fas fa-folder"></i> Folder`;
