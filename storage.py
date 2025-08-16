@@ -150,7 +150,13 @@ def assemble_chunks(file_id, filename, dest_path=''):
     target_dir = os.path.join(ROOT_DIR, dest_path) if dest_path else ROOT_DIR
     target_path = os.path.join(target_dir, safe_filename)
     os.makedirs(target_dir, exist_ok=True)
-    
+
+    # Define tmp_dir and calculate total_chunks
+    tmp_dir = os.path.join(ROOT_DIR, '.chunks', file_id)
+    # Count chunk files (exclude .timestamp)
+    chunk_files = [f for f in os.listdir(tmp_dir) if f != '.timestamp' and os.path.isfile(os.path.join(tmp_dir, f))]
+    total_chunks = len(chunk_files)
+
     try:
         with open(target_path, 'wb') as outfile:
             for i in range(total_chunks):
@@ -159,11 +165,11 @@ def assemble_chunks(file_id, filename, dest_path=''):
                     raise FileNotFoundError(f"Chunk {i} not found")
                 with open(chunk_file, 'rb') as infile:
                     outfile.write(infile.read())
-        
+
         # Ensure the final file is writable
         if os.name == 'nt':
             os.chmod(target_path, stat.S_IWRITE | stat.S_IREAD)
-        
+
         # cleanup chunks
         cleanup_chunks(file_id)
         return True
