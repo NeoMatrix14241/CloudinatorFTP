@@ -5,7 +5,7 @@ import json
 import time
 
 # Server configuration
-PORT = 80
+PORT = 5000
 CHUNK_SIZE = 10 * 1024 * 1024  # 10 MB adjustable chunk size
 ENABLE_CHUNKED_UPLOADS = True
 SESSION_SECRET = 'change_this_secret_in_production'

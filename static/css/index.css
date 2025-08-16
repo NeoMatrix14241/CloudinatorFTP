@@ -17,7 +17,8 @@ body {
     -webkit-backdrop-filter: blur(20px);
     backdrop-filter: blur(20px);
     border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-    padding: 12px 20px; /* Reduced from 20px 30px */
+    padding: 12px 20px;
+    /* Reduced from 20px 30px */
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -28,34 +29,43 @@ body {
 
 .header-left h1 {
     color: white;
-    font-size: 20px; /* Reduced from 24px */
+    font-size: 20px;
+    /* Reduced from 24px */
     font-weight: 300;
     display: flex;
     align-items: center;
-    gap: 8px; /* Reduced from 10px */
+    gap: 8px;
+    /* Reduced from 10px */
 }
 
 .user-info {
     display: flex;
     align-items: center;
-    gap: 15px; /* Reduced from 20px */
+    gap: 15px;
+    /* Reduced from 20px */
     color: rgba(255, 255, 255, 0.9);
 }
 
 .user-badge {
     display: flex;
     align-items: center;
-    gap: 6px; /* Reduced from 8px */
+    gap: 6px;
+    /* Reduced from 8px */
     background: rgba(255, 255, 255, 0.1);
-    padding: 6px 12px; /* Reduced from 8px 15px */
-    border-radius: 16px; /* Reduced from 20px */
+    padding: 6px 12px;
+    /* Reduced from 8px 15px */
+    border-radius: 16px;
+    /* Reduced from 20px */
     border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 .role-badge {
-    padding: 3px 8px; /* Reduced from 4px 10px */
-    border-radius: 10px; /* Reduced from 12px */
-    font-size: 11px; /* Reduced from 12px */
+    padding: 3px 8px;
+    /* Reduced from 4px 10px */
+    border-radius: 10px;
+    /* Reduced from 12px */
+    font-size: 11px;
+    /* Reduced from 12px */
     font-weight: 600;
     text-transform: uppercase;
 }
@@ -73,11 +83,14 @@ body {
 .logout-btn {
     color: rgba(255, 255, 255, 0.8);
     text-decoration: none;
-    padding: 6px 12px; /* Reduced from 8px 15px */
-    border-radius: 6px; /* Reduced from 8px */
+    padding: 6px 12px;
+    /* Reduced from 8px 15px */
+    border-radius: 6px;
+    /* Reduced from 8px */
     transition: all 0.3s ease;
     border: 1px solid rgba(255, 255, 255, 0.3);
-    font-size: 13px; /* Added smaller font size */
+    font-size: 13px;
+    /* Added smaller font size */
 }
 
 .logout-btn:hover {
@@ -97,6 +110,7 @@ body {
     background: rgba(255, 255, 255, 0.1);
     -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
+    padding: 15px 20px;
     border-radius: 12px;
     margin-bottom: 25px;
     border: 1px solid rgba(255, 255, 255, 0.2);
@@ -143,6 +157,7 @@ body {
     border-color: #3498db;
     background: rgba(255, 255, 255, 0.15);
 }
+
 .create-folder-form input[type="text"]::placeholder {
     color: rgba(255, 255, 255, 0.6);
 }
@@ -350,17 +365,20 @@ body {
 
 /* Desktop-specific table styling for better file name handling */
 @media (min-width: 769px) {
+
     .table th:nth-child(2),
     .table td:nth-child(2) {
-        width: 35%; /* Balanced width */
-        max-width: 400px; 
-        min-width: 220px; 
+        width: 35%;
+        /* Balanced width */
+        max-width: 400px;
+        min-width: 220px;
     }
 
     /* Size column for desktop - ensure proper formatting */
     .table th:nth-child(3),
     .table td:nth-child(3) {
-        width: 140px; /* Increased width for proper display */
+        width: 140px;
+        /* Increased width for proper display */
         min-width: 140px;
         white-space: normal;
         line-height: 1.3;
@@ -369,70 +387,84 @@ body {
     /* Actions column for desktop - accommodate text buttons */
     .table th:last-child,
     .table td:last-child {
-        width: 30%; /* More space for actions and SIZE */
-        min-width: 320px; 
+        width: 30%;
+        /* More space for actions and SIZE */
+        min-width: 320px;
     }
 
     .table tbody tr {
-        max-height: 250px; /* Even larger for 5 lines */
+        max-height: 250px;
+        /* Even larger for 5 lines */
         overflow: hidden;
     }
 
     /* Ensure file names don't make rows too tall */
     .file-name {
-        max-height: 200px; /* Much larger for 5 lines */
+        max-height: 200px;
+        /* Much larger for 5 lines */
         overflow: hidden;
     }
 }
 
 /* Mobile-specific styling for file names */
 @media (max-width: 768px) {
+
     /* Enable horizontal scrolling for better name display */
     .file-table {
         overflow-x: auto !important;
-        /* Removed -webkit-overflow-scrolling for compatibility */
     }
-    
+
     .table {
-        min-width: 600px !important; /* Smaller table width to fit better on mobile */
+        min-width: 600px !important;
+        /* Smaller table width to fit better on mobile */
     }
-    
+
     /* Override all previous name column rules */
     .file-table .table th:nth-child(2),
     .file-table .table td:nth-child(2) {
-        width: 220px !important; /* Good balance - not too small, not too wide */
-        min-width: 220px !important; 
+        width: 220px !important;
+        /* Good balance - not too small, not too wide */
+        min-width: 220px !important;
         max-width: 220px !important;
     }
-    
+
     /* Override file-name container */
     .file-table .table .file-name {
         max-width: 220px !important;
         max-height: unset !important;
         overflow: visible !important;
-        display: flex !important; /* Keep icon and name side by side */
+        display: flex !important;
+        /* Keep icon and name side by side */
         align-items: flex-start !important;
         gap: 8px !important;
     }
-    
+
     /* Override all previous file name styling with maximum specificity */
     .file-table .table td:nth-child(2) .file-name a,
     .file-table .table td:nth-child(2) .file-name span,
     .file-table .table .file-name a,
     .file-table .table .file-name span {
-        white-space: normal !important; /* Allow line breaks */
+        white-space: normal !important;
+        /* Allow line breaks */
         overflow: hidden !important;
         text-overflow: ellipsis !important;
-        display: -webkit-box !important; /* Use webkit-box for multi-line */
+        display: -webkit-box !important;
+        /* Use webkit-box for multi-line */
         line-height: 1.3 !important;
-        word-break: break-word !important; /* Break long words */
-        -webkit-line-clamp: 6 !important; /* Increased to 6 lines for more content */
+        word-break: break-word !important;
+        /* Break long words */
+        -webkit-line-clamp: 6 !important;
+        /* Increased to 6 lines for more content */
         line-clamp: 6 !important;
         -webkit-box-orient: vertical !important;
-        max-height: 7.8em !important; /* About 6 lines */
-        width: 100% !important; /* Use full available width */
-        max-width: none !important; /* Remove width restrictions */
-        flex: 1 !important; /* Take remaining space */
+        max-height: 7.8em !important;
+        /* About 6 lines */
+        width: 100% !important;
+        /* Use full available width */
+        max-width: none !important;
+        /* Remove width restrictions */
+        flex: 1 !important;
+        /* Take remaining space */
     }
 }
 
@@ -548,8 +580,7 @@ body {
 .upload-queue {
     background: rgba(255, 255, 255, 0.05);
     border-radius: 12px;
-    -webkit-backdrop-filter: blur(10px);
-    backdrop-filter: blur(10px);
+    padding: 20px;
     margin-top: 20px;
     border: 1px solid rgba(255, 255, 255, 0.1);
     display: none;
@@ -644,6 +675,7 @@ body {
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.05);
 }
+
 .queue-item {
     display: flex;
     align-items: center;
@@ -726,11 +758,25 @@ body {
     font-weight: 500;
 }
 
-.status-pending { color: #f39c12; }
-.status-uploading { color: #3498db; }
-.status-completed { color: #27ae60; }
-.status-error { color: #e74c3c; }
-.status-cancelled { color: #ff9800; }
+.status-pending {
+    color: #f39c12;
+}
+
+.status-uploading {
+    color: #3498db;
+}
+
+.status-completed {
+    color: #27ae60;
+}
+
+.status-error {
+    color: #e74c3c;
+}
+
+.status-cancelled {
+    color: #ff9800;
+}
 
 .remove-btn {
     background: rgba(231, 76, 60, 0.2);
@@ -768,8 +814,7 @@ body {
     height: 4px;
     background: rgba(255, 255, 255, 0.2);
     border-radius: 2px;
-    -webkit-backdrop-filter: blur(10px);
-    backdrop-filter: blur(10px);
+    overflow: hidden;
 }
 
 .progress-fill-small {
@@ -787,10 +832,54 @@ body {
     font-weight: 500;
     text-align: center;
     display: none;
+    transition: all 0.3s ease;
+    transform: translateX(100%);
 }
 
 .upload-status.show {
     display: block;
+    transform: translateX(0);
+}
+
+/* Stacked notification styles */
+.upload-status[id^="notification-"] {
+    display: block;
+    position: fixed;
+    right: 20px;
+    z-index: 10000;
+    margin: 0;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1.4;
+    width: auto;
+    min-width: 300px;
+    max-width: 500px;
+    transition: all 0.3s ease-out;
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+/* Mobile responsive stacked notifications */
+@media (max-width: 768px) {
+    .upload-status[id^="notification-"] {
+        right: 10px;
+        left: 10px;
+        max-width: none;
+        min-width: auto;
+        width: auto;
+    }
 }
 
 .upload-status.success {
@@ -1024,6 +1113,7 @@ body {
 
 /* Enhanced Mobile Responsive Design - Fixed Consistent Spacing */
 @media (max-width: 768px) {
+
     /* Show mobile scroll hint */
     .mobile-scroll-hint {
         display: block !important;
@@ -1035,38 +1125,48 @@ body {
     }
 
     .header {
-        padding: 8px 12px; /* Much more compact */
-        flex-direction: row; /* Keep horizontal layout */
+        padding: 8px 12px;
+        /* Much more compact */
+        flex-direction: row;
+        /* Keep horizontal layout */
         gap: 8px;
         text-align: left;
-        margin-bottom: 12px; /* Reduced from 18px */
+        margin-bottom: 12px;
+        /* Reduced from 18px */
     }
 
     .header-left h1 {
-        font-size: 16px; /* Reduced from 20px */
+        font-size: 16px;
+        /* Reduced from 20px */
         gap: 6px;
     }
 
     .user-info {
-        flex-direction: row; /* Keep horizontal */
-        gap: 8px; /* Reduced from 10px */
+        flex-direction: row;
+        /* Keep horizontal */
+        gap: 8px;
+        /* Reduced from 10px */
         font-size: 13px;
     }
 
     .user-badge {
-        flex-direction: row; /* Keep horizontal */
+        flex-direction: row;
+        /* Keep horizontal */
         text-align: left;
-        padding: 4px 8px; /* Much smaller padding */
+        padding: 4px 8px;
+        /* Much smaller padding */
         font-size: 12px;
     }
 
     .role-badge {
-        padding: 2px 6px; /* Even smaller */
+        padding: 2px 6px;
+        /* Even smaller */
         font-size: 10px;
     }
 
     .logout-btn {
-        padding: 4px 8px; /* Smaller logout button */
+        padding: 4px 8px;
+        /* Smaller logout button */
         font-size: 11px;
     }
 
@@ -1133,7 +1233,8 @@ body {
 
     .table {
         width: 100%;
-        min-width: 500px; /* Minimum width to prevent cramping */
+        min-width: 500px;
+        /* Minimum width to prevent cramping */
         table-layout: auto;
         border-collapse: collapse;
         font-size: 14px;
@@ -1149,15 +1250,21 @@ body {
     /* Allow name column to expand naturally for full file names */
     .table th:nth-child(2),
     .table td:nth-child(2) {
-        white-space: normal; /* Allow wrapping */
-        word-break: break-word; /* Break long words */
-        min-width: 150px; /* Minimum width */
-        max-width: none; /* Remove max width restriction */
-        padding: 12px 8px; /* Slightly more padding for multi-line content */
+        white-space: normal;
+        /* Allow wrapping */
+        word-break: break-word;
+        /* Break long words */
+        min-width: 150px;
+        /* Minimum width */
+        max-width: none;
+        /* Remove max width restriction */
+        padding: 12px 8px;
+        /* Slightly more padding for multi-line content */
     }
 
     /* Specific column widths for mobile */
-    .table th:nth-child(1), /* Checkbox */
+    .table th:nth-child(1),
+    /* Checkbox */
     .table td:nth-child(1) {
         width: 35px;
         text-align: center;
@@ -1166,7 +1273,8 @@ body {
         white-space: nowrap;
     }
 
-    .table th:nth-child(3), /* Size */
+    .table th:nth-child(3),
+    /* Size */
     .table td:nth-child(3) {
         width: 120px;
         font-size: 12px;
@@ -1174,35 +1282,45 @@ body {
         line-height: 1.3;
     }
 
-    .table th:nth-child(4), /* Type */
+    .table th:nth-child(4),
+    /* Type */
     .table td:nth-child(4) {
         width: 80px;
         font-size: 12px;
         white-space: nowrap;
     }
 
-    .table th:nth-child(5), /* Modified */
+    .table th:nth-child(5),
+    /* Modified */
     .table td:nth-child(5) {
         width: 100px;
         font-size: 11px;
         white-space: nowrap;
     }
 
-    .table th:nth-child(6), /* Actions */
+    .table th:nth-child(6),
+    /* Actions */
     .table td:nth-child(6) {
-        width: 300px; /* Increased from 220px to ensure all 5 buttons fit */
+        width: 300px;
+        /* Increased from 220px to ensure all 5 buttons fit */
         text-align: center;
         white-space: nowrap;
     }
 
     /* Make buttons smaller for mobile */
     .btn-sm {
-        font-size: 8px !important; /* Slightly larger for readability */
-        padding: 2px 3px !important; /* Compact padding */
-        margin: 0 1px; /* Reduced margin */
-        min-width: 28px; /* Smaller minimum width for mobile */
-        flex-shrink: 0 !important; /* Prevent buttons from shrinking */
-        white-space: nowrap !important; /* Prevent text wrapping */
+        font-size: 8px !important;
+        /* Slightly larger for readability */
+        padding: 2px 3px !important;
+        /* Compact padding */
+        margin: 0 1px;
+        /* Reduced margin */
+        min-width: 28px;
+        /* Smaller minimum width for mobile */
+        flex-shrink: 0 !important;
+        /* Prevent buttons from shrinking */
+        white-space: nowrap !important;
+        /* Prevent text wrapping */
     }
 
     /* File name improvements */
@@ -1217,11 +1335,14 @@ body {
     /* Actions container */
     .actions {
         display: flex !important;
-        gap: 1px; /* Tight spacing for mobile */
+        gap: 1px;
+        /* Tight spacing for mobile */
         justify-content: center;
         align-items: center;
-        flex-wrap: nowrap !important; /* Force single row */
-        flex-direction: row !important; /* Force horizontal */
+        flex-wrap: nowrap !important;
+        /* Force single row */
+        flex-direction: row !important;
+        /* Force horizontal */
         width: 100%;
         overflow: visible !important;
     }
@@ -1237,7 +1358,8 @@ body {
     /* File name styling for mobile - allow full names */
     .file-name {
         display: flex;
-        align-items: flex-start; /* Align to top when wrapping */
+        align-items: flex-start;
+        /* Align to top when wrapping */
         gap: 6px;
         max-width: 100%;
     }
@@ -1247,8 +1369,10 @@ body {
         line-height: 1.3;
         text-decoration: none;
         color: #2c3e50;
-        word-break: break-word; /* Break long file names */
-        white-space: normal; /* Allow wrapping */
+        word-break: break-word;
+        /* Break long file names */
+        white-space: normal;
+        /* Allow wrapping */
         max-width: 100%;
     }
 
@@ -1270,7 +1394,8 @@ body {
         margin: 0 auto !important;
         cursor: pointer;
         display: block;
-        transform: scale(0.4); /* Make it even smaller */
+        transform: scale(0.4);
+        /* Make it even smaller */
     }
 
     /* Also apply to the select all checkbox in header */
@@ -1279,7 +1404,8 @@ body {
         height: 14px !important;
         margin: 0 auto !important;
         display: block;
-        transform: scale(0.4); /* Make it even smaller */
+        transform: scale(0.4);
+        /* Make it even smaller */
     }
 
     /* Add horizontal scroll indicator */
@@ -1307,25 +1433,30 @@ body {
 
     /* Compact empty table for mobile - target the actual HTML structure */
     .table td[colspan] {
-        padding: 10px 20px !important; /* Much smaller padding */
+        padding: 10px 20px !important;
+        /* Much smaller padding */
     }
 
-    .table td[colspan] > div {
-        min-height: 40px !important; /* Much smaller min-height */
+    .table td[colspan]>div {
+        min-height: 40px !important;
+        /* Much smaller min-height */
     }
 
     .table td[colspan] i {
-        font-size: 20px !important; /* Smaller icon */
+        font-size: 20px !important;
+        /* Smaller icon */
         margin-bottom: 5px !important;
     }
 
     .table td[colspan] div[style*="font-size: 18px"] {
-        font-size: 12px !important; /* Smaller title */
+        font-size: 12px !important;
+        /* Smaller title */
         margin-bottom: 4px !important;
     }
 
     .table td[colspan] div[style*="font-size: 14px"] {
-        font-size: 10px !important; /* Smaller description */
+        font-size: 10px !important;
+        /* Smaller description */
     }
 
     /* Force the table itself to be smaller */
@@ -1347,7 +1478,8 @@ body {
 
     .table th,
     .table td {
-        padding: 8px 6px !important; /* Increased padding for less cramped look */
+        padding: 8px 6px !important;
+        /* Increased padding for less cramped look */
         white-space: nowrap;
         vertical-align: middle;
     }
@@ -1355,7 +1487,8 @@ body {
     /* Override white-space for size column to keep content together */
     .table th:nth-child(3),
     .table td:nth-child(3) {
-        white-space: nowrap !important; /* Keep files/folders together */
+        white-space: nowrap !important;
+        /* Keep files/folders together */
         font-size: 11px !important;
     }
 
@@ -1367,15 +1500,48 @@ body {
         background: rgba(255, 255, 255, 0.98);
         z-index: 2;
         box-shadow: 2px 0 4px rgba(0, 0, 0, 0.1);
-        width: 8% !important; /* Fixed width for checkbox column */
+        width: 8% !important;
+        /* Fixed width for checkbox column */
     }
 
     /* Set fixed widths for all columns for horizontal scrolling */
-    .file-table .table th:nth-child(2), .file-table .table td:nth-child(2) { width: 220px !important; min-width: 220px !important; max-width: 220px !important; } /* Name - balanced size */
-    .file-table .table th:nth-child(3), .file-table .table td:nth-child(3) { width: 120px !important; white-space: nowrap !important; min-width: 120px !important; } /* Size - compact */
-    .file-table .table th:nth-child(4), .file-table .table td:nth-child(4) { width: 80px !important; min-width: 80px !important; } /* Type - smaller */
-    .file-table .table th:nth-child(5), .file-table .table td:nth-child(5) { width: 100px !important; min-width: 100px !important; } /* Modified - smaller */
-    .file-table .table th:nth-child(6), .file-table .table td:nth-child(6) { width: 160px !important; min-width: 160px !important; } /* Actions - smaller */
+    .file-table .table th:nth-child(2),
+    .file-table .table td:nth-child(2) {
+        width: 220px !important;
+        min-width: 220px !important;
+        max-width: 220px !important;
+    }
+
+    /* Name - balanced size */
+    .file-table .table th:nth-child(3),
+    .file-table .table td:nth-child(3) {
+        width: 120px !important;
+        white-space: nowrap !important;
+        min-width: 120px !important;
+    }
+
+    /* Size - compact */
+    .file-table .table th:nth-child(4),
+    .file-table .table td:nth-child(4) {
+        width: 80px !important;
+        min-width: 80px !important;
+    }
+
+    /* Type - smaller */
+    .file-table .table th:nth-child(5),
+    .file-table .table td:nth-child(5) {
+        width: 100px !important;
+        min-width: 100px !important;
+    }
+
+    /* Modified - smaller */
+    .file-table .table th:nth-child(6),
+    .file-table .table td:nth-child(6) {
+        width: 160px !important;
+        min-width: 160px !important;
+    }
+
+    /* Actions - smaller */
 
     .table thead th:first-child {
         background: linear-gradient(135deg, #34495e, #2c3e50);
@@ -1389,43 +1555,54 @@ body {
     /* File name column adjustments - allow full names */
     .file-name {
         display: flex;
-        align-items: flex-start; /* Align to top when wrapping */
+        align-items: flex-start;
+        /* Align to top when wrapping */
         gap: 4px;
     }
 
     .file-name a,
     .file-name span {
-        word-break: break-word; /* Break long file names */
-        white-space: normal; /* Allow wrapping */
+        word-break: break-word;
+        /* Break long file names */
+        white-space: normal;
+        /* Allow wrapping */
         flex: 1;
-        line-height: 1.3; /* Better line spacing */
+        line-height: 1.3;
+        /* Better line spacing */
     }
 
     /* Size column */
     .table th:nth-child(3),
     .table td:nth-child(3) {
-        min-width: 120px; /* Increased for proper mobile display */
-        text-align: left; /* Left align for better mobile readability */
-        font-size: 11px; /* Smaller font to fit content */
-        white-space: nowrap; /* Keep files/folders on same line */
+        min-width: 120px;
+        /* Increased for proper mobile display */
+        text-align: left;
+        /* Left align for better mobile readability */
+        font-size: 11px;
+        /* Smaller font to fit content */
+        white-space: nowrap;
+        /* Keep files/folders on same line */
     }
 
     /* Type column */
     .table th:nth-child(4),
     .table td:nth-child(4) {
-        min-width: 38px; /* 30% smaller: 55px -> 38px */
+        min-width: 38px;
+        /* 30% smaller: 55px -> 38px */
     }
 
     /* Modified column */
     .table th:nth-child(5),
     .table td:nth-child(5) {
-        min-width: 49px; /* 30% smaller: 70px -> 49px */
+        min-width: 49px;
+        /* 30% smaller: 70px -> 49px */
     }
 
     /* Actions column */
     .table th:last-child,
     .table td:last-child {
-        min-width: 200px; /* Increased to accommodate text buttons */
+        min-width: 200px;
+        /* Increased to accommodate text buttons */
         white-space: nowrap;
     }
 
@@ -1566,37 +1743,39 @@ body {
 
 /* Tablet specific adjustments */
 @media (min-width: 769px) and (max-width: 1024px) {
+
     /* Uniform spacing for tablets */
     .header {
         margin-bottom: 18px;
     }
-    
+
     .breadcrumb {
         margin-bottom: 18px;
     }
-    
+
     .storage-stats {
         margin-bottom: 18px;
     }
-    
+
     .controls {
         margin-bottom: 18px;
     }
-    
+
     .upload-section {
         margin-bottom: 18px;
     }
-    
+
     .file-table {
-        margin: 18px 0; /* Changed from margin-bottom to full margin */
+        margin: 18px 0;
+        /* Changed from margin-bottom to full margin */
         overflow-x: auto;
-        /* Removed -webkit-overflow-scrolling for compatibility */
     }
 
     /* Tablet-specific actions column */
     .table th:last-child,
     .table td:last-child {
-        min-width: 350px; /* Increased from 280px for better button spacing */
+        min-width: 350px;
+        /* Increased from 280px for better button spacing */
     }
 
     .actions {
@@ -1607,13 +1786,14 @@ body {
         padding: 3px 6px;
         font-size: 10px;
     }
-    
+
     .stats-grid {
         grid-template-columns: repeat(2, 1fr);
     }
 
     .table {
-        min-width: 490px; /* 30% smaller: 700px -> 490px */
+        min-width: 490px;
+        /* 30% smaller: 700px -> 490px */
     }
 
     .progress-stats {
@@ -1623,13 +1803,17 @@ body {
 
 /* Medium mobile screens (between very small and tablet) */
 @media (min-width: 481px) and (max-width: 768px) {
-    .table th:nth-child(6), /* Actions */
+
+    .table th:nth-child(6),
+    /* Actions */
     .table td:nth-child(6) {
-        width: 320px; /* Increased from 250px for more space */
+        width: 320px;
+        /* Increased from 250px for more space */
     }
 
     .btn-sm {
-        font-size: 8px !important; /* Slightly larger than very small screens */
+        font-size: 8px !important;
+        /* Slightly larger than very small screens */
         padding: 2px 4px !important;
         min-width: 30px;
     }
@@ -1646,29 +1830,35 @@ body {
     }
 
     .header {
-        padding: 6px 8px; /* Ultra-compact padding */
+        padding: 6px 8px;
+        /* Ultra-compact padding */
     }
 
     .header-left h1 {
-        font-size: 14px; /* Much smaller title */
+        font-size: 14px;
+        /* Much smaller title */
     }
 
     .user-badge {
-        padding: 3px 6px; /* Minimal padding */
+        padding: 3px 6px;
+        /* Minimal padding */
         font-size: 11px;
     }
 
     .user-info {
-        gap: 6px; /* Smaller gaps */
+        gap: 6px;
+        /* Smaller gaps */
     }
 
     .role-badge {
-        padding: 1px 4px; /* Tiny role badge */
+        padding: 1px 4px;
+        /* Tiny role badge */
         font-size: 9px;
     }
 
     .logout-btn {
-        padding: 3px 6px; /* Tiny logout button */
+        padding: 3px 6px;
+        /* Tiny logout button */
         font-size: 10px;
     }
 
@@ -1685,72 +1875,89 @@ body {
     }
 
     .file-table {
-        margin: 12px 0; /* Changed from negative margins to positive */
+        margin: 12px 0;
+        /* Changed from negative margins to positive */
         overflow-x: auto;
-        /* Removed -webkit-overflow-scrolling for compatibility */
         border-radius: 10px !important;
     }
 
     .table {
-        min-width: 315px; /* 30% smaller: 450px -> 315px */
-        font-size: 8px; /* 30% smaller: 10px -> 8px */
+        min-width: 315px;
+        /* 30% smaller: 450px -> 315px */
+        font-size: 8px;
+        /* 30% smaller: 10px -> 8px */
         border-radius: 10px !important;
     }
 
     .table th,
     .table td {
-        padding: 4px 3px; /* 30% smaller: 5px 4px -> 4px 3px */
+        padding: 4px 3px;
+        /* 30% smaller: 5px 4px -> 4px 3px */
     }
 
     /* Adjust sticky columns for very small screens */
     .table th:first-child,
     .table td:first-child {
-        min-width: 21px; /* 30% smaller: 30px -> 21px */
+        min-width: 21px;
+        /* 30% smaller: 30px -> 21px */
     }
 
     .file-name {
-        min-width: 56px; /* 30% smaller: 80px -> 56px */
-        max-width: 77px; /* 30% smaller: 110px -> 77px */
+        min-width: 56px;
+        /* 30% smaller: 80px -> 56px */
+        max-width: 77px;
+        /* 30% smaller: 110px -> 77px */
     }
 
     .table th:nth-child(3),
     .table td:nth-child(3) {
-        min-width: 35px; /* 30% smaller: 50px -> 35px */
+        min-width: 35px;
+        /* 30% smaller: 50px -> 35px */
     }
 
     .table th:nth-child(4),
     .table td:nth-child(4) {
-        min-width: 32px; /* 30% smaller: 45px -> 32px */
+        min-width: 32px;
+        /* 30% smaller: 45px -> 32px */
     }
 
     .table th:nth-child(5),
     .table td:nth-child(5) {
-        min-width: 42px; /* 30% smaller: 60px -> 42px */
+        min-width: 42px;
+        /* 30% smaller: 60px -> 42px */
     }
 
     .table th:last-child,
     .table td:last-child {
-        min-width: 180px; /* Increased from 120px for more space */
+        min-width: 180px;
+        /* Increased from 120px for more space */
     }
 
     .btn-sm {
-        padding: 1px 2px; /* Reduced padding for tiny buttons */
-        font-size: 6px; /* Reduced font size */
-        min-width: 20px; /* Set minimum width */
+        padding: 1px 2px;
+        /* Reduced padding for tiny buttons */
+        font-size: 6px;
+        /* Reduced font size */
+        min-width: 20px;
+        /* Set minimum width */
     }
 
     /* Hide button text on very small screens, show icons only */
     .actions .btn-sm {
-        font-size: 0; /* Hide text */
+        font-size: 0;
+        /* Hide text */
     }
 
     .actions .btn-sm i {
-        font-size: 8px; /* Show only icons, slightly larger */
+        font-size: 8px;
+        /* Show only icons, slightly larger */
     }
 
     .actions {
-        gap: 1px; /* Keep tight spacing */
-        flex-wrap: nowrap; /* Ensure no wrapping */
+        gap: 1px;
+        /* Keep tight spacing */
+        flex-wrap: nowrap;
+        /* Ensure no wrapping */
     }
 
     .upload-section {
@@ -1768,16 +1975,19 @@ body {
 @media (max-width: 768px) and (orientation: landscape) {
     .header {
         flex-direction: row;
-        padding: 6px 12px; /* More compact for landscape */
+        padding: 6px 12px;
+        /* More compact for landscape */
     }
 
     .user-info {
         flex-direction: row;
-        gap: 8px; /* Smaller gap for landscape */
+        gap: 8px;
+        /* Smaller gap for landscape */
     }
 
     .header-left h1 {
-        font-size: 15px; /* Smaller for landscape */
+        font-size: 15px;
+        /* Smaller for landscape */
     }
 
     .stats-grid {
@@ -1790,7 +2000,9 @@ body {
 }
 
 /* High DPI displays */
-@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+@media (-webkit-min-device-pixel-ratio: 2),
+(min-resolution: 192dpi) {
+
     .file-icon,
     .btn i {
         font-size: 1.1em;
@@ -1799,6 +2011,7 @@ body {
 
 /* Touch-friendly enhancements */
 @media (pointer: coarse) {
+
     .btn,
     .file-checkbox,
     .remove-btn {
@@ -1830,6 +2043,7 @@ body {
         opacity: 0;
         transform: translateY(20px);
     }
+
     to {
         opacity: 1;
         transform: translateY(0);
@@ -1845,6 +2059,7 @@ body {
         opacity: 0;
         transform: translateY(30px);
     }
+
     to {
         opacity: 1;
         transform: translateY(0);
@@ -1852,8 +2067,15 @@ body {
 }
 
 @keyframes pulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.05); }
+
+    0%,
+    100% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.05);
+    }
 }
 
 .pulse {
@@ -1888,7 +2110,8 @@ body {
     /* Make table even more compact on small screens */
     .table {
         font-size: 12px;
-        min-width: 450px; /* Slightly smaller minimum width */
+        min-width: 450px;
+        /* Slightly smaller minimum width */
     }
 
     .table th,
