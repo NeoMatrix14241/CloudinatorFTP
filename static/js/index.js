@@ -8,9 +8,9 @@ const USER_ROLE = configElement.dataset.userRole || "readonly";
 // Notification timing configuration (in milliseconds)
 // You can easily adjust these values to change how long notifications stay visible:
 const NOTIFICATION_TIMERS = {
-    SUCCESS: 3000,  // 2 seconds - for positive actions (uploads, deletes, queue operations)
-    INFO: 3000,     // 4 seconds - for general information
-    ERROR: 5000        // 0 = never auto-hide, stays until manually clicked (for important errors)
+    SUCCESS: 2000,  // 2 seconds - for positive actions (uploads, deletes, queue operations)
+    INFO: 2000,     // 4 seconds - for general information
+    ERROR: 4000        // 0 = never auto-hide, stays until manually clicked (for important errors)
 };
 
 // Utility function to update notification timers at runtime (for debugging/testing)
