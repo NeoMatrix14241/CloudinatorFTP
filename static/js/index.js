@@ -305,8 +305,8 @@ function addFilesToQueue(files) {
         console.log('📄 Processing file:', file.name, 'Size:', file.size);
         const fileId = generateFileId(file);
 
-        // Check if file already in queue
-        if (uploadQueue.find(item => item.id === fileId)) {
+        // Check if file already in queue by both name and size (not by sanitized name)
+        if (uploadQueue.find(item => item.name === file.name && item.size === file.size)) {
             console.log('⚠️ File already in queue:', file.name);
             showUploadStatus(`📁 File "${file.name}" is already in the queue`, 'info');
             return;
@@ -315,7 +315,7 @@ function addFilesToQueue(files) {
         const queueItem = {
             id: fileId,
             file: file,
-            name: file.name,
+            name: file.name, // preserve raw name
             size: file.size,
             status: 'pending',
             progress: 0,
@@ -335,7 +335,10 @@ function addFilesToQueue(files) {
 }
 
 function generateFileId(file) {
-    return `${Date.now()}-${file.name}-${file.size}`.replace(/[^a-z0-9\-\.]/gi, '');
+    // Only remove slashes, preserve all other characters (including +, spaces, etc.)
+    // This ensures uniqueness for files like "OC Extreme+.html" and "OC+.html"
+    const safeName = file.name.replace(/[\/\\]/g, '');
+    return `${Date.now()}-${safeName}-${file.size}`;
 }
 
 function removeFromQueue(fileId) {
@@ -1936,7 +1939,7 @@ async function performSingleDelete(itemPath, itemName) {
         }
     } catch (error) {
         console.error('Delete error:', error);
-        showUploadStatus('❌ Network error during delete', 'error');
+               showUploadStatus('❌ Network error during delete', 'error');
     } finally {
         closeDeleteModal();
     }

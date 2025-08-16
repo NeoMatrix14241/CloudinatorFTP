@@ -1,4 +1,12 @@
-from flask import Flask, render_template, request, redirect, url_for, send_from_directory, flash, session, jsonify
+# Bulk ZIP progress tracking
+bulk_zip_progress = {}
+
+from flask import g
+# Global flag for cancelling bulk ZIP
+bulk_zip_cancelled = {}
+
+# Move this endpoint below app initialization
+from flask import Flask, render_template, request, redirect, url_for, send_from_directory, flash, session, jsonify, Response
 from werkzeug.utils import secure_filename
 import os
 import shutil
@@ -7,6 +15,9 @@ import threading
 import time
 import logging
 import uuid
+import zipfile
+import io
+import re
 from datetime import datetime
 from config import PORT, ROOT_DIR, SESSION_SECRET, CHUNK_SIZE, ENABLE_CHUNKED_UPLOADS
 from auth import check_login, login_user, logout_user, current_user, is_logged_in, get_role
@@ -15,6 +26,15 @@ import storage
 app = Flask(__name__)
 app.secret_key = SESSION_SECRET
 storage.ensure_root()
+
+@app.route('/cancel_bulk_zip', methods=['POST'])
+def cancel_bulk_zip():
+    session_id = session.get('session_id') or request.cookies.get('session')
+    if not session_id:
+        return jsonify({'error': 'No session ID'}), 400
+    bulk_zip_cancelled[session_id] = True
+    print(f"❌ Bulk ZIP cancelled for session {session_id}")
+    return jsonify({'status': 'cancelled'})
 
 # Add Jinja2 filter for timestamp formatting
 @app.template_filter('timestamp_to_date')
@@ -310,15 +330,155 @@ def download(path):
     filename = os.path.basename(full_path)
     return send_from_directory(directory, filename, as_attachment=True)
 
+@app.route('/bulk-download', methods=['POST'])
+@login_required
+def bulk_download():
+    """Download multiple files and folders as a streaming ZIP file"""
+    try:
+        print(f"📥 Bulk download request received from user: {current_user()}")
+        
+        data = request.get_json()
+        print(f"📋 Request data: {data}")
+        
+        if not data or 'paths' not in data:
+            print("❌ Error: No paths provided in request")
+            return jsonify({'error': 'No paths provided'}), 400
+        
+        paths = data['paths']
+        print(f"📁 Requested paths ({len(paths)} items): {paths}")
+        
+        if not paths:
+            print("❌ Error: Empty paths list")
+            return jsonify({'error': 'Empty paths list'}), 400
+        
+        # Validate all paths
+        print(f"🔍 Validating {len(paths)} paths...")
+        invalid_paths = []
+        valid_paths = []
+        for path in paths:
+            if not storage.is_safe_path(path):
+                invalid_paths.append(path)
+                print(f"⚠️  Invalid path detected: {path}")
+            else:
+                valid_paths.append(path)
+                print(f"✅ Valid path: {path}")
+        
+        print(f"📊 Validation results: {len(valid_paths)} valid, {len(invalid_paths)} invalid")
+        
+        if invalid_paths:
+            return jsonify({'error': f'Invalid paths: {invalid_paths}'}), 400
+        
+        # Generate a filename for the ZIP based on selection
+        if len(paths) == 1:
+            # Single item - use its name
+            base_name = os.path.basename(paths[0]) or 'download'
+        else:
+            # Multiple items - use generic name with count
+            base_name = f'bulk_download_{len(paths)}_items'
+        
+        zip_filename = f'{base_name}.zip'
+        print(f"📦 Creating ZIP file: {zip_filename}")
+        
+        def generate_zip():
+            """Generator function to create ZIP file on-the-fly with true streaming, cancellation, and progress"""
+            session_id = session.get('session_id')
+            bulk_zip_progress[session_id] = {'current': 0, 'total': len(paths), 'done': False}
+            def zip_generator():
+                print(f"🗂️ Starting ZIP generation for {len(paths)} paths...")
+                temp_buffer = io.BytesIO()
+                with zipfile.ZipFile(temp_buffer, 'w', zipfile.ZIP_DEFLATED, compresslevel=1) as zip_file:
+                    files_added = 0
+                    for i, path in enumerate(paths, 1):
+                        # Check for cancellation
+                        if session_id and bulk_zip_cancelled.get(session_id):
+                            print(f"❌ ZIP generation cancelled for session {session_id}")
+                            bulk_zip_cancelled.pop(session_id, None)
+                            break
+                        print(f"📄 Processing item {i}/{len(paths)}: {path}")
+                        bulk_zip_progress[session_id]['current'] = i
+                        full_path = os.path.join(ROOT_DIR, path)
+                        if not os.path.exists(full_path):
+                            print(f"⚠️  Path does not exist: {full_path}")
+                            continue
+                        try:
+                            if os.path.isfile(full_path):
+                                print(f"📄 Adding file: {os.path.basename(full_path)}")
+                                zip_file.write(full_path, os.path.basename(full_path))
+                                files_added += 1
+                            elif os.path.isdir(full_path):
+                                print(f"📁 Adding directory: {os.path.basename(full_path)}")
+                                dir_name = os.path.basename(full_path)
+                                dir_files_added = 0
+                                for root, dirs, files in os.walk(full_path):
+                                    rel_path = os.path.relpath(root, full_path)
+                                    zip_root = dir_name if rel_path == '.' else os.path.join(dir_name, rel_path)
+                                    for file in files:
+                                        try:
+                                            file_path = os.path.join(root, file)
+                                            zip_path = os.path.join(zip_root, file)
+                                            zip_file.write(file_path, zip_path)
+                                            dir_files_added += 1
+                                        except (PermissionError, OSError) as e:
+                                            print(f"⚠️  Skipped file {file_path}: {str(e)}")
+                                            logging.warning(f"Skipped file {file_path}: {str(e)}")
+                                            continue
+                                    if not files and not dirs:
+                                        zip_info = zipfile.ZipInfo(zip_root + '/')
+                                        zip_info.external_attr = 0o755 << 16
+                                        zip_file.writestr(zip_info, '')
+                                print(f"📁 Directory added with {dir_files_added} files")
+                                files_added += dir_files_added
+                        except (PermissionError, OSError) as e:
+                            print(f"⚠️  Skipped item {full_path}: {str(e)}")
+                            logging.warning(f"Skipped item {full_path}: {str(e)}")
+                            continue
+                print(f"✅ ZIP generation complete: {files_added} files added")
+                bulk_zip_progress[session_id]['done'] = True
+                temp_buffer.seek(0)
+                return temp_buffer.read()
+            return zip_generator()
+        
+        # Generate the ZIP file
+        print("🔄 Generating ZIP data...")
+        zip_data = generate_zip()
+        print(f"📦 ZIP data generated: {len(zip_data)} bytes")
+        
+        # Return as streaming response
+        def stream_response():
+            chunk_size = 8192  # 8KB chunks
+            chunks_sent = 0
+            for i in range(0, len(zip_data), chunk_size):
+                chunks_sent += 1
+                yield zip_data[i:i + chunk_size]
+            print(f"📤 ZIP download completed: {chunks_sent} chunks sent")
+        
+        response = Response(
+            stream_response(),
+            mimetype='application/zip',
+            headers={
+                'Content-Disposition': f'attachment; filename="{zip_filename}"',
+                'Content-Length': str(len(zip_data))
+            }
+        )
+        
+        print(f"🎉 Bulk download response ready for {len(paths)} items")
+        logging.info(f"Bulk download initiated by {current_user()}: {len(paths)} items")
+        logging.debug(f"Paths requested: {paths}")
+        return response
+        
+    except Exception as e:
+        print(f"❌ Bulk download error: {str(e)}")
+        logging.error(f"Bulk download error: {str(e)}")
+        return jsonify({'error': 'Failed to create download'}), 500
+
 @app.route('/upload', methods=['POST'])
 @login_required
 def upload():
     session_id = session.get('session_id')
     if not session_id:
-        # Generate session ID if missing
         session_id = str(uuid.uuid4())
         session['session_id'] = session_id
-    
+
     try:
         role = get_role(current_user())
         if role != 'readwrite':
@@ -330,12 +490,12 @@ def upload():
         filename = request.form.get('filename', '')
         dest_path = request.form.get('dest_path', '')
 
-        # Validate and secure filename
+        # Validate filename (must not be empty)
         if not filename:
             return 'Filename is required', 400
-        
-        filename = secure_filename(filename)
-        if not filename:
+
+        # Remove all sanitization, only check for empty and slashes
+        if '/' in filename or '\\' in filename:
             return 'Invalid filename', 400
 
         # Security check: ensure destination path is safe
@@ -376,11 +536,8 @@ def upload():
             # If this is the last chunk, assemble the file
             if chunk_num == total_chunks - 1:
                 try:
-                    storage.assemble_chunks(file_id, total_chunks, filename, dest_path)
-                    # Successful assembly - untrack the upload
-                    chunk_tracker.untrack_upload(session_id, file_id)
-                    print(f"✅ Successfully assembled {filename} from {total_chunks} chunks")
-                    return 'File uploaded successfully', 200
+                    # When assembling, use the original filename
+                    storage.assemble_chunks(file_id, filename, dest_path)
                 except Exception as e:
                     # Assembly failed - cleanup will happen in assemble_chunks
                     chunk_tracker.untrack_upload(session_id, file_id)
@@ -397,9 +554,12 @@ def upload():
 
             # Use provided filename or fall back to uploaded filename
             if not filename:
-                filename = secure_filename(uploaded_file.filename)
+                filename = uploaded_file.filename
                 if not filename:
                     return 'Invalid filename', 400
+            # Only check for slashes
+            if '/' in filename or '\\' in filename:
+                return 'Invalid filename', 400
 
             # Construct target path
             target_dir = os.path.join(ROOT_DIR, dest_path) if dest_path else ROOT_DIR
@@ -1051,10 +1211,10 @@ def mkdir():
         path = request.form.get('path','')
 
         if not foldername:
-            return jsonify({'error': 'Folder name is required'}), 400
+            return jsonify({'error': 'Folder name required'}), 400
 
-        # Secure the folder name
-        foldername = secure_filename(foldername)
+        # Only replace slashes, preserve all other characters (including +, spaces, etc.)
+        foldername = foldername.replace('/', '_').replace('\\', '_')
         if not foldername:
             return jsonify({'error': 'Invalid folder name'}), 400
 
@@ -1064,13 +1224,9 @@ def mkdir():
 
         created = storage.create_folder(path, foldername)
         if not created:
-            return jsonify({'error': 'Folder already exists or error creating folder'}), 400
+            return jsonify({'error': 'Folder already exists or could not be created'}), 409
         else:
-            return jsonify({
-                'success': True, 
-                'message': f'Folder "{foldername}" created successfully',
-                'folder_name': foldername
-            }), 200
+            return jsonify({'success': True, 'message': f'Folder "{foldername}" created successfully'}), 200
     
     except Exception as e:
         return jsonify({'error': f'Error creating folder: {str(e)}'}), 500

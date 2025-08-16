@@ -144,14 +144,12 @@ def save_chunk(file_id, chunk_num, chunk_data):
         print(f"❌ Error saving chunk {chunk_num} for {file_id}: {e}")
         return False
 
-def assemble_chunks(file_id, total_chunks, filename, dest_path=''):
-    tmp_dir = os.path.join(ROOT_DIR, '.chunks', file_id)
+def assemble_chunks(file_id, filename, dest_path=''):
+    # Only replace slashes, preserve all other characters
+    safe_filename = filename.replace('/', '_').replace('\\', '_')
     target_dir = os.path.join(ROOT_DIR, dest_path) if dest_path else ROOT_DIR
-    
-    # Ensure target directory exists
+    target_path = os.path.join(target_dir, safe_filename)
     os.makedirs(target_dir, exist_ok=True)
-    
-    target_path = os.path.join(target_dir, filename)
     
     try:
         with open(target_path, 'wb') as outfile:
@@ -317,13 +315,16 @@ def start_cleanup_scheduler():
     print("📧 Started basic chunk cleanup scheduler (runs every hour)")
 
 def create_folder(path, foldername):
-    full_path = os.path.join(ROOT_DIR, path, foldername) if path else os.path.join(ROOT_DIR, foldername)
-    try:
-        if not os.path.exists(full_path):
-            os.makedirs(full_path)
-            return True
+    # Only replace slashes, preserve all other characters
+    safe_foldername = foldername.replace('/', '_').replace('\\', '_')
+    target_dir = os.path.join(ROOT_DIR, path) if path else ROOT_DIR
+    folder_path = os.path.join(target_dir, safe_foldername)
+    if os.path.exists(folder_path):
         return False
-    except (OSError, IOError):
+    try:
+        os.makedirs(folder_path)
+        return True
+    except Exception:
         return False
 
 def delete_path(path):
