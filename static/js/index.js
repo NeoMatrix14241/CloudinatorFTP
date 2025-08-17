@@ -412,6 +412,11 @@ async function cancelUpload(fileId) {
                 isUploading = false;
             }
 
+            // Refresh file table after cancel
+            setTimeout(() => {
+                refreshFileTable();
+            }, 500);
+
             // Continue with next file if we were batch uploading
             if (uploadQueue.some(item => item.status === 'pending') && !isUploading) {
                 setTimeout(() => {
@@ -723,7 +728,7 @@ function showUploadStatus(message, type = 'info') {
     notification.innerHTML = message;
     notification.id = `notification-${notificationId_current}`;
     notification.dataset.type = type; // Store type for batch operations
-    
+
     // Calculate position immediately based on header and notification count
     const headerElement = document.querySelector('.header');
     const headerHeight = headerElement ? headerElement.offsetHeight : 70;
@@ -731,7 +736,7 @@ function showUploadStatus(message, type = 'info') {
     const gap = 10;
     const startPosition = headerHeight + 20;
     const topPosition = startPosition + (notificationCount * (notificationHeight + gap));
-    
+
     // Style for stacking - set position immediately
     notification.style.position = 'fixed';
     notification.style.right = '20px';
@@ -741,34 +746,34 @@ function showUploadStatus(message, type = 'info') {
     notification.style.maxWidth = '500px';
     notification.style.transform = 'translateX(100%)'; // Start off-screen
     notification.style.transition = 'transform 0.3s ease-out';
-    
+
     // Increment count and add to page
     notificationCount++;
     document.body.appendChild(notification);
-    
+
     // Trigger slide-in animation immediately
     requestAnimationFrame(() => {
         notification.style.transform = 'translateX(0)';
     });
-    
+
     // Consistent timing for all notifications using centralized config
     if (type === 'info' || type === 'success') {
         // Use centralized timer configuration
         const hideDelay = type === 'success' ? NOTIFICATION_TIMERS.SUCCESS : NOTIFICATION_TIMERS.INFO;
-        
+
         const timerId = setTimeout(() => {
             removeNotification(notificationId_current);
         }, hideDelay);
-        
+
         // Store timer reference
         notificationTimers.set(notificationId_current, timerId);
     }
-    
+
     // Add click to dismiss
     notification.addEventListener('click', () => {
         removeNotification(notificationId_current);
     });
-    
+
     notification.style.cursor = 'pointer';
     notification.title = 'Click to dismiss';
 }
@@ -790,11 +795,11 @@ function removeNotification(notificationId) {
             clearTimeout(notificationTimers.get(notificationId));
             notificationTimers.delete(notificationId);
         }
-        
+
         // Slide out animation
         notification.style.transform = 'translateX(100%)';
         notification.style.opacity = '0';
-        
+
         setTimeout(() => {
             if (notification.parentNode) {
                 notification.parentNode.removeChild(notification);
@@ -813,10 +818,10 @@ function repositionNotifications() {
     const notificationHeight = 60; // Estimated height
     const gap = 10;
     const startPosition = headerHeight + 20;
-    
+
     // Reset count to match actual notifications
     notificationCount = existingNotifications.length;
-    
+
     existingNotifications.forEach((notif, index) => {
         const topPosition = startPosition + (index * (notificationHeight + gap));
         notif.style.top = `${topPosition}px`;
@@ -832,11 +837,11 @@ function clearNotificationQueue() {
             notif.parentNode.removeChild(notif);
         }
     });
-    
+
     // Clear all timers
     notificationTimers.forEach(timerId => clearTimeout(timerId));
     notificationTimers.clear();
-    
+
     notificationCount = 0; // Reset count
 }
 
@@ -884,10 +889,11 @@ function updateItemStatus(fileId, status, error = null) {
             console.log(`⏰ Set completion time for ${item.name}: ${item.completedTime}`);
 
             // Auto-remove completed items after 5 seconds
-            setTimeout(() => {
-                console.log(`🧹 Auto-removing completed item: ${item.name}`);
-                removeFromQueue(item.id);
-            }, 5000);
+            // Let startBatchUpload handle cleanup after all files are done.
+            // setTimeout(() => {
+            //     console.log(`🧹 Auto-removing completed item: ${item.name}`);
+            //     removeFromQueue(item.id);
+            // }, 5000);
         }
 
         console.log(`🔄 Calling updateQueueDisplay after status update`);
@@ -1322,9 +1328,14 @@ async function startBatchUpload() {
 
         const completedCount = uploadQueue.filter(item => item.status === 'completed').length;
         const errorCount = uploadQueue.filter(item => item.status === 'error').length;
+        const cancelledCount = uploadQueue.filter(item => item.status === 'cancelled').length;
         const pendingCount = uploadQueue.filter(item => item.status === 'pending').length;
 
-        if (errorCount === 0) {
+        // Ensure overall progress is set to 100% after all uploads
+        totalBytesUploaded = totalBytesToUpload;
+        updateProgressSummary();
+
+        if (errorCount === 0 && cancelledCount === 0) {
             showUploadStatus(
                 `🎉 All files uploaded successfully! (${completedCount} files)`,
                 'success'
@@ -1336,17 +1347,19 @@ async function startBatchUpload() {
             }, 1000);
         } else {
             showUploadStatus(
-                `📊 Batch upload completed: ${completedCount} successful, ${errorCount} failed`,
+                `📊 Batch upload completed: ${completedCount} successful, ${errorCount} failed, ${cancelledCount} cancelled`,
                 'info'
             );
         }
 
-        // Auto-clear completed items after upload batch finishes
-        console.log('🧹 Auto-clearing completed items in 3 seconds...');
+        // Auto-clear completed/error/cancelled items after upload batch finishes
+        console.log('🧹 Auto-clearing finished items in 3 seconds...');
         setTimeout(() => {
-            // Remove completed and error items
+            // Only remove items that are completed, error, or cancelled
             const itemsToRemove = uploadQueue.filter(item =>
-                item.status === 'completed' || item.status === 'error'
+                item.status === 'completed' ||
+                item.status === 'error' ||
+                item.status === 'cancelled'
             );
 
             itemsToRemove.forEach(item => {
@@ -1939,7 +1952,7 @@ async function performSingleDelete(itemPath, itemName) {
         }
     } catch (error) {
         console.error('Delete error:', error);
-               showUploadStatus('❌ Network error during delete', 'error');
+        showUploadStatus('❌ Network error during delete', 'error');
     } finally {
         closeDeleteModal();
     }
