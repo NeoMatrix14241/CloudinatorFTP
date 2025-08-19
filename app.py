@@ -7,6 +7,7 @@ bulk_zip_cancelled = {}
 
 # Move this endpoint below app initialization
 from flask import Flask, render_template, request, redirect, url_for, send_from_directory, send_file, flash, session, jsonify, Response
+from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import os
 import shutil
@@ -24,6 +25,7 @@ from auth import check_login, login_user, logout_user, current_user, is_logged_i
 import storage
 
 app = Flask(__name__)
+CORS(app)
 app.secret_key = SESSION_SECRET
 storage.ensure_root()
 
