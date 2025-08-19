@@ -6,7 +6,7 @@ from flask import g
 bulk_zip_cancelled = {}
 
 # Move this endpoint below app initialization
-from flask import Flask, render_template, request, redirect, url_for, send_from_directory, flash, session, jsonify, Response
+from flask import Flask, render_template, request, redirect, url_for, send_from_directory, send_file, flash, session, jsonify, Response
 from werkzeug.utils import secure_filename
 import os
 import shutil
@@ -1262,6 +1262,28 @@ def delete():
     except Exception as e:
         flash(f'Error deleting item: {str(e)}')
         return redirect(url_for('index'))
+
+@app.route('/api/speedtest/ping', methods=['GET'])
+def speedtest_ping():
+    # Just return OK for latency test
+    return jsonify({'ok': True})
+
+@app.route('/api/speedtest/upload', methods=['POST'])
+def speedtest_upload():
+    # Receive 25MiB data, measure time server-side if needed
+    file = request.files.get('data')
+    if not file:
+        return jsonify({'error': 'No data'}), 400
+    # Optionally read to memory to simulate disk write
+    file.read()
+    return jsonify({'ok': True})
+
+@app.route('/api/speedtest/download', methods=['GET'])
+def speedtest_download():
+    # Send 25MiB of zero bytes
+    size = 25 * 1024 * 1024
+    buf = io.BytesIO(b'\x00' * size)
+    return send_file(buf, mimetype='application/octet-stream', as_attachment=True, download_name='speedtest.bin')
 
 @app.errorhandler(413)
 def too_large(e):

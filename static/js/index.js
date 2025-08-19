@@ -2280,12 +2280,71 @@ async function updateManualCleanupButton() {
     }
 }
 
-// Event listeners and initialization
+// Speed Test Modal Functions
+function openSpeedTestModal() {
+    const modal = document.getElementById('speedTestModal');
+    const results = document.getElementById('speedTestResults');
+    if (results) results.innerHTML = '<p>Testing connection...</p>';
+    if (modal) modal.classList.add('show');
+    runSpeedTest();
+}
+
+function closeSpeedTestModal() {
+    const modal = document.getElementById('speedTestModal');
+    if (modal) modal.classList.remove('show');
+}
+
+// Speed Test Logic
+async function runSpeedTest() {
+    const results = document.getElementById('speedTestResults');
+    const TEST_SIZE = 25 * 1024 * 1024; // 25 MiB
+    let latency = null, uploadMbps = null, downloadMbps = null;
+
+    try {
+        // 1. Latency test (small ping)
+        const t0 = performance.now();
+        await fetch('/api/speedtest/ping', {method: 'GET'});
+        const t1 = performance.now();
+        latency = t1 - t0;
+
+        // 2. Upload test
+        const uploadData = new Uint8Array(TEST_SIZE); // 25MiB zeroes
+        const uploadForm = new FormData();
+        uploadForm.append('data', new Blob([uploadData]), 'speedtest.bin');
+        const uploadStart = performance.now();
+        await fetch('/api/speedtest/upload', {method: 'POST', body: uploadForm});
+        const uploadEnd = performance.now();
+        const uploadTime = (uploadEnd - uploadStart) / 1000;
+        uploadMbps = (TEST_SIZE / 1024 / 1024) / uploadTime;
+
+        // 3. Download test
+        const downloadStart = performance.now();
+        const resp = await fetch('/api/speedtest/download', {method: 'GET'});
+        await resp.arrayBuffer();
+        const downloadEnd = performance.now();
+        const downloadTime = (downloadEnd - downloadStart) / 1000;
+        downloadMbps = (TEST_SIZE / 1024 / 1024) / downloadTime;
+
+        // Show results
+        if (results) {
+            results.innerHTML = `
+                <div><strong>Latency:</strong> ${latency.toFixed(1)} ms</div>
+                <div><strong>Upload Speed:</strong> ${uploadMbps.toFixed(2)} MiB/s</div>
+                <div><strong>Download Speed:</strong> ${downloadMbps.toFixed(2)} MiB/s</div>
+                <div style="margin-top:10px;font-size:12px;color:#888;">Tested with 25 MiB transfer</div>
+            `;
+        }
+    } catch (e) {
+        if (results) results.innerHTML = `<div style="color:red;">Speed test failed: ${e}</div>`;
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function () {
     const clearBtn = document.getElementById('clearAllBtn');
     const uploadBtn = document.getElementById('startUploadBtn');
     const fileInput = document.getElementById('fileInput');
     const fileInputDisplay = document.querySelector('.file-input-display');
+    const speedTestBtn = document.getElementById('speedTestBtn');
 
     // Add event listeners with null checks
     if (clearBtn) {
@@ -2300,6 +2359,11 @@ document.addEventListener('DOMContentLoaded', function () {
         uploadBtn.addEventListener('click', startBatchUpload);
     } else {
         console.warn('⚠️ Upload button not found');
+    }
+
+    // Ensure Speed Test button event is attached
+    if (speedTestBtn) {
+        speedTestBtn.addEventListener('click', openSpeedTestModal);
     }
 
     // Create folder form event listener

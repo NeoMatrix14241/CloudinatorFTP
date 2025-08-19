@@ -123,9 +123,14 @@
             </form>
         </div>
 
+        
+
         <!-- Enhanced Upload section -->
         <div class="upload-section slide-in">
-            <h3><i class="fas fa-cloud-upload-alt"></i> Upload Files</h3>
+            <h3><i class="fas fa-cloud-upload-alt"></i> Upload Files 
+                <button class="btn btn-outline btn-sm" id="speedTestBtn">
+	                <i class="fas fa-tachometer-alt"></i> Speed Test
+                </button></h3>
             <div class="upload-form">
                 <div class="file-input-wrapper">
                     <input type="file" id="fileInput" class="file-input" multiple required>
@@ -528,6 +533,22 @@
             </div>
             <div class="modal-footer">
                 <button class="btn btn-primary" onclick="closeNotificationModal()">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Speed Test Modal -->
+    <div class="modal" id="speedTestModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Connection Speed Test</h3>
+                <button class="modal-close" onclick="closeSpeedTestModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="speedTestResults">
+                <p>Testing connection...</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeSpeedTestModal()">Close</button>
             </div>
         </div>
     </div>
