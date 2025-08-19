@@ -28,7 +28,7 @@ termux-setup-storage
 #### 2. 🐍 Install Python Dependencies
 
 ```bash
-pip install flask bcrypt
+pip install flask flash_cors bcrypt
 ```
 
 > **⚠️ Troubleshooting bcrypt installation:**
