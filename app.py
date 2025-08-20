@@ -1282,8 +1282,8 @@ def speedtest_upload():
 
 @app.route('/api/speedtest/download', methods=['GET'])
 def speedtest_download():
-    # Send 25MiB of zero bytes
-    size = 25 * 1024 * 1024
+    # Send 5MiB of zero bytes
+    size = 3 * 1024 * 1024
     buf = io.BytesIO(b'\x00' * size)
     return send_file(buf, mimetype='application/octet-stream', as_attachment=True, download_name='speedtest.bin')
 
