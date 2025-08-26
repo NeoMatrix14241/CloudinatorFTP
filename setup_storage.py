@@ -137,7 +137,7 @@ def setup_custom_path():
     print("\n🔧 Custom Path Setup")
     print("-" * 30)
     print("Enter the full path where you want to store files.")
-    print("The system will automatically create a 'CloudflareFTP' subdirectory.")
+    print("No subdirectory will be created; the exact path will be used.")
     print()
     
     examples = {
@@ -179,8 +179,8 @@ def setup_custom_path():
             
             # Expand user paths like ~/Documents
             expanded_path = os.path.expanduser(custom_path)
-            
-            if set_custom_storage_path(expanded_path):
+            # For custom path, use exactly what the user specified (no subfolder)
+            if set_custom_storage_path(expanded_path, use_subfolder=False):
                 importlib.reload(config)
                 return True
             else:

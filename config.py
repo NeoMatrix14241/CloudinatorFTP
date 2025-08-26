@@ -240,17 +240,23 @@ def format_bytes(bytes):
         bytes /= 1024
     return f"{bytes:.1f} PB"
 
-def set_custom_storage_path(custom_path):
-    """Set a custom storage path and save it"""
+def set_custom_storage_path(custom_path, use_subfolder=True):
+    """
+    Set the storage path. If use_subfolder is True, append 'CloudinatorFTP' to the path.
+    If False, use the path as-is (for custom user input).
+    """
     global ROOT_DIR
     
     try:
         # Expand user paths like ~/Documents
         expanded_path = os.path.expanduser(custom_path)
         
-        # Add CloudflareFTP suffix if not already there
-        if not expanded_path.endswith('CloudflareFTP'):
-            expanded_path = os.path.join(expanded_path, 'CloudflareFTP')
+        if use_subfolder:
+            # Always append CloudinatorFTP for preset paths
+            final_path = os.path.join(expanded_path, 'CloudinatorFTP')
+        else:
+            # Use the exact custom path
+            final_path = expanded_path
         
         # Create directory
         os.makedirs(expanded_path, exist_ok=True)
