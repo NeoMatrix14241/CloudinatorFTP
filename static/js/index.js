@@ -2331,7 +2331,7 @@ async function runSpeedTest() {
                 <div><strong>Latency:</strong> ${latency.toFixed(1)} ms</div>
                 <div><strong>Upload Speed:</strong> ${uploadMbps.toFixed(2)} MiB/s</div>
                 <div><strong>Download Speed:</strong> ${downloadMbps.toFixed(2)} MiB/s</div>
-                <div style="margin-top:10px;font-size:12px;color:#888;">Tested with 25 MiB transfer</div>
+                <div style="margin-top:10px;font-size:12px;color:#888;">Tested with 5 MiB transfer</div>
             `;
         }
     } catch (e) {
