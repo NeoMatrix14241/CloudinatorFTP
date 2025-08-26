@@ -2308,7 +2308,7 @@ async function runSpeedTest() {
         latency = t1 - t0;
 
         // 2. Upload test
-        const uploadData = new Uint8Array(TEST_SIZE); // 25MiB zeroes
+        const uploadData = new Uint8Array(TEST_SIZE); // 5MiB zeroes
         const uploadForm = new FormData();
         uploadForm.append('data', new Blob([uploadData]), 'speedtest.bin');
         const uploadStart = performance.now();
