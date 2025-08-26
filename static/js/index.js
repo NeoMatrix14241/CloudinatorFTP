@@ -2297,7 +2297,7 @@ function closeSpeedTestModal() {
 // Speed Test Logic
 async function runSpeedTest() {
     const results = document.getElementById('speedTestResults');
-    const TEST_SIZE = 25 * 1024 * 1024; // 25 MiB
+    const TEST_SIZE = 5 * 1024 * 1024; // 5 MiB
     let latency = null, uploadMbps = null, downloadMbps = null;
 
     try {
