@@ -1,6 +1,14 @@
 # 📁 Cloudinator - Cloudflare and Termux FTP
 
-A lightweight FTP-like file transfer server that runs on Termux and exposes itself to the internet via Cloudflare tunnels. Access your Android device's storage from anywhere in the world!
+A lightweight FTP-like file transfer server that runs on Termux and exposes itself to the internet via Cloudflare tunnels. Access your Android device's storage from anywhere!
+
+## 🚧 Roadmap
+
+- [ ] **Streaming ZIP downloads** using `zipstream-new` for efficient batch downloads with checkbox selection
+- [ ] **Folder uploads** using `webkitdirectory` to support recursive folder selection in modern browsers
+- [ ] **File manager-style navigation** with support for move and copy operations
+- [ ] **AJAX-based table sorting and searching** for instant, client-side interactivity
+- [ ] **Fix stuck uploads at 100%** by resolving issues with pending chunk assembly (especially for large files)
 
 ## 🚀 Quick Start
 
