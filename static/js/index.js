@@ -4384,7 +4384,7 @@ document.addEventListener('DOMContentLoaded', function () {
         console.log('🔧 Setting up clear button event listener');
         clearBtn.addEventListener('click', clearAllQueue);
     } else {
-        console.warn('⚠️ Clear button not found');
+        console.log('ℹ️ Clear button not found');
     }
 
     // Add Clear Completed button event listener
@@ -4395,14 +4395,14 @@ document.addEventListener('DOMContentLoaded', function () {
             clearCompletedItems();
         });
     } else {
-        console.warn('⚠️ Clear completed button not found');
+        console.log('ℹ️ Clear completed button not found');
     }
 
     if (uploadBtn) {
         console.log('🔧 Setting up upload button event listener');
         uploadBtn.addEventListener('click', startBatchUpload);
     } else {
-        console.warn('⚠️ Upload button not found');
+        console.log('ℹ️ Upload button not found');
     }
 
     // Setup parallel upload controls
