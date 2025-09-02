@@ -654,7 +654,6 @@ def bulk_download():
             headers={
                 'Content-Disposition': f'attachment; filename="{zip_filename}"',
                 'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
                 'X-Accel-Buffering': 'no',
                 'Content-Encoding': 'identity'
             }
