@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>404 - Page Not Found | Cloudinator</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp">
+    <link href="{{ url_for('static', filename='css/404.css') }}" rel="stylesheet">
+</head>
+<body>
+    <div class="error-container">
+        <div class="error-icon">
+            <i class="fas fa-exclamation-triangle"></i>
+        </div>
+        
+        <h1 class="error-title">404</h1>
+        <h2 class="error-subtitle">Page Not Found</h2>
+        
+        <p class="error-message">
+            The page you're looking for doesn't exist or has been moved. 
+            This might happen if you followed an old link or typed the URL incorrectly.
+        </p>
+        
+        <div class="error-actions">
+            <a href="/" class="btn btn-primary">
+                <i class="fas fa-home"></i>
+                Go Home
+            </a>
+            <button class="btn btn-secondary" onclick="history.back()">
+                <i class="fas fa-arrow-left"></i>
+                Go Back
+            </button>
+        </div>
+        
+        <div class="error-details">
+            <h4>What you can do:</h4>
+            <ul>
+                <li>
+                    <i class="fas fa-check"></i>
+                    Check the URL for typos
+                </li>
+                <li>
+                    <i class="fas fa-check"></i>
+                    Go back to the previous page
+                </li>
+                <li>
+                    <i class="fas fa-check"></i>
+                    Visit the home page
+                </li>
+                <li>
+                    <i class="fas fa-check"></i>
+                    Make sure you're logged in
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/404.js') }}"></script>
+</body>
+</html>

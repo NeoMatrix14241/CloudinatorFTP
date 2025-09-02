@@ -1,0 +1,3094 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    min-height: 100vh;
+    color: #333;
+}
+
+/* Header */
+.header {
+    background: rgba(255, 255, 255, 0.1);
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 12px 20px;
+    /* Reduced from 20px 30px */
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.header-left h1 {
+    color: white;
+    font-size: 20px;
+    /* Reduced from 24px */
+    font-weight: 300;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    /* Reduced from 10px */
+}
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    /* Reduced from 20px */
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.user-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    /* Reduced from 8px */
+    background: rgba(255, 255, 255, 0.1);
+    padding: 6px 12px;
+    /* Reduced from 8px 15px */
+    border-radius: 16px;
+    /* Reduced from 20px */
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.role-badge {
+    padding: 3px 8px;
+    /* Reduced from 4px 10px */
+    border-radius: 10px;
+    /* Reduced from 12px */
+    font-size: 11px;
+    /* Reduced from 12px */
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.role-readwrite {
+    background: #27ae60;
+    color: white;
+}
+
+.role-readonly {
+    background: #f39c12;
+    color: white;
+}
+
+.logout-btn {
+    color: rgba(255, 255, 255, 0.8);
+    text-decoration: none;
+    padding: 6px 12px;
+    /* Reduced from 8px 15px */
+    border-radius: 6px;
+    /* Reduced from 8px */
+    transition: all 0.3s ease;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    font-size: 13px;
+    /* Added smaller font size */
+}
+
+.logout-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+}
+
+/* Main container */
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 30px;
+}
+
+/* Breadcrumb */
+.breadcrumb {
+    background: rgba(255, 255, 255, 0.1);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    padding: 15px 20px;
+    border-radius: 12px;
+    margin-bottom: 25px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.breadcrumb h3 {
+    color: white;
+    font-size: 18px;
+    font-weight: 400;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Controls section - Updated desktop spacing */
+.controls {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 25px;
+    flex-wrap: wrap;
+}
+
+.create-folder-form {
+    display: flex;
+    gap: 10px;
+    background: rgba(255, 255, 255, 0.1);
+    padding: 15px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.create-folder-form input[type="text"] {
+    padding: 10px 15px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    font-size: 14px;
+    min-width: 200px;
+}
+
+.create-folder-form input[type="text"]:focus {
+    outline: none;
+    border-color: #3498db;
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.create-folder-form input[type="text"]::placeholder {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+/* Manual cleanup button styling */
+.manual-cleanup-btn {
+    margin-left: 10px;
+}
+
+/* Hide manual cleanup button by default to prevent flash on page load */
+#manualCleanupBtn {
+    display: none !important;
+}
+
+/* Bulk Actions */
+.bulk-actions {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 15px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    display: none;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 15px;
+}
+
+.bulk-actions.show {
+    display: flex;
+}
+
+.bulk-info {
+    color: white;
+    font-weight: 500;
+}
+
+.bulk-buttons {
+    display: flex;
+    gap: 10px;
+}
+
+.btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
+}
+
+.btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #3498db, #2980b9);
+    color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(52, 152, 219, 0.3);
+}
+
+/* Download button specific styling */
+#bulkDownloadBtn {
+    background: linear-gradient(135deg, #2ecc71, #27ae60);
+    position: relative;
+    overflow: hidden;
+}
+
+#bulkDownloadBtn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(46, 204, 113, 0.4);
+    background: linear-gradient(135deg, #27ae60, #2ecc71);
+}
+
+#bulkDownloadBtn::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+    transition: left 0.5s ease;
+}
+
+#bulkDownloadBtn:hover::before {
+    left: 100%;
+}
+
+/* ZIP download state styling */
+#bulkDownloadBtn.zip-mode {
+    background: linear-gradient(135deg, #9b59b6, #8e44ad);
+}
+
+#bulkDownloadBtn.zip-mode:hover:not(:disabled) {
+    background: linear-gradient(135deg, #8e44ad, #9b59b6);
+    box-shadow: 0 8px 25px rgba(155, 89, 182, 0.4);
+}
+
+.btn-success {
+    background: linear-gradient(135deg, #27ae60, #229954);
+    color: white;
+}
+
+.btn-success:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(39, 174, 96, 0.3);
+}
+
+.btn-danger {
+    background: linear-gradient(135deg, #e74c3c, #c0392b);
+    color: white;
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+.btn-danger:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 5px 15px rgba(231, 76, 60, 0.3);
+}
+
+.btn-warning {
+    background: linear-gradient(135deg, #f39c12, #e67e22);
+    color: white;
+}
+
+.btn-warning:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(243, 156, 18, 0.3);
+}
+
+/* File table */
+.file-table {
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    margin: 25px 0;
+}
+
+.table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.table thead {
+    background: linear-gradient(135deg, #34495e, #2c3e50);
+    color: white;
+}
+
+.table th {
+    padding: 18px 20px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.table tbody tr {
+    border-bottom: 1px solid #ecf0f1;
+    transition: all 0.3s ease;
+}
+
+.table tbody tr:hover {
+    background: rgba(52, 152, 219, 0.05);
+    transform: scale(1.005);
+}
+
+.table tbody tr.selected {
+    background: rgba(52, 152, 219, 0.1);
+    border-left: 4px solid #3498db;
+}
+
+.table td {
+    padding: 18px 20px;
+    vertical-align: top;
+}
+
+.file-checkbox {
+    width: 18px;
+    height: 18px;
+    margin-right: 10px;
+    cursor: pointer;
+}
+
+.file-icon {
+    font-size: 18px;
+    margin-right: 10px;
+    width: 20px;
+    text-align: center;
+}
+
+.folder-icon {
+    color: #f39c12;
+}
+
+.file-icon-default {
+    color: #7f8c8d;
+}
+
+.file-name {
+    display: flex;
+    align-items: flex-start;
+    font-weight: 500;
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.file-name a,
+.file-name span {
+    color: #2c3e50;
+    text-decoration: none;
+    transition: color 0.3s ease;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    white-space: normal;
+    line-height: 1.4;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 5;
+    line-clamp: 5;
+    -webkit-box-orient: vertical;
+}
+
+.file-name a:hover {
+    color: #3498db;
+}
+
+.file-type {
+    color: #7f8c8d;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+/* Desktop-specific table styling for better file name handling */
+@media (min-width: 769px) {
+
+    .table th:nth-child(2),
+    .table td:nth-child(2) {
+        width: 35%;
+        /* Balanced width */
+        max-width: 400px;
+        min-width: 220px;
+    }
+
+    /* Size column for desktop - ensure proper formatting */
+    .table th:nth-child(3),
+    .table td:nth-child(3) {
+        width: 140px;
+        /* Increased width for proper display */
+        min-width: 140px;
+        white-space: normal;
+        line-height: 1.3;
+    }
+
+    /* Actions column for desktop - accommodate text buttons */
+    .table th:last-child,
+    .table td:last-child {
+        width: 30%;
+        /* More space for actions and SIZE */
+        min-width: 320px;
+    }
+
+    .table tbody tr {
+        max-height: 250px;
+        /* Even larger for 5 lines */
+        overflow: hidden;
+    }
+
+    /* Ensure file names don't make rows too tall */
+    .file-name {
+        max-height: 200px;
+        /* Much larger for 5 lines */
+        overflow: hidden;
+    }
+}
+
+/* Mobile-specific styling for file names */
+@media (max-width: 768px) {
+
+    /* Enable horizontal scrolling for better name display */
+    .file-table {
+        overflow-x: auto !important;
+    }
+
+    .table {
+        min-width: 600px !important;
+        /* Smaller table width to fit better on mobile */
+    }
+
+    /* Override all previous name column rules */
+    .file-table .table th:nth-child(2),
+    .file-table .table td:nth-child(2) {
+        width: 220px !important;
+        /* Good balance - not too small, not too wide */
+        min-width: 220px !important;
+        max-width: 220px !important;
+    }
+
+    /* Override file-name container */
+    .file-table .table .file-name {
+        max-width: 220px !important;
+        max-height: unset !important;
+        overflow: visible !important;
+        display: flex !important;
+        /* Keep icon and name side by side */
+        align-items: flex-start !important;
+        gap: 8px !important;
+    }
+
+    /* Override all previous file name styling with maximum specificity */
+    .file-table .table td:nth-child(2) .file-name a,
+    .file-table .table td:nth-child(2) .file-name span,
+    .file-table .table .file-name a,
+    .file-table .table .file-name span {
+        white-space: normal !important;
+        /* Allow line breaks */
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        display: -webkit-box !important;
+        /* Use webkit-box for multi-line */
+        line-height: 1.3 !important;
+        word-break: break-word !important;
+        /* Break long words */
+        -webkit-line-clamp: 6 !important;
+        /* Increased to 6 lines for more content */
+        line-clamp: 6 !important;
+        -webkit-box-orient: vertical !important;
+        max-height: 7.8em !important;
+        /* About 6 lines */
+        width: 100% !important;
+        /* Use full available width */
+        max-width: none !important;
+        /* Remove width restrictions */
+        flex: 1 !important;
+        /* Take remaining space */
+    }
+}
+
+.actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+}
+
+.btn-sm {
+    padding: 5px 10px;
+    font-size: 11px;
+    border-radius: 4px;
+    min-width: auto;
+    text-align: center;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+/* Individual action button styling */
+.actions .btn-sm {
+    padding: 4px 8px;
+    margin: 1px;
+    font-size: 10px;
+}
+
+.actions .btn-sm i {
+    font-size: 10px;
+    margin-right: 3px;
+}
+
+.btn-outline {
+    background: transparent;
+    border: 1px solid #3498db;
+    color: #3498db;
+}
+
+.btn-outline:hover {
+    background: #3498db;
+    color: white;
+}
+
+.btn-danger {
+    background: #e74c3c;
+    color: white;
+    border: 1px solid #e74c3c;
+}
+
+.btn-danger:hover {
+    background: #c0392b;
+    border-color: #c0392b;
+}
+
+/* Enhanced Upload Section - Perfect spacing match */
+.upload-section {
+    background: rgba(255, 255, 255, 0.1);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border-radius: 15px;
+    padding: 25px;
+    margin-bottom: 25px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    position: relative;
+}
+
+.upload-section h3 {
+    color: white;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.upload-form {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.upload-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.upload-mode-btn {
+    padding: 8px 16px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.8);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.upload-mode-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    border-color: rgba(255, 255, 255, 0.5);
+}
+
+.upload-mode-btn.active {
+    background: #3498db;
+    color: white;
+    border-color: #3498db;
+    box-shadow: 0 0 10px rgba(52, 152, 219, 0.3);
+}
+
+.upload-mode-hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 12px;
+    margin-left: auto;
+}
+
+.upload-mode-hint i {
+    opacity: 0.8;
+}
+
+.upload-instructions {
+    margin-top: 4px;
+    color: rgba(255, 255, 255, 0.6);
+    font-style: italic;
+}
+
+.file-input-wrapper {
+    position: relative;
+    display: inline-block;
+}
+
+.file-input {
+    position: absolute;
+    opacity: 0;
+    width: 100%;
+    height: 100%;
+    cursor: pointer;
+}
+
+.file-input-display {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 15px 20px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 2px dashed rgba(255, 255, 255, 0.4);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    color: white;
+}
+
+.file-input-display:hover {
+    border-color: rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.15);
+}
+
+/* Enhanced Upload Queue */
+.upload-queue {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    padding: 20px;
+    margin-top: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    display: none;
+}
+
+.upload-queue.show {
+    display: block;
+    animation: slideInUp 0.4s ease-out;
+}
+
+.queue-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    color: white;
+    font-weight: 600;
+}
+
+.queue-stats {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.upload-progress-summary {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+    display: none;
+}
+
+.upload-progress-summary.show {
+    display: block;
+}
+
+.progress-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 15px;
+    color: white;
+    font-size: 14px;
+}
+
+.stat-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.stat-value {
+    font-weight: 600;
+    color: #3498db;
+}
+
+.overall-progress {
+    margin-top: 15px;
+}
+
+.overall-progress-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: white;
+    font-size: 14px;
+    margin-bottom: 8px;
+}
+
+.overall-progress-bar {
+    height: 8px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.overall-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #27ae60, #2ecc71);
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+.queue-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+/* Parallel Upload Controls */
+.parallel-upload-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.9);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    padding: 4px 8px;
+}
+
+.parallel-upload-controls label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0;
+    cursor: pointer;
+    user-select: none;
+}
+
+.parallel-upload-controls input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+}
+
+.parallel-upload-controls select {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 3px;
+    padding: 2px 4px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.parallel-upload-controls select option {
+    background: #2c3e50;
+    color: #fff;
+}
+
+.file-queue {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.queue-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 15px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    transition: all 0.3s ease;
+    color: white;
+}
+
+.queue-item:last-child {
+    border-bottom: none;
+}
+
+.queue-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.queue-item.uploading {
+    background: rgba(52, 152, 219, 0.1);
+    border-left: 4px solid #3498db;
+}
+
+.queue-item.completed {
+    background: rgba(39, 174, 96, 0.1);
+    border-left: 4px solid #27ae60;
+    opacity: 0.7;
+}
+
+.queue-item.error {
+    background: rgba(231, 76, 60, 0.1);
+    border-left: 4px solid #e74c3c;
+}
+
+.queue-item.cancelled {
+    background: rgba(255, 152, 0, 0.1);
+    border-left: 4px solid #ff9800;
+    opacity: 0.7;
+}
+
+.file-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-grow: 1;
+    min-width: 0;
+}
+
+.file-info-details {
+    min-width: 0;
+    flex-grow: 1;
+}
+
+.file-info-name {
+    font-weight: 500;
+    font-size: 14px;
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-info-meta {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.7);
+    display: flex;
+    gap: 15px;
+}
+
+.file-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 120px;
+    justify-content: flex-end;
+}
+
+.status-text {
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.status-pending {
+    color: #f39c12;
+}
+
+.status-uploading {
+    color: #3498db;
+}
+
+.status-completed {
+    color: #27ae60;
+}
+
+.status-error {
+    color: #e74c3c;
+}
+
+.status-cancelled {
+    color: #ff9800;
+}
+
+.remove-btn {
+    background: rgba(231, 76, 60, 0.2);
+    border: 1px solid rgba(231, 76, 60, 0.4);
+    color: #e74c3c;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-size: 12px;
+}
+
+.remove-btn:hover {
+    background: rgba(231, 76, 60, 0.3);
+    transform: scale(1.1);
+}
+
+.cancel-btn {
+    background: rgba(255, 152, 0, 0.2) !important;
+    border: 1px solid rgba(255, 152, 0, 0.4) !important;
+    color: #ff9800 !important;
+}
+
+.cancel-btn:hover {
+    background: rgba(255, 152, 0, 0.3) !important;
+    border: 1px solid rgba(255, 152, 0, 0.6) !important;
+}
+
+.progress-bar-small {
+    width: 80px;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.progress-fill-small {
+    height: 100%;
+    background: linear-gradient(90deg, #3498db, #2980b9);
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+/* Upload status */
+.upload-status {
+    margin-top: 15px;
+    padding: 12px;
+    border-radius: 8px;
+    font-weight: 500;
+    text-align: center;
+    display: none;
+    transition: all 0.3s ease;
+    transform: translateX(100%);
+}
+
+.upload-status.show {
+    display: block;
+    transform: translateX(0);
+}
+
+/* Stacked notification styles */
+.upload-status[id^="notification-"] {
+    display: block;
+    position: fixed;
+    right: 20px;
+    z-index: 10000;
+    margin: 0;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1.4;
+    width: auto;
+    min-width: 300px;
+    max-width: 500px;
+    transition: all 0.3s ease-out;
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+/* Mobile responsive stacked notifications */
+@media (max-width: 768px) {
+    .upload-status[id^="notification-"] {
+        right: 10px;
+        left: 10px;
+        max-width: none;
+        min-width: auto;
+        width: auto;
+    }
+}
+
+.upload-status.success {
+    background: rgba(39, 174, 96, 0.2);
+    border: 1px solid rgba(39, 174, 96, 0.4);
+    color: #27ae60;
+}
+
+.upload-status.error {
+    background: rgba(231, 76, 60, 0.2);
+    border: 1px solid rgba(231, 76, 60, 0.4);
+    color: #e74c3c;
+}
+
+.upload-status.info {
+    background: rgba(52, 152, 219, 0.2);
+    border: 1px solid rgba(52, 152, 219, 0.4);
+    color: #3498db;
+}
+
+/* Progress bar */
+.progress-bar {
+    width: 100%;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 10px;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #3498db, #2980b9);
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+/* Modal Styles */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    -webkit-backdrop-filter: blur(5px);
+    backdrop-filter: blur(5px);
+}
+
+.modal.show {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Ensure centering with additional properties */
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+}
+
+.modal-content {
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 15px;
+    padding: 30px;
+    width: 90%;
+    max-width: 500px;
+    box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
+    /* Ensure content is centered */
+    position: relative;
+    margin: auto;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.modal-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: #7f8c8d;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal-close:hover {
+    color: #e74c3c;
+}
+
+.modal-body {
+    margin-bottom: 20px;
+}
+
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 500;
+    color: #2c3e50;
+}
+
+.form-control {
+    width: 100%;
+    padding: 10px 15px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+/* Folder Browser Styles */
+.folder-browser {
+    background: rgba(240, 240, 240, 0.95);
+    border: 1px solid rgba(200, 200, 200, 0.8);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.current-destination {
+    background: rgba(200, 200, 200, 0.3);
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin-bottom: 10px;
+    border: 1px solid rgba(150, 150, 150, 0.4);
+    display: flex;
+    align-items: center;
+    color: #333 !important;
+}
+
+.browser-actions {
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(150, 150, 150, 0.4);
+    background: rgba(200, 200, 200, 0.2);
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.browser-actions .btn {
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+.folder-list {
+    padding: 8px;
+    max-height: 250px;
+    overflow-y: auto;
+}
+
+.folder-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    cursor: pointer;
+    border-radius: 6px;
+    margin-bottom: 2px;
+    transition: all 0.2s ease;
+    color: #333 !important;
+}
+
+.folder-item:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+    transform: translateX(2px);
+}
+
+.folder-item:active {
+    transform: translateX(0px);
+    background-color: rgba(0, 0, 0, 0.1);
+}
+
+.folder-item i.fa-folder {
+    color: #f39c12;
+    margin-right: 10px;
+    font-size: 14px;
+    min-width: 16px;
+}
+
+.folder-item i.fa-chevron-right {
+    color: rgba(0, 0, 0, 0.4);
+    font-size: 12px;
+    margin-left: auto;
+}
+
+.browser-loading {
+    padding: 20px;
+    text-align: center;
+    color: rgba(0, 0, 0, 0.6);
+}
+
+.browser-loading i {
+    margin-right: 8px;
+}
+
+.folder-item span,
+.folder-item .folder-name,
+.current-destination span,
+.current-destination {
+    color: #333 !important;
+}
+
+.current-destination {
+    color: #333 !important;
+}
+
+.empty-state {
+    padding: 20px;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.empty-state i {
+    font-size: 24px;
+    margin-bottom: 8px;
+    display: block;
+    opacity: 0.7;
+}
+
+/* Empty state */
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.empty-state i {
+    font-size: 48px;
+    margin-bottom: 20px;
+    opacity: 0.5;
+}
+
+.empty-state h3 {
+    font-size: 20px;
+    margin-bottom: 10px;
+    font-weight: 300;
+}
+
+.empty-state p {
+    font-size: 14px;
+}
+
+/* Storage Stats */
+.storage-stats {
+    background: rgba(255, 255, 255, 0.1);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 25px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+}
+
+.storage-stats h4 {
+    margin-bottom: 15px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+}
+
+.stat-card {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    padding: 15px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.stat-card .stat-label {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.7);
+    margin-bottom: 5px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.stat-card .stat-value {
+    font-size: 18px;
+    font-weight: 600;
+    color: white;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.disk-usage-bar {
+    margin-top: 15px;
+}
+
+.disk-usage-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 14px;
+    margin-bottom: 8px;
+}
+
+.disk-usage-progress {
+    height: 8px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.disk-usage-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #27ae60, #f39c12, #e74c3c);
+    transition: width 0.3s ease;
+}
+
+/* Enhanced Mobile Responsive Design - Fixed Consistent Spacing */
+@media (max-width: 768px) {
+
+    /* Show mobile scroll hint */
+    .mobile-scroll-hint {
+        display: block !important;
+    }
+
+    .container {
+        padding: 15px;
+        max-width: 100%;
+    }
+
+    .header {
+        padding: 8px 12px;
+        /* Much more compact */
+        flex-direction: row;
+        /* Keep horizontal layout */
+        gap: 8px;
+        text-align: left;
+        margin-bottom: 12px;
+        /* Reduced from 18px */
+    }
+
+    .header-left h1 {
+        font-size: 16px;
+        /* Reduced from 20px */
+        gap: 6px;
+    }
+
+    .user-info {
+        flex-direction: row;
+        /* Keep horizontal */
+        gap: 8px;
+        /* Reduced from 10px */
+        font-size: 13px;
+    }
+
+    .user-badge {
+        flex-direction: row;
+        /* Keep horizontal */
+        text-align: left;
+        padding: 4px 8px;
+        /* Much smaller padding */
+        font-size: 12px;
+    }
+
+    .role-badge {
+        padding: 2px 6px;
+        /* Even smaller */
+        font-size: 10px;
+    }
+
+    .logout-btn {
+        padding: 4px 8px;
+        /* Smaller logout button */
+        font-size: 11px;
+    }
+
+    .breadcrumb {
+        padding: 12px 15px;
+        margin-bottom: 18px;
+    }
+
+    .breadcrumb h3 {
+        font-size: 16px;
+        flex-direction: column;
+        gap: 5px;
+        text-align: center;
+    }
+
+    .storage-stats {
+        padding: 15px;
+        margin-bottom: 18px;
+    }
+
+    .stats-grid {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .stat-card {
+        padding: 12px;
+    }
+
+    .stat-card .stat-value {
+        font-size: 16px;
+    }
+
+    .controls {
+        flex-direction: column;
+        gap: 10px;
+        margin-bottom: 18px;
+    }
+
+    .create-folder-form {
+        flex-direction: column;
+        padding: 12px;
+    }
+
+    .create-folder-form input[type="text"] {
+        min-width: auto;
+        width: 100%;
+        margin-bottom: 10px;
+    }
+
+    /* Reduce manual cleanup button margin in mobile */
+    .manual-cleanup-btn {
+        margin-left: 5px;
+    }
+
+    /* Enhanced file table for mobile - SIMPLIFIED APPROACH */
+    .file-table {
+        margin: 18px 0;
+        border-radius: 12px !important;
+        overflow-x: auto;
+        width: 100%;
+        background: white;
+    }
+
+    .table {
+        width: 100%;
+        min-width: 500px;
+        /* Minimum width to prevent cramping */
+        table-layout: auto;
+        border-collapse: collapse;
+        font-size: 14px;
+    }
+
+    /* Keep all columns visible but make them smaller on mobile */
+    .table th,
+    .table td {
+        padding: 10px 8px;
+        vertical-align: middle;
+    }
+
+    /* Allow name column to expand naturally for full file names */
+    .table th:nth-child(2),
+    .table td:nth-child(2) {
+        white-space: normal;
+        /* Allow wrapping */
+        word-break: break-word;
+        /* Break long words */
+        min-width: 150px;
+        /* Minimum width */
+        max-width: none;
+        /* Remove max width restriction */
+        padding: 12px 8px;
+        /* Slightly more padding for multi-line content */
+    }
+
+    /* Specific column widths for mobile */
+    .table th:nth-child(1),
+    /* Checkbox */
+    .table td:nth-child(1) {
+        width: 35px;
+        text-align: center;
+        vertical-align: middle;
+        padding: 10px 4px;
+        white-space: nowrap;
+    }
+
+    .table th:nth-child(3),
+    /* Size */
+    .table td:nth-child(3) {
+        width: 120px;
+        font-size: 12px;
+        white-space: normal;
+        line-height: 1.3;
+    }
+
+    .table th:nth-child(4),
+    /* Type */
+    .table td:nth-child(4) {
+        width: 80px;
+        font-size: 12px;
+        white-space: nowrap;
+    }
+
+    .table th:nth-child(5),
+    /* Modified */
+    .table td:nth-child(5) {
+        width: 100px;
+        font-size: 11px;
+        white-space: nowrap;
+    }
+
+    .table th:nth-child(6),
+    /* Actions */
+    .table td:nth-child(6) {
+        width: 300px;
+        /* Increased from 220px to ensure all 5 buttons fit */
+        text-align: center;
+        white-space: nowrap;
+    }
+
+    /* Make buttons smaller for mobile */
+    .btn-sm {
+        font-size: 8px !important;
+        /* Slightly larger for readability */
+        padding: 2px 3px !important;
+        /* Compact padding */
+        margin: 0 1px;
+        /* Reduced margin */
+        min-width: 28px;
+        /* Smaller minimum width for mobile */
+        flex-shrink: 0 !important;
+        /* Prevent buttons from shrinking */
+        white-space: nowrap !important;
+        /* Prevent text wrapping */
+    }
+
+    /* File name improvements */
+    .file-name a {
+        display: block;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    /* Actions container */
+    .actions {
+        display: flex !important;
+        gap: 1px;
+        /* Tight spacing for mobile */
+        justify-content: center;
+        align-items: center;
+        flex-wrap: nowrap !important;
+        /* Force single row */
+        flex-direction: row !important;
+        /* Force horizontal */
+        width: 100%;
+        overflow: visible !important;
+    }
+
+    /* Adjust padding for mobile */
+    .table th,
+    .table td {
+        padding: 12px 8px;
+        font-size: 12px;
+        line-height: 1.4;
+    }
+
+    /* File name styling for mobile - allow full names */
+    .file-name {
+        display: flex;
+        align-items: flex-start;
+        /* Align to top when wrapping */
+        gap: 6px;
+        max-width: 100%;
+    }
+
+    .file-name a {
+        font-size: 13px;
+        line-height: 1.3;
+        text-decoration: none;
+        color: #2c3e50;
+        word-break: break-word;
+        /* Break long file names */
+        white-space: normal;
+        /* Allow wrapping */
+        max-width: 100%;
+    }
+
+    .file-name a:hover {
+        color: #3498db;
+    }
+
+    /* Icon sizing for mobile */
+    .file-icon {
+        font-size: 14px;
+        width: 16px;
+        flex-shrink: 0;
+    }
+
+    /* Checkbox styling for mobile */
+    .file-checkbox {
+        width: 14px !important;
+        height: 14px !important;
+        margin: 0 auto !important;
+        cursor: pointer;
+        display: block;
+        transform: scale(0.4);
+        /* Make it even smaller */
+    }
+
+    /* Also apply to the select all checkbox in header */
+    #selectAll {
+        width: 14px !important;
+        height: 14px !important;
+        margin: 0 auto !important;
+        display: block;
+        transform: scale(0.4);
+        /* Make it even smaller */
+    }
+
+    /* Add horizontal scroll indicator */
+    .file-table::-webkit-scrollbar {
+        height: 8px;
+    }
+
+    .file-table::-webkit-scrollbar-track {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+    }
+
+    .file-table::-webkit-scrollbar-thumb {
+        background: rgba(52, 152, 219, 0.5);
+        border-radius: 4px;
+    }
+
+    /* Modified date styling */
+    .table td:nth-child(5) {
+        font-size: 10px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    /* Compact empty table for mobile - target the actual HTML structure */
+    .table td[colspan] {
+        padding: 10px 20px !important;
+        /* Much smaller padding */
+    }
+
+    .table td[colspan]>div {
+        min-height: 40px !important;
+        /* Much smaller min-height */
+    }
+
+    .table td[colspan] i {
+        font-size: 20px !important;
+        /* Smaller icon */
+        margin-bottom: 5px !important;
+    }
+
+    .table td[colspan] div[style*="font-size: 18px"] {
+        font-size: 12px !important;
+        /* Smaller title */
+        margin-bottom: 4px !important;
+    }
+
+    .table td[colspan] div[style*="font-size: 14px"] {
+        font-size: 10px !important;
+        /* Smaller description */
+    }
+
+    /* Force the table itself to be smaller */
+    .file-table .table {
+        min-height: 60px !important;
+    }
+
+    .file-table {
+        min-height: 60px !important;
+    }
+
+    .table tbody tr:last-child td:first-child {
+        border-bottom-left-radius: 12px;
+    }
+
+    .table tbody tr:last-child td:last-child {
+        border-bottom-right-radius: 12px;
+    }
+
+    .table th,
+    .table td {
+        padding: 8px 6px !important;
+        /* Increased padding for less cramped look */
+        white-space: nowrap;
+        vertical-align: middle;
+    }
+
+    /* Override white-space for size column to keep content together */
+    .table th:nth-child(3),
+    .table td:nth-child(3) {
+        white-space: nowrap !important;
+        /* Keep files/folders together */
+        font-size: 11px !important;
+    }
+
+    /* Make only first column sticky for better UX */
+    .table th:first-child,
+    .table td:first-child {
+        position: sticky;
+        left: 0;
+        background: rgba(255, 255, 255, 0.98);
+        z-index: 2;
+        box-shadow: 2px 0 4px rgba(0, 0, 0, 0.1);
+        width: 8% !important;
+        /* Fixed width for checkbox column */
+    }
+
+    /* Set fixed widths for all columns for horizontal scrolling */
+    .file-table .table th:nth-child(2),
+    .file-table .table td:nth-child(2) {
+        width: 220px !important;
+        min-width: 220px !important;
+        max-width: 220px !important;
+    }
+
+    /* Name - balanced size */
+    .file-table .table th:nth-child(3),
+    .file-table .table td:nth-child(3) {
+        width: 120px !important;
+        white-space: nowrap !important;
+        min-width: 120px !important;
+    }
+
+    /* Size - compact */
+    .file-table .table th:nth-child(4),
+    .file-table .table td:nth-child(4) {
+        width: 80px !important;
+        min-width: 80px !important;
+    }
+
+    /* Type - smaller */
+    .file-table .table th:nth-child(5),
+    .file-table .table td:nth-child(5) {
+        width: 100px !important;
+        min-width: 100px !important;
+    }
+
+    /* Modified - smaller */
+    .file-table .table th:nth-child(6),
+    .file-table .table td:nth-child(6) {
+        width: 160px !important;
+        min-width: 160px !important;
+    }
+
+    /* Actions - smaller */
+
+    .table thead th:first-child {
+        background: linear-gradient(135deg, #34495e, #2c3e50);
+        color: white;
+    }
+
+    .table tbody tr {
+        background: rgba(255, 255, 255, 0.95);
+    }
+
+    /* File name column adjustments - allow full names */
+    .file-name {
+        display: flex;
+        align-items: flex-start;
+        /* Align to top when wrapping */
+        gap: 4px;
+    }
+
+    .file-name a,
+    .file-name span {
+        word-break: break-word;
+        /* Break long file names */
+        white-space: normal;
+        /* Allow wrapping */
+        flex: 1;
+        line-height: 1.3;
+        /* Better line spacing */
+    }
+
+    /* Size column */
+    .table th:nth-child(3),
+    .table td:nth-child(3) {
+        min-width: 120px;
+        /* Increased for proper mobile display */
+        text-align: left;
+        /* Left align for better mobile readability */
+        font-size: 11px;
+        /* Smaller font to fit content */
+        white-space: nowrap;
+        /* Keep files/folders on same line */
+    }
+
+    /* Type column */
+    .table th:nth-child(4),
+    .table td:nth-child(4) {
+        min-width: 38px;
+        /* 30% smaller: 55px -> 38px */
+    }
+
+    /* Modified column */
+    .table th:nth-child(5),
+    .table td:nth-child(5) {
+        min-width: 49px;
+        /* 30% smaller: 70px -> 49px */
+    }
+
+    /* Actions column */
+    .table th:last-child,
+    .table td:last-child {
+        min-width: 200px;
+        /* Increased to accommodate text buttons */
+        white-space: nowrap;
+    }
+
+    .actions {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 190px;
+        justify-content: flex-start;
+        flex-wrap: nowrap;
+    }
+
+    .actions .btn-sm {
+        padding: 3px 6px;
+        font-size: 9px;
+        min-width: auto;
+        height: 22px;
+        border-radius: 3px;
+        text-align: left;
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+    }
+
+    .actions .btn-sm i {
+        font-size: 8px;
+        margin-right: 4px;
+        width: 12px;
+        text-align: center;
+    }
+
+    .file-info-meta {
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    /* Mobile upload section */
+    .upload-section {
+        padding: 15px;
+        margin: 0 0 18px 0;
+    }
+
+    .upload-section h3 {
+        font-size: 18px;
+    }
+
+    /* Mobile upload controls */
+    .upload-controls {
+        flex-direction: column;
+        gap: 8px;
+        margin-bottom: 15px;
+    }
+
+    .upload-mode-btn {
+        padding: 10px 12px;
+        font-size: 14px;
+        width: 100%;
+        justify-content: center;
+    }
+
+    .upload-mode-hint {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+        margin-left: 0;
+        text-align: left;
+        font-size: 11px;
+    }
+
+    .upload-instructions {
+        margin-top: 2px;
+        font-size: 10px;
+        line-height: 1.3;
+    }
+
+    .file-input-display {
+        padding: 20px 15px;
+        text-align: center;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .file-input-display i {
+        font-size: 24px;
+    }
+
+    .queue-actions {
+        flex-direction: column;
+        width: 100%;
+        gap: 8px;
+    }
+
+    .queue-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+    }
+
+    .queue-stats {
+        text-align: center;
+    }
+
+    .upload-progress-summary {
+        padding: 12px;
+    }
+
+    .progress-stats {
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+
+    .file-queue {
+        max-height: 250px;
+    }
+
+    .queue-item {
+        padding: 10px;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+    }
+
+    .file-info {
+        order: 1;
+    }
+
+    .file-status {
+        order: 2;
+        justify-content: space-between;
+        min-width: auto;
+    }
+
+    .bulk-actions {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 12px;
+    }
+
+    .bulk-buttons {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+    }
+
+    /* Modal adjustments for mobile */
+    .modal-content {
+        width: 95%;
+        margin: 20px;
+        padding: 20px;
+    }
+
+    .modal-header {
+        flex-direction: column;
+        text-align: center;
+        gap: 10px;
+    }
+
+    .modal-footer {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .modal-footer .btn {
+        width: 100%;
+    }
+}
+
+/* Tablet specific adjustments */
+@media (min-width: 769px) and (max-width: 1024px) {
+
+    /* Uniform spacing for tablets */
+    .header {
+        margin-bottom: 18px;
+    }
+
+    .breadcrumb {
+        margin-bottom: 18px;
+    }
+
+    .storage-stats {
+        margin-bottom: 18px;
+    }
+
+    .controls {
+        margin-bottom: 18px;
+    }
+
+    .upload-section {
+        margin-bottom: 18px;
+    }
+
+    .file-table {
+        margin: 18px 0;
+        /* Changed from margin-bottom to full margin */
+        overflow-x: auto;
+    }
+
+    /* Tablet-specific actions column */
+    .table th:last-child,
+    .table td:last-child {
+        min-width: 350px;
+        /* Increased from 280px for better button spacing */
+    }
+
+    .actions {
+        gap: 4px;
+    }
+
+    .actions .btn-sm {
+        padding: 3px 6px;
+        font-size: 10px;
+    }
+
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .table {
+        min-width: 490px;
+        /* 30% smaller: 700px -> 490px */
+    }
+
+    .progress-stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* Medium mobile screens (between very small and tablet) */
+@media (min-width: 481px) and (max-width: 768px) {
+
+    .table th:nth-child(6),
+    /* Actions */
+    .table td:nth-child(6) {
+        width: 320px;
+        /* Increased from 250px for more space */
+    }
+
+    .btn-sm {
+        font-size: 8px !important;
+        /* Slightly larger than very small screens */
+        padding: 2px 4px !important;
+        min-width: 30px;
+    }
+
+    .actions {
+        gap: 2px;
+    }
+}
+
+/* Very small screens (phones in portrait) */
+@media (max-width: 480px) {
+    .container {
+        padding: 5px;
+    }
+
+    .header {
+        padding: 6px 8px;
+        /* Ultra-compact padding */
+    }
+
+    .header-left h1 {
+        font-size: 14px;
+        /* Much smaller title */
+    }
+
+    .user-badge {
+        padding: 3px 6px;
+        /* Minimal padding */
+        font-size: 11px;
+    }
+
+    .user-info {
+        gap: 6px;
+        /* Smaller gaps */
+    }
+
+    .role-badge {
+        padding: 1px 4px;
+        /* Tiny role badge */
+        font-size: 9px;
+    }
+
+    .logout-btn {
+        padding: 3px 6px;
+        /* Tiny logout button */
+        font-size: 10px;
+    }
+
+    .breadcrumb {
+        padding: 10px;
+    }
+
+    .storage-stats {
+        padding: 12px;
+    }
+
+    .stat-card {
+        padding: 10px;
+    }
+
+    .file-table {
+        margin: 12px 0;
+        /* Changed from negative margins to positive */
+        overflow-x: auto;
+        border-radius: 10px !important;
+    }
+
+    .table {
+        min-width: 315px;
+        /* 30% smaller: 450px -> 315px */
+        font-size: 8px;
+        /* 30% smaller: 10px -> 8px */
+        border-radius: 10px !important;
+    }
+
+    .table th,
+    .table td {
+        padding: 4px 3px;
+        /* 30% smaller: 5px 4px -> 4px 3px */
+    }
+
+    /* Adjust sticky columns for very small screens */
+    .table th:first-child,
+    .table td:first-child {
+        min-width: 21px;
+        /* 30% smaller: 30px -> 21px */
+    }
+
+    .file-name {
+        min-width: 56px;
+        /* 30% smaller: 80px -> 56px */
+        max-width: 77px;
+        /* 30% smaller: 110px -> 77px */
+    }
+
+    .table th:nth-child(3),
+    .table td:nth-child(3) {
+        min-width: 35px;
+        /* 30% smaller: 50px -> 35px */
+    }
+
+    .table th:nth-child(4),
+    .table td:nth-child(4) {
+        min-width: 32px;
+        /* 30% smaller: 45px -> 32px */
+    }
+
+    .table th:nth-child(5),
+    .table td:nth-child(5) {
+        min-width: 42px;
+        /* 30% smaller: 60px -> 42px */
+    }
+
+    .table th:last-child,
+    .table td:last-child {
+        min-width: 180px;
+        /* Increased from 120px for more space */
+    }
+
+    .btn-sm {
+        padding: 1px 2px;
+        /* Reduced padding for tiny buttons */
+        font-size: 6px;
+        /* Reduced font size */
+        min-width: 20px;
+        /* Set minimum width */
+    }
+
+    /* Hide button text on very small screens, show icons only */
+    .actions .btn-sm {
+        font-size: 0;
+        /* Hide text */
+    }
+
+    .actions .btn-sm i {
+        font-size: 8px;
+        /* Show only icons, slightly larger */
+    }
+
+    .actions {
+        gap: 1px;
+        /* Keep tight spacing */
+        flex-wrap: nowrap;
+        /* Ensure no wrapping */
+    }
+
+    .upload-section {
+        padding: 12px;
+        margin: 8px 0;
+        max-width: 100%;
+        box-sizing: border-box;
+        overflow-x: hidden;
+    }
+
+    .upload-section h3 {
+        font-size: 16px;
+        margin-bottom: 12px;
+    }
+
+    /* Very small screen upload controls */
+    .upload-controls {
+        flex-direction: column;
+        gap: 6px;
+        margin-bottom: 12px;
+    }
+
+    .upload-mode-btn {
+        padding: 8px 10px;
+        font-size: 13px;
+        width: 100%;
+        justify-content: center;
+        border-radius: 6px;
+    }
+
+    .upload-mode-hint {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 4px;
+        margin-left: 0;
+        text-align: left;
+        font-size: 10px;
+        line-height: 1.2;
+        flex-wrap: wrap;
+    }
+
+    .upload-instructions {
+        margin-top: 1px;
+        font-size: 9px;
+        line-height: 1.2;
+        color: rgba(255, 255, 255, 0.7);
+    }
+
+    .file-input-display {
+        padding: 15px 10px;
+        font-size: 12px;
+        line-height: 1.3;
+    }
+
+    .file-input-display i {
+        font-size: 18px;
+        margin-bottom: 8px;
+    }
+
+    .file-input-display strong {
+        font-size: 13px;
+    }
+
+    .file-input-display div div {
+        font-size: 10px;
+        margin-top: 4px;
+    }
+
+    /* Mobile parallel upload controls */
+    .parallel-upload-controls {
+        flex-direction: row;
+        justify-content: center;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px;
+        font-size: 11px;
+        width: 100%;
+        margin-bottom: 8px;
+        flex-wrap: wrap;
+    }
+
+    .parallel-upload-controls label {
+        gap: 4px;
+        font-size: 11px;
+        align-items: center;
+        white-space: nowrap;
+    }
+
+    .parallel-upload-controls select {
+        padding: 2px 4px;
+        font-size: 11px;
+        min-width: 40px;
+        height: auto;
+    }
+
+    .parallel-upload-controls input[type="checkbox"] {
+        transform: scale(1.1);
+    }
+
+    .queue-actions {
+        flex-direction: column;
+        gap: 6px;
+        align-items: stretch;
+    }
+
+    .modal-content {
+        width: 98%;
+        margin: 10px;
+        padding: 15px;
+    }
+
+    /* Mobile folder browser */
+    .folder-browser {
+        max-height: 250px;
+    }
+
+    .browser-actions {
+        padding: 6px 8px;
+        gap: 6px;
+    }
+
+    .browser-actions .btn {
+        font-size: 10px;
+        padding: 3px 6px;
+        flex: 1;
+        text-align: center;
+    }
+
+    .folder-list {
+        padding: 6px;
+        max-height: 200px;
+    }
+
+    .folder-item {
+        padding: 10px 8px;
+        font-size: 13px;
+    }
+
+    .folder-item i.fa-folder {
+        font-size: 13px;
+        margin-right: 8px;
+    }
+
+    .current-destination {
+        padding: 6px 8px;
+        font-size: 12px;
+    }
+
+    .current-destination span {
+        font-size: 12px;
+    }
+}
+
+/* Landscape phone orientation */
+@media (max-width: 768px) and (orientation: landscape) {
+    .header {
+        flex-direction: row;
+        padding: 6px 12px;
+        /* More compact for landscape */
+    }
+
+    .user-info {
+        flex-direction: row;
+        gap: 8px;
+        /* Smaller gap for landscape */
+    }
+
+    .header-left h1 {
+        font-size: 15px;
+        /* Smaller for landscape */
+    }
+
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .file-queue {
+        max-height: 200px;
+    }
+}
+
+/* High DPI displays */
+@media (-webkit-min-device-pixel-ratio: 2),
+(min-resolution: 192dpi) {
+
+    .file-icon,
+    .btn i {
+        font-size: 1.1em;
+    }
+}
+
+/* Touch-friendly enhancements */
+@media (pointer: coarse) {
+
+    .btn,
+    .file-checkbox,
+    .remove-btn {
+        min-height: 44px;
+        min-width: 44px;
+    }
+
+    .file-checkbox {
+        width: 20px;
+        height: 20px;
+    }
+
+    .table tbody tr {
+        min-height: 50px;
+    }
+
+    .queue-item {
+        min-height: 60px;
+    }
+}
+
+/* Animations */
+.fade-in {
+    animation: fadeIn 0.6s ease-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.slide-in {
+    animation: slideInUp 0.4s ease-out;
+}
+
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.05);
+    }
+}
+
+.pulse {
+    animation: pulse 2s infinite;
+}
+
+/* Scrollbar styling for queue */
+.file-queue::-webkit-scrollbar {
+    width: 6px;
+}
+
+.file-queue::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+}
+
+.file-queue::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 3px;
+}
+
+.file-queue::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.5);
+}
+
+/* Extra small mobile devices (portrait phones) */
+@media (max-width: 480px) {
+    .container {
+        padding: 10px;
+    }
+
+    /* Make table even more compact on small screens */
+    .table {
+        font-size: 12px;
+        min-width: 450px;
+        /* Slightly smaller minimum width */
+    }
+
+    .table th,
+    .table td {
+        padding: 8px 6px;
+    }
+
+    /* Make buttons smaller */
+    .btn-sm {
+        font-size: 10px !important;
+        padding: 3px 6px !important;
+    }
+
+    /* Compact file names */
+    .file-name a {
+        font-size: 12px;
+    }
+
+    /* Smaller icons */
+    .file-icon {
+        font-size: 12px;
+        width: 14px;
+    }
+}
+
+/* Confirmation Modal Styles */
+.confirmation-content {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 20px 0;
+}
+
+.confirmation-icon {
+    flex-shrink: 0;
+}
+
+.confirmation-icon i {
+    font-size: 48px;
+    color: #f39c12;
+}
+
+.confirmation-message {
+    flex: 1;
+}
+
+.confirmation-message p {
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.5;
+    color: #333;
+}
+
+#confirmationConfirmBtn.btn-warning {
+    background: #f39c12;
+    border-color: #f39c12;
+}
+
+#confirmationConfirmBtn.btn-danger {
+    background: #e74c3c;
+    border-color: #e74c3c;
+}
+
+/* Assembly Status Styles */
+.queue-item.assembling {
+    border-left-color: #f39c12;
+}
+
+.status-assembling {
+    color: #f39c12;
+}
+
+.queue-item.assembling .progress-bar-small .progress-fill-small {
+    background: linear-gradient(90deg, #f39c12, #e67e22);
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+/* Search and sorting styles */
+.table-controls {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    padding: 15px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.search-wrapper input:focus {
+    outline: none;
+    border-color: #3498db;
+    background: rgba(255, 255, 255, 0.15);
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.2);
+}
+
+.search-wrapper input::placeholder {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+/* Sortable column headers */
+.sortable:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #3498db;
+    transition: all 0.2s ease;
+}
+
+.sortable.sort-asc .sort-icon:before {
+    content: "\f0de"; /* fa-sort-up */
+    color: #3498db;
+    opacity: 1;
+}
+
+.sortable.sort-desc .sort-icon:before {
+    content: "\f0dd"; /* fa-sort-down */
+    color: #3498db;
+    opacity: 1;
+}
+
+.sortable:hover .sort-icon {
+    opacity: 0.8;
+}
+
+/* Hidden rows for search */
+.hidden-by-search {
+    display: none !important;
+}
+
+/* Search highlight */
+.search-highlight {
+    background: #f39c12;
+    color: #2c3e50;
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-weight: bold;
+}
+
+/* Deep search results styling */
+.search-results-header {
+    background: linear-gradient(135deg, #2e7d32 0%, #388e3c 100%) !important;
+    border: none !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    /* Ensure always visible */
+    display: table-row !important;
+    visibility: visible !important;
+    height: auto !important;
+}
+
+.search-header-cell {
+    padding: 0 !important;
+    border: none !important;
+    /* Ensure the cell is always visible */
+    display: table-cell !important;
+    visibility: visible !important;
+    width: 100% !important;
+}
+
+/* New div-based search header (mobile-friendly) */
+.search-results-header-div {
+    background: linear-gradient(135deg, #2e7d32 0%, #388e3c 100%);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    width: 100%;
+    display: block !important;
+    visibility: visible !important;
+}
+
+.search-header-content {
+    padding: 15px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.search-header-main {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: white;
+    font-weight: 600;
+}
+
+.search-header-main i {
+    font-size: 18px;
+    color: #81c784;
+}
+
+.search-title {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.search-count {
+    background: rgba(255,255,255,0.2);
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.search-truncated {
+    background: rgba(255,193,7,0.2);
+    color: #ffc107;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.search-header-meta {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    color: rgba(255,255,255,0.8);
+    font-size: 13px;
+}
+
+.btn-close-search {
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.2);
+    color: white;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-size: 12px;
+}
+
+.btn-close-search:hover {
+    background: rgba(255,255,255,0.2);
+    border-color: rgba(255,255,255,0.3);
+}
+
+.search-result-row {
+    background: rgba(76, 175, 80, 0.03) !important;
+    border-left: 3px solid #4caf50 !important;
+    transition: all 0.2s ease;
+}
+
+.search-result-row:hover {
+    background: rgba(76, 175, 80, 0.08) !important;
+    transform: translateX(2px);
+}
+
+.search-result-name {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 8px 0;
+}
+
+.search-result-icon {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(76, 175, 80, 0.1);
+    border-radius: 6px;
+    color: #4caf50;
+    font-size: 14px;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.search-result-details {
+    flex: 1;
+    min-width: 0;
+}
+
+.search-result-title {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 4px;
+    color: #2c3e50;
+}
+
+.search-folder-link {
+    color: #2980b9 !important;
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+.search-folder-link:hover {
+    color: #3498db !important;
+    text-decoration: underline;
+}
+
+.search-result-path {
+    font-size: 12px;
+    color: #7f8c8d;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-style: italic;
+}
+
+.search-result-path i {
+    font-size: 11px;
+    color: #95a5a6;
+}
+
+.search-result-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.search-result-actions .btn {
+    padding: 6px 10px;
+    font-size: 12px;
+    min-width: auto;
+}
+
+.search-name-cell {
+    min-width: 250px;
+    max-width: 400px;
+}
+
+.search-size-cell, .search-type-cell, .search-date-cell {
+    font-size: 13px;
+    color: #5a6c7d;
+}
+
+.folder-size-text {
+    color: #7f8c8d;
+    font-size: 13px;
+    font-style: italic;
+}
+
+.search-actions-cell {
+    min-width: 120px;
+    text-align: right;
+}
+
+/* Responsive adjustments for search results */
+@media (max-width: 768px) {
+    /* Force search header to display on mobile */
+    .search-results-header {
+        display: table-row !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        height: auto !important;
+        min-height: 60px !important;
+    }
+    
+    .search-header-cell {
+        display: table-cell !important;
+        visibility: visible !important;
+        width: 100% !important;
+        padding: 0 !important;
+    }
+    
+    .search-header-content {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 12px 15px;
+        /* Force visibility */
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    .search-header-main {
+        flex-wrap: wrap;
+        gap: 8px;
+        width: 100%;
+        /* Force visibility */
+        display: flex !important;
+        visibility: visible !important;
+    }
+    
+    .search-title {
+        font-size: 14px;
+        /* Force visibility */
+        display: inline !important;
+        visibility: visible !important;
+    }
+    
+    .search-count {
+        font-size: 12px;
+        padding: 4px 8px;
+    }
+    
+    .search-truncated {
+        font-size: 11px;
+        width: 100%;
+        margin-top: 4px;
+        display: block;
+    }
+    
+    .search-header-meta {
+        width: 100%;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    
+    .search-time {
+        font-size: 12px;
+    }
+    
+    .btn-close-search {
+        font-size: 12px;
+        padding: 6px 12px;
+        min-width: auto;
+    }
+    
+    .btn-close-search i {
+        margin-right: 4px;
+    }
+    
+    .search-result-name {
+        gap: 8px;
+    }
+    
+    .search-result-icon {
+        width: 20px;
+        height: 20px;
+        font-size: 12px;
+    }
+    
+    .search-result-title {
+        font-size: 13px;
+    }
+    
+    .search-result-path {
+        font-size: 11px;
+    }
+}
+
+/* Improve visibility of search results on smaller screens */
+@media (max-width: 480px) {
+    .search-header-content {
+        padding: 10px 12px;
+    }
+    
+    .search-header-main {
+        font-size: 13px;
+    }
+    
+    .search-header-main i {
+        font-size: 16px;
+    }
+    
+    .search-title {
+        font-size: 13px;
+        font-weight: 700;
+    }
+    
+    .search-count {
+        font-size: 11px;
+        padding: 3px 6px;
+    }
+    
+    .btn-close-search {
+        font-size: 11px;
+        padding: 4px 8px;
+    }
+    
+    /* Ensure search results table is visible on mobile */
+    .search-results-header {
+        display: table-row !important;
+        /* Override mobile table compression */
+        min-height: 50px !important;
+        height: auto !important;
+    }
+    
+    .search-header-cell {
+        display: table-cell !important;
+        width: 100% !important;
+        /* Override mobile table font size for search header */
+        font-size: 12px !important;
+        padding: 0 !important;
+        min-width: 100% !important;
+    }
+    
+    /* Override the tiny mobile table styles specifically for search header */
+    .search-results-header .search-header-cell {
+        font-size: 12px !important;
+        padding: 10px !important;
+        min-width: 100% !important;
+        width: 100% !important;
+    }
+    
+    .search-results-header .search-header-content {
+        font-size: 12px !important;
+        padding: 10px !important;
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 8px !important;
+        min-height: 40px !important;
+    }
+    
+    .search-results-header .search-title {
+        font-size: 12px !important;
+        font-weight: bold !important;
+        display: inline-block !important;
+        visibility: visible !important;
+    }
+    
+    /* Make search results more readable on very small screens */
+    .search-result-row td {
+        padding: 8px 4px !important;
+        font-size: 12px !important;
+    }
+}
+
+/* Empty folder styling */
+.empty-folder-row {
+    background: rgba(255,255,255,0.02) !important;
+}
+
+.empty-folder-row:hover {
+    background: rgba(255,255,255,0.02) !important;
+}
+
+/* Search input styling */
+#tableSearch {
+    width: 100% !important;
+    padding: 12px 15px 12px 45px !important;
+    background: rgba(255,255,255,0.1) !important;
+    border: 2px solid rgba(255,255,255,0.2) !important;
+    border-radius: 8px !important;
+    color: white !important;
+    font-size: 14px !important;
+    transition: all 0.3s ease !important;
+}
+
+#tableSearch::placeholder {
+    color: rgba(255,255,255,0.6) !important;
+}
+
+#tableSearch:focus {
+    outline: none !important;
+    border-color: #3498db !important;
+    background: rgba(255,255,255,0.15) !important;
+}
+
+/* Sort direction indicators */
+.sort-icon {
+    transition: all 0.2s ease;
+}
+
+.sortable {
+    user-select: none;
+    position: relative;
+}
