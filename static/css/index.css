@@ -427,6 +427,11 @@ body {
         line-height: 1.3;
     }
 
+    /* Keep sortable headers inline */
+    .table th:nth-child(3).sortable {
+        white-space: nowrap;
+    }
+
     /* Actions column for desktop - accommodate text buttons */
     .table th:last-child,
     .table td:last-child {
@@ -1434,9 +1439,10 @@ body {
 
     .breadcrumb h3 {
         font-size: 16px;
-        flex-direction: column;
+        flex-direction: row;
         gap: 5px;
         text-align: center;
+        justify-content: center;
     }
 
     .storage-stats {
@@ -3086,9 +3092,12 @@ body {
 /* Sort direction indicators */
 .sort-icon {
     transition: all 0.2s ease;
+    display: inline-block;
+    white-space: nowrap;
 }
 
 .sortable {
     user-select: none;
     position: relative;
+    white-space: nowrap;
 }
