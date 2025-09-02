@@ -4266,10 +4266,10 @@ document.addEventListener('DOMContentLoaded', function () {
         const uploadInstructions = document.getElementById('uploadInstructions');
         
         if (mode === 'files') {
-            filesBtn.classList.add('active');
-            foldersBtn.classList.remove('active');
-            fileInput.style.display = '';
-            folderInput.style.display = 'none';
+            if (filesBtn) filesBtn.classList.add('active');
+            if (foldersBtn) foldersBtn.classList.remove('active');
+            if (fileInput) fileInput.style.display = '';
+            if (folderInput) folderInput.style.display = 'none';
             updateFileInputDisplay('files');
             if (uploadModeHint) {
                 uploadModeHint.textContent = 'Multiple file selection supported';
@@ -4278,10 +4278,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 uploadInstructions.style.display = 'none';
             }
         } else {
-            foldersBtn.classList.add('active');
-            filesBtn.classList.remove('active');
-            fileInput.style.display = 'none';
-            folderInput.style.display = '';
+            if (foldersBtn) foldersBtn.classList.add('active');
+            if (filesBtn) filesBtn.classList.remove('active');
+            if (fileInput) fileInput.style.display = 'none';
+            if (folderInput) folderInput.style.display = '';
             updateFileInputDisplay('folders');
             if (uploadModeHint) {
                 if (isAndroid) {
@@ -4359,8 +4359,10 @@ document.addEventListener('DOMContentLoaded', function () {
         foldersBtn.addEventListener('click', () => setUploadMode('folders'));
     }
 
-    // Initialize with files mode
-    setUploadMode('files');
+    // Initialize with files mode only if upload elements exist
+    if (filesBtn || foldersBtn) {
+        setUploadMode('files');
+    }
     
     // Update mobile-specific instructions after initialization
     function updateMobileInstructions() {
