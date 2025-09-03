@@ -538,28 +538,28 @@ function sortTable(column) {
         const aIsFolder = a.querySelector('.fa-folder, .folder-icon') && !a.querySelector('a[href*="/download/"]');
         const bIsFolder = b.querySelector('.fa-folder, .folder-icon') && !b.querySelector('a[href*="/download/"]');
         
-        // Debug logging for name sorting
-        if (column === 'name') {
-            console.log(`Comparing: "${aValue}" (${aIsFolder ? 'folder' : 'file'}) vs "${bValue}" (${bIsFolder ? 'folder' : 'file'})`);
+        // WINDOWS EXPLORER RULE: For ALL columns, always group folders first, then files
+        if (aIsFolder && !bIsFolder) {
+            return currentSort.direction === 'asc' ? -1 : 1;
+        }
+        if (!aIsFolder && bIsFolder) {
+            return currentSort.direction === 'asc' ? 1 : -1;
         }
         
-        let comparison = 0;
-        
-        // Handle different column types
-        if (column === 'size') {
+        // Both are same type - now sort by the selected column
+        let comparison;
+        if (column === 'name') {
+            // If both are same type, sort alphabetically
+            comparison = aValue.localeCompare(bValue, undefined, { 
+                numeric: true, 
+                sensitivity: 'base'
+            });
+        } else if (column === 'size') {
             comparison = compareSizes(aValue, bValue);
         } else if (column === 'modified') {
             comparison = compareDates(aValue, bValue);
-        } else {
-            // String comparison for name and type
+        } else if (column === 'type') {
             comparison = aValue.localeCompare(bValue, undefined, { numeric: true, sensitivity: 'base' });
-        }
-        
-        // If values are equal, folders come before files
-        if (comparison === 0) {
-            if (aIsFolder && !bIsFolder) return -1; // a (folder) before b (file)
-            if (!aIsFolder && bIsFolder) return 1;  // b (folder) before a (file)
-            return 0; // both same type
         }
         
         return currentSort.direction === 'asc' ? comparison : -comparison;
@@ -728,6 +728,19 @@ function updateSortInfo(column, direction) {
 // Reset sorting to default state
 function resetSorting() {
     console.log('🔄 Resetting table sorting to default');
+    
+    // Clear deep search results first (fixes green background timing display)
+    hideDeepSearchResults();
+    
+    // Clear search input and hide clear button
+    const searchInput = document.getElementById('tableSearch');
+    const clearButton = document.getElementById('clearSearch');
+    if (searchInput) {
+        searchInput.value = '';
+    }
+    if (clearButton) {
+        clearButton.style.display = 'none';
+    }
     
     // Reset sort state
     currentSort = { column: null, direction: 'asc' };
@@ -1037,13 +1050,13 @@ function updateFileTable(files, path) {
                 </div>
             </td>
             <td class="size-cell">
-                <span style="color: #95a5a6; font-size: 13px;">--</span>
+                <span style="color: white; font-size: 13px;">--</span>
             </td>
             <td class="type-cell">
-                <span style="color: #95a5a6; font-size: 13px;">Folder</span>
+                <span style="color: white; font-size: 13px;">Folder</span>
             </td>
             <td class="date-cell">
-                <span style="color: #95a5a6; font-size: 13px;">--</span>
+                <span style="color: white; font-size: 13px;">--</span>
             </td>
             <td></td>
         `;
@@ -1090,7 +1103,7 @@ function createEmptyFolderRow() {
     const row = document.createElement('tr');
     row.className = 'empty-folder-row';
     row.innerHTML = `
-        <td colspan="6" style="text-align: center; padding: 40px 20px; color: #7f8c8d;">
+        <td colspan="6" style="text-align: center; padding: 40px 20px; color: white;">
             <div style="opacity: 0.6;">
                 <i class="fas fa-folder-open" style="font-size: 48px; margin-bottom: 15px; display: block;"></i>
                 <div style="font-size: 16px; font-weight: 500; margin-bottom: 5px;">This folder is empty</div>
@@ -1134,20 +1147,23 @@ function createFileTableRow(item, currentPath) {
         </td>
         <td>
             ${item.is_dir ? 
-                '<span style="color: #7f8c8d; font-size: 13px;">--</span>' :
-                `<span class="file-size" style="color: #2c3e50; font-weight: 500;">${formatFileSize(item.size)}</span>`
+                `<span style="color: white; font-size: 13px;">
+                    ${item.item_count ? `${item.item_count.files || 0} files, ${item.item_count.dirs || 0} folders` : '--'}<br>
+                    ${formatFileSize(item.size)}
+                </span>` :
+                `<span class="file-size" style="color: white; font-weight: 500;">${formatFileSize(item.size)}</span>`
             }
         </td>
         <td class="type-cell">
             ${item.is_dir ? 
-                '<span style="color: #7f8c8d; font-size: 13px;">Folder</span>' :
-                '<span style="color: #7f8c8d; font-size: 13px;">File</span>'
+                '<span style="color: white; font-size: 13px;">Folder</span>' :
+                '<span style="color: white; font-size: 13px;">File</span>'
             }
         </td>
         <td>
             ${item.modified ? 
-                `<span class="file-date" style="color: #7f8c8d; font-size: 13px;">${new Date(item.modified * 1000).toLocaleString()}</span>` :
-                '<span style="color: #95a5a6; font-size: 13px;">--</span>'
+                `<span class="file-date" style="color: white; font-size: 13px;">${new Date(item.modified * 1000).toLocaleString()}</span>` :
+                '<span style="color: white; font-size: 13px;">--</span>'
             }
         </td>
         <td>
@@ -2032,12 +2048,12 @@ function getFileColor(filename) {
         gif: '#9b59b6', bmp: '#9b59b6', svg: '#9b59b6',
         mp4: '#e74c3c', avi: '#e74c3c', mkv: '#e74c3c',
         mp3: '#f39c12', wav: '#f39c12', flac: '#f39c12',
-        zip: '#95a5a6', rar: '#95a5a6', '7z': '#95a5a6',
+        zip: '#ffffff', rar: '#ffffff', '7z': '#ffffff',
         txt: '#34495e', md: '#34495e',
         html: '#2ecc71', css: '#2ecc71', js: '#2ecc71',
         py: '#2ecc71', java: '#2ecc71'
     };
-    return colorMap[extension] || '#7f8c8d';
+    return colorMap[extension] || '#ffffff';
 }
 
 // Notification stacking system
@@ -2231,8 +2247,11 @@ function updateItemStatus(fileId, status, error = null) {
 
 // AJAX function to refresh file table without page reload
 async function refreshFileTable() {
+    const startTime = Date.now();
+    console.log('📁 refreshFileTable() started...');
     try {
         const currentPath = CURRENT_PATH || '';
+        console.log(`📁 Fetching files from: /api/files/${currentPath}`);
         const response = await fetch(`/api/files/${currentPath}`);
 
         if (!response.ok) {
@@ -2247,6 +2266,9 @@ async function refreshFileTable() {
 
         // Update the file table with new data
         updateFileTableContent(data.files);
+        
+        const endTime = Date.now();
+        console.log(`✅ refreshFileTable() completed in ${endTime - startTime}ms`);
 
         console.log('✅ File table refreshed successfully');
 
@@ -2301,10 +2323,10 @@ function updateFileTableContent(files) {
                             </a>
                         </div>
                     </td>
-                    <td><span style="color: #7f8c8d; font-size: 12px;">--</span></td>
+                    <td><span style="color: white; font-size: 12px;">--</span></td>
                     <td><span class="file-type"><i class="fas fa-arrow-up"></i> Parent Directory</span></td>
-                    <td><span style="color: #7f8c8d; font-size: 12px;">--</span></td>
-                    <td><div class="actions"><span style="color: #7f8c8d; font-size: 12px;">Navigation</span></div></td>
+                    <td><span style="color: white; font-size: 12px;">--</span></td>
+                    <td><div class="actions"><span style="color: white; font-size: 12px;">Navigation</span></div></td>
                 `;
         tbody.appendChild(goUpRow);
     }
@@ -2316,9 +2338,9 @@ function updateFileTableContent(files) {
                     <tr>
                         <td colspan="${colspan}" style="text-align: center; padding: 40px 20px; vertical-align: middle;">
                             <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 120px;">
-                                <i class="fas fa-folder-open" style="font-size: 36px; color: #95a5a6; margin-bottom: 15px; opacity: 0.7;"></i>
-                                <div style="color: #7f8c8d; font-weight: 500; margin-bottom: 8px; font-size: 18px;">This folder is empty</div>
-                                <div style="color: #95a5a6; font-size: 14px; text-align: center; max-width: 300px;">
+                                <i class="fas fa-folder-open" style="font-size: 36px; color: white; margin-bottom: 15px; opacity: 0.7;"></i>
+                                <div style="color: white; font-weight: 500; margin-bottom: 8px; font-size: 18px;">This folder is empty</div>
+                                <div style="color: white; font-size: 14px; text-align: center; max-width: 300px;">
                                     ${USER_ROLE === 'readwrite' ? 'Upload files or create folders to get started' : 'No files available'}
                                 </div>
                             </div>
@@ -2341,7 +2363,7 @@ function updateFileTableContent(files) {
             iconHtml = `<i class="fas fa-folder file-icon folder-icon"></i>
                                 <a href="/${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}">${file.name}</a>`;
 
-            sizeHtml = `<span style="color: #7f8c8d; font-size: 13px;">
+            sizeHtml = `<span style="color: white; font-size: 13px;">
                         ${file.item_count ? `${file.item_count.files || 0} files, ${file.item_count.dirs || 0} folders` : '--'}<br>
                         ${file.size ? formatFileSize(file.size) : '--'}
                     </span>`;
@@ -2383,7 +2405,7 @@ function updateFileTableContent(files) {
         } else {
             // File
             iconHtml = `<i class="fas fa-file file-icon file-icon-default"></i>${file.name}`;
-            sizeHtml = `<span style="color: #2c3e50; font-weight: 500;">${formatFileSize(file.size)}</span>`;
+            sizeHtml = `<span style="color: white; font-weight: 500;">${formatFileSize(file.size)}</span>`;
             typeHtml = `<i class="fas fa-file"></i> File`;
             actionsHtml = `
                         <button type="button" class="btn btn-outline btn-sm download-btn" 
@@ -2447,8 +2469,8 @@ function updateFileTableContent(files) {
                     <td><span class="file-type">${typeHtml}</span></td>
                     <td>
                         ${file.modified ?
-                `<span style="color: #7f8c8d; font-size: 13px; white-space: nowrap;">${formatTimestamp(file.modified)}</span>` :
-                `<span style="color: #95a5a6; font-size: 13px;">--</span>`
+                `<span style="color: white; font-size: 13px; white-space: nowrap;">${formatTimestamp(file.modified)}</span>` :
+                `<span style="color: white; font-size: 13px;">--</span>`
             }
                     </td>
                     <td>
@@ -4660,6 +4682,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Load storage statistics with connectivity check
     async function initializeStorageStats() {
+        // Prevent duplicate calls during page load
+        if (window.storageStatsInitialized) {
+            console.log('📊 Storage stats already initialized, skipping...');
+            return;
+        }
+        window.storageStatsInitialized = true;
+        
         console.log('Initializing storage stats...');
 
         // First check if server is reachable
@@ -4674,11 +4703,16 @@ document.addEventListener('DOMContentLoaded', function () {
         await loadStorageStats();
     }
 
-    // Initialize storage stats
-    initializeStorageStats();
-
-    // Refresh storage stats every 30 seconds
-    setInterval(loadStorageStats, 30000);
+    // Check for existing assembly jobs immediately
+    checkExistingAssemblies();
+    
+    // Initialize real-time monitoring (which handles storage stats internally)
+    // Only do this once to prevent duplicate SSE connections
+    if (!window.storageMonitoringInitialized) {
+        initializeRealTimeMonitoring();
+    } else {
+        console.log('📡 Real-time monitoring already initialized, skipping duplicate initialization');
+    }
 
     // Show enhanced upload hints
     showUploadStatus(
@@ -5249,13 +5283,6 @@ async function checkExistingAssemblies() {
     }
 }
 
-// Call this when page loads
-document.addEventListener('DOMContentLoaded', () => {
-    // Check for existing assembly jobs IMMEDIATELY - no delay!
-    // This must run before any cleanup happens on the server
-    checkExistingAssemblies();
-});
-
 // Cleanup polling on page unload
 window.addEventListener('beforeunload', () => {
     assemblyPollers.forEach(intervalId => clearInterval(intervalId));
@@ -5319,5 +5346,449 @@ setInterval(autoCleanupCompletedItems, 10000);
 document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
         setTimeout(autoCleanupCompletedItems, 1000);
+    }
+});
+
+// Real-time storage monitoring with Server-Sent Events
+let storageEventSource = null;
+let connectionStatus = 'disconnected';
+let reconnectAttempts = 0;
+const maxReconnectAttempts = 5;
+const reconnectDelay = 3000; // 3 seconds
+let lastKnownFileCount = null;
+let lastKnownDirCount = null;
+
+function initializeRealTimeMonitoring() {
+    console.log('📡 Initializing optimized real-time storage monitoring...');
+    
+    // Skip duplicate initialization if already done
+    if (window.storageMonitoringInitialized) {
+        console.log('📡 Real-time monitoring already initialized, skipping...');
+        return;
+    }
+    window.storageMonitoringInitialized = true;
+    
+    // Prevent page unload from interfering with SSE connections
+    let connectionInitialized = false;
+    
+    // Initialize connection with delay to ensure page is fully loaded
+    setTimeout(() => {
+        if (!connectionInitialized) {
+            connectionInitialized = true;
+            console.log('📡 Starting stable SSE connection after page load...');
+            connectToStorageStream();
+            setupFallbackPolling();
+        }
+    }, 500); // 500ms delay to ensure page stability
+    
+    // Faster detection for Waitress SSE incompatibility 
+    setTimeout(() => {
+        if (connectionStatus !== 'connected' && !window.storageStatsInitialized) {
+            console.log('📊 SSE failed (likely Waitress), loading initial storage stats via API...');
+            initializeStorageStats();
+            // Immediately show green for Waitress since API polling works
+            document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+            connectionStatus = 'connected';
+            // Immediately activate real-time polling for Waitress
+            activateRealtimePolling();
+        }
+    }, 500); // Faster detection - 500ms instead of 2s
+}
+
+async function initializeStorageStats() {
+    // Prevent duplicate calls during page load
+    if (window.storageStatsInitialized) {
+        console.log('📊 Storage stats already initialized by main handler, skipping fallback...');
+        return;
+    }
+    
+    console.log('📊 Initializing storage stats at startup...');
+    try {
+        const response = await fetch('/api/storage_stats');
+        if (response.ok) {
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+                const data = await response.json();
+                if (data.file_count !== undefined && data.dir_count !== undefined) {
+                    lastKnownFileCount = data.file_count;
+                    lastKnownDirCount = data.dir_count;
+                    console.log(`📊 Initial stats: ${data.file_count} files, ${data.dir_count} dirs`);
+                    updateStorageDisplay(data);
+                }
+            } else {
+                // Got HTML instead of JSON - likely an error page
+                const text = await response.text();
+                console.warn(`⚠️ Initial stats API returned HTML instead of JSON (status ${response.status}):`, text.substring(0, 100) + '...');
+            }
+        } else {
+            throw new Error(`API error: ${response.status} ${response.statusText}`);
+        }
+    } catch (error) {
+        console.warn('⚠️ Failed to initialize storage stats:', error);
+    }
+}
+
+function handleStatsUpdate(data) {
+    // Check for changes and refresh if needed
+    if (lastKnownFileCount !== null && lastKnownDirCount !== null) {
+        if (data.file_count !== lastKnownFileCount || data.dir_count !== lastKnownDirCount) {
+            console.log(`🔄 Real-time update detected: ${lastKnownFileCount}→${data.file_count} files, ${lastKnownDirCount}→${data.dir_count} dirs`);
+            refreshFileTable();
+        }
+    }
+    
+    // Update stored values and display
+    lastKnownFileCount = data.file_count;
+    lastKnownDirCount = data.dir_count;
+    updateStorageDisplay(data);
+}
+
+function activateRealtimePolling() {
+    console.log('🚀 Activating real-time polling for Waitress compatibility...');
+    
+    // Clear any existing polling
+    if (window.realtimePollingInterval) {
+        clearInterval(window.realtimePollingInterval);
+    }
+    
+    // Start aggressive polling for real-time feel (2.5 seconds)
+    window.realtimePollingInterval = setInterval(async () => {
+        try {
+            const response = await fetch('/api/storage_stats');
+            if (response.ok) {
+                const contentType = response.headers.get('content-type');
+                if (contentType && contentType.includes('application/json')) {
+                    const data = await response.json();
+                    handleStatsUpdate(data);
+                    document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+                } else {
+                    // Got HTML instead of JSON - likely an error page
+                    const text = await response.text();
+                    console.warn(`⚠️ API returned HTML instead of JSON (status ${response.status}):`, text.substring(0, 100) + '...');
+                    document.title = '🟠 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+                }
+            } else {
+                throw new Error(`API error: ${response.status} ${response.statusText}`);
+            }
+        } catch (error) {
+            console.error('⚠️ Real-time polling failed:', error);
+            document.title = '🔴 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+            // Don't clear interval - keep trying
+        }
+    }, 2500); // 2.5 second interval for real-time feel
+    
+    console.log('✅ Real-time polling active - updates every 2.5 seconds');
+}
+
+function setupFallbackPolling() {
+    let sseFailureCount = 0;
+    let fallbackPollingInterval = null;
+    
+    // Only activate fallback if SSE consistently fails
+    const checkSSEHealth = () => {
+        if (!storageEventSource || storageEventSource.readyState === EventSource.CLOSED) {
+            sseFailureCount++;
+            console.warn(`⚠️ SSE connection issue detected (${sseFailureCount}/1)`);
+            
+            if (sseFailureCount >= 1 && !fallbackPollingInterval) {
+                console.log('🔄 Activating fallback polling due to SSE failures...');
+                fallbackPollingInterval = setInterval(async () => {
+                    try {
+                        const response = await fetch('/api/storage_stats');
+                        if (response.ok) {
+                            const contentType = response.headers.get('content-type');
+                            if (contentType && contentType.includes('application/json')) {
+                                const data = await response.json();
+                                if (data.file_count !== undefined && data.dir_count !== undefined) {
+                                    if (lastKnownFileCount !== null && lastKnownDirCount !== null) {
+                                        if (data.file_count !== lastKnownFileCount || data.dir_count !== lastKnownDirCount) {
+                                            console.log(`🔄 Fallback detected changes: ${lastKnownFileCount}→${data.file_count} files, ${lastKnownDirCount}→${data.dir_count} dirs`);
+                                            await refreshFileTable();
+                                            updateStorageDisplay(data);
+                                        }
+                                    }
+                                    lastKnownFileCount = data.file_count;
+                                    lastKnownDirCount = data.dir_count;
+                                }
+                            } else {
+                                // Got HTML instead of JSON - likely an error page
+                                const text = await response.text();
+                                console.warn(`⚠️ Fallback API returned HTML instead of JSON (status ${response.status}):`, text.substring(0, 100) + '...');
+                            }
+                        } else {
+                            throw new Error(`API error: ${response.status} ${response.statusText}`);
+                        }
+                    } catch (error) {
+                        console.warn('⚠️ Fallback polling failed:', error);
+                    }
+                }, 3000); // Faster polling - 3 seconds instead of 30 for real-time feel
+            }
+        } else if (storageEventSource && storageEventSource.readyState === EventSource.OPEN) {
+            // SSE is working, reset failure count and clear fallback if active
+            if (sseFailureCount > 0) {
+                console.log('✅ SSE connection restored, disabling fallback polling');
+                sseFailureCount = 0;
+                if (fallbackPollingInterval) {
+                    clearInterval(fallbackPollingInterval);
+                    fallbackPollingInterval = null;
+                }
+            }
+        }
+    };
+    
+    // Check SSE health every 15 seconds
+    setInterval(checkSSEHealth, 15000);
+}
+
+function connectToStorageStream() {
+    try {
+        // Only close existing connection if it's actually dead/errored
+        if (storageEventSource && storageEventSource.readyState === EventSource.CLOSED) {
+            storageEventSource = null;
+        } else if (storageEventSource && storageEventSource.readyState === EventSource.OPEN) {
+            console.log('📡 SSE connection already active, not creating duplicate');
+            return;
+        }
+
+        console.log('📡 Connecting to storage stats stream...');
+        console.log('🔍 EventSource URL:', '/api/storage_stats_stream');
+        
+        // Show connecting state
+        document.title = '🟠 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+        console.log('🟠 Set title to connecting state');
+        
+        // Create EventSource with credentials to include session cookies
+        storageEventSource = new EventSource('/api/storage_stats_stream', { withCredentials: true });
+        console.log('🔍 EventSource created with credentials:', storageEventSource);
+        console.log('🔍 Initial readyState:', storageEventSource.readyState);
+        
+        // POLL the readyState to detect connection success
+        let stateCheckInterval = setInterval(() => {
+            console.log('🔍 Checking EventSource readyState:', storageEventSource.readyState);
+            if (storageEventSource.readyState === EventSource.OPEN) {
+                console.log('🎯 EventSource is OPEN! Connection successful!');
+                document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+                connectionStatus = 'connected';
+                window.storageStatsInitialized = true;
+                clearInterval(stateCheckInterval);
+            } else if (storageEventSource.readyState === EventSource.CLOSED) {
+                console.log('❌ EventSource is CLOSED');
+                clearInterval(stateCheckInterval);
+            }
+        }, 100); // Check every 100ms
+        
+        // IMMEDIATE detection of ANY data
+        let dataReceived = false;
+        storageEventSource.addEventListener('message', function(event) {
+            if (!dataReceived) {
+                dataReceived = true;
+                console.log('🎯 FIRST MESSAGE DETECTED!', event.data);
+                // Immediately turn green on first message
+                document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+                connectionStatus = 'connected';
+                window.storageStatsInitialized = true;
+            }
+        });
+        
+        // Keep connection alive by preventing premature closure
+        storageEventSource.addEventListener('error', function(event) {
+            console.warn('⚠️ SSE error event:', event);
+            console.warn('⚠️ EventSource readyState:', storageEventSource.readyState);
+            console.warn('⚠️ EventSource url:', storageEventSource.url);
+            // Don't immediately close on errors - let the reconnect logic handle it
+        });
+        
+        storageEventSource.onopen = function(event) {
+            console.log('✅ Storage stats stream connected - waiting for initial data via SSE');
+            console.log('🟢 SSE onopen fired - changing title to connected');
+            console.log('🟢 EventSource readyState:', storageEventSource.readyState);
+            connectionStatus = 'connected';
+            reconnectAttempts = 0;
+            updateConnectionStatus();
+            
+            // SSE will provide initial data, no need for separate API call
+            window.storageStatsInitialized = true;
+            
+            // Add clean connection indicator
+            document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+            console.log('🟢 Title set to connected state:', document.title);
+        };
+
+        storageEventSource.onmessage = function(event) {
+            console.log('📡 Raw SSE message received:', event.data);
+            
+            // If this is the first message and we're still connecting, treat it as successful connection
+            if (document.title.startsWith('🟠')) {
+                console.log('🟢 First SSE message received - treating as successful connection');
+                document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+                connectionStatus = 'connected';
+                reconnectAttempts = 0;
+                updateConnectionStatus();
+                window.storageStatsInitialized = true;
+            }
+            
+            try {
+                const data = JSON.parse(event.data);
+                console.log('📡 Parsed SSE data:', data);
+                handleStorageUpdate(data);
+            } catch (error) {
+                console.warn('⚠️ Failed to parse SSE data:', error, event.data);
+            }
+        };
+
+        storageEventSource.onerror = function(event) {
+            console.error('❌ Storage stats stream error:', event);
+            console.log('🔴 SSE onerror fired - connection failed');
+            console.log('🔴 EventSource readyState:', storageEventSource.readyState);
+            console.log('🔴 EventSource url:', storageEventSource.url);
+            console.log('🔴 Event type:', event.type);
+            console.log('🔴 Event target:', event.target);
+            connectionStatus = 'error';
+            updateConnectionStatus();
+            
+            // Add clean disconnection indicator
+            document.title = '🔴 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+            console.log('🔴 Title set to error state');
+            
+            // Attempt to reconnect
+            if (reconnectAttempts < maxReconnectAttempts) {
+                reconnectAttempts++;
+                console.log(`🔄 Attempting to reconnect (${reconnectAttempts}/${maxReconnectAttempts}) in ${reconnectDelay}ms...`);
+                setTimeout(() => {
+                    connectToStorageStream();
+                }, reconnectDelay);
+            } else {
+                console.error('💀 Max reconnection attempts reached. SSE unavailable.');
+                // The fallback polling will be handled by setupFallbackPolling()
+            }
+        };
+
+    } catch (error) {
+        console.error('❌ Error initializing SSE connection:', error);
+        // The fallback polling will be handled by setupFallbackPolling()
+    }
+}
+
+function handleStorageUpdate(data) {
+    console.log('📊 Real-time storage update received:', data);
+    
+    switch (data.type) {
+        case 'connected':
+            console.log('📡 SSE connection established');
+            break;
+            
+        case 'storage_stats_update':
+            console.log('🔄 Processing storage_stats_update...', data.data);
+            
+            // Brief flash to show SSE activity
+            document.title = '⚡ ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+            setTimeout(() => {
+                document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+            }, 2000);
+            
+            if (data.data) {
+                // Update storage display with real-time data
+                updateStorageDisplay(data.data);
+                
+                // Update our tracked file counts
+                if (data.data.file_count !== undefined) {
+                    lastKnownFileCount = data.data.file_count;
+                }
+                if (data.data.dir_count !== undefined) {
+                    lastKnownDirCount = data.data.dir_count;
+                }
+                
+                // Check for file/folder changes and refresh table if needed
+                // Skip change notifications for initial data (page load)
+                if (data.data.changes && !data.initial) {
+                    const changes = data.data.changes;
+                    console.log('🔍 Changes detected:', changes);
+                    
+                    // Refresh file table for ANY change including modifications and renames
+                    // - files_changed/dirs_changed: for file/folder creation/deletion
+                    // - size_changed: for file content modifications
+                    // - content_changed: for file renames, modifications, permission changes
+                    // - mtime_changed: for any file modifications
+                    const shouldRefresh = (
+                        changes.files_changed !== 0 || 
+                        changes.dirs_changed !== 0 || 
+                        changes.size_changed !== 0 ||
+                        changes.content_changed === true ||
+                        changes.mtime_changed === true ||
+                        // Always refresh if we get a change notification (covers any other changes)
+                        Object.keys(changes).length > 0
+                    );
+                    
+                    if (shouldRefresh) {
+                        let message = 'Storage updated: ';
+                        if (changes.files_changed > 0) message += `+${changes.files_changed} files `;
+                        if (changes.files_changed < 0) message += `${changes.files_changed} files `;
+                        if (changes.dirs_changed > 0) message += `+${changes.dirs_changed} folders `;
+                        if (changes.dirs_changed < 0) message += `${changes.dirs_changed} folders `;
+                        if (changes.size_changed !== 0) message += `size changed `;
+                        if (changes.files_changed === 0 && changes.dirs_changed === 0 && changes.size_changed === 0) {
+                            message += 'files modified/renamed ';
+                        }
+                        
+                        showUploadStatus(`<i class="fas fa-sync-alt"></i> ${message.trim()}`, 'info');
+                        
+                        // Refresh file table for any change
+                        console.log('🚀 Triggering instant file table refresh via SSE...');
+                        // Use requestAnimationFrame for immediate, smooth UI update
+                        requestAnimationFrame(async () => {
+                            console.log('🔄 SSE triggered refreshFileTable() call starting...');
+                            await refreshFileTable();
+                            console.log('✅ SSE triggered refreshFileTable() completed!');
+                        });
+                        
+                        // Skip redundant storage stats call since we already have the data
+                        console.log('📊 Using real-time storage data (skipping additional API call)');
+                    } else {
+                        console.log('📊 No significant changes detected, no file table refresh needed');
+                    }
+                } else if (data.initial) {
+                    console.log('📊 Initial storage data received (no change notification shown)');
+                } else {
+                    console.log('📊 No changes data in SSE update');
+                }
+                
+                console.log(`📊 Updated file counts: ${lastKnownFileCount} files, ${lastKnownDirCount} dirs`);
+            }
+            break;
+            
+        case 'ping':
+            // Keep-alive ping, just log it
+            console.log('📡 SSE keep-alive ping');
+            break;
+            
+        default:
+            console.log('📡 Unknown SSE message type:', data.type);
+    }
+}
+
+function updateConnectionStatus() {
+    // Update a connection indicator if you have one in the UI
+    // This is optional - you could add a small indicator icon
+    const indicator = document.getElementById('connectionStatus');
+    if (indicator) {
+        indicator.className = `connection-status ${connectionStatus}`;
+        indicator.title = `Real-time monitoring: ${connectionStatus}`;
+    }
+}
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+    if (storageEventSource) {
+        storageEventSource.close();
+        storageEventSource = null;
+    }
+});
+
+// Reconnect when page becomes visible (in case connection was lost)
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && connectionStatus === 'error' && storageEventSource === null) {
+        console.log('📡 Page visible - attempting to reconnect to storage stream');
+        reconnectAttempts = 0;
+        connectToStorageStream();
     }
 });

@@ -410,11 +410,11 @@
                         </td>
                         <td>
                             {% if item.is_dir %}
-                                <span style="color: #7f8c8d; font-size: 13px;">
+                                <span style="color: white; font-size: 13px;">
                                     {% if item.item_count %}
                                         {{ item.item_count.files }} files, {{ item.item_count.dirs }} folders
                                         {% if item.size > 0 %}
-                                            <br><small style="color: #95a5a6;">
+                                            <br><small style="color: white;">
                                                 {% if item.size >= 1024*1024*1024 %}
                                                     {{ "%.2f"|format(item.size / (1024*1024*1024)) }} GB
                                                 {% elif item.size >= 1024*1024 %}
@@ -429,7 +429,7 @@
                                     {% endif %}
                                 </span>
                             {% else %}
-                                <span style="color: #2c3e50; font-weight: 500;">
+                                <span style="color: white; font-weight: 500;">
                                     {% if item.size >= 1024*1024*1024 %}
                                         {{ "%.2f"|format(item.size / (1024*1024*1024)) }} GB
                                     {% elif item.size >= 1024*1024 %}
@@ -453,11 +453,11 @@
                         </td>
                         <td>
                             {% if item.modified %}
-                                <span style="color: #7f8c8d; font-size: 13px; white-space: nowrap;">
+                                <span style="color: white; font-size: 13px; white-space: nowrap;">
                                     {{ item.modified|int|timestamp_to_date }}
                                 </span>
                             {% else %}
-                                <span style="color: #95a5a6; font-size: 13px;">--</span>
+                                <span style="color: white; font-size: 13px;">--</span>
                             {% endif %}
                         </td>
                         <td>

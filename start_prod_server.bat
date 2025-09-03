@@ -1,5 +1,6 @@
 @echo off
-echo Starting CloudinatorFTP with Waitress WSGI Server...
+echo Starting CloudinatorFTP Production Server...
+echo (Tries Gunicorn first for better SSE, falls back to Waitress)
 echo.
 
 REM Check if virtual environment exists
@@ -14,12 +15,12 @@ REM Install/update dependencies
 echo Installing dependencies...
 pip install -r requirements.txt
 
-REM Start the WSGI server
+REM Start the production server (tries Gunicorn first, falls back to Waitress)
 echo.
 echo Starting server on http://localhost:5000
 echo Press Ctrl+C to stop the server
 echo.
 
-waitress-serve --host=0.0.0.0 --port=5000 --threads=8 --channel-timeout=120 wsgi:application
+python prod_server.py
 
 pause

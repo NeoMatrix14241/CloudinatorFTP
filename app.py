@@ -25,6 +25,10 @@ from config import PORT, ROOT_DIR, SESSION_SECRET, CHUNK_SIZE, ENABLE_CHUNKED_UP
 from auth import check_login, login_user, logout_user, current_user, is_logged_in, get_role
 import storage
 
+# File monitoring and real-time updates
+from file_monitor import FileSystemMonitor
+from realtime_stats import storage_stats_sse, trigger_storage_update, get_event_manager
+
 # Assembly Queue System
 import queue
 from dataclasses import dataclass
@@ -137,7 +141,19 @@ assembly_queue = AssemblyQueue()
 app = Flask(__name__)
 CORS(app)
 app.secret_key = SESSION_SECRET
+
+# Configure session for better cross-origin support (but keep logout working)
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Less restrictive than 'Strict' but more secure than 'None'
+app.config['SESSION_COOKIE_SECURE'] = False  # Set to True if using HTTPS
+app.config['SESSION_COOKIE_HTTPONLY'] = True  # Keep this secure for production
+
 storage.ensure_root()
+
+# Initialize file system monitoring
+file_monitor = FileSystemMonitor(ROOT_DIR)
+file_monitor.add_change_callback(trigger_storage_update)
+file_monitor.start_monitoring()
+print(f"📡 File system monitoring started for: {ROOT_DIR}")
 
 @app.route('/cancel_bulk_zip', methods=['POST'])
 def cancel_bulk_zip():
@@ -1063,6 +1079,33 @@ def storage_stats_debug():
         traceback.print_exc()
         return jsonify({'error': f'Debug storage stats error: {str(e)}'}), 500
 
+@app.route('/api/storage_stats_stream', methods=['GET'])
+def storage_stats_stream():
+    """Server-Sent Events endpoint for real-time storage stats"""
+    if not is_logged_in():
+        return jsonify({'error': 'Authentication required'}), 401
+    
+    print(f"📡 SSE connection established for user: {current_user()}")
+    return storage_stats_sse()
+
+@app.route('/api/monitoring_status', methods=['GET'])
+def monitoring_status():
+    """Get current monitoring system status"""
+    if not is_logged_in():
+        return jsonify({'error': 'Authentication required'}), 401
+    
+    try:
+        event_manager = get_event_manager()
+        return jsonify({
+            'monitoring_active': file_monitor.monitoring,
+            'connected_clients': event_manager.get_client_count(),
+            'last_check': getattr(file_monitor, 'last_check_time', None),
+            'total_checks': getattr(file_monitor, 'check_count', 0)
+        }), 200
+    except Exception as e:
+        print(f"❌ Error getting monitoring status: {e}")
+        return jsonify({'error': f'Monitoring status error: {str(e)}'}), 500
+
 @app.route('/api/disk_stats_fast', methods=['GET'])
 def disk_stats_fast():
     """Fast disk stats only (no file counting) - no auth required"""
@@ -1288,12 +1331,14 @@ def api_files(path):
         role = get_role(current_user())
         items = storage.list_dir(path)
         
-        return jsonify({
+        response_data = {
             'success': True,
             'files': items,
             'current_path': path,
             'role': role
-        }), 200
+        }
+        
+        return jsonify(response_data), 200
         
     except Exception as e:
         print(f"❌ Error in api_files: {e}")

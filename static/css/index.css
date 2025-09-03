@@ -299,7 +299,7 @@ body {
 
 /* File table */
 .file-table {
-    background: rgba(255, 255, 255, 0.95);
+    background: rgba(48,84,140,255); /* Theme-matched light blue background */
     border-radius: 12px;
     overflow: hidden;
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
@@ -327,7 +327,7 @@ body {
 }
 
 .table tbody tr {
-    border-bottom: 1px solid #ecf0f1;
+    border-bottom: 1px solid rgba(48,84,140,255); /* Light blue border to complement theme */
     transition: all 0.3s ease;
 }
 
@@ -344,6 +344,7 @@ body {
 .table td {
     padding: 18px 20px;
     vertical-align: top;
+    color: white;
 }
 
 .file-checkbox {
@@ -365,7 +366,7 @@ body {
 }
 
 .file-icon-default {
-    color: #7f8c8d;
+    color: white;
 }
 
 .file-name {
@@ -378,7 +379,7 @@ body {
 
 .file-name a,
 .file-name span {
-    color: #2c3e50;
+    color: white;
     text-decoration: none;
     transition: color 0.3s ease;
     word-break: break-word;
@@ -395,11 +396,11 @@ body {
 }
 
 .file-name a:hover {
-    color: #3498db;
+    color: #87CEEB;
 }
 
 .file-type {
-    color: #7f8c8d;
+    color: white;
     font-size: 14px;
     display: flex;
     align-items: center;
@@ -1118,7 +1119,7 @@ body {
     border: none;
     font-size: 24px;
     cursor: pointer;
-    color: #7f8c8d;
+    color: white;
     padding: 0;
     width: 30px;
     height: 30px;
@@ -1386,6 +1387,30 @@ body {
         max-width: 100%;
     }
 
+    /* Ensure file table maintains theme background on mobile */
+    .file-table {
+        background: rgba(48,84,140,255) !important; /* Force theme-matched light blue background */
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    /* Ensure table rows maintain theme styling on mobile */
+    .table tbody tr {
+        border-bottom: 1px solid rgba(48,84,140,255) !important; /* Light blue border to complement theme */
+        background: transparent !important; /* Allow parent background to show through */
+    }
+
+    .table tbody tr:hover {
+        background: rgba(52, 152, 219, 0.05) !important;
+    }
+
+    .table tbody tr.selected {
+        background: rgba(52, 152, 219, 0.1) !important;
+        border-left: 4px solid #3498db;
+    }
+
     .header {
         padding: 8px 12px;
         /* Much more compact */
@@ -1491,7 +1516,7 @@ body {
         border-radius: 12px !important;
         overflow-x: auto;
         width: 100%;
-        background: white;
+        background: rgba(48, 84, 140, 255) !important;
     }
 
     .table {
@@ -1502,12 +1527,62 @@ body {
         border-collapse: collapse;
         font-size: 14px;
     }
+    
+    /* Ensure table rows have theme background on mobile */
+    .table tbody tr {
+        background: rgba(48, 84, 140, 255) !important;
+        border-bottom: 1px solid rgba(48, 84, 140, 255) !important;
+    }
+    
+    /* Ensure file icons are white on mobile */
+    .file-icon-default {
+        color: white !important;
+    }
 
     /* Keep all columns visible but make them smaller on mobile */
     .table th,
     .table td {
         padding: 10px 8px;
         vertical-align: middle;
+        color: white !important;
+    }
+    
+    /* Keep header styling consistent with desktop - solid color instead of gradient */
+    .table th {
+        background: #34495e !important;
+        color: white !important;
+    }
+    
+    /* Only table body cells get the blue theme background */
+    .table td {
+        background: rgba(48, 84, 140, 255) !important;
+    }
+    
+    /* Override specific file name and folder colors on mobile */
+    .folder-item .folder-name,
+    .current-destination span,
+    .current-destination,
+    .file-name,
+    .file-name a,
+    .file-name span,
+    .table td a,
+    .table td span {
+        color: white !important;
+    }
+    
+    /* Smaller checkboxes for mobile */
+    input[type="checkbox"].file-checkbox,
+    input[type="checkbox"].item-checkbox,
+    input[type="checkbox"]#selectAll,
+    .file-checkbox,
+    .item-checkbox,
+    #selectAll {
+        width: 0.25rem !important;
+        height: 0.25rem !important;
+        margin: 0 auto !important;
+        cursor: pointer !important;
+        transform: scale(0.5) !important;
+        /* Remove all custom appearance overrides - use browser defaults */
     }
 
     /* Allow name column to expand naturally for full file names */
@@ -1534,6 +1609,7 @@ body {
         vertical-align: middle;
         padding: 10px 4px;
         white-space: nowrap;
+        /* Remove specific background - let it inherit from general td styling */
     }
 
     .table th:nth-child(3),
@@ -1650,24 +1726,23 @@ body {
         flex-shrink: 0;
     }
 
-    /* Checkbox styling for mobile */
+    /* Checkbox styling for mobile - reasonable size like desktop */
     .file-checkbox {
-        width: 14px !important;
-        height: 14px !important;
+        width: 16px !important;
+        height: 16px !important;
         margin: 0 auto !important;
         cursor: pointer;
         display: block;
-        transform: scale(0.4);
-        /* Make it even smaller */
+        /* Use reasonable size - not too big, not too small */
     }
 
     /* Also apply to the select all checkbox in header */
     #selectAll {
-        width: 14px !important;
-        height: 14px !important;
+        width: 16px !important;
+        height: 16px !important;
         margin: 0 auto !important;
         display: block;
-        transform: scale(0.4);
+        /* Use reasonable size - not too big, not too small */
         /* Make it even smaller */
     }
 
@@ -2033,6 +2108,23 @@ body {
     }
 }
 
+/* Large mobile devices (iPhone 14 Pro Max, etc.) */
+@media (max-width: 900px) and (orientation: portrait) {
+    /* Ensure small checkboxes for large mobile devices */
+    input[type="checkbox"].file-checkbox,
+    input[type="checkbox"].item-checkbox,
+    input[type="checkbox"]#selectAll,
+    .file-checkbox,
+    .item-checkbox,
+    #selectAll {
+        width: 0.25rem !important;
+        height: 0.25rem !important;
+        margin: 0 auto !important;
+        cursor: pointer !important;
+        transform: scale(0.5) !important;
+    }
+}
+
 /* Tablet specific adjustments */
 @media (min-width: 769px) and (max-width: 1024px) {
 
@@ -2095,6 +2187,58 @@ body {
 
 /* Medium mobile screens (between very small and tablet) */
 @media (min-width: 481px) and (max-width: 768px) {
+    /* Ensure theme background colors are maintained on medium mobile screens */
+    .file-table {
+        background: rgba(48, 84, 140, 255) !important;
+    }
+    
+    .table tbody tr {
+        background: rgba(48, 84, 140, 255) !important;
+        border-bottom: 1px solid rgba(48, 84, 140, 255) !important;
+    }
+    
+    /* Ensure white text color for table cells on medium mobile */
+    .table td {
+        color: white !important;
+        background: rgba(48, 84, 140, 255) !important;
+    }
+    
+    .table th {
+        background: #34495e !important;
+        color: white !important;
+    }
+    
+    /* Ensure white text for file icons */
+    .file-icon-default {
+        color: white !important;
+    }
+    
+    /* Override specific file name and folder colors on medium mobile */
+    .folder-item .folder-name,
+    .current-destination span,
+    .current-destination,
+    .file-name,
+    .file-name a,
+    .file-name span,
+    .table td a,
+    .table td span {
+        color: white !important;
+    }
+    
+    /* Smaller checkboxes for medium mobile */
+    input[type="checkbox"].file-checkbox,
+    input[type="checkbox"].item-checkbox,
+    input[type="checkbox"]#selectAll,
+    .file-checkbox,
+    .item-checkbox,
+    #selectAll {
+        width: 0.25rem !important;
+        height: 0.25rem !important;
+        margin: 0 auto !important;
+        cursor: pointer !important;
+        transform: scale(0.5) !important;
+        /* Remove all custom appearance overrides - use browser defaults */
+    }
 
     .table th:nth-child(6),
     /* Actions */
@@ -2117,6 +2261,59 @@ body {
 
 /* Very small screens (phones in portrait) */
 @media (max-width: 480px) {
+    /* Ensure theme background colors are maintained on very small screens */
+    .file-table {
+        background: rgba(48, 84, 140, 255) !important;
+    }
+    
+    .table tbody tr {
+        background: rgba(48, 84, 140, 255) !important;
+        border-bottom: 1px solid rgba(48, 84, 140, 255) !important;
+    }
+    
+    /* Ensure white text color for table cells on very small screens */
+    .table td {
+        color: white !important;
+        background: rgba(48, 84, 140, 255) !important;
+    }
+    
+    .table th {
+        background: #34495e !important;
+        color: white !important;
+    }
+    
+    /* Ensure white text for file icons */
+    .file-icon-default {
+        color: white !important;
+    }
+    
+    /* Override specific file name and folder colors on very small screens */
+    .folder-item .folder-name,
+    .current-destination span,
+    .current-destination,
+    .file-name,
+    .file-name a,
+    .file-name span,
+    .table td a,
+    .table td span {
+        color: white !important;
+    }
+    
+    /* Much smaller checkboxes for very small screens like iPhone SE */
+    input[type="checkbox"].file-checkbox,
+    input[type="checkbox"].item-checkbox,
+    input[type="checkbox"]#selectAll,
+    .file-checkbox,
+    .item-checkbox,
+    #selectAll {
+        width: 0.25rem !important;
+        height: 0.25rem !important;
+        margin: 0 auto !important;
+        cursor: pointer !important;
+        transform: scale(0.5) !important;
+        /* Remove all custom appearance overrides - use browser defaults */
+    }
+
     .container {
         padding: 5px;
     }
@@ -2171,67 +2368,83 @@ body {
         /* Changed from negative margins to positive */
         overflow-x: auto;
         border-radius: 10px !important;
+        background: rgba(48,84,140,255) !important; /* Ensure theme background on very small screens */
     }
 
     .table {
-        min-width: 315px;
-        /* 30% smaller: 450px -> 315px */
-        font-size: 8px;
-        /* 30% smaller: 10px -> 8px */
+        min-width: 300px;
+        /* Even smaller for iPhone SE: 315px -> 300px */
+        font-size: 7px;
+        /* Smaller font: 8px -> 7px */
         border-radius: 10px !important;
+    }
+
+    /* Ensure table rows maintain theme styling on very small screens */
+    .table tbody tr {
+        border-bottom: 1px solid rgba(48,84,140,255) !important;
+        background: transparent !important;
+    }
+
+    .table tbody tr:hover {
+        background: rgba(52, 152, 219, 0.05) !important;
+    }
+
+    .table tbody tr.selected {
+        background: rgba(52, 152, 219, 0.1) !important;
+        border-left: 4px solid #3498db;
     }
 
     .table th,
     .table td {
-        padding: 4px 3px;
-        /* 30% smaller: 5px 4px -> 4px 3px */
+        padding: 3px 2px;
+        /* More compact for iPhone SE: 4px 3px -> 3px 2px */
     }
 
-    /* Adjust sticky columns for very small screens */
+    /* Adjust sticky columns for very small screens like iPhone SE */
     .table th:first-child,
     .table td:first-child {
-        min-width: 21px;
-        /* 30% smaller: 30px -> 21px */
+        min-width: 14px;
+        /* Much smaller checkbox column to match 10px checkboxes */
     }
 
     .file-name {
-        min-width: 56px;
-        /* 30% smaller: 80px -> 56px */
-        max-width: 77px;
-        /* 30% smaller: 110px -> 77px */
+        min-width: 50px;
+        /* Smaller file name: 56px -> 50px */
+        max-width: 70px;
+        /* Smaller max width: 77px -> 70px */
     }
 
     .table th:nth-child(3),
     .table td:nth-child(3) {
-        min-width: 35px;
-        /* 30% smaller: 50px -> 35px */
+        min-width: 30px;
+        /* Smaller size column: 35px -> 30px */
     }
 
     .table th:nth-child(4),
     .table td:nth-child(4) {
-        min-width: 32px;
-        /* 30% smaller: 45px -> 32px */
+        min-width: 28px;
+        /* Smaller type column: 32px -> 28px */
     }
 
     .table th:nth-child(5),
     .table td:nth-child(5) {
-        min-width: 42px;
-        /* 30% smaller: 60px -> 42px */
+        min-width: 36px;
+        /* Smaller date column: 42px -> 36px */
     }
 
     .table th:last-child,
     .table td:last-child {
-        min-width: 180px;
-        /* Increased from 120px for more space */
+        min-width: 160px;
+        /* Smaller actions column: 180px -> 160px */
     }
 
     .btn-sm {
-        padding: 1px 2px;
-        /* Reduced padding for tiny buttons */
-        font-size: 6px;
-        /* Reduced font size */
-        min-width: 20px;
-        /* Set minimum width */
+        padding: 1px 1px;
+        /* Even tighter padding for iPhone SE */
+        font-size: 5px;
+        /* Smaller font size */
+        min-width: 18px;
+        /* Smaller minimum width: 20px -> 18px */
     }
 
     /* Hide button text on very small screens, show icons only */
@@ -2241,8 +2454,8 @@ body {
     }
 
     .actions .btn-sm i {
-        font-size: 8px;
-        /* Show only icons, slightly larger */
+        font-size: 7px;
+        /* Slightly smaller icons for iPhone SE: 8px -> 7px */
     }
 
     .actions {
@@ -2839,7 +3052,7 @@ body {
 
 .search-result-path {
     font-size: 12px;
-    color: #7f8c8d;
+    color: white;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -2874,7 +3087,7 @@ body {
 }
 
 .folder-size-text {
-    color: #7f8c8d;
+    color: white;
     font-size: 13px;
     font-style: italic;
 }

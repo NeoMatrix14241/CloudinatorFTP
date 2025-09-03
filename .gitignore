@@ -4,3 +4,4 @@ __pycache__/
 uploads/
 *.backup
 *.asc
+.venv/
