@@ -1565,8 +1565,13 @@ function updateStorageDisplay(stats) {
     }
 }
 
+// Track if user is actively downloading to avoid false beforeunload warnings
+let activeDownloads = new Set();
+
 window.addEventListener('beforeunload', function (e) {
-    if (isUploading || uploadQueue.some(item => item.status === 'pending')) {
+    // Only show warning if uploads are in progress AND user is actually navigating away
+    // Don't interfere with downloads
+    if ((isUploading || uploadQueue.some(item => item.status === 'pending')) && activeDownloads.size === 0) {
         // Try immediate cleanup for chunks
         cleanupUnfinishedChunks().catch(console.error);
 
@@ -2466,7 +2471,15 @@ function updateFileTableContent(files) {
                     </span>`;
 
             typeHtml = `<i class="fas fa-folder"></i> Folder`;
-            actionsHtml = USER_ROLE === 'readwrite' ? `
+            actionsHtml = `
+                        <button type="button" class="btn btn-outline btn-sm download-btn" 
+                                data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
+                                onclick="downloadFolderAsZip('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
+                                title="Download folder as ZIP">
+                            <i class="fas fa-download"></i> Download
+                        </button>
+                        
+                        ${USER_ROLE === 'readwrite' ? `
                         <button type="button" class="btn btn-warning btn-sm move-btn" 
                                 data-item-name="${file.name}"
                                 data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
@@ -2498,7 +2511,8 @@ function updateFileTableContent(files) {
                                 title="Delete item">
                             <i class="fas fa-trash"></i> Delete
                         </button>
-                    ` : '';
+                        ` : ''}
+                    `;
         } else {
             // File
             iconHtml = `<i class="fas fa-file file-icon file-icon-default"></i>${file.name}`;
@@ -3652,12 +3666,40 @@ async function performRename(oldPath, newName) {
 
 // Single-item action functions for individual action buttons
 function downloadItem(itemPath) {
+    // Track download to prevent beforeunload warning
+    const downloadId = Date.now() + Math.random();
+    activeDownloads.add(downloadId);
+    
+    // Create a temporary link to track when download completes
+    const link = document.createElement('a');
+    link.href = `/download/${itemPath}`;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    
+    // Remove from active downloads after a delay (download should start)
+    setTimeout(() => {
+        activeDownloads.delete(downloadId);
+        if (document.body.contains(link)) {
+            document.body.removeChild(link);
+        }
+    }, 1000);
+    
+    // Trigger download
     window.location.href = `/download/${itemPath}`;
 }
 
 function downloadFolderAsZip(folderPath, folderName) {
     console.log(`📁 Downloading folder as ZIP: ${folderName} (${folderPath})`);
     showUploadStatus(`📦 Preparing ZIP download for folder: ${folderName}`, 'info');
+    
+    // Track download to prevent beforeunload warning
+    const downloadId = Date.now() + Math.random();
+    activeDownloads.add(downloadId);
+    
+    // Remove from active downloads after a delay (download should start)
+    setTimeout(() => {
+        activeDownloads.delete(downloadId);
+    }, 3000); // Longer delay for ZIP preparation
     
     // Use the existing bulk download function with single folder path
     performBulkZipDownload([folderPath]);
@@ -3945,6 +3987,10 @@ async function performBulkZipDownload(paths) {
         console.log('🔄 Initiating ZIP stream download for paths:', paths);
         showUploadStatus('📦 Preparing ZIP download...', 'info');
         
+        // Track download to prevent beforeunload warning
+        const downloadId = Date.now() + Math.random();
+        activeDownloads.add(downloadId);
+        
         // Use form submission method for large files - no memory limits
         console.log('📥 Using form submission for large file download (no memory limits)');
         
@@ -3966,7 +4012,9 @@ async function performBulkZipDownload(paths) {
             if (document.body.contains(form)) {
                 document.body.removeChild(form);
             }
-        }, 1000);
+            // Remove from active downloads after form submission completes
+            activeDownloads.delete(downloadId);
+        }, 2000);
         
         showUploadStatus('✅ Large file ZIP download started', 'success');
         clearSelection();
