@@ -5,6 +5,88 @@ const UPLOAD_URL = configElement.dataset.uploadUrl || "/upload";
 const CURRENT_PATH = configElement.dataset.currentPath || "";
 const USER_ROLE = configElement.dataset.userRole || "readonly";
 
+// Browser history management for authentication
+document.addEventListener('DOMContentLoaded', function() {
+    // Immediate authentication check on page load
+    checkAuthenticationOnPageLoad();
+    
+    // Clean up browser history to prevent login page from being accessible via back button
+    cleanupAuthenticationHistory();
+});
+
+async function checkAuthenticationOnPageLoad() {
+    try {
+        // Make a quick authentication check
+        const response = await fetch('/admin/upload_status', {
+            method: 'GET',
+            cache: 'no-cache',
+            headers: {
+                'Cache-Control': 'no-cache'
+            }
+        });
+        
+        // If we get redirected to login or get a 401/403, we're not authenticated
+        if (!response.ok || response.url.includes('/login')) {
+            console.log('🔒 Not authenticated, redirecting to login...');
+            window.location.replace('/login');
+            return;
+        }
+        
+        console.log('✅ Authentication verified');
+    } catch (error) {
+        console.log('🔒 Authentication check failed, redirecting to login...');
+        window.location.replace('/login');
+    }
+}
+
+function cleanupAuthenticationHistory() {
+    // Check if we came from the login page and clean up history
+    const referrer = document.referrer;
+    if (referrer && referrer.includes('/login')) {
+        // Replace the current history state to remove login page from history
+        const currentUrl = window.location.href;
+        console.log('🔄 Cleaning up authentication history');
+        
+        // Replace current state to ensure login page is not in history
+        window.history.replaceState({authenticated: true}, '', currentUrl);
+        
+        // Add a state to prevent accidental back navigation to login
+        window.history.pushState({authenticated: true}, '', currentUrl);
+        
+        // Handle popstate events to prevent going back to login
+        window.addEventListener('popstate', function(event) {
+            if (event.state && event.state.authenticated) {
+                // User is authenticated, prevent going back to login
+                console.log('🔒 Preventing navigation back to login page');
+                window.history.pushState({authenticated: true}, '', window.location.href);
+            }
+        });
+    }
+    
+    // Add periodic authentication check
+    setInterval(checkAuthenticationStatus, 30000); // Check every 30 seconds
+}
+
+async function checkAuthenticationStatus() {
+    try {
+        const response = await fetch('/admin/upload_status', {
+            method: 'GET',
+            cache: 'no-cache',
+            headers: {
+                'Cache-Control': 'no-cache'
+            }
+        });
+        
+        if (!response.ok || response.url.includes('/login')) {
+            console.log('🔒 Session expired, redirecting to login...');
+            window.location.replace('/login');
+        }
+    } catch (error) {
+        console.log('🔒 Session check failed, redirecting to login...');
+        window.location.replace('/login');
+    }
+}
+
 // Device detection for mobile-specific features
 const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 const isAndroid = /Android/i.test(navigator.userAgent);
@@ -82,7 +164,7 @@ function performLocalSearch(searchTerm) {
     rows.forEach(row => {
         // Skip parent directory row
         if (row.style.background === 'rgba(52, 152, 219, 0.1)' || 
-            row.innerHTML.includes('.. (Go Up)')) {
+            row.innerHTML.includes('.. (Parent Directory)')) {
             return;
         }
         
@@ -152,7 +234,7 @@ function performSearch(searchTerm) {
     rows.forEach(row => {
         // Skip parent directory row
         if (row.style.background === 'rgba(52, 152, 219, 0.1)' || 
-            row.innerHTML.includes('.. (Go Up)')) {
+            row.innerHTML.includes('.. (Parent Directory)')) {
             return;
         }
         
@@ -407,7 +489,7 @@ function hideLocalResults() {
     const rows = tbody.querySelectorAll('tr:not(.search-results-header):not(.search-result-row)');
     
     rows.forEach(row => {
-        if (!row.innerHTML.includes('.. (Go Up)')) {
+        if (!row.innerHTML.includes('.. (Parent Directory)')) {
             row.style.display = 'none';
         }
     });
@@ -527,7 +609,7 @@ function sortTable(column) {
     // Separate parent directory row and file rows
     const parentRow = rows.find(row => 
         row.style.background === 'rgba(52, 152, 219, 0.1)' || 
-        row.innerHTML.includes('.. (Go Up)')
+        row.innerHTML.includes('.. (Parent Directory)')
     );
     const fileRows = rows.filter(row => row !== parentRow);
     
@@ -773,7 +855,7 @@ function resetSorting() {
         // Separate parent directory row and file rows
         const parentRow = rows.find(row => 
             row.style.background === 'rgba(52, 152, 219, 0.1)' || 
-            row.innerHTML.includes('.. (Go Up)')
+            row.innerHTML.includes('.. (Parent Directory)')
         );
         const fileRows = rows.filter(row => row !== parentRow);
         
@@ -2250,9 +2332,11 @@ async function refreshFileTable() {
     const startTime = Date.now();
     console.log('📁 refreshFileTable() started...');
     try {
-        const currentPath = CURRENT_PATH || '';
-        console.log(`📁 Fetching files from: /api/files/${currentPath}`);
-        const response = await fetch(`/api/files/${currentPath}`);
+        // Use the current path from navigation state, not the static page load path
+        const pathToUse = currentPath || '';
+        console.log(`📁 Using current navigation path: "${pathToUse}"`);
+        console.log(`📁 Fetching files from: /api/files/${pathToUse}`);
+        const response = await fetch(`/api/files/${pathToUse}`);
 
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -2305,10 +2389,14 @@ function updateFileTableContent(files) {
         bulkActions.classList.remove('show');
     }
 
+    // Use currentPath from navigation state, not CURRENT_PATH from page load
+    const pathToUse = currentPath || '';
+    console.log(`📁 updateFileTableContent using path: "${pathToUse}"`);
+
     // Add "Go Up" row if we're not at root
-    if (CURRENT_PATH) {
-        const parentPath = CURRENT_PATH.includes('/')
-            ? CURRENT_PATH.split('/').slice(0, -1).join('/')
+    if (pathToUse) {
+        const parentPath = pathToUse.includes('/')
+            ? pathToUse.split('/').slice(0, -1).join('/')
             : '';
 
         const goUpRow = document.createElement('tr');
@@ -2317,16 +2405,22 @@ function updateFileTableContent(files) {
                     <td></td>
                     <td>
                         <div class="file-name">
-                            <i class="fas fa-level-up-alt file-icon" style="color: #3498db;"></i>
-                            <a href="${parentPath ? '/' + parentPath : '/'}" style="color: #3498db; font-weight: 600;">
-                                .. (Go Up)
+                            <i class="fas fa-level-up-alt file-icon folder-icon"></i>
+                            <a href="#" onclick="navigateToFolder('${parentPath}'); return false;" class="folder-link">
+                                .. (Parent Directory)
                             </a>
                         </div>
                     </td>
-                    <td><span style="color: white; font-size: 12px;">--</span></td>
-                    <td><span class="file-type"><i class="fas fa-arrow-up"></i> Parent Directory</span></td>
-                    <td><span style="color: white; font-size: 12px;">--</span></td>
-                    <td><div class="actions"><span style="color: white; font-size: 12px;">Navigation</span></div></td>
+                    <td class="size-cell">
+                        <span style="color: white; font-size: 13px;">--</span>
+                    </td>
+                    <td class="type-cell">
+                        <span style="color: white; font-size: 13px;">Folder</span>
+                    </td>
+                    <td class="date-cell">
+                        <span style="color: white; font-size: 13px;">--</span>
+                    </td>
+                    <td></td>
                 `;
         tbody.appendChild(goUpRow);
     }
@@ -2354,14 +2448,14 @@ function updateFileTableContent(files) {
     files.forEach(file => {
         const row = document.createElement('tr');
         row.className = 'file-row';
-        row.setAttribute('data-path', CURRENT_PATH ? `${CURRENT_PATH}/${file.name}` : file.name);
+        row.setAttribute('data-path', pathToUse ? `${pathToUse}/${file.name}` : file.name);
 
         let iconHtml, sizeHtml, typeHtml, actionsHtml;
 
         if (file.is_dir || file.type === 'dir') {
             // Directory
             iconHtml = `<i class="fas fa-folder file-icon folder-icon"></i>
-                                <a href="/${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}">${file.name}</a>`;
+                                <a href="#" onclick="navigateToFolder('${pathToUse ? pathToUse + '/' : ''}${file.name}'); return false;">${file.name}</a>`;
 
             sizeHtml = `<span style="color: white; font-size: 13px;">
                         ${file.item_count ? `${file.item_count.files || 0} files, ${file.item_count.dirs || 0} folders` : '--'}<br>
@@ -2372,32 +2466,32 @@ function updateFileTableContent(files) {
             actionsHtml = USER_ROLE === 'readwrite' ? `
                         <button type="button" class="btn btn-warning btn-sm move-btn" 
                                 data-item-name="${file.name}"
-                                data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
-                                onclick="showSingleMoveModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
+                                onclick="showSingleMoveModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
                                 title="Move item">
                             <i class="fas fa-cut"></i> Move
                         </button>
                         
                         <button type="button" class="btn btn-success btn-sm copy-btn" 
                                 data-item-name="${file.name}"
-                                data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
-                                onclick="showSingleCopyModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
+                                onclick="showSingleCopyModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
                                 title="Copy item">
                             <i class="fas fa-copy"></i> Copy
                         </button>
                         
                         <button type="button" class="btn btn-primary btn-sm rename-btn" 
                                 data-item-name="${file.name}"
-                                data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
-                                onclick="showSingleRenameModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
+                                onclick="showSingleRenameModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
                                 title="Rename item">
                             <i class="fas fa-edit"></i> Rename
                         </button>
                         
                         <button type="button" class="btn btn-danger btn-sm delete-btn" 
                                 data-item-name="${file.name}"
-                                data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
-                                onclick="showSingleDeleteModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
+                                onclick="showSingleDeleteModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
                                 title="Delete item">
                             <i class="fas fa-trash"></i> Delete
                         </button>
@@ -2409,40 +2503,40 @@ function updateFileTableContent(files) {
             typeHtml = `<i class="fas fa-file"></i> File`;
             actionsHtml = `
                         <button type="button" class="btn btn-outline btn-sm download-btn" 
-                                data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
-                                onclick="downloadItem('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}')"
+                                data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
+                                onclick="downloadItem('${pathToUse ? pathToUse + '/' : ''}${file.name}')"
                                 title="Download file">
                             <i class="fas fa-download"></i> Download
                         </button>
                         ${USER_ROLE === 'readwrite' ? `
                             <button type="button" class="btn btn-warning btn-sm move-btn" 
                                     data-item-name="${file.name}"
-                                    data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
-                                    onclick="showSingleMoveModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                    data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
+                                    onclick="showSingleMoveModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
                                     title="Move item">
                                 <i class="fas fa-cut"></i> Move
                             </button>
                             
                             <button type="button" class="btn btn-success btn-sm copy-btn" 
                                     data-item-name="${file.name}"
-                                    data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
-                                    onclick="showSingleCopyModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                    data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
+                                    onclick="showSingleCopyModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
                                     title="Copy item">
                                 <i class="fas fa-copy"></i> Copy
                             </button>
                             
                             <button type="button" class="btn btn-primary btn-sm rename-btn" 
                                     data-item-name="${file.name}"
-                                    data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
-                                    onclick="showSingleRenameModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                    data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
+                                    onclick="showSingleRenameModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
                                     title="Rename item">
                                 <i class="fas fa-edit"></i> Rename
                             </button>
                             
                             <button type="button" class="btn btn-danger btn-sm delete-btn" 
                                     data-item-name="${file.name}"
-                                    data-item-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}"
-                                    onclick="showSingleDeleteModal('${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}', '${file.name}')"
+                                    data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
+                                    onclick="showSingleDeleteModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
                                     title="Delete item">
                                 <i class="fas fa-trash"></i> Delete
                             </button>
@@ -2454,7 +2548,7 @@ function updateFileTableContent(files) {
                     <td>
                         ${USER_ROLE === 'readwrite' ? `
                             <input type="checkbox" class="file-checkbox item-checkbox" 
-                                   data-path="${CURRENT_PATH ? CURRENT_PATH + '/' : ''}${file.name}" 
+                                   data-path="${pathToUse ? pathToUse + '/' : ''}${file.name}" 
                                    data-name="${file.name}" 
                                    data-is-dir="${file.is_dir || file.type === 'dir' ? 'true' : 'false'}" 
                                    onchange="updateSelection()">
@@ -3721,7 +3815,7 @@ async function performBulkMove(paths, destination) {
             body: JSON.stringify({
                 paths: paths,
                 destination: destination,
-                current_path: CURRENT_PATH
+                current_path: currentPath || ''
             })
         });
 
@@ -3750,7 +3844,7 @@ async function performBulkCopy(paths, destination) {
             body: JSON.stringify({
                 paths: paths,
                 destination: destination,
-                current_path: CURRENT_PATH
+                current_path: currentPath || ''
             })
         });
 
@@ -4261,7 +4355,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const rows = document.querySelectorAll('#filesTable tbody tr');
         const initialCount = Array.from(rows).filter(row => 
             !row.style.background?.includes('rgba(52, 152, 219, 0.1)') && 
-            !row.innerHTML.includes('.. (Go Up)')
+            !row.innerHTML.includes('.. (Parent Directory)')
         ).length;
         
         const visibleCountSpan = document.getElementById('visibleCount');

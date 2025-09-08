@@ -6,7 +6,7 @@ from flask import g
 bulk_zip_cancelled = {}
 
 # Move this endpoint below app initialization
-from flask import Flask, render_template, request, redirect, url_for, send_from_directory, send_file, flash, session, jsonify, Response
+from flask import Flask, render_template, request, redirect, url_for, send_from_directory, send_file, flash, session, jsonify, Response, make_response, render_template_string
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import os
@@ -434,22 +434,68 @@ def before_request():
         )
         cleanup_thread.start()
 
+@app.after_request
+def after_request(response):
+    """Add security headers to all responses"""
+    # Add cache control headers to authenticated pages
+    if request.endpoint and request.endpoint not in ['login', 'static']:
+        # Check if this is an authenticated route
+        if is_logged_in() or request.endpoint in ['index', 'download', 'upload', 'admin']:
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+    
+    return response
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    # If user is already logged in, redirect to main page
+    # If user is already logged in, use JavaScript redirect to avoid history issues
     if is_logged_in():
-        return redirect(url_for('index'))
+        return render_template_string('''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Redirecting...</title>
+            <script>
+                // Use replace to avoid adding to browser history
+                window.location.replace('/');
+            </script>
+        </head>
+        <body>
+            <p>Already logged in, redirecting... <a href="/">Click here if not redirected</a></p>
+        </body>
+        </html>
+        ''')
     
     if request.method == 'POST':
         username = request.form.get('username','').strip()
         password = request.form.get('password','')
         if check_login(username, password):
             login_user(username)
+            # Set the user role in session
+            session['role'] = get_role(username)
             # Generate a unique session ID for tracking uploads
             session['session_id'] = str(uuid.uuid4())
             # Clear any old flash messages when successfully logging in
             session.pop('_flashes', None)
-            return redirect(url_for('index'))
+            
+            # Return a page that redirects using JavaScript to replace history
+            return render_template_string('''
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Login Successful</title>
+                <script>
+                    // Replace the entire history to prevent back button issues
+                    window.history.replaceState(null, null, '/');
+                    window.location.replace('/');
+                </script>
+            </head>
+            <body>
+                <p>Login successful, redirecting... <a href="/">Click here if not redirected</a></p>
+            </body>
+            </html>
+            ''')
         else:
             flash('Invalid username or password')
     return render_template('login.html')
@@ -464,9 +510,11 @@ def logout():
         
         logout_user()
         session.pop('_flashes', None)
-        return redirect(url_for('login'))
+        # Add a parameter to indicate logout to prevent authentication check loops
+        return redirect(url_for('login', logged_out='1'))
     except Exception as e:
         logging.error(f"Logout error: {e}", exc_info=True)
+        return redirect(url_for('login', logged_out='1'))
         return "Internal server error during logout", 500
 
 @app.route('/', defaults={'path': ''})
@@ -481,14 +529,28 @@ def index(path):
             flash(f'Path "{path}" does not exist or is not a directory')
         return redirect(url_for('index'))
     
-    # Ensure session has a session_id for upload tracking
-    if 'session_id' not in session:
-        session['session_id'] = str(uuid.uuid4())
-    
-    role = get_role(current_user())
-    items = storage.list_dir(path)
-    return render_template('index.html', items=items, path=path, role=role, 
-                         CHUNK_SIZE=CHUNK_SIZE)
+    try:
+        # Get current directory info
+        current_path = os.path.join(ROOT_DIR, path) if path else ROOT_DIR
+        items = storage.list_dir(path)
+        
+        response = make_response(render_template('index.html', 
+                                               items=items, 
+                                               path=path, 
+                                               role=session.get('role', 'readonly'),
+                                               CHUNK_SIZE=CHUNK_SIZE))
+        
+        # Add strict cache control headers to prevent caching of authenticated content
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        
+        return response
+        
+    except Exception as e:
+        logging.error(f"Error loading directory {path}: {e}", exc_info=True)
+        flash('Error loading directory')
+        return redirect(url_for('index'))
 
 @app.route('/download/<path:path>')
 @login_required
@@ -1020,6 +1082,18 @@ def upload_status():
     """Get current upload status for UI updates"""
     try:
         role = get_role(current_user())
+        
+        # Allow readonly users to check auth status, but return limited info
+        if role == 'readonly':
+            return jsonify({
+                'authenticated': True,
+                'role': 'readonly',
+                'has_active_uploads': False,
+                'session_has_active': False,
+                'total_active_sessions': 0,
+                'can_upload': False
+            })
+        
         if role != 'readwrite':
             return jsonify({'error': 'Permission denied'}), 403
             

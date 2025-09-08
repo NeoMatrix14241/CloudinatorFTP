@@ -6,6 +6,12 @@
     <title>File Manager - Cloudinator FTP</title>
     <meta name="description" content="Secure file sharing platform">
     <meta name="keywords" content="file management, ftp, https">
+    
+    <!-- Prevent caching of authenticated content -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="{{ url_for('static', filename='css/index.css') }}" rel="stylesheet">
     <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp">
@@ -348,12 +354,12 @@
                                 <i class="fas fa-level-up-alt file-icon" style="color: #3498db;"></i>
                                 {% if '/' in path %}
                                     {% set parent_path = '/'.join(path.split('/')[:-1]) %}
-                                    <a href="{{ url_for('index', path=parent_path) }}" 
+                                    <a href="#" onclick="navigateToFolder('{{ parent_path }}'); return false;" 
                                        style="color: #3498db; font-weight: 600;">
                                         .. (Go Up)
                                     </a>
                                 {% else %}
-                                    <a href="{{ url_for('index') }}" 
+                                    <a href="#" onclick="navigateToFolder(''); return false;" 
                                        style="color: #3498db; font-weight: 600;">
                                         .. (Go Up)
                                     </a>

@@ -28,6 +28,7 @@ def login_user(username):
 
 def logout_user():
     session.pop('username', None)
+    session.pop('role', None)
 
 def current_user():
     return session.get('username')

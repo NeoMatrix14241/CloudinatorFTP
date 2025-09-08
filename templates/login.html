@@ -55,5 +55,35 @@
     </div>
 
     <script src="{{ url_for('static', filename='js/login.js') }}"></script>
+    
+    <!-- Browser history management -->
+    <script>
+        // Handle browser history to prevent login page from being accessible via back button
+        window.addEventListener('load', function() {
+            // If user successfully logs in, this page should not be in browser history
+            // We'll handle this in the main application after successful login
+            console.log('Login page loaded');
+        });
+        
+        // Handle page visibility to clean up history if user is already logged in
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) {
+                // Page became visible, check if user is already logged in
+                checkAndRedirectIfLoggedIn();
+            }
+        });
+        
+        async function checkAndRedirectIfLoggedIn() {
+            try {
+                const response = await fetch('/admin/upload_status');
+                if (response.ok) {
+                    // User is already logged in, redirect without adding to history
+                    window.location.replace('/');
+                }
+            } catch (error) {
+                // User not logged in, which is expected on login page
+            }
+        }
+    </script>
 </body>
 </html>
