@@ -3655,6 +3655,8 @@ async function performRename(oldPath, newName) {
             // Clear selection and refresh
             clearSelection();
             await refreshFileTable();
+            // Refresh storage stats after rename (file count unchanged but size might change)
+            refreshStorageStats('rename operation');
         } else {
             showUploadStatus(`❌ Rename failed: ${result.error}`, 'error');
         }
@@ -3782,6 +3784,8 @@ async function performSingleDelete(itemPath, itemName) {
         if (result.success || result.deleted_count > 0) {
             showUploadStatus(`✅ Successfully deleted "${itemName}"`, 'success');
             await refreshFileTable();
+            // Refresh storage stats after delete (file count and size changed)
+            refreshStorageStats('delete operation');
         } else {
             const errorMsg = result.error || (result.errors && result.errors[0]) || 'Unknown error';
             showUploadStatus(`❌ Delete failed: ${errorMsg}`, 'error');
@@ -3871,6 +3875,8 @@ async function performBulkMove(paths, destination) {
             // Clear selection first, then refresh file table
             clearSelection();
             await refreshFileTable();
+            // Refresh storage stats after move (file locations changed)
+            refreshStorageStats('move operation');
         } else {
             showNotification('Move Failed', result.error, 'error');
         }
@@ -3900,6 +3906,8 @@ async function performBulkCopy(paths, destination) {
             // Clear selection first, then refresh file table
             clearSelection();
             await refreshFileTable();
+            // Refresh storage stats after copy (new files created, size increased)
+            refreshStorageStats('copy operation');
         } else {
             showNotification('Copy Failed', result.error, 'error');
         }
@@ -3938,6 +3946,8 @@ async function performBulkDelete(paths) {
             // Clear selection first, then refresh file table
             clearSelection();
             await refreshFileTable();
+            // Refresh storage stats after bulk delete (multiple files removed, size decreased)
+            refreshStorageStats('bulk delete operation');
         } else {
             showUploadStatus(`❌ Bulk delete failed: ${result.error}`, 'error');
         }
@@ -4111,6 +4121,8 @@ async function createFolder(folderName, path) {
             document.getElementById('folderNameInput').value = '';
             // Refresh the file table
             await refreshFileTable();
+            // Refresh storage stats after folder creation (directory count increased)
+            refreshStorageStats('folder creation');
         } else {
             showNotification('Create Folder Failed', result.error, 'error');
         }
@@ -5356,6 +5368,8 @@ function startAssemblyPolling(fileId) {
                 // Refresh file table to show new file
                 setTimeout(() => {
                     refreshFileTable();
+                    // Also refresh storage stats after successful upload
+                    refreshStorageStats('upload completed');
                 }, 1000);
                 
             } else if (status.status === 'error') {
@@ -5526,16 +5540,16 @@ function initializeRealTimeMonitoring() {
         }
     }, 500); // 500ms delay to ensure page stability
     
-    // Faster detection for Waitress SSE incompatibility 
+    // Faster detection for SSE incompatibility 
     setTimeout(() => {
         if (connectionStatus !== 'connected' && !window.storageStatsInitialized) {
-            console.log('📊 SSE failed (likely Waitress), loading initial storage stats via API...');
+            console.log('📊 SSE failed, loading initial storage stats via API...');
             initializeStorageStats();
-            // Immediately show green for Waitress since API polling works
+            // Show green and activate event-driven updates instead of polling
             document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
             connectionStatus = 'connected';
-            // Immediately activate real-time polling for Waitress
-            activateRealtimePolling();
+            // Use event-driven updates instead of aggressive polling
+            activateEventDrivenUpdates();
         }
     }, 500); // Faster detection - 500ms instead of 2s
 }
@@ -5588,41 +5602,46 @@ function handleStatsUpdate(data) {
     updateStorageDisplay(data);
 }
 
-function activateRealtimePolling() {
-    console.log('🚀 Activating real-time polling for Waitress compatibility...');
+function activateEventDrivenUpdates() {
+    console.log('🚀 Activating event-driven storage updates (no polling)...');
     
     // Clear any existing polling
     if (window.realtimePollingInterval) {
         clearInterval(window.realtimePollingInterval);
+        window.realtimePollingInterval = null;
     }
     
-    // Start aggressive polling for real-time feel (2.5 seconds)
-    window.realtimePollingInterval = setInterval(async () => {
-        try {
-            const response = await fetch('/api/storage_stats');
-            if (response.ok) {
-                const contentType = response.headers.get('content-type');
-                if (contentType && contentType.includes('application/json')) {
-                    const data = await response.json();
-                    handleStatsUpdate(data);
-                    document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
-                } else {
-                    // Got HTML instead of JSON - likely an error page
-                    const text = await response.text();
-                    console.warn(`⚠️ API returned HTML instead of JSON (status ${response.status}):`, text.substring(0, 100) + '...');
-                    document.title = '🟠 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
-                }
-            } else {
-                throw new Error(`API error: ${response.status} ${response.statusText}`);
-            }
-        } catch (error) {
-            console.error('⚠️ Real-time polling failed:', error);
-            document.title = '🔴 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
-            // Don't clear interval - keep trying
-        }
-    }, 2500); // 2.5 second interval for real-time feel
+    // Set connection status to active
+    document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+    connectionStatus = 'connected';
+    window.storageStatsInitialized = true;
     
-    console.log('✅ Real-time polling active - updates every 2.5 seconds');
+    console.log('✅ Event-driven updates active - storage stats will update only when files change');
+}
+
+// Function to manually refresh storage stats when file operations occur
+async function refreshStorageStats(reason = 'manual') {
+    try {
+        console.log(`📊 Refreshing storage stats (reason: ${reason})`);
+        const response = await fetch('/api/storage_stats');
+        if (response.ok) {
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+                const data = await response.json();
+                handleStatsUpdate(data);
+                document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+                console.log(`✅ Storage stats updated (${reason})`);
+            } else {
+                console.warn(`⚠️ API returned HTML instead of JSON (status ${response.status})`);
+                document.title = '🟠 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+            }
+        } else {
+            throw new Error(`API error: ${response.status} ${response.statusText}`);
+        }
+    } catch (error) {
+        console.error('⚠️ Storage stats refresh failed:', error);
+        document.title = '🔴 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+    }
 }
 
 function setupFallbackPolling() {
@@ -5636,7 +5655,11 @@ function setupFallbackPolling() {
             console.warn(`⚠️ SSE connection issue detected (${sseFailureCount}/1)`);
             
             if (sseFailureCount >= 1 && !fallbackPollingInterval) {
-                console.log('🔄 Activating fallback polling due to SSE failures...');
+                console.log('🔄 SSE failed - using event-driven updates instead of polling...');
+                // Instead of polling, use event-driven updates
+                activateEventDrivenUpdates();
+                
+                // Optional: Very infrequent fallback check (every 5 minutes) only for connection health
                 fallbackPollingInterval = setInterval(async () => {
                     try {
                         const response = await fetch('/api/storage_stats');
@@ -5644,10 +5667,12 @@ function setupFallbackPolling() {
                             const contentType = response.headers.get('content-type');
                             if (contentType && contentType.includes('application/json')) {
                                 const data = await response.json();
+                                // Only update if there are significant changes
                                 if (data.file_count !== undefined && data.dir_count !== undefined) {
                                     if (lastKnownFileCount !== null && lastKnownDirCount !== null) {
-                                        if (data.file_count !== lastKnownFileCount || data.dir_count !== lastKnownDirCount) {
-                                            console.log(`🔄 Fallback detected changes: ${lastKnownFileCount}→${data.file_count} files, ${lastKnownDirCount}→${data.dir_count} dirs`);
+                                        if (Math.abs(data.file_count - lastKnownFileCount) > 5 || 
+                                            Math.abs(data.dir_count - lastKnownDirCount) > 2) {
+                                            console.log(`🔄 Health check detected significant changes: ${lastKnownFileCount}→${data.file_count} files, ${lastKnownDirCount}→${data.dir_count} dirs`);
                                             await refreshFileTable();
                                             updateStorageDisplay(data);
                                         }
@@ -5656,17 +5681,15 @@ function setupFallbackPolling() {
                                     lastKnownDirCount = data.dir_count;
                                 }
                             } else {
-                                // Got HTML instead of JSON - likely an error page
-                                const text = await response.text();
-                                console.warn(`⚠️ Fallback API returned HTML instead of JSON (status ${response.status}):`, text.substring(0, 100) + '...');
+                                console.warn(`⚠️ Health check API returned HTML instead of JSON (status ${response.status})`);
                             }
                         } else {
                             throw new Error(`API error: ${response.status} ${response.statusText}`);
                         }
                     } catch (error) {
-                        console.warn('⚠️ Fallback polling failed:', error);
+                        console.warn('⚠️ Health check failed:', error);
                     }
-                }, 3000); // Faster polling - 3 seconds instead of 30 for real-time feel
+                }, 300000); // Very infrequent - 5 minutes instead of 3 seconds
             }
         } else if (storageEventSource && storageEventSource.readyState === EventSource.OPEN) {
             // SSE is working, reset failure count and clear fallback if active
