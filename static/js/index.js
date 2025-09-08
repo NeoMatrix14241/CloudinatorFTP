@@ -447,12 +447,15 @@ function createSearchResultRow(result, searchTerm) {
             <button class="btn btn-sm btn-primary" onclick="navigateToFolder('${result.path}')" title="Open folder">
                 <i class="fas fa-folder-open"></i>
             </button>
+            <button class="btn btn-sm btn-success" onclick="downloadFolderAsZip('${result.path}', '${result.name}')" title="Download folder as ZIP">
+                <i class="fas fa-download"></i>
+            </button>
             <button class="btn btn-sm btn-outline" onclick="openFileLocation('${folderPath}')" title="Open file location">
                 <i class="fas fa-level-up-alt"></i>
             </button>
         </div>` :
         `<div class="search-result-actions">
-            <button class="btn btn-sm btn-success" onclick="window.open('/download/${result.path}', '_blank')" title="Download file">
+            <button class="btn btn-sm btn-success" onclick="downloadItem('${result.path}')" title="Download file">
                 <i class="fas fa-download"></i>
             </button>
             <button class="btn btn-sm btn-outline" onclick="openFileLocation('${folderPath}')" title="Open file location">
