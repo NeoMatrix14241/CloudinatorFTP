@@ -163,68 +163,86 @@ def storage_stats_sse():
         event_manager.add_client(client_queue)
         
         try:
-            # Send initial connection message
-            yield f"data: {json.dumps({'type': 'connected', 'timestamp': time.time()})}\n\n"
+            # Send initial connection message with proper SSE format (as bytes for Waitress)
+            yield f"data: {json.dumps({'type': 'connected', 'timestamp': time.time()})}\n\n".encode('utf-8')
             
             # Always send complete initial stats when client connects
             from file_monitor import get_file_monitor
             file_monitor = get_file_monitor()
             current_snapshot = file_monitor.get_current_snapshot()
             
-            # If no snapshot exists yet, force create one
-            if not current_snapshot:
-                print("📸 Creating initial snapshot for new SSE client...")
-                current_snapshot = file_monitor.force_check()
-            
+            # Provide instant stats - don't wait for slow force_check
             if current_snapshot:
-                # Get complete initial storage stats
-                disk_stats = event_manager._get_fast_disk_stats()
-                
-                initial_stats = {
-                    'type': 'storage_stats_update',
-                    'timestamp': time.time(),
-                    'initial': True,
-                    'data': {
-                        'file_count': current_snapshot.file_count,
-                        'dir_count': current_snapshot.dir_count,
-                        'total_size': current_snapshot.total_size,
-                        'content_size': current_snapshot.total_size,
-                        'last_modified': current_snapshot.last_modified,
-                        'total_space': disk_stats['total_space'],
-                        'free_space': disk_stats['free_space'],
-                        'used_space': disk_stats['used_space'],
-                        'changes': {'files_changed': 0, 'dirs_changed': 0, 'size_changed': 0}
-                    }
+                print("� Using cached snapshot for instant SSE response")
+                file_count = current_snapshot.file_count
+                dir_count = current_snapshot.dir_count
+                total_size = current_snapshot.total_size
+                last_modified = current_snapshot.last_modified
+            else:
+                print("📡 No snapshot available, providing instant placeholder stats")
+                file_count = 0
+                dir_count = 0
+                total_size = 0
+                last_modified = time.time()
+            
+            # Get complete initial storage stats (disk stats are fast)
+            disk_stats = event_manager._get_fast_disk_stats()
+            
+            initial_stats = {
+                'type': 'storage_stats_update',
+                'timestamp': time.time(),
+                'initial': True,
+                'data': {
+                    'file_count': file_count,
+                    'dir_count': dir_count,
+                    'total_size': total_size,
+                    'content_size': total_size,
+                    'last_modified': last_modified,
+                    'total_space': disk_stats['total_space'],
+                    'free_space': disk_stats['free_space'],
+                    'used_space': disk_stats['used_space'],
+                    'changes': {'files_changed': 0, 'dirs_changed': 0, 'size_changed': 0}
                 }
-                
-                print(f"📡 Sending initial storage stats to new client: files={initial_stats['data']['file_count']}, total_space={initial_stats['data']['total_space']}")
-                yield f"data: {json.dumps(initial_stats)}\n\n"
+            }
+            
+            print(f"📡 Sending instant initial storage stats to new client: files={initial_stats['data']['file_count']}, total_space={initial_stats['data']['total_space']}")
+            yield f"data: {json.dumps(initial_stats)}\n\n".encode('utf-8')
             
             # Keep connection alive and send updates
             while True:
                 try:
                     data = client_queue.get(timeout=10)
-                    yield f"data: {json.dumps(data)}\n\n"
+                    yield f"data: {json.dumps(data)}\n\n".encode('utf-8')
                 except Empty:
-                    yield f"data: {json.dumps({'type': 'ping', 'timestamp': time.time()})}\n\n"
+                    yield f"data: {json.dumps({'type': 'ping', 'timestamp': time.time()})}\n\n".encode('utf-8')
                 except Exception as e:
                     print(f"❌ Error in SSE stream: {e}")
                     break
                     
         finally:
             event_manager.remove_client(client_queue)
-            print(f"� SSE client cleanup completed")
+            print(f"📡 SSE client cleanup completed")
 
-    # Return response with Waitress-compatible headers
-    return Response(
+    # Create response with Waitress-specific SSE headers
+    from flask import Response
+    response = Response(
         event_stream(),
-        mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Credentials': 'true'
-        }
+        mimetype='text/event-stream'
     )
+    
+    # Essential headers for Waitress SSE compatibility (no hop-by-hop headers!)
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    # DO NOT SET Connection header - it's handled by WSGI server
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    response.headers['X-Accel-Buffering'] = 'no'  # Disable nginx buffering if behind proxy
+    
+    # Critical for Waitress: disable response buffering
+    response.direct_passthrough = True
+    
+    return response
 
 def trigger_storage_update(old_snapshot, new_snapshot):
     """Callback function to be registered with file monitor"""

@@ -26,7 +26,7 @@ from auth import check_login, login_user, logout_user, current_user, is_logged_i
 import storage
 
 # File monitoring and real-time updates
-from file_monitor import FileSystemMonitor
+from file_monitor import get_file_monitor, init_file_monitor
 from realtime_stats import storage_stats_sse, trigger_storage_update, get_event_manager
 
 # Assembly Queue System
@@ -150,9 +150,8 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True  # Keep this secure for production
 storage.ensure_root()
 
 # Initialize file system monitoring
-file_monitor = FileSystemMonitor(ROOT_DIR)
+file_monitor = init_file_monitor()
 file_monitor.add_change_callback(trigger_storage_update)
-file_monitor.start_monitoring()
 print(f"📡 File system monitoring started for: {ROOT_DIR}")
 
 @app.route('/cancel_bulk_zip', methods=['POST'])
@@ -1119,15 +1118,62 @@ def upload_status():
 @app.route('/api/storage_stats', methods=['GET'])
 @login_required
 def storage_stats_api():
-    """Get storage statistics including disk space and file counts"""
+    """Get storage statistics - INSTANT VERSION using cached data"""
     try:
-        print(f"📊 Storage stats API called by user: {session.get('username', 'unknown')}")
-        stats = storage.get_storage_stats()
-        print(f"📊 Storage stats calculated: {stats}")
+        print(f"📊 INSTANT Storage stats API called by user: {session.get('username', 'unknown')}")
+        
+        # Use cached snapshot for instant response
+        from file_monitor import get_file_monitor
+        file_monitor = get_file_monitor()
+        current_snapshot = file_monitor.get_current_snapshot()
+        
+        # Get fast disk stats only (no file counting)
+        from realtime_stats import StorageStatsEventManager
+        event_manager = StorageStatsEventManager()
+        disk_stats = event_manager._get_fast_disk_stats()
+        
+        # Build instant stats response
+        if current_snapshot:
+            stats = {
+                'total_space': disk_stats['total_space'],
+                'used_space': disk_stats['used_space'],
+                'free_space': disk_stats['free_space'],
+                'file_count': current_snapshot.file_count,
+                'dir_count': current_snapshot.dir_count,
+                'content_size': current_snapshot.total_size
+            }
+        else:
+            # Fallback instant stats
+            stats = {
+                'total_space': disk_stats['total_space'],
+                'used_space': disk_stats['used_space'],
+                'free_space': disk_stats['free_space'],
+                'file_count': 0,
+                'dir_count': 0,
+                'content_size': 0
+            }
+        
+        print(f"📊 INSTANT storage stats returned: files={stats['file_count']}, dirs={stats['dir_count']}")
         return jsonify(stats), 200
         
     except Exception as e:
-        print(f"❌ Error getting storage stats: {e}")
+        print(f"❌ Error getting instant storage stats: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Storage stats error: {str(e)}'}), 500
+
+@app.route('/api/storage_stats_slow', methods=['GET'])
+@login_required
+def storage_stats_slow_api():
+    """Get storage statistics - SLOW VERSION with full file counting"""
+    try:
+        print(f"📊 SLOW Storage stats API called by user: {session.get('username', 'unknown')}")
+        stats = storage.get_storage_stats()
+        print(f"📊 SLOW storage stats calculated: {stats}")
+        return jsonify(stats), 200
+        
+    except Exception as e:
+        print(f"❌ Error getting slow storage stats: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': f'Storage stats error: {str(e)}'}), 500
@@ -1161,6 +1207,140 @@ def storage_stats_stream():
     
     print(f"📡 SSE connection established for user: {current_user()}")
     return storage_stats_sse()
+
+@app.route('/api/storage_stats_poll', methods=['GET'])
+def storage_stats_poll():
+    """Polling endpoint for storage stats - fallback when SSE fails"""
+    if not is_logged_in():
+        return jsonify({'error': 'Authentication required'}), 401
+    
+    try:
+        from file_monitor import get_file_monitor
+        file_monitor = get_file_monitor()
+        
+        # Get current timestamp for comparison
+        last_check = request.args.get('last_check', type=float, default=0)
+        
+        # For initial load (last_check=0), provide instant cached stats
+        if last_check == 0:
+            print("📊 Initial polling request - providing instant cached stats")
+            current_time = time.time()
+            
+            # Get quick disk stats only
+            from realtime_stats import StorageStatsEventManager
+            event_manager = StorageStatsEventManager()
+            disk_stats = event_manager._get_fast_disk_stats()
+            
+            # Use cached snapshot if available, otherwise provide placeholder
+            current_snapshot = file_monitor.get_current_snapshot()
+            if current_snapshot:
+                file_count = current_snapshot.file_count
+                dir_count = current_snapshot.dir_count
+                total_size = current_snapshot.total_size
+            else:
+                # Provide instant placeholder stats
+                file_count = 0
+                dir_count = 0
+                total_size = 0
+            
+            response_data = {
+                'type': 'polling_response',
+                'timestamp': current_time,
+                'changed': True,  # Always true for initial load
+                'data': {
+                    'file_count': file_count,
+                    'dir_count': dir_count,
+                    'total_size': total_size,
+                    'content_size': total_size,
+                    'last_modified': current_time,
+                    'total_space': disk_stats['total_space'],
+                    'free_space': disk_stats['free_space'],
+                    'used_space': disk_stats['used_space'],
+                    'changes': {
+                        'files_changed': 0,
+                        'dirs_changed': 0,
+                        'size_changed': 0,
+                        'content_changed': False,
+                        'mtime_changed': False
+                    }
+                }
+            }
+            
+            print(f"📊 Instant polling response: files={file_count}, dirs={dir_count}")
+            return jsonify(response_data), 200
+        
+        # Regular polling check for changes
+        current_snapshot = file_monitor.get_current_snapshot()
+        current_time = time.time()
+        
+        # Always return current stats, but include a 'changed' flag
+        has_changes = False
+        changes_data = {'files_changed': 0, 'dirs_changed': 0, 'size_changed': 0}
+        
+        if current_snapshot and current_snapshot.timestamp > last_check:
+            has_changes = True
+            
+            # Get the last known file/dir counts from the polling history
+            # Use a simple session-based tracking to reduce false positives
+            last_known_files = request.args.get('last_files', type=int, default=0)
+            last_known_dirs = request.args.get('last_dirs', type=int, default=0)
+            
+            # Calculate actual count changes
+            files_diff = current_snapshot.file_count - last_known_files if last_known_files > 0 else 0
+            dirs_diff = current_snapshot.dir_count - last_known_dirs if last_known_dirs > 0 else 0
+            
+            # Only report specific changes if we have meaningful differences
+            if abs(files_diff) > 0 or abs(dirs_diff) > 0:
+                # Real file/folder count change detected
+                changes_data = {
+                    'files_changed': files_diff,
+                    'dirs_changed': dirs_diff,
+                    'size_changed': 0,  # Size changes are complex to calculate
+                    'content_changed': True,
+                    'mtime_changed': True
+                }
+            else:
+                # Timestamp changed but no count changes - likely system noise
+                # Report as minor content change without specific counts
+                changes_data = {
+                    'files_changed': 0,  # No count change
+                    'dirs_changed': 0,   # No count change
+                    'size_changed': 0,   # No size change claimed
+                    'content_changed': True,   # Something changed (timestamp)
+                    'mtime_changed': True      # Modification time changed
+                }
+            
+        # Debug logging for timestamp comparison
+        print(f"📊 Polling debug: last_check={last_check}, snapshot_timestamp={current_snapshot.timestamp if current_snapshot else 'None'}, has_changes={has_changes}")
+            
+        # Get disk stats
+        from realtime_stats import StorageStatsEventManager
+        event_manager = StorageStatsEventManager()
+        disk_stats = event_manager._get_fast_disk_stats()
+        
+        response_data = {
+            'type': 'polling_response',
+            'timestamp': current_time,
+            'changed': has_changes,
+            'data': {
+                'file_count': current_snapshot.file_count if current_snapshot else 0,
+                'dir_count': current_snapshot.dir_count if current_snapshot else 0,
+                'total_size': current_snapshot.total_size if current_snapshot else 0,
+                'content_size': current_snapshot.total_size if current_snapshot else 0,
+                'last_modified': current_snapshot.last_modified if current_snapshot else current_time,
+                'total_space': disk_stats['total_space'],
+                'free_space': disk_stats['free_space'],
+                'used_space': disk_stats['used_space'],
+                'changes': changes_data  # Add changes field for frontend
+            }
+        }
+        
+        print(f"📊 Polling response: changed={has_changes}, files={response_data['data']['file_count']}")
+        return jsonify(response_data), 200
+        
+    except Exception as e:
+        print(f"❌ Error in polling endpoint: {e}")
+        return jsonify({'error': f'Polling error: {str(e)}'}), 500
 
 @app.route('/api/monitoring_status', methods=['GET'])
 def monitoring_status():

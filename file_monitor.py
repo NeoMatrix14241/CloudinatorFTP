@@ -106,6 +106,14 @@ class FileSystemMonitor:
         if not self.monitoring:
             return
             
+        # Prevent duplicate processing of the same change
+        current_time = time.time()
+        if hasattr(self, '_last_instant_change') and (current_time - self._last_instant_change) < 0.5:
+            print("⚡ Duplicate instant change ignored (debounced)")
+            return
+        
+        self._last_instant_change = current_time
+        
         # Set flag to trigger immediate check in polling loop
         self.pending_change = True
         self.change_event.set()  # Wake up the monitoring loop immediately
@@ -174,6 +182,7 @@ class FileSystemMonitor:
             
             if not for_comparison:
                 print(f"📸 Snapshot created: {file_count} files, {dir_count} dirs, {total_size:,} bytes")
+                print(f"🔍 Debug - Actual files found: {len(all_files)}, Root path: {self.root_path}")
             
             return snapshot
             
@@ -370,7 +379,8 @@ file_monitor = FileSystemMonitor()
 def init_file_monitor():
     """Initialize and start the global file monitor"""
     global file_monitor
-    file_monitor.start_monitoring()
+    if not file_monitor.monitoring:
+        file_monitor.start_monitoring()
     return file_monitor
 
 def get_file_monitor():

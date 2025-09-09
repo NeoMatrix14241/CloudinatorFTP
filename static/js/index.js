@@ -92,6 +92,9 @@ const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/
 const isAndroid = /Android/i.test(navigator.userAgent);
 const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
 
+// Global search state tracking
+let isSearchResultsDisplayed = false;
+
 // Feature detection for folder upload capabilities
 const supportsDragDrop = 'ondrop' in window && 'ondragover' in window;
 const supportsWebkitDirectory = 'webkitdirectory' in document.createElement('input');
@@ -314,6 +317,9 @@ function displayDeepSearchResults(data, searchTerm) {
     // Hide local results
     hideLocalResults();
     
+    // Mark that search results are now displayed
+    isSearchResultsDisplayed = true;
+    
     // Show deep search results with header above table
     const table = document.getElementById('filesTable');
     const tbody = table.querySelector('tbody');
@@ -499,6 +505,9 @@ function hideLocalResults() {
 }
 
 function hideDeepSearchResults() {
+    // Mark that search results are no longer displayed
+    isSearchResultsDisplayed = false;
+    
     // Remove table-based search headers
     const searchRows = document.querySelectorAll('.search-results-header, .search-result-row');
     searchRows.forEach(row => row.remove());
@@ -2339,6 +2348,16 @@ function updateItemStatus(fileId, status, error = null) {
 async function refreshFileTable() {
     const startTime = Date.now();
     console.log('📁 refreshFileTable() started...');
+    
+    // Check if search results are currently displayed - don't refresh if they are
+    const searchHeader = document.getElementById('searchResultsHeader');
+    const searchRows = document.querySelectorAll('.search-result-row');
+    
+    if (isSearchResultsDisplayed || searchHeader || searchRows.length > 0) {
+        console.log('🔍 Search results currently displayed - skipping refresh to preserve search view');
+        return;
+    }
+    
     try {
         // Use the current path from navigation state, not the static page load path
         const pathToUse = currentPath || '';
@@ -5508,7 +5527,7 @@ document.addEventListener('visibilitychange', () => {
     }
 });
 
-// Real-time storage monitoring with Server-Sent Events
+// Real-time storage monitoring with Server-Sent Events and Polling Fallback
 let storageEventSource = null;
 let connectionStatus = 'disconnected';
 let reconnectAttempts = 0;
@@ -5517,8 +5536,23 @@ const reconnectDelay = 3000; // 3 seconds
 let lastKnownFileCount = null;
 let lastKnownDirCount = null;
 
+// Polling fallback variables
+let pollingInterval = null;
+let pollingEnabled = false;
+let lastPollingCheck = 0;
+let sseFailedPermanently = false;
+
+// MANUAL TIMING CONTROLS - Edit these for instant loading
+const INSTANT_LOAD_SETTINGS = {
+    sseTimeout: 1000,        // How long to wait for SSE before fallback (1 second)
+    pollingDelay: 50,        // Delay before starting polling (50ms)
+    initialDelay: 50,        // Delay before starting any monitoring (50ms)
+    pollingIntervalTime: 500, // How often polling checks for changes (0.5 seconds)
+    enableInstantMode: true  // Set to false to use original timing
+};
+
 function initializeRealTimeMonitoring() {
-    console.log('📡 Initializing optimized real-time storage monitoring...');
+    console.log('📡 Initializing INSTANT real-time storage monitoring...');
     
     // Skip duplicate initialization if already done
     if (window.storageMonitoringInitialized) {
@@ -5527,31 +5561,42 @@ function initializeRealTimeMonitoring() {
     }
     window.storageMonitoringInitialized = true;
     
-    // Prevent page unload from interfering with SSE connections
-    let connectionInitialized = false;
-    
-    // Initialize connection with delay to ensure page is fully loaded
-    setTimeout(() => {
-        if (!connectionInitialized) {
-            connectionInitialized = true;
-            console.log('📡 Starting stable SSE connection after page load...');
-            connectToStorageStream();
-            setupFallbackPolling();
+    // Add Page Visibility API handling to prevent issues on tab switching
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            console.log('📱 Tab became hidden - monitoring continues in background');
+        } else {
+            console.log('📱 Tab became visible - monitoring already active, no re-initialization needed');
+            // Don't re-initialize - just log that tab is visible again
+            // This prevents the "+1 files" issue when switching tabs
         }
-    }, 500); // 500ms delay to ensure page stability
+    });
     
-    // Faster detection for SSE incompatibility 
+    // Reset fallback state
+    sseFailedPermanently = false;
+    pollingEnabled = false;
+    
+    // Use manual timing controls
+    const sseTimeout = INSTANT_LOAD_SETTINGS.enableInstantMode ? INSTANT_LOAD_SETTINGS.sseTimeout : 2000;
+    const initialDelay = INSTANT_LOAD_SETTINGS.enableInstantMode ? INSTANT_LOAD_SETTINGS.initialDelay : 100;
+    
+    console.log(`📡 Using instant mode: SSE timeout=${sseTimeout}ms, initial delay=${initialDelay}ms`);
+    
+    // Try SSE first with minimal delay
     setTimeout(() => {
-        if (connectionStatus !== 'connected' && !window.storageStatsInitialized) {
-            console.log('📊 SSE failed, loading initial storage stats via API...');
-            initializeStorageStats();
-            // Show green and activate event-driven updates instead of polling
-            document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
-            connectionStatus = 'connected';
-            // Use event-driven updates instead of aggressive polling
-            activateEventDrivenUpdates();
-        }
-    }, 500); // Faster detection - 500ms instead of 2s
+        console.log('📡 Attempting SSE connection...');
+        connectToStorageStream();
+        
+        // Fast fallback to polling if SSE fails
+        setTimeout(() => {
+            if (connectionStatus !== 'connected' && !window.storageStatsInitialized && !sseFailedPermanently) {
+                console.log('⚠️ SSE connection timeout, falling back to instant polling...');
+                sseFailedPermanently = true;
+                setupFallbackPolling();
+            }
+        }, sseTimeout);
+        
+    }, initialDelay);
 }
 
 async function initializeStorageStats() {
@@ -5767,18 +5812,20 @@ function connectToStorageStream() {
         });
         
         storageEventSource.onopen = function(event) {
-            console.log('✅ Storage stats stream connected - waiting for initial data via SSE');
+            console.log('✅ SSE connection successful - disabling polling fallback');
             console.log('🟢 SSE onopen fired - changing title to connected');
             console.log('🟢 EventSource readyState:', storageEventSource.readyState);
             connectionStatus = 'connected';
             reconnectAttempts = 0;
-            updateConnectionStatus();
+            
+            // Stop polling if it was running
+            stopPolling();
             
             // SSE will provide initial data, no need for separate API call
             window.storageStatsInitialized = true;
             
             // Add clean connection indicator
-            document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
+            document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '') + ' (SSE)';
             console.log('🟢 Title set to connected state:', document.title);
         };
 
@@ -5812,28 +5859,127 @@ function connectToStorageStream() {
             console.log('🔴 Event type:', event.type);
             console.log('🔴 Event target:', event.target);
             connectionStatus = 'error';
-            updateConnectionStatus();
             
             // Add clean disconnection indicator
             document.title = '🔴 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
             console.log('🔴 Title set to error state');
             
-            // Attempt to reconnect
-            if (reconnectAttempts < maxReconnectAttempts) {
+            // Try a few SSE reconnects, then fall back to polling
+            if (reconnectAttempts < 2) { // Reduced from 5 to 2 attempts
                 reconnectAttempts++;
-                console.log(`🔄 Attempting to reconnect (${reconnectAttempts}/${maxReconnectAttempts}) in ${reconnectDelay}ms...`);
+                console.log(`🔄 Attempting SSE reconnect (${reconnectAttempts}/2) in ${reconnectDelay}ms...`);
                 setTimeout(() => {
                     connectToStorageStream();
                 }, reconnectDelay);
             } else {
-                console.error('💀 Max reconnection attempts reached. SSE unavailable.');
-                // The fallback polling will be handled by setupFallbackPolling()
+                console.error('💀 SSE reconnection failed, switching to polling fallback...');
+                sseFailedPermanently = true;
+                
+                // Close SSE connection
+                if (storageEventSource) {
+                    storageEventSource.close();
+                    storageEventSource = null;
+                }
+                
+                // Start polling fallback
+                setupFallbackPolling();
             }
         };
 
     } catch (error) {
         console.error('❌ Error initializing SSE connection:', error);
-        // The fallback polling will be handled by setupFallbackPolling()
+        sseFailedPermanently = true;
+        setupFallbackPolling();
+    }
+}
+
+// Polling fallback system for when SSE fails
+function setupFallbackPolling() {
+    if (pollingEnabled) {
+        console.log('📊 Polling already enabled, skipping setup');
+        return;
+    }
+    
+    const pollingDelay = INSTANT_LOAD_SETTINGS.enableInstantMode ? INSTANT_LOAD_SETTINGS.pollingDelay : 0;
+    
+    console.log(`🔄 Setting up INSTANT polling fallback (delay: ${pollingDelay}ms)...`);
+    
+    setTimeout(() => {
+        pollingEnabled = true;
+        lastPollingCheck = 0; // Start with 0 for instant initial load
+        
+        // Update title to show polling mode
+        document.title = '🟠 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '') + ' (Polling)';
+        
+        // Start polling with configurable interval
+        const pollingIntervalTime = INSTANT_LOAD_SETTINGS.pollingIntervalTime || 2000;
+        pollingInterval = setInterval(performPollingCheck, pollingIntervalTime);
+        
+        // Perform immediate initial check
+        performPollingCheck();
+    }, pollingDelay);
+}
+
+async function performPollingCheck() {
+    try {
+        // Include current file/dir counts for accurate change detection
+        const currentFiles = lastKnownFileCount || 0;
+        const currentDirs = lastKnownDirCount || 0;
+        
+        const response = await fetch(`/api/storage_stats_poll?last_check=${lastPollingCheck}&last_files=${currentFiles}&last_dirs=${currentDirs}`, {
+            method: 'GET',
+            cache: 'no-cache',
+            headers: {
+                'Cache-Control': 'no-cache'
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Polling failed: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        console.log('📊 Polling response:', data);
+        
+        // Update connection status on successful poll
+        if (connectionStatus !== 'connected') {
+            connectionStatus = 'connected';
+            document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '') + ' (Polling)';
+            console.log('🟢 Polling connection established');
+        }
+        
+        // Update last check timestamp
+        lastPollingCheck = data.timestamp;
+        
+        // Handle the data same way as SSE
+        if (data.changed || !window.storageStatsInitialized) {
+            console.log('🔄 Changes detected via polling, updating display...');
+            
+            // Convert polling response to SSE-like format
+            const sseData = {
+                type: 'storage_stats_update',
+                timestamp: data.timestamp,
+                initial: !window.storageStatsInitialized,
+                data: data.data
+            };
+            
+            handleStorageUpdate(sseData);
+            window.storageStatsInitialized = true;
+        }
+        
+    } catch (error) {
+        console.error('❌ Polling check failed:', error);
+        connectionStatus = 'error';
+        document.title = '🔴 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '') + ' (Polling)';
+    }
+}
+
+function stopPolling() {
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+        pollingEnabled = false;
+        console.log('🛑 Polling stopped');
     }
 }
 
@@ -5877,28 +6023,40 @@ function handleStorageUpdate(data) {
                     // - size_changed: for file content modifications
                     // - content_changed: for file renames, modifications, permission changes
                     // - mtime_changed: for any file modifications
+                    // Check if there are actual significant changes worth showing to user
+                    const hasSignificantChanges = (
+                        changes.files_changed !== 0 || 
+                        changes.dirs_changed !== 0 || 
+                        changes.size_changed !== 0
+                    );
+                    
+                    // Check if we should refresh the file table (broader criteria)
                     const shouldRefresh = (
                         changes.files_changed !== 0 || 
                         changes.dirs_changed !== 0 || 
                         changes.size_changed !== 0 ||
                         changes.content_changed === true ||
-                        changes.mtime_changed === true ||
-                        // Always refresh if we get a change notification (covers any other changes)
-                        Object.keys(changes).length > 0
+                        changes.mtime_changed === true
                     );
                     
                     if (shouldRefresh) {
-                        let message = 'Storage updated: ';
-                        if (changes.files_changed > 0) message += `+${changes.files_changed} files `;
-                        if (changes.files_changed < 0) message += `${changes.files_changed} files `;
-                        if (changes.dirs_changed > 0) message += `+${changes.dirs_changed} folders `;
-                        if (changes.dirs_changed < 0) message += `${changes.dirs_changed} folders `;
-                        if (changes.size_changed !== 0) message += `size changed `;
-                        if (changes.files_changed === 0 && changes.dirs_changed === 0 && changes.size_changed === 0) {
-                            message += 'files modified/renamed ';
+                        // Only show notification for significant changes
+                        if (hasSignificantChanges) {
+                            let message = 'Storage updated: ';
+                            if (changes.files_changed > 0) message += `+${changes.files_changed} files `;
+                            if (changes.files_changed < 0) message += `${changes.files_changed} files `;
+                            if (changes.dirs_changed > 0) message += `+${changes.dirs_changed} folders `;
+                            if (changes.dirs_changed < 0) message += `${changes.dirs_changed} folders `;
+                            if (changes.size_changed !== 0) message += `size changed `;
+                            if (changes.files_changed === 0 && changes.dirs_changed === 0 && changes.size_changed === 0) {
+                                message += 'files modified/renamed ';
+                            }
+                            
+                            showUploadStatus(`<i class="fas fa-sync-alt"></i> ${message.trim()}`, 'info');
+                        } else {
+                            // Minor change - refresh table but don't show notification
+                            console.log('📊 Minor content change detected - refreshing table silently');
                         }
-                        
-                        showUploadStatus(`<i class="fas fa-sync-alt"></i> ${message.trim()}`, 'info');
                         
                         // Refresh file table for any change
                         console.log('🚀 Triggering instant file table refresh via SSE...');

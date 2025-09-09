@@ -71,16 +71,22 @@ if __name__ == "__main__":
                 application,
                 host='0.0.0.0',
                 port=5000,
-                threads=5000,                         # Match with max expected concurrent users
-                connection_limit=50,                # Limit concurrent connections to match threads
+                threads=8,                           # Reduced for better SSE handling
+                connection_limit=1000,               # Higher connection limit for SSE
                 asyncore_use_poll=True,              # Better performance on Windows
-                channel_timeout=300,                 # 5 minutes - longer for large file transfers
-                cleanup_interval=5,                  # Very fast cleanup for instant responsiveness
-                recv_bytes=131072,                   # 128KB - larger buffer for file uploads
-                send_bytes=131072,                   # 128KB - larger buffer for file downloads
+                channel_timeout=600,                 # 10 minutes for SSE connections
+                cleanup_interval=30,                 # Faster cleanup interval
+                recv_bytes=65536,                    # 64KB buffer
+                send_bytes=65536,                    # 64KB buffer for SSE
                 ident='CloudinatorFTP/1.0',          # Custom server identification
                 url_scheme='http',                   # Explicit scheme for session handling
-                max_request_body_size=1099511627776  # 1TB limit (effectively unlimited)
+                max_request_body_size=1099511627776, # 1TB limit (effectively unlimited)
+                # SSE-specific optimizations
+                outbuf_overflow=1048576,             # 1MB output buffer
+                outbuf_high_watermark=16384,         # 16KB high watermark
+                inbuf_overflow=524288,               # 512KB input buffer
+                # Disable output buffering for real-time streams
+                expose_tracebacks=False              # Security
             )
         except ImportError:
             print("⚠️  Neither Gunicorn nor Waitress installed. Installing Waitress...")
