@@ -6,3 +6,5 @@ zipstream-new==1.1.8
 gunicorn==23.0.0
 waitress==3.0.2
 watchdog==6.0.0
+uvicorn==0.35.0
+a2wsgi==1.10.10
