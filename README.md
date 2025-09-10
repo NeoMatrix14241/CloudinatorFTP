@@ -78,11 +78,16 @@ python create_user.py
 #### 6. 🎯 Launch the Server
 
 ```bash
-python wsgi.py
+python dev_server.py
+python prod_asgi_server.py
+python prod_wsgi_server.py
 
 or
 
-launch start_prod_server.bat
+launch:
+- start_dev_server.bat > Flask Server
+- start_prod_asgi_server.bat > ASGI Server (Uvicorn)
+- start_prod_wsgi_server.bat > WSGI Server (Waitress)
 ```
 
 #### 7. 🌍 Expose to Internet
@@ -211,7 +216,6 @@ After uploading files, find them in your Android file manager:
 | `bcrypt` installation fails | `pkg install clang python-dev libcrypt-dev` |
 | Port already in use | Change port in `config.py` or kill process |
 | Cloudflare tunnel fails | Check internet connection, try again |
-| Upload fails | Check file size limits and permissions |
 
 ## 🌐 Network Configuration
 
@@ -220,7 +224,7 @@ After uploading files, find them in your Android file manager:
 - **Host**: 0.0.0.0 (listens on all interfaces)
 - **Chunk Size**: 10MB (for large file uploads)
 
-### Firewall Configuration
+### Firewall Configuration (If needed)
 
 **Linux (UFW):**
 ```bash
@@ -239,5 +243,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## 📄 License
 
 Apache License - see [LICENSE](LICENSE) file for details.
+
 
 ---
