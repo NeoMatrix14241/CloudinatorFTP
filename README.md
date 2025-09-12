@@ -78,11 +78,15 @@ python create_user.py
 #### 6. 🎯 Launch the Server
 
 ```bash
-python wsgi.py
+python dev_server.py # Flask (Native)
+python prod_asgi_server.py # ASGI
+python prod_wsgi_server.py # WSGI
 
 or
 
-launch start_prod_server.bat
+launch start_dev_server.bat
+launch start_prod_asgi_server.bat
+launch start_prod_wsgi_server.bat
 ```
 
 #### 7. 🌍 Expose to Internet
@@ -94,6 +98,27 @@ cloudflared tunnel --url http://localhost:5000
 ```
 
 You'll receive a public URL like: `https://random-words-12345.trycloudflare.com`
+
+Or if you want to use it with domain, use these configuration for config.yml of cloudflared:
+
+```bash
+tunnel: <tunnel id>
+credentials-file: C:\Users\%username%\.cloudflared\<tunnel id>.json
+ingress:
+  - hostname: domain.com
+    service: http://localhost:5000
+    originRequest:
+      connectTimeout: 0s
+      tlsTimeout: 0s
+      tcpKeepAlive: 0s
+      keepAliveTimeout: 0s
+      httpHostHeader: domain.com
+      noTLSVerify: true
+      disableChunkedEncoding: false
+      proxyConnectTimeout: 0s
+      expectContinueTimeout: 0s
+  - service: http_status:404
+```
 
 ## 📂 Storage Configuration Guide
 
