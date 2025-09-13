@@ -74,7 +74,7 @@ if __name__ == "__main__":
             timeout_graceful_shutdown=60, # Only shutdown timeout
             
             # CONCURRENT UPLOAD OPTIMIZATIONS
-            limit_concurrency=50,        # Allow 15 concurrent connections (10 uploads + 5 overhead)
+            limit_concurrency=None,        # Allow 15 concurrent connections (10 uploads + 5 overhead)
             limit_max_requests=None,     # NO REQUEST LIMIT - essential for concurrent uploads!
             
             # Critical: Large request handling for multiple uploads
