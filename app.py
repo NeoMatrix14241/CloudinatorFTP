@@ -9,6 +9,7 @@ bulk_zip_cancelled = {}
 from flask import Flask, render_template, request, redirect, url_for, send_from_directory, send_file, flash, session, jsonify, Response, make_response, render_template_string
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import ClientDisconnected
 import os
 import shutil
 import json
@@ -753,6 +754,10 @@ def upload():
     if not session_id:
         session_id = str(uuid.uuid4())
         session['session_id'] = session_id
+    
+    # Initialize these variables outside the try block to ensure they're available in the except blocks
+    file_id = None
+    filename = None
 
     try:
         role = get_role(current_user())
@@ -875,6 +880,15 @@ def upload():
                 print(f"❌ Failed to save whole file {filename}: {e}")
                 return f'Failed to save file: {str(e)}', 500
 
+    except ClientDisconnected as e:
+        print(f"👋 Client disconnected during upload of {filename or 'unknown file'} (ID: {file_id})")
+        # Always clean up chunks if we have a file_id
+        if file_id:
+            chunk_tracker.untrack_upload(session_id, file_id)
+            storage.cleanup_chunks(file_id)
+        # No need to send response - client is gone
+        return '', 499  # Return 499 Client Closed Request
+    
     except Exception as e:
         print(f"❌ Upload error: {e}")
         # If there was an error and we were tracking this upload, clean it up
