@@ -143,10 +143,15 @@ app = Flask(__name__)
 CORS(app)
 app.secret_key = SESSION_SECRET
 
-# Configure session for better cross-origin support (but keep logout working)
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Less restrictive than 'Strict' but more secure than 'None'
-app.config['SESSION_COOKIE_SECURE'] = False  # Set to True if using HTTPS
-app.config['SESSION_COOKIE_HTTPONLY'] = True  # Keep this secure for production
+# Configure session handling
+app.config.update(
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=True,  # Enable secure cookies for Cloudflare Tunnel HTTPS
+    SESSION_COOKIE_HTTPONLY=True,
+    PERMANENT_SESSION_LIFETIME=3600,  # 1 hour (in seconds)
+    SESSION_REFRESH_EACH_REQUEST=True,
+    SESSION_COOKIE_NAME='cloudinator_session'
+)
 
 storage.ensure_root()
 
@@ -154,6 +159,23 @@ storage.ensure_root()
 file_monitor = init_file_monitor()
 file_monitor.add_change_callback(trigger_storage_update)
 print(f"📡 File system monitoring started for: {ROOT_DIR}")
+
+@app.before_request
+def validate_session():
+    # Skip validation for login-related routes
+    if request.endpoint in ['login', 'static']:
+        return
+        
+    # Check if user is logged in
+    if not session.get('logged_in'):
+        session.clear()
+        return redirect(url_for('login'))
+        
+    # Validate session age
+    login_time = session.get('login_time', 0)
+    if time.time() - login_time > 3600:  # 1 hour
+        session.clear()
+        return redirect(url_for('login'))
 
 @app.route('/cancel_bulk_zip', methods=['POST'])
 def cancel_bulk_zip():
@@ -449,73 +471,67 @@ def after_request(response):
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    # If user is already logged in, use JavaScript redirect to avoid history issues
-    if is_logged_in():
-        return render_template_string('''
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Redirecting...</title>
-            <script>
-                // Use replace to avoid adding to browser history
-                window.location.replace('/');
-            </script>
-        </head>
-        <body>
-            <p>Already logged in, redirecting... <a href="/">Click here if not redirected</a></p>
-        </body>
-        </html>
-        ''')
+    # Clear any existing session data first
+    session.clear()
     
     if request.method == 'POST':
-        username = request.form.get('username','').strip()
-        password = request.form.get('password','')
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        
         if check_login(username, password):
-            login_user(username)
-            # Set the user role in session
-            session['role'] = get_role(username)
-            # Generate a unique session ID for tracking uploads
-            session['session_id'] = str(uuid.uuid4())
-            # Clear any old flash messages when successfully logging in
-            session.pop('_flashes', None)
+            # Mark session as permanent (will use PERMANENT_SESSION_LIFETIME)
+            session.permanent = True
             
-            # Return a page that redirects using JavaScript to replace history
-            return render_template_string('''
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Login Successful</title>
-                <script>
-                    // Replace the entire history to prevent back button issues
-                    window.history.replaceState(null, null, '/');
-                    window.location.replace('/');
-                </script>
-            </head>
-            <body>
-                <p>Login successful, redirecting... <a href="/">Click here if not redirected</a></p>
-            </body>
-            </html>
-            ''')
+            # Set up session data
+            login_user(username)
+            session['role'] = get_role(username)
+            session['session_id'] = str(uuid.uuid4())
+            session['logged_in'] = True
+            session['login_time'] = int(time.time())
+            
+            # Force the session to be saved
+            session.modified = True
+            
+            response = make_response(redirect(url_for('index')))
+            # Set a cookie to help with session persistence
+            response.set_cookie('session_check', '1', 
+                              max_age=3600, 
+                              samesite='Lax', 
+                              httponly=True)
+            return response
         else:
             flash('Invalid username or password')
+            
     return render_template('login.html')
 
 @app.route('/logout')
 def logout():
     try:
+        # Clean up any upload chunks
         session_id = session.get('session_id')
-        
         if session_id:
             chunk_tracker.cleanup_session_chunks(session_id)
         
-        logout_user()
-        session.pop('_flashes', None)
-        # Add a parameter to indicate logout to prevent authentication check loops
-        return redirect(url_for('login', logged_out='1'))
+        # Clear the session completely
+        session.clear()
+        
+        # Create response with session-clearing headers
+        response = make_response(redirect(url_for('login', logged_out='1')))
+        response.delete_cookie('cloudinator_session')
+        response.delete_cookie('session_check')
+        
+        # Add cache-control headers to prevent caching
+        response.headers.update({
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+        })
+        
+        return response
     except Exception as e:
         logging.error(f"Logout error: {e}", exc_info=True)
+        session.clear()  # Still try to clear session even if other operations fail
         return redirect(url_for('login', logged_out='1'))
-        return "Internal server error during logout", 500
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
