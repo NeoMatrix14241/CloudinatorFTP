@@ -146,7 +146,6 @@ app.secret_key = SESSION_SECRET
 # Configure session handling
 app.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
-    SESSION_COOKIE_SECURE=True,  # Enable secure cookies for Cloudflare Tunnel HTTPS
     PERMANENT_SESSION_LIFETIME=3600,  # 1 hour (in seconds)
     SESSION_REFRESH_EACH_REQUEST=True,
     SESSION_COOKIE_NAME='cloudinator_session'
