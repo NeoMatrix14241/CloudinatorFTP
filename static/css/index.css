@@ -3550,3 +3550,66 @@ td .fa-file {
     position: relative;
     white-space: nowrap;
 }
+
+/* ===== Layout fixes: allow file names to wrap and ensure actions/buttons are visible ===== */
+/* These overrides focus on desktop/tablet where we previously forced single-line ellipses. */
+@media (min-width: 769px) {
+    /* Let the name column expand and wrap instead of truncating. This keeps the table layout
+       but allows long filenames to occupy multiple lines and keeps action buttons visible. */
+    .table th:nth-child(2),
+    .table td:nth-child(2) {
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        max-width: none !important;
+    }
+
+    .file-name,
+    .file-name a,
+    .file-name span,
+    .table td .file-name a,
+    .table td .file-name span {
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+        word-break: break-word !important;
+        overflow: visible !important;
+        max-height: none !important;
+    }
+
+    /* Remove artificial row height limits so wrapped names can push row height naturally. */
+    .table tbody tr {
+        max-height: none !important;
+    }
+    .file-name {
+        max-height: none !important;
+    }
+
+    /* Make the actions container wrap so buttons remain visible instead of being clipped. */
+    .table th:last-child,
+    .table td:last-child {
+        /* keep a reasonable minimum so actions have space, but allow wrapping */
+        min-width: 220px !important;
+        width: auto !important;
+    }
+
+    .actions {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        gap: 8px !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+    }
+
+    /* Keep individual buttons from shrinking too small but allow them to wrap onto next line. */
+    .actions .btn-sm {
+        white-space: nowrap !important;
+        flex-shrink: 0 !important;
+    }
+
+    /* If the table would still be too narrow, allow horizontal scrolling on the file-table container. */
+    .file-table {
+        overflow-x: auto !important;
+    }
+}
+
+/* End layout fixes block */

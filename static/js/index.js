@@ -12,6 +12,8 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Clean up browser history to prevent login page from being accessible via back button
     cleanupAuthenticationHistory();
+    // Transform any server-rendered rows to use detailed file type & icon mapping
+    try { transformInitialRows(); } catch (e) { console.warn('transformInitialRows not available yet', e); }
 });
 
 async function checkAuthenticationOnPageLoad() {
@@ -406,47 +408,55 @@ function createSearchResultRow(result, searchTerm) {
     row.className = 'file-row search-result-row';
     row.dataset.path = result.path;
     
-    const sizeDisplay = result.is_dir ? 
-        `<span class="folder-size-text">Folder</span>` :
-        formatFileSize(result.size);
+    const sizeDisplay = result.is_dir ? `<span class="folder-size-text">Folder</span>` : formatFileSize(result.size);
     
     // Extract folder path (excluding filename)
     const pathParts = result.path.split('/');
     const folderPath = pathParts.slice(0, -1).join('/');
     const displayPath = folderPath || 'Root';
     
-    const nameHtml = result.is_dir ?
-        `<div class="search-result-name">
+    // Build safer name HTML using escapeHtml and mapping for icon/type
+    let nameHtml = '';
+    if (result.is_dir) {
+        nameHtml = `
+        <div class="search-result-name">
             <div class="search-result-icon">
                 <i class="fas fa-folder"></i>
             </div>
             <div class="search-result-details">
                 <div class="search-result-title">
-                    <a href="#" onclick="navigateToFolder('${result.path}'); return false;" 
+                    <a href="#" onclick="navigateToFolder('${escapeHtml(result.path)}'); return false;" 
                        class="search-folder-link">
-                        ${highlightText(result.name, searchTerm)}
+                        ${highlightText(escapeHtml(result.name), searchTerm)}
                     </a>
                 </div>
                 <div class="search-result-path">
                     <i class="fas fa-folder-open"></i>
-                    /${displayPath}
-                </div>
-            </div>
-        </div>` :
-        `<div class="search-result-name">
-            <div class="search-result-icon">
-                <i class="fas fa-file"></i>
-            </div>
-            <div class="search-result-details">
-                <div class="search-result-title">
-                    ${highlightText(result.name, searchTerm)}
-                </div>
-                <div class="search-result-path">
-                    <i class="fas fa-folder-open"></i>
-                    /${displayPath}
+                    /${escapeHtml(displayPath)}
                 </div>
             </div>
         </div>`;
+    } else {
+        const iconClass = getFileIcon(result.name);
+        const typeText = getFileType(result.name);
+        nameHtml = `
+        <div class="search-result-name">
+            <div class="search-result-icon">
+                <i class="${iconClass}"></i>
+            </div>
+            <div class="search-result-details">
+                <div class="search-result-title">
+                    ${highlightText(escapeHtml(result.name), searchTerm)}
+                </div>
+                <div class="search-result-path">
+                    <i class="fas fa-folder-open"></i>
+                    /${escapeHtml(displayPath)}
+                </div>
+            </div>
+        </div>`;
+        // expose type for the column below
+        result._derived_type = typeText;
+    }
     
     const actionsHtml = result.is_dir ? 
         `<div class="search-result-actions">
@@ -479,7 +489,7 @@ function createSearchResultRow(result, searchTerm) {
         </td>
         <td class="search-name-cell">${nameHtml}</td>
         <td class="search-size-cell">${sizeDisplay}</td>
-        <td class="search-type-cell">${result.type}</td>
+        <td class="search-type-cell">${escapeHtml(result._derived_type || result.type || (result.is_dir ? 'Folder' : getFileType(result.name)))}</td>
         <td class="search-date-cell">${result.modified}</td>
         <td class="search-actions-cell">${actionsHtml}</td>
     `;
@@ -1218,6 +1228,11 @@ function createFileTableRow(item, currentPath) {
     row.className = 'file-row';
     row.setAttribute('data-path', itemPath);
     
+    // Use escaped names and mapped icons/types
+    const safeName = escapeHtml(item.name);
+    const itemIcon = item.is_dir ? 'fas fa-folder' : getFileIcon(item.name);
+    const itemTypeText = item.is_dir ? 'Folder' : getFileType(item.name);
+
     row.innerHTML = `
         <td>
             <input type="checkbox" class="file-checkbox item-checkbox" 
@@ -1230,12 +1245,12 @@ function createFileTableRow(item, currentPath) {
             <div class="file-name">
                 ${item.is_dir ? 
                     `<i class="fas fa-folder file-icon folder-icon"></i>
-                     <a href="#" onclick="navigateToFolder('${itemPath}'); return false;" 
-                        data-folder-path="${itemPath}" class="folder-link">
-                         ${item.name}
+                     <a href="#" onclick="navigateToFolder('${escapeHtml(itemPath)}'); return false;" 
+                        data-folder-path="${escapeHtml(itemPath)}" class="folder-link">
+                         ${safeName}
                      </a>` :
-                    `<i class="fas fa-file file-icon file-icon-default"></i>
-                     ${item.name}`
+                    `<i class="${itemIcon} file-icon file-icon-default" style="color: ${getFileColor(item.name)}"></i>
+                     ${safeName}`
                 }
             </div>
         </td>
@@ -1249,10 +1264,7 @@ function createFileTableRow(item, currentPath) {
             }
         </td>
         <td class="type-cell">
-            ${item.is_dir ? 
-                '<span class="file-type"><i class="fas fa-folder folder-icon file-icon"></i> Folder</span>' :
-                '<span class="file-type"><i class="fas fa-file file-icon file-icon-default"></i> File</span>'
-            }
+            ${`<span class="file-type"><i class="${item.is_dir ? 'fas fa-folder folder-icon file-icon' : itemIcon}"></i> ${escapeHtml(itemTypeText)}</span>`}
         </td>
         <td>
             ${item.modified ? 
@@ -2038,7 +2050,7 @@ function createQueueItemElement(item) {
                     <i class="${getFileIcon(item.name)}" style="color: ${getFileColor(item.name)};"></i>
                     <div class="file-info-details">
                         <div class="file-info-name" title="${item.displayName || item.name}">
-                            ${item.displayName || item.name}
+                            ${escapeHtml(item.displayName || item.name)}
                         </div>
                         <div class="file-info-meta">
                             <span><i class="fas fa-weight-hanging"></i> ${formatFileSize(item.size)}</span>
@@ -2117,42 +2129,137 @@ function formatTime(seconds) {
 }
 
 function getFileIcon(filename) {
-    const extension = filename.split('.').pop().toLowerCase();
-    const iconMap = {
-        pdf: 'fas fa-file-pdf',
-        doc: 'fas fa-file-word', docx: 'fas fa-file-word',
-        xls: 'fas fa-file-excel', xlsx: 'fas fa-file-excel',
-        ppt: 'fas fa-file-powerpoint', pptx: 'fas fa-file-powerpoint',
-        jpg: 'fas fa-file-image', jpeg: 'fas fa-file-image', png: 'fas fa-file-image',
-        gif: 'fas fa-file-image', bmp: 'fas fa-file-image', svg: 'fas fa-file-image',
-        mp4: 'fas fa-file-video', avi: 'fas fa-file-video', mkv: 'fas fa-file-video',
-        mov: 'fas fa-file-video', wmv: 'fas fa-file-video',
-        mp3: 'fas fa-file-audio', wav: 'fas fa-file-audio', flac: 'fas fa-file-audio',
-        zip: 'fas fa-file-archive', rar: 'fas fa-file-archive', '7z': 'fas fa-file-archive',
-        txt: 'fas fa-file-alt', md: 'fas fa-file-alt',
-        html: 'fas fa-file-code', css: 'fas fa-file-code', js: 'fas fa-file-code',
-        py: 'fas fa-file-code', java: 'fas fa-file-code'
-    };
-    return iconMap[extension] || 'fas fa-file';
+    const ext = String(filename).split('.').pop().toLowerCase();
+    return EXTENSION_MAP[ext]?.icon || 'fas fa-file';
 }
 
 function getFileColor(filename) {
-    const extension = filename.split('.').pop().toLowerCase();
-    const colorMap = {
-        pdf: '#e74c3c',
-        doc: '#3498db', docx: '#3498db',
-        xls: '#27ae60', xlsx: '#27ae60',
-        ppt: '#e67e22', pptx: '#e67e22',
-        jpg: '#9b59b6', jpeg: '#9b59b6', png: '#9b59b6',
-        gif: '#9b59b6', bmp: '#9b59b6', svg: '#9b59b6',
-        mp4: '#e74c3c', avi: '#e74c3c', mkv: '#e74c3c',
-        mp3: '#f39c12', wav: '#f39c12', flac: '#f39c12',
-        zip: '#ffffff', rar: '#ffffff', '7z': '#ffffff',
-        txt: '#34495e', md: '#34495e',
-        html: '#2ecc71', css: '#2ecc71', js: '#2ecc71',
-        py: '#2ecc71', java: '#2ecc71'
-    };
-    return colorMap[extension] || '#ffffff';
+    const ext = String(filename).split('.').pop().toLowerCase();
+    return EXTENSION_MAP[ext]?.color || '#ffffff';
+}
+
+// Centralized extension -> {type, icon, color} mapping (partial but extensive)
+const EXTENSION_MAP = (function(){
+    // Helper to build entries quickly
+    const e = (exts, type, icon, color) => exts.forEach(x => map[x] = { type, icon, color });
+    const map = Object.create(null);
+
+    // Documents & Text
+    e(['txt','rtf','doc','docx','odt','pdf','tex','log','csv','tsv','md','xml','json','ini','cfg','yaml','yml','nfo','readme','wps','dot','dotx'], 'Document', 'fas fa-file-alt', '#34495e');
+
+    // Spreadsheets & Data
+    e(['xls','xlsx','ods','db','mdb','accdb','sqlite','sqlite3','sql','sav','dat','dbf','parquet','arff','rdata','dta','pivot'], 'Spreadsheet / Data', 'fas fa-file-excel', '#27ae60');
+
+    // Presentations
+    e(['ppt','pptx','odp','key','pub','msg','eml','oft','note'], 'Presentation / Mail', 'fas fa-file-powerpoint', '#e67e22');
+
+    // Images
+    e(['jpg','jpeg','png','gif','bmp','tif','tiff','ico','svg','webp','heic','heif','psd','psb','ai','eps','ind','indd','idml','xcf','cpt','exr','hdr','raw','nef','cr2','arw','dng','sketch','fig','xd'], 'Image', 'fas fa-file-image', '#9b59b6');
+
+    // Video
+    e(['mp4','avi','mov','wmv','mkv','flv','webm','mpeg','mpg','m4v','3gp','mxf','f4v','vob','swf','blend','aep','prproj','drp','veg'], 'Video', 'fas fa-file-video', '#e74c3c');
+
+    // Audio
+    e(['mp3','wav','ogg','flac','wma','aac','m4a','mid','midi','aiff','aif','oma','pcm','stem'], 'Audio', 'fas fa-file-audio', '#f39c12');
+
+    // 3D / CAD
+    e(['dwg','dxf','dwf','dwt','dgn','rvt','rfa','rte','ifc','step','stp','stl','iges','igs','sldprt','sldasm','ipt','iam','f3d','fbx','obj','3ds','max','skp','plt','cam','cnc','nc','scad'], '3D / CAD', 'fas fa-cube', '#16a085');
+
+    // Dev / Code
+    e(['py','ipynb','js','jsx','ts','tsx','html','htm','css','java','class','jar','c','cpp','h','hpp','cs','vb','php','asp','aspx','jsp','go','rb','pl','sh','bat','cmd','ps1','lua','sql','yaml','yml','toml','r','m','scala','kt','swift','rs','jsonl','env','config','jsonc'], 'Code / Script', 'fas fa-code', '#2ecc71');
+
+    // Archives
+    e(['zip','rar','7z','tar','gz','gzip','bz2','tgz','iso','img','cab','arj','lzh','pkg'], 'Archive', 'fas fa-file-archive', '#95a5a6');
+
+    // Executables & System
+    e(['exe','msi','bat','cmd','ps1','vbs','dll','sys','drv','ocx','reg','inf','scr','com','cpl'], 'Executable / System', 'fas fa-cogs', '#7f8c8d');
+
+    // Web
+    e(['map','sitemap','url','lnk','cache','cookie'], 'Web / Shortcut', 'fas fa-globe', '#3498db');
+
+    // Security / Certs
+    e(['cer','crt','pem','pfx','p12','key','csr','enc','sig','asc'], 'Certificate / Key', 'fas fa-shield-alt', '#c0392b');
+
+    // Project / Config
+    e(['project','workspace','sln','solution','config','settings','prefs','manifest','lock','jsonc'], 'Project / Config', 'fas fa-folder-tree', '#34495e');
+
+    // Backups / Logs / Misc
+    e(['tmp','bak','old','log','err','torrent','dmp','cache','backup','copy'], 'Backup / Log / Temp', 'fas fa-file', '#95a5a6');
+
+    // Specialized enterprise
+    e(['pst','ost','ics','vcf','contact','form','template','report','policy','license','audit','script','blueprint','model','sim'], 'Enterprise / Specialized', 'fas fa-file-alt', '#9b59b6');
+
+    // Default PDF mapping (also included above) ensure 'pdf' explicit
+    map['pdf'] = { type: 'PDF Document', icon: 'fas fa-file-pdf', color: '#e74c3c' };
+
+    return map;
+})();
+
+function escapeHtml(unsafe) {
+    return String(unsafe).replace(/[&<>"'`]/g, function (c) {
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;","`":"&#96;"}[c];
+    });
+}
+
+function getFileType(filename) {
+    if (!filename) return 'Unknown';
+    const name = String(filename);
+    // directories are handled separately by callers
+    const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+    if (!ext) return 'Unknown';
+    return EXTENSION_MAP[ext]?.type || ext.toUpperCase() + ' File';
+}
+
+// Transform server-rendered rows (initial page load) to use detailed icons/type text
+function transformInitialRows() {
+    const tbody = document.querySelector('#filesTable tbody');
+    if (!tbody) return;
+
+    const rows = Array.from(tbody.querySelectorAll('tr.file-row'));
+    rows.forEach(row => {
+        try {
+            const nameCell = row.querySelector('td:nth-child(2) .file-name');
+            if (!nameCell) return;
+
+            const link = nameCell.querySelector('a.folder-link');
+            const isDir = !!link;
+            let filename = '';
+            if (isDir) {
+                filename = link.textContent.trim();
+                // ensure link onclick uses safe path
+                const dataPath = row.dataset.path || '';
+                link.setAttribute('onclick', `navigateToFolder('${escapeHtml(dataPath)}'); return false;`);
+            } else {
+                // for files, the filename text may follow the icon
+                filename = nameCell.textContent.trim();
+            }
+
+            // Replace icon and text with mapped icon and escaped name
+            const iconEl = nameCell.querySelector('i');
+            const iconClass = isDir ? 'fas fa-folder' : getFileIcon(filename);
+            if (iconEl) iconEl.className = iconClass + ' file-icon';
+
+            // Replace displayed name safely
+            if (isDir) {
+                link.textContent = filename; // textContent is safe
+            } else {
+                // Remove existing text nodes after icon
+                const clone = nameCell.cloneNode(true);
+                const icons = clone.querySelectorAll('i'); icons.forEach(i=>i.remove());
+                const rawText = clone.textContent.trim();
+                nameCell.innerHTML = `<i class="${iconClass} file-icon file-icon-default" style="color: ${getFileColor(filename)}"></i> ${escapeHtml(rawText)}`;
+            }
+
+            // Update type column
+            const typeCell = row.querySelector('td:nth-child(4) .file-type') || row.querySelector('td:nth-child(4)');
+            if (typeCell) {
+                const typeText = isDir ? 'Folder' : getFileType(filename);
+                typeCell.innerHTML = `<i class="${isDir ? 'fas fa-folder' : getFileIcon(filename)}"></i> ${escapeHtml(typeText)}`;
+            }
+        } catch (err) {
+            console.warn('transformInitialRows skipped a row due to error', err);
+        }
+    });
 }
 
 // Notification stacking system
