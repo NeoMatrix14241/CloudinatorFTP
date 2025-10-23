@@ -139,9 +139,18 @@ class FileSystemMonitor:
             all_files = []
             
             for root, dirs, files in os.walk(self.root_path):
-                # Count directories
+                # Skip scanning temporary chunk directories (created during chunked uploads)
+                # so that transient chunk files do not trigger storage-stat changes or notifications.
+                # We remove '.chunks' from dirs to prevent os.walk from recursing into it.
+                if '.chunks' in dirs:
+                    try:
+                        dirs.remove('.chunks')
+                    except ValueError:
+                        pass
+
+                # Count directories (excluding any removed .chunks)
                 dir_count += len(dirs)
-                
+
                 # Collect all files with their info
                 for file in files:
                     file_path = os.path.join(root, file)
