@@ -327,13 +327,13 @@ body {
 }
 
 .table tbody tr {
-    border-bottom: 1px solid rgba(48,84,140,255); /* Light blue border to complement theme */
-    transition: all 0.3s ease;
+    border-bottom: 1px solid rgba(48,84,140,255);
+    transition: background-color 0.3s ease;
+    white-space: nowrap;
 }
 
 .table tbody tr:hover {
     background: rgba(52, 152, 219, 0.05);
-    transform: scale(1.005);
 }
 
 .table tbody tr.selected {
@@ -343,8 +343,11 @@ body {
 
 .table td {
     padding: 18px 20px;
-    vertical-align: top;
+    vertical-align: middle;
     color: white;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .file-checkbox {
@@ -361,20 +364,29 @@ body {
     text-align: center;
 }
 
-.folder-icon {
-    color: #f39c12;
+.folder-icon,
+.file-icon.folder-icon,
+.fa-folder,
+i.fa-folder,
+i.folder-icon,
+.file-name .folder-icon,
+.file-name .fa-folder {
+    color: #f39c12 !important;
 }
 
-.file-icon-default {
-    color: white;
+.file-icon-default,
+.fa-file,
+i.fa-file {
+    color: white !important;
 }
 
 .file-name {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     font-weight: 500;
     max-width: 100%;
     overflow: hidden;
+    white-space: nowrap;
 }
 
 .file-name a,
@@ -382,17 +394,12 @@ body {
     color: white;
     text-decoration: none;
     transition: color 0.3s ease;
-    word-break: break-word;
-    overflow-wrap: break-word;
-    white-space: normal;
-    line-height: 1.4;
-    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    display: -webkit-box;
-    -webkit-line-clamp: 5;
-    line-clamp: 5;
-    -webkit-box-orient: vertical;
+    white-space: nowrap;
+    line-height: 1.4;
+    max-width: 100%;
+    display: block;
 }
 
 .file-name a:hover {
@@ -410,15 +417,15 @@ body {
 /* Desktop-specific table styling for better file name handling */
 @media (min-width: 769px) {
 
-    .table th:nth-child(2),
-    .table td:nth-child(2) {
-        width: 35%;
-        /* Balanced width */
-        max-width: 400px;
-        min-width: 220px;
-    }
-
-    /* Size column for desktop - ensure proper formatting */
+.table th:nth-child(2),
+.table td:nth-child(2) {
+    width: 35%;
+    max-width: 400px;
+    min-width: 220px;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}    /* Size column for desktop - ensure proper formatting */
     .table th:nth-child(3),
     .table td:nth-child(3) {
         width: 140px;
@@ -1256,6 +1263,10 @@ body {
 .current-destination span,
 .current-destination {
     color: #333 !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
 }
 
 .current-destination {
@@ -1372,6 +1383,84 @@ body {
     height: 100%;
     background: linear-gradient(90deg, #27ae60, #f39c12, #e74c3c);
     transition: width 0.3s ease;
+}
+
+/* Fix for folder highlighting issue - 2023-10-23 */
+.file-name {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+}
+
+.file-name a,
+.file-name span,
+.file-name .folder-link {
+    display: inline !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    max-width: calc(100% - 30px) !important;
+    line-height: normal !important;
+}
+
+.file-icon {
+    flex: 0 0 auto !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 20px !important;
+}
+
+/* Icon colors - Permanent retention */
+.file-icon.folder-icon,
+.fa-folder,
+i.folder-icon,
+i.fa-folder,
+.file-name .fa-folder,
+.file-name .folder-icon,
+td .fa-folder,
+[data-folder-path] .fa-folder,
+.folder-link .fa-folder {
+    color: #f39c12 !important;
+}
+
+.file-icon-default,
+.fa-file,
+i.fa-file,
+.file-name .fa-file,
+td .fa-file {
+    color: white !important;
+}
+
+/* Ensure consistent text color and no wrapping */
+.table td .file-name a,
+.table td .file-name span {
+    color: white !important;
+    text-decoration: none !important;
+    white-space: nowrap !important;
+}
+
+/* Remove any existing multi-line clamp properties */
+.file-name a,
+.file-name span {
+    -webkit-line-clamp: unset !important;
+    line-clamp: unset !important;
+    -webkit-box-orient: unset !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+}
+
+/* Ensure mobile compatibility */
+@media (max-width: 768px) {
+    .file-name {
+        max-width: 100% !important;
+    }
+    
+    .file-name a,
+    .file-name span,
+    .file-name .folder-link {
+        max-width: calc(100% - 25px) !important;
+    }
 }
 
 /* Enhanced Mobile Responsive Design - Fixed Consistent Spacing */
@@ -1586,21 +1675,15 @@ body {
     }
 
     /* Allow name column to expand naturally for full file names */
-    .table th:nth-child(2),
-    .table td:nth-child(2) {
-        white-space: normal;
-        /* Allow wrapping */
-        word-break: break-word;
-        /* Break long words */
-        min-width: 150px;
-        /* Minimum width */
-        max-width: none;
-        /* Remove max width restriction */
-        padding: 12px 8px;
-        /* Slightly more padding for multi-line content */
-    }
-
-    /* Specific column widths for mobile */
+.table th:nth-child(2),
+.table td:nth-child(2) {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 150px;
+    max-width: 300px;
+    padding: 12px 8px;
+}    /* Specific column widths for mobile */
     .table th:nth-child(1),
     /* Checkbox */
     .table td:nth-child(1) {
@@ -1663,12 +1746,30 @@ body {
     }
 
     /* File name improvements */
-    .file-name a {
-        display: block;
-        max-width: 100%;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+    .file-name {
+        display: flex !important;
+        align-items: center !important;
+        gap: 8px !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        max-width: 100% !important;
+    }
+
+    .file-name a.folder-link,
+    .file-name a,
+    .file-name span {
+        display: inline-block !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        color: white !important;
+        text-decoration: none !important;
+        transition: color 0.3s ease !important;
+    }
+
+    .file-name .file-icon {
+        flex-shrink: 0 !important;
     }
 
     /* Actions container */
@@ -1890,23 +1991,22 @@ body {
         background: rgba(255, 255, 255, 0.95);
     }
 
-    /* File name column adjustments - allow full names */
+    /* File name column adjustments - keep single line with ellipsis */
     .file-name {
         display: flex;
-        align-items: flex-start;
-        /* Align to top when wrapping */
+        align-items: center;
         gap: 4px;
+        max-width: 100%;
+        overflow: hidden;
     }
 
     .file-name a,
     .file-name span {
-        word-break: break-word;
-        /* Break long file names */
-        white-space: normal;
-        /* Allow wrapping */
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
         flex: 1;
         line-height: 1.3;
-        /* Better line spacing */
     }
 
     /* Size column */

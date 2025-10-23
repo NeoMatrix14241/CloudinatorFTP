@@ -1250,8 +1250,8 @@ function createFileTableRow(item, currentPath) {
         </td>
         <td class="type-cell">
             ${item.is_dir ? 
-                '<span style="color: white; font-size: 13px;">Folder</span>' :
-                '<span style="color: white; font-size: 13px;">File</span>'
+                '<span class="file-type"><i class="fas fa-folder folder-icon file-icon"></i> Folder</span>' :
+                '<span class="file-type"><i class="fas fa-file file-icon file-icon-default"></i> File</span>'
             }
         </td>
         <td>
@@ -2489,7 +2489,7 @@ function updateFileTableContent(files) {
                         ${file.size ? formatFileSize(file.size) : '--'}
                     </span>`;
 
-            typeHtml = `<i class="fas fa-folder"></i> Folder`;
+            typeHtml = '<span class="file-type"><i class="fas fa-folder folder-icon file-icon"></i> Folder</span>';
             actionsHtml = `
                         <button type="button" class="btn btn-outline btn-sm download-btn" 
                                 data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
@@ -2536,7 +2536,7 @@ function updateFileTableContent(files) {
             // File
             iconHtml = `<i class="fas fa-file file-icon file-icon-default"></i>${file.name}`;
             sizeHtml = `<span style="color: white; font-weight: 500;">${formatFileSize(file.size)}</span>`;
-            typeHtml = `<i class="fas fa-file"></i> File`;
+            typeHtml = '<span class="file-type"><i class="fas fa-file file-icon file-icon-default"></i> File</span>';
             actionsHtml = `
                         <button type="button" class="btn btn-outline btn-sm download-btn" 
                                 data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
@@ -2596,7 +2596,7 @@ function updateFileTableContent(files) {
                         </div>
                     </td>
                     <td>${sizeHtml}</td>
-                    <td><span class="file-type">${typeHtml}</span></td>
+                    <td class="type-cell">${typeHtml}</td>
                     <td>
                         ${file.modified ?
                 `<span style="color: white; font-size: 13px; white-space: nowrap;">${formatTimestamp(file.modified)}</span>` :
