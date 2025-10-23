@@ -495,32 +495,25 @@ i.fa-file {
         gap: 8px !important;
     }
 
-    /* Override all previous file name styling with maximum specificity */
+    /* Override previous name styling on mobile: allow unlimited wrapping and full visibility */
     .file-table .table td:nth-child(2) .file-name a,
     .file-table .table td:nth-child(2) .file-name span,
     .file-table .table .file-name a,
     .file-table .table .file-name span {
-        white-space: normal !important;
-        /* Allow line breaks */
-        overflow: hidden !important;
-        text-overflow: ellipsis !important;
-        display: -webkit-box !important;
-        /* Use webkit-box for multi-line */
+        display: inline-block !important;
+        white-space: normal !important; /* allow breaks */
+        overflow: visible !important;   /* show wrapped content */
+        text-overflow: clip !important;
         line-height: 1.3 !important;
         word-break: break-word !important;
-        /* Break long words */
-        -webkit-line-clamp: 6 !important;
-        /* Increased to 6 lines for more content */
-        line-clamp: 6 !important;
-        -webkit-box-orient: vertical !important;
-        max-height: 7.8em !important;
-        /* About 6 lines */
+        overflow-wrap: anywhere !important;
+        -webkit-line-clamp: unset !important;
+        line-clamp: unset !important;
+        -webkit-box-orient: unset !important;
+        max-height: none !important;
         width: 100% !important;
-        /* Use full available width */
         max-width: none !important;
-        /* Remove width restrictions */
         flex: 1 !important;
-        /* Take remaining space */
     }
 }
 
@@ -3613,3 +3606,156 @@ td .fa-file {
 }
 
 /* End layout fixes block */
+
+/* Strong mobile override: ensure Name column wraps and Actions can wrap on narrow screens */
+@media (max-width: 768px) {
+    /* Target both the generic and file-table scoped selectors */
+    .file-table .table th:nth-child(2),
+    .file-table .table td:nth-child(2),
+    .table th:nth-child(2),
+    .table td:nth-child(2) {
+        /* Make the Name column wider on mobile so filenames wrap less and rows stay compact */
+        white-space: normal !important;
+        overflow: hidden !important; /* prevent visual overlap into other columns */
+        text-overflow: ellipsis !important;
+        /* Prefer a percentage width but provide a sensible minimum to avoid extreme wrapping */
+        width: 55% !important;
+        min-width: 220px !important;
+        max-width: none !important;
+        box-sizing: border-box !important;
+    }
+
+    /* Make file-name elements allow wrapping and occupy full width */
+    .file-name,
+    .file-table .file-name {
+        /* Use flex so the icon and name sit on the same line; keep name constrained to cell width */
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: flex-start !important;
+        gap: 8px !important;
+        white-space: normal !important;
+        max-width: 100% !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+        min-width: 0 !important;
+    }
+
+    .file-name a,
+    .file-name span,
+    .file-table .file-name a,
+    .file-table .file-name span {
+        /* Force block-level content and strong wrapping inside the Name cell */
+        display: block !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+        word-break: break-word !important;
+        /* fallback to strong break-all if necessary to avoid any horizontal overflow */
+        word-break: break-all !important;
+        hyphens: auto !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+    }
+
+    /* As an extra safety, ensure table cells hide horizontal overflow so wrapped text cannot escape */
+    .table td {
+        overflow-x: hidden !important;
+        word-break: break-word !important;
+    }
+
+    /* Allow actions to wrap onto multiple lines so buttons remain visible */
+    /* Lay out action buttons in a single horizontal row to save vertical space.
+       If buttons don't fit, the container becomes horizontally scrollable. */
+    .actions {
+        display: flex !important;
+        flex-wrap: nowrap !important;
+        gap: 6px !important;
+        justify-content: flex-start !important;
+        align-items: center !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        padding-bottom: 4px !important; /* small padding so scroll area is tappable */
+    }
+
+    /* Ensure each button keeps its content but doesn't force wrapping; allow horizontal scroll */
+    .actions .btn-sm {
+        white-space: nowrap !important;
+        flex: 0 0 auto !important; /* don't grow or shrink — stay inline */
+        min-width: 34px !important;
+        padding: 4px 8px !important;
+    }
+
+    /* Small visual tweak: hide overflowing scrollbar on most platforms but keep functionality */
+    .actions::-webkit-scrollbar { height: 6px; }
+    .actions::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+
+    /* Avoid forcing fixed column widths that could reintroduce truncation */
+    .file-table .table th:nth-child(2),
+    .file-table .table td:nth-child(2) {
+        /* Prevent the name column from collapsing to an extremely narrow width */
+        width: auto !important;
+        min-width: 120px !important; /* sensible minimum so text can wrap naturally */
+        max-width: none !important;
+    }
+}
+
+/* --- Final override: ensure Name column uses wrapping and wider width on mobile --- */
+/* Very specific selectors + !important to override earlier rules if necessary */
+/* (removed empty selector) */
+
+.file-table .table td:nth-child(2) .file-name a,
+.file-table .table td:nth-child(2) .file-name span,
+.table td:nth-child(2) .file-name a,
+.table td:nth-child(2) .file-name span {
+    display: block !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    max-width: 100% !important;
+}
+
+/* Force the name column to be wider on small screens, reduce vertical wrapping */
+@media (max-width: 768px) {
+    .file-table .table th:nth-child(2),
+    .file-table .table td:nth-child(2),
+    .table th:nth-child(2),
+    .table td:nth-child(2) {
+        width: 60% !important;
+        min-width: 240px !important;
+        max-width: none !important;
+        box-sizing: border-box !important;
+    }
+
+    /* Ensure adjacent columns don't take excessive width */
+    .file-table .table th:nth-child(3),
+    .file-table .table td:nth-child(3) {
+        width: 18% !important;
+        min-width: 90px !important;
+    }
+    .file-table .table th:nth-child(4),
+    .file-table .table td:nth-child(4) {
+        width: 12% !important;
+        min-width: 70px !important;
+    }
+
+    .table td {
+        overflow-x: hidden !important;
+    }
+}
+
+/* Desktop fallback: ensure wrapping applied there too */
+@media (min-width: 769px) {
+    .file-table .table td:nth-child(2) .file-name a,
+    .file-table .table td:nth-child(2) .file-name span {
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+        word-break: break-word !important;
+    }
+}
