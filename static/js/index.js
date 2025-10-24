@@ -3720,6 +3720,12 @@ function closeModal() {
 }
 
 function showRenameModal() {
+    if (isOperationInProgress) {
+        console.log('⏳ Operation in progress, please wait...');
+        showNotification('Please Wait', 'An operation is in progress', 'info');
+        return;
+    }
+
     if (selectedItems.size === 0) {
         showNotification('No Selection', 'Please select an item to rename', 'error');
         return;
@@ -3731,22 +3737,38 @@ function showRenameModal() {
     }
 
     const selectedPath = Array.from(selectedItems)[0];
-    const itemName = selectedPath.split('/').pop(); // Get just the filename
+    const itemName = selectedPath.split('/').pop();
 
     const modal = document.getElementById('renameModal');
     const newItemNameInput = document.getElementById('newItemName');
     const currentItemNameDiv = document.getElementById('currentItemName');
 
     if (newItemNameInput) {
-        newItemNameInput.value = itemName; // Pre-fill with current name
-        newItemNameInput.focus();
-        // Select the name part without extension for easy editing
-        const lastDotIndex = itemName.lastIndexOf('.');
-        if (lastDotIndex > 0) {
-            newItemNameInput.setSelectionRange(0, lastDotIndex);
-        } else {
-            newItemNameInput.select();
-        }
+        newItemNameInput.value = itemName;
+        
+        const stopPropagation = (e) => e.stopPropagation();
+        
+        newItemNameInput.removeEventListener('click', stopPropagation);
+        newItemNameInput.removeEventListener('keydown', stopPropagation);
+        newItemNameInput.removeEventListener('keyup', stopPropagation);
+        newItemNameInput.removeEventListener('input', stopPropagation);
+        newItemNameInput.removeEventListener('focus', stopPropagation);
+        
+        newItemNameInput.addEventListener('click', stopPropagation);
+        newItemNameInput.addEventListener('keydown', stopPropagation);
+        newItemNameInput.addEventListener('keyup', stopPropagation);
+        newItemNameInput.addEventListener('input', stopPropagation);
+        newItemNameInput.addEventListener('focus', stopPropagation);
+        
+        setTimeout(() => {
+            newItemNameInput.focus();
+            const lastDotIndex = itemName.lastIndexOf('.');
+            if (lastDotIndex > 0) {
+                newItemNameInput.setSelectionRange(0, lastDotIndex);
+            } else {
+                newItemNameInput.select();
+            }
+        }, 100);
     }
 
     if (currentItemNameDiv) {
@@ -3765,6 +3787,9 @@ function closeRenameModal() {
     if (newItemNameInput) newItemNameInput.value = '';
 }
 
+// Add this at the top of your script
+let isOperationInProgress = false;
+
 async function confirmRename() {
     const newName = document.getElementById('newItemName').value.trim();
     const selectedPath = Array.from(selectedItems)[0];
@@ -3774,20 +3799,57 @@ async function confirmRename() {
         return;
     }
 
-    if (newName === selectedPath.split('/').pop()) {
+    // Get current name from selected path
+    const currentName = selectedPath.split('/').pop();
+    
+    if (newName === currentName) {
         showNotification('Same Name', 'The new name is the same as the current name', 'info');
         closeRenameModal();
         return;
     }
 
-    // Validate new name
     if (!isValidFilename(newName)) {
         showNotification('Invalid Name', 'Invalid filename. Avoid special characters like <, >, :, ", |, ?, *, \\', 'error');
         return;
     }
 
-    await performRename(selectedPath, newName);
-    closeRenameModal();
+    // Prevent rapid-fire renames
+    if (isOperationInProgress) {
+        console.log('⏳ Please wait for previous operation to complete');
+        return;
+    }
+
+    isOperationInProgress = true;
+
+    const renameButton = document.querySelector('#renameModal .btn-primary');
+    const cancelButton = document.querySelector('#renameModal .btn-secondary');
+    
+    if (renameButton) {
+        renameButton.disabled = true;
+        renameButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Renaming...';
+    }
+    if (cancelButton) {
+        cancelButton.disabled = true;
+    }
+
+    try {
+        await performRename(selectedPath, newName);
+        
+        // Small delay for visual feedback
+        await new Promise(resolve => setTimeout(resolve, 300));
+        
+    } finally {
+        if (renameButton) {
+            renameButton.disabled = false;
+            renameButton.innerHTML = 'Rename';
+        }
+        if (cancelButton) {
+            cancelButton.disabled = false;
+        }
+        
+        isOperationInProgress = false;
+        closeRenameModal();
+    }
 }
 
 function isValidFilename(filename) {
@@ -3797,8 +3859,6 @@ function isValidFilename(filename) {
 
 async function performRename(oldPath, newName) {
     try {
-        showUploadStatus('🔄 Renaming item...', 'info');
-
         const response = await fetch('/rename', {
             method: 'POST',
             headers: {
@@ -3812,20 +3872,38 @@ async function performRename(oldPath, newName) {
 
         const result = await response.json();
 
-        if (result.success) {
-            showUploadStatus(`✅ Successfully renamed to "${newName}"`, 'success');
-
-            // Clear selection and refresh
-            clearSelection();
-            await refreshFileTable();
-            // Refresh storage stats after rename (file count unchanged but size might change)
-            refreshStorageStats('rename operation');
+        if (response.ok && result.success) {
+            showNotification('Success', result.message || 'Item renamed successfully', 'success');
+            
+            // CRITICAL: Immediately update selectedItems with new path
+            // Don't wait for file monitor - backend confirmed the rename!
+            const parentPath = oldPath.includes('/') 
+                ? oldPath.split('/').slice(0, -1).join('/') 
+                : '';
+            const newPath = parentPath ? `${parentPath}/${newName}` : newName;
+            
+            // Update selection immediately
+            selectedItems.delete(oldPath);
+            selectedItems.add(newPath);
+            
+            console.log(`✅ Updated selection: "${oldPath}" → "${newPath}"`);
+            
+            // Clear checkboxes to avoid confusion (optional)
+            const selectAllCheckbox = document.getElementById('selectAll');
+            if (selectAllCheckbox) {
+                selectAllCheckbox.checked = false;
+                selectAllCheckbox.indeterminate = false;
+            }
+            
+            // Trigger navigation (file monitor will update later)
+            navigateToFolder(currentPath || '');
+            
         } else {
-            showUploadStatus(`❌ Rename failed: ${result.error}`, 'error');
+            showNotification('Rename Failed', result.error || 'Could not rename item', 'error');
         }
     } catch (error) {
         console.error('Rename error:', error);
-        showUploadStatus('❌ Network error during rename', 'error');
+        showNotification('Error', 'Failed to rename item: ' + error.message, 'error');
     }
 }
 
