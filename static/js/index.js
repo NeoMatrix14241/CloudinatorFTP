@@ -2536,26 +2536,26 @@ function updateFileTableContent(files) {
         const goUpRow = document.createElement('tr');
         goUpRow.style.background = 'rgba(52, 152, 219, 0.1)';
         goUpRow.innerHTML = `
-                    <td></td>
-                    <td>
-                        <div class="file-name">
-                            <i class="fas fa-level-up-alt file-icon folder-icon"></i>
-                            <a href="#" onclick="navigateToFolder('${parentPath}'); return false;" class="folder-link">
-                                .. (Parent Directory)
-                            </a>
-                        </div>
-                    </td>
-                    <td class="size-cell">
-                        <span style="color: white; font-size: 13px;">--</span>
-                    </td>
-                    <td class="type-cell">
-                        <span style="color: white; font-size: 13px;">Folder</span>
-                    </td>
-                    <td class="date-cell">
-                        <span style="color: white; font-size: 13px;">--</span>
-                    </td>
-                    <td></td>
-                `;
+            <td></td>
+            <td>
+                <div class="file-name">
+                    <i class="fas fa-level-up-alt file-icon folder-icon"></i>
+                    <a href="#" data-action="navigate" data-path="${parentPath}" class="folder-link">
+                        .. (Parent Directory)
+                    </a>
+                </div>
+            </td>
+            <td class="size-cell">
+                <span style="color: white; font-size: 13px;">--</span>
+            </td>
+            <td class="type-cell">
+                <span style="color: white; font-size: 13px;">Folder</span>
+            </td>
+            <td class="date-cell">
+                <span style="color: white; font-size: 13px;">--</span>
+            </td>
+            <td></td>
+        `;
         tbody.appendChild(goUpRow);
     }
 
@@ -2563,18 +2563,18 @@ function updateFileTableContent(files) {
         // Show empty state
         const colspan = '6'; // Always 6 columns for consistent layout
         tbody.innerHTML += `
-                    <tr>
-                        <td colspan="${colspan}" style="text-align: center; padding: 40px 20px; vertical-align: middle;">
-                            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 120px;">
-                                <i class="fas fa-folder-open" style="font-size: 36px; color: white; margin-bottom: 15px; opacity: 0.7;"></i>
-                                <div style="color: white; font-weight: 500; margin-bottom: 8px; font-size: 18px;">This folder is empty</div>
-                                <div style="color: white; font-size: 14px; text-align: center; max-width: 300px;">
-                                    ${USER_ROLE === 'readwrite' ? 'Upload files or create folders to get started' : 'No files available'}
-                                </div>
-                            </div>
-                        </td>
-                    </tr>
-                `;
+            <tr>
+                <td colspan="${colspan}" style="text-align: center; padding: 40px 20px; vertical-align: middle;">
+                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 120px;">
+                        <i class="fas fa-folder-open" style="font-size: 36px; color: white; margin-bottom: 15px; opacity: 0.7;"></i>
+                        <div style="color: white; font-weight: 500; margin-bottom: 8px; font-size: 18px;">This folder is empty</div>
+                        <div style="color: white; font-size: 14px; text-align: center; max-width: 300px;">
+                            ${USER_ROLE === 'readwrite' ? 'Upload files or create folders to get started' : 'No files available'}
+                        </div>
+                    </div>
+                </td>
+            </tr>
+        `;
         return;
     }
 
@@ -2585,189 +2585,205 @@ function updateFileTableContent(files) {
         row.setAttribute('data-path', pathToUse ? `${pathToUse}/${file.name}` : file.name);
 
         let iconHtml, sizeHtml, typeHtml, actionsHtml;
+        const itemPath = pathToUse ? `${pathToUse}/${file.name}` : file.name;
 
         if (file.is_dir || file.type === 'dir') {
             // Directory
             iconHtml = `<i class="fas fa-folder file-icon folder-icon"></i>
-                                <a href="#" onclick="navigateToFolder('${pathToUse ? pathToUse + '/' : ''}${file.name}'); return false;">${file.name}</a>`;
+                <a href="#" data-action="navigate" data-path="${itemPath}">${file.name}</a>`;
 
             sizeHtml = `<span style="color: white; font-size: 13px;">
-                        ${file.item_count ? `${file.item_count.files || 0} files, ${file.item_count.dirs || 0} folders` : '--'}<br>
-                        ${file.size ? formatFileSize(file.size) : '--'}
-                    </span>`;
+                ${file.item_count ? `${file.item_count.files || 0} files, ${file.item_count.dirs || 0} folders` : '--'}<br>
+                ${file.size ? formatFileSize(file.size) : '--'}
+            </span>`;
 
             typeHtml = '<span class="file-type"><i class="fas fa-folder folder-icon file-icon"></i> Folder</span>';
+            
             actionsHtml = `
-                        <button type="button" class="btn btn-outline btn-sm download-btn" 
-                                data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
-                                onclick="downloadFolderAsZip('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
-                                title="Download folder as ZIP">
-                            <i class="fas fa-download"></i> Download
-                        </button>
-                        
-                        ${USER_ROLE === 'readwrite' ? `
-                        <button type="button" class="btn btn-warning btn-sm move-btn" 
-                                data-item-name="${file.name}"
-                                data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
-                                onclick="showSingleMoveModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
-                                title="Move item">
-                            <i class="fas fa-cut"></i> Move
-                        </button>
-                        
-                        <button type="button" class="btn btn-success btn-sm copy-btn" 
-                                data-item-name="${file.name}"
-                                data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
-                                onclick="showSingleCopyModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
-                                title="Copy item">
-                            <i class="fas fa-copy"></i> Copy
-                        </button>
-                        
-                        <button type="button" class="btn btn-primary btn-sm rename-btn" 
-                                data-item-name="${file.name}"
-                                data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
-                                onclick="showSingleRenameModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
-                                title="Rename item">
-                            <i class="fas fa-edit"></i> Rename
-                        </button>
-                        
-                        <button type="button" class="btn btn-danger btn-sm delete-btn" 
-                                data-item-name="${file.name}"
-                                data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
-                                onclick="showSingleDeleteModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
-                                title="Delete item">
-                            <i class="fas fa-trash"></i> Delete
-                        </button>
-                        ` : ''}
-                    `;
+                <button type="button" class="btn btn-outline btn-sm" 
+                        data-action="download-folder"
+                        data-item-path="${itemPath}"
+                        data-item-name="${file.name}"
+                        title="Download folder as ZIP">
+                    <i class="fas fa-download"></i> Download
+                </button>
+                
+                ${USER_ROLE === 'readwrite' ? `
+                <button type="button" class="btn btn-warning btn-sm" 
+                        data-action="move"
+                        data-item-name="${file.name}"
+                        data-item-path="${itemPath}"
+                        title="Move item">
+                    <i class="fas fa-cut"></i> Move
+                </button>
+                
+                <button type="button" class="btn btn-success btn-sm" 
+                        data-action="copy"
+                        data-item-name="${file.name}"
+                        data-item-path="${itemPath}"
+                        title="Copy item">
+                    <i class="fas fa-copy"></i> Copy
+                </button>
+                
+                <button type="button" class="btn btn-primary btn-sm" 
+                        data-action="rename"
+                        data-item-name="${file.name}"
+                        data-item-path="${itemPath}"
+                        title="Rename item">
+                    <i class="fas fa-edit"></i> Rename
+                </button>
+                
+                <button type="button" class="btn btn-danger btn-sm" 
+                        data-action="delete"
+                        data-item-name="${file.name}"
+                        data-item-path="${itemPath}"
+                        title="Delete item">
+                    <i class="fas fa-trash"></i> Delete
+                </button>
+                ` : ''}
+            `;
         } else {
-            // File
-            iconHtml = `<i class="fas fa-file file-icon file-icon-default"></i>${file.name}`;
+            // File - USE getFileIcon and getFileColor functions
+            const fileIcon = getFileIcon(file.name);
+            const fileColor = getFileColor(file.name);
+            const fileType = typeof getFileType === 'function' ? getFileType(file.name) : 'File';
+            
+            // Only apply color to the icon in the name column, not the text
+            iconHtml = `<i class="${fileIcon} file-icon file-icon-default" style="color: ${fileColor};"></i>${file.name}`;
             sizeHtml = `<span style="color: white; font-weight: 500;">${formatFileSize(file.size)}</span>`;
-            typeHtml = '<span class="file-type"><i class="fas fa-file file-icon file-icon-default"></i> File</span>';
+            
+            // Type cell icon should NOT have color applied
+            typeHtml = `<span class="file-type"><i class="${fileIcon} file-icon file-icon-default"></i> ${fileType}</span>`;
+            
             actionsHtml = `
-                        <button type="button" class="btn btn-outline btn-sm download-btn" 
-                                data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
-                                onclick="downloadItem('${pathToUse ? pathToUse + '/' : ''}${file.name}')"
-                                title="Download file">
-                            <i class="fas fa-download"></i> Download
-                        </button>
-                        ${USER_ROLE === 'readwrite' ? `
-                            <button type="button" class="btn btn-warning btn-sm move-btn" 
-                                    data-item-name="${file.name}"
-                                    data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
-                                    onclick="showSingleMoveModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
-                                    title="Move item">
-                                <i class="fas fa-cut"></i> Move
-                            </button>
-                            
-                            <button type="button" class="btn btn-success btn-sm copy-btn" 
-                                    data-item-name="${file.name}"
-                                    data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
-                                    onclick="showSingleCopyModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
-                                    title="Copy item">
-                                <i class="fas fa-copy"></i> Copy
-                            </button>
-                            
-                            <button type="button" class="btn btn-primary btn-sm rename-btn" 
-                                    data-item-name="${file.name}"
-                                    data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
-                                    onclick="showSingleRenameModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
-                                    title="Rename item">
-                                <i class="fas fa-edit"></i> Rename
-                            </button>
-                            
-                            <button type="button" class="btn btn-danger btn-sm delete-btn" 
-                                    data-item-name="${file.name}"
-                                    data-item-path="${pathToUse ? pathToUse + '/' : ''}${file.name}"
-                                    onclick="showSingleDeleteModal('${pathToUse ? pathToUse + '/' : ''}${file.name}', '${file.name}')"
-                                    title="Delete item">
-                                <i class="fas fa-trash"></i> Delete
-                            </button>
-                        ` : ''}
-                    `;
+                <button type="button" class="btn btn-outline btn-sm" 
+                        data-action="download"
+                        data-item-path="${itemPath}"
+                        title="Download file">
+                    <i class="fas fa-download"></i> Download
+                </button>
+                ${USER_ROLE === 'readwrite' ? `
+                    <button type="button" class="btn btn-warning btn-sm" 
+                            data-action="move"
+                            data-item-name="${file.name}"
+                            data-item-path="${itemPath}"
+                            title="Move item">
+                        <i class="fas fa-cut"></i> Move
+                    </button>
+                    
+                    <button type="button" class="btn btn-success btn-sm" 
+                            data-action="copy"
+                            data-item-name="${file.name}"
+                            data-item-path="${itemPath}"
+                            title="Copy item">
+                        <i class="fas fa-copy"></i> Copy
+                    </button>
+                    
+                    <button type="button" class="btn btn-primary btn-sm" 
+                            data-action="rename"
+                            data-item-name="${file.name}"
+                            data-item-path="${itemPath}"
+                            title="Rename item">
+                        <i class="fas fa-edit"></i> Rename
+                    </button>
+                    
+                    <button type="button" class="btn btn-danger btn-sm" 
+                            data-action="delete"
+                            data-item-name="${file.name}"
+                            data-item-path="${itemPath}"
+                            title="Delete item">
+                        <i class="fas fa-trash"></i> Delete
+                    </button>
+                ` : ''}
+            `;
         }
 
         row.innerHTML = `
-                    <td>
-                        ${USER_ROLE === 'readwrite' ? `
-                            <input type="checkbox" class="file-checkbox item-checkbox" 
-                                   data-path="${pathToUse ? pathToUse + '/' : ''}${file.name}" 
-                                   data-name="${file.name}" 
-                                   data-is-dir="${file.is_dir || file.type === 'dir' ? 'true' : 'false'}" 
-                                   onchange="updateSelection()">
-                        ` : ''}
-                    </td>
-                    <td>
-                        <div class="file-name">
-                            ${iconHtml}
-                        </div>
-                    </td>
-                    <td>${sizeHtml}</td>
-                    <td class="type-cell">${typeHtml}</td>
-                    <td>
-                        ${file.modified ?
+            <td>
+                ${USER_ROLE === 'readwrite' ? `
+                    <input type="checkbox" class="file-checkbox item-checkbox" 
+                           data-path="${itemPath}" 
+                           data-name="${file.name}" 
+                           data-is-dir="${file.is_dir || file.type === 'dir' ? 'true' : 'false'}" 
+                           onchange="updateSelection()">
+                ` : ''}
+            </td>
+            <td>
+                <div class="file-name">
+                    ${iconHtml}
+                </div>
+            </td>
+            <td>${sizeHtml}</td>
+            <td class="type-cell">${typeHtml}</td>
+            <td>
+                ${file.modified ?
                 `<span style="color: white; font-size: 13px; white-space: nowrap;">${formatTimestamp(file.modified)}</span>` :
                 `<span style="color: white; font-size: 13px;">--</span>`
             }
-                    </td>
-                    <td>
-                        <div class="actions">
-                            ${actionsHtml}
-                        </div>
-                    </td>
-                `;
+            </td>
+            <td>
+                <div class="actions">
+                    ${actionsHtml}
+                </div>
+            </td>
+        `;
 
         tbody.appendChild(row);
     });
 
-    // Add event listeners to dynamically created action buttons
-    if (USER_ROLE === 'readwrite') {
-        // Delete buttons
-        document.querySelectorAll('.delete-btn').forEach(button => {
-            button.removeEventListener('click', handleDeleteClick);
-            button.addEventListener('click', handleDeleteClick);
-        });
-
-        // Move buttons  
-        document.querySelectorAll('.move-btn').forEach(button => {
-            button.addEventListener('click', function () {
-                const itemName = this.getAttribute('data-item-name');
-                const itemPath = this.getAttribute('data-item-path');
-                showSingleMoveModal(itemPath, itemName);
-            });
-        });
-
-        // Copy buttons
-        document.querySelectorAll('.copy-btn').forEach(button => {
-            button.addEventListener('click', function () {
-                const itemName = this.getAttribute('data-item-name');
-                const itemPath = this.getAttribute('data-item-path');
-                showSingleCopyModal(itemPath, itemName);
-            });
-        });
-
-        // Rename buttons
-        document.querySelectorAll('.rename-btn').forEach(button => {
-            button.addEventListener('click', function () {
-                const itemName = this.getAttribute('data-item-name');
-                const itemPath = this.getAttribute('data-item-path');
-                showSingleRenameModal(itemPath, itemName);
-            });
-        });
-
-        // Add event listeners to checkboxes
-        document.querySelectorAll('.item-checkbox').forEach(checkbox => {
-            checkbox.addEventListener('change', updateSelection);
-        });
+    // ===== EVENT DELEGATION - Handle all button clicks =====
+    // Remove old listener if exists
+    const oldListener = tbody._actionListener;
+    if (oldListener) {
+        tbody.removeEventListener('click', oldListener);
     }
-
-    // Download buttons (available for all roles)
-    document.querySelectorAll('.download-btn').forEach(button => {
-        button.addEventListener('click', function () {
-            const itemPath = this.getAttribute('data-item-path');
-            downloadItem(itemPath);
-        });
-    });
+    
+    // Create new listener
+    const actionListener = function(e) {
+        // Handle navigation links
+        const navLink = e.target.closest('a[data-action="navigate"]');
+        if (navLink) {
+            e.preventDefault();
+            const path = navLink.getAttribute('data-path');
+            navigateToFolder(path);
+            return;
+        }
+        
+        // Handle action buttons
+        const button = e.target.closest('button[data-action]');
+        if (!button) return;
+        
+        const action = button.getAttribute('data-action');
+        const itemPath = button.getAttribute('data-item-path');
+        const itemName = button.getAttribute('data-item-name');
+        
+        console.log(`🔘 Action: ${action}, Path: ${itemPath}, Name: ${itemName}`);
+        
+        switch(action) {
+            case 'download':
+                downloadItem(itemPath);
+                break;
+            case 'download-folder':
+                downloadFolderAsZip(itemPath, itemName);
+                break;
+            case 'move':
+                showSingleMoveModal(itemPath, itemName);
+                break;
+            case 'copy':
+                showSingleCopyModal(itemPath, itemName);
+                break;
+            case 'rename':
+                showSingleRenameModal(itemPath, itemName);
+                break;
+            case 'delete':
+                showSingleDeleteModal(itemPath, itemName);
+                break;
+        }
+    };
+    
+    // Store reference and add listener
+    tbody._actionListener = actionListener;
+    tbody.addEventListener('click', actionListener);
 
     // Update selection state to ensure UI is in sync
     updateSelection();
