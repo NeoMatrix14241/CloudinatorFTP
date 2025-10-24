@@ -469,38 +469,36 @@ def after_request(response):
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    # Clear any existing session data first
-    session.clear()
+    # If user is already logged in, redirect to index
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
     
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
         
         if check_login(username, password):
-            # Mark session as permanent (will use PERMANENT_SESSION_LIFETIME)
-            session.permanent = True
-            
             # Set up session data
+            session.clear()
+            session.permanent = True
             login_user(username)
             session['role'] = get_role(username)
             session['session_id'] = str(uuid.uuid4())
             session['logged_in'] = True
             session['login_time'] = int(time.time())
-            
-            # Force the session to be saved
             session.modified = True
             
-            response = make_response(redirect(url_for('index')))
-            # Set a cookie to help with session persistence
-            response.set_cookie('session_check', '1', 
-                              max_age=3600, 
-                              samesite='Lax', 
-                              httponly=True)
-            return response
+            return redirect(url_for('index'))
         else:
             flash('Invalid username or password')
-            
-    return render_template('login.html')
+            return render_template('login.html'), 401
+    
+    # Render login page with no-cache headers
+    response = make_response(render_template('login.html'))
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 @app.route('/logout')
 def logout():
