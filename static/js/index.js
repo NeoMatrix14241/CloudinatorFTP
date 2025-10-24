@@ -1175,13 +1175,15 @@ function updateFileTable(files, path) {
                 </div>
             </td>
             <td class="size-cell">
-                <span style="color: white; font-size: 13px;">--</span>
+                <span style="color: white; font-size: 13px;"></span>
             </td>
             <td class="type-cell">
-                <span style="color: white; font-size: 13px;">Folder</span>
+                <span class="file-type">
+                    <i class="fas fa-arrow-up"></i> Parent Directory
+                </span>
             </td>
             <td class="date-cell">
-                <span style="color: white; font-size: 13px;">--</span>
+                <span style="color: white; font-size: 13px;"></span>
             </td>
             <td></td>
         `;
