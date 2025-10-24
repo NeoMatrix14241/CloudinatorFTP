@@ -16,6 +16,27 @@ document.addEventListener('DOMContentLoaded', function() {
     try { transformInitialRows(); } catch (e) { console.warn('transformInitialRows not available yet', e); }
 });
 
+// Function to protect all modal inputs from event delegation
+function protectModalInputs() {
+    const modals = document.querySelectorAll('.modal');
+    
+    modals.forEach(modal => {
+        const inputs = modal.querySelectorAll('input, textarea, select');
+        
+        inputs.forEach(input => {
+            // Stop propagation for all events that might interfere
+            ['click', 'keydown', 'keyup', 'keypress', 'input', 'focus', 'blur'].forEach(eventType => {
+                input.addEventListener(eventType, function(e) {
+                    e.stopPropagation();
+                }, true);
+            });
+        });
+    });
+}
+
+// Call this after DOM is loaded or after modals are created
+document.addEventListener('DOMContentLoaded', protectModalInputs);
+
 async function checkAuthenticationOnPageLoad() {
     try {
         // Make a quick authentication check
