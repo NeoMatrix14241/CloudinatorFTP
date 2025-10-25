@@ -41,8 +41,10 @@ pip install flask
 \`\`\`
 
 4. **mod_wsgi** for your Apache + Python version:  
-   - Download: [https://www.lfd.uci.edu/~gohlke/pythonlibs/#mod_wsgi](https://www.lfd.uci.edu/~gohlke/pythonlibs/#mod_wsgi)  
-   - Copy `mod_wsgi.so` into `C:\xampp\apache\modules\`.
+
+\`\`\`bash
+pip install mod_wsgi
+\`\`\`
 
 ---
 
@@ -160,7 +162,7 @@ venv\Scripts\activate
 | 500 Internal Server Error | Check Apache error log |
 | ImportError | Verify `sys.path.insert(0, <absolute_path>)` in `.wsgi` |
 | Flask not loading | Ensure `application` variable exists in `.wsgi` |
-| mod_wsgi fails | Check `.so` matches Apache + Python version |
+| mod_wsgi fails | Ensure you installed via `pip install mod_wsgi` and use the correct Python version |
 
 ---
 
