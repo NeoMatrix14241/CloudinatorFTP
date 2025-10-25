@@ -146,7 +146,7 @@ app.secret_key = SESSION_SECRET
 # Configure session handling
 app.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
-    PERMANENT_SESSION_LIFETIME=3600,  # Seconds
+    PERMANENT_SESSION_LIFETIME=300,  # Seconds
     SESSION_REFRESH_EACH_REQUEST=True,
     SESSION_COOKIE_NAME='cloudinator_session'
 )
