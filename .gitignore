@@ -5,3 +5,4 @@ uploads/
 *.backup
 *.asc
 .venv/
+.hindtrc

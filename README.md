@@ -78,16 +78,12 @@ python create_user.py
 #### 6. 🎯 Launch the Server
 
 ```bash
-python dev_server.py # Flask Server
-python prod_asgi_server.py # ASGI Server (Uvicorn)
-python prod_wsgi_server.py # WSGI Server (Waitress)
+python dev_server.py # Flask Server (WSGI)
 
 or
 
 launch:
-- start_dev_server.bat > Flask Server
-- start_prod_asgi_server.bat > ASGI Server (Uvicorn)
-- start_prod_wsgi_server.bat > WSGI Server (Waitress)
+- start_dev_server.bat > Flask Server (WSGI)
 ```
 
 #### 7. 🌍 Expose to Internet
