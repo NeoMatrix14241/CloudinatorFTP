@@ -14,6 +14,20 @@ document.addEventListener('DOMContentLoaded', function() {
     cleanupAuthenticationHistory();
     // Transform any server-rendered rows to use detailed file type & icon mapping
     try { transformInitialRows(); } catch (e) { console.warn('transformInitialRows not available yet', e); }
+
+    const createFolderForm = document.getElementById('createFolderForm');
+    if (createFolderForm) {
+        createFolderForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const folderName = document.getElementById('folderNameInput').value;
+            
+            // Use the global currentPath variable
+            console.log('Current global path:', currentPath);
+            
+            await createFolder(folderName, currentPath);
+        });
+    }
 });
 
 // Function to protect all modal inputs from event delegation
@@ -1086,6 +1100,13 @@ async function navigateToFolder(newPath) {
         const oldPath = currentPath;
         currentPath = cleanPath;
         console.log(`📝 Updated currentPath: "${oldPath}" → "${currentPath}"`);
+
+        // Update hidden path input
+        const pathInput = document.querySelector('input[name="path"]');
+        if (pathInput) {
+            pathInput.value = currentPath;
+            console.log(`📝 Updated hidden path input to: "${currentPath}"`);
+        }
         
         // Update page content
         console.log(`🔄 Updating file table with ${files.length} items...`);
@@ -4347,9 +4368,14 @@ async function performBulkZipDownload(paths) {
 // Create Folder Function
 async function createFolder(folderName, path) {
     try {
+        // Use the global currentPath variable instead of the passed path
+        const actualPath = currentPath || path || '';
+        
+        console.log('Creating folder with currentPath:', actualPath);
+        
         const formData = new FormData();
         formData.append('foldername', folderName);
-        formData.append('path', path);
+        formData.append('path', actualPath);
 
         const response = await fetch('/mkdir', {
             method: 'POST',
@@ -4360,11 +4386,8 @@ async function createFolder(folderName, path) {
 
         if (response.ok) {
             showNotification('Folder Created', result.message, 'success');
-            // Clear the input field
             document.getElementById('folderNameInput').value = '';
-            // Refresh the file table
             await refreshFileTable();
-            // Refresh storage stats after folder creation (directory count increased)
             refreshStorageStats('folder creation');
         } else {
             showNotification('Create Folder Failed', result.error, 'error');
@@ -4856,20 +4879,6 @@ document.addEventListener('DOMContentLoaded', function () {
     // Ensure Speed Test button event is attached
     if (speedTestBtn) {
         speedTestBtn.addEventListener('click', openSpeedTestModal);
-    }
-
-    // Create folder form event listener
-    const createFolderForm = document.getElementById('createFolderForm');
-    if (createFolderForm) {
-        createFolderForm.addEventListener('submit', function (e) {
-            e.preventDefault();
-            const folderName = document.getElementById('folderNameInput').value.trim();
-            const path = e.target.querySelector('input[name="path"]').value;
-
-            if (folderName) {
-                createFolder(folderName, path);
-            }
-        });
     }
 
     // Rename modal Enter key support and Ctrl+A support
