@@ -32,7 +32,7 @@ pip install -r requirements.txt
 
 OR
 
-pip install flask flask_cors bcrypt werkzeug zipstream-new watchdog gunicorn waitress uvicorn a2wsgi
+pip install flask flask_cors bcrypt werkzeug zipstream-new watchdog
 ```
 
 > **⚠️ Troubleshooting bcrypt installation:**
