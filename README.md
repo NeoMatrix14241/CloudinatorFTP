@@ -44,8 +44,8 @@ pip install flask flask_cors bcrypt werkzeug zipstream-new watchdog
 #### 3. 📥 Clone the Project
 
 ```bash
-git clone https://github.com/NeoMatrix14241/cloudflare-termux-ftp.git
-cd cloudflare-termux-ftp
+git clone https://github.com/NeoMatrix14241/CloudinatorFTP.git
+cd CloudinatorFTP
 ```
 
 #### 4. 📂 Configure Server and Storage Location
