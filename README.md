@@ -50,16 +50,14 @@ cd CloudinatorFTP
 
 #### 4. 📂 Configure Server and Storage Location
 
-**Option A: Interactive Setup (Recommended)**
+**Option A: Storage Only (Quick Configuration)**
 ```bash
-python setup_storage.py # Storage
-python config.py # Advanced (Server and Storage)
+python setup_storage.py
 ```
 
-**Option B: Quick Setup**
+**Option B: Storage & Server (Advanced)**
 ```bash
-# Run the automated setup
-python setup.py
+python config.py
 ```
 
 #### 5. 👥 Setup Users (Optional)
