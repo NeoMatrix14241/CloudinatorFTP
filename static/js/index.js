@@ -1147,7 +1147,7 @@ async function navigateToFolder(newPath) {
 // Handle browser back/forward buttons
 window.addEventListener('popstate', function(event) {
     const path = event.state?.path || '';
-    console.log('🔄 Browser back/forward navigation to:', path);
+    console.log('🔄 POPSTATE EVENT FIRED - Browser back/forward navigation to:', path);
     navigateToFolder(path);
 });
 
@@ -5387,6 +5387,16 @@ document.addEventListener('keydown', function (e) {
 
     // Backspace or Alt + Left Arrow to go up one level
     if ((e.key === 'Backspace' || (e.altKey && e.key === 'ArrowLeft')) && window.location.pathname !== '/') {
+    // Check if user is typing in an input field
+    const activeElement = document.activeElement;
+    const isInputField = activeElement && (
+        activeElement.tagName === 'INPUT' ||
+        activeElement.tagName === 'TEXTAREA' ||
+        activeElement.contentEditable === 'true'
+    );
+    
+    // Only navigate back if NOT typing in an input field
+    if (!isInputField) {
         e.preventDefault();
         const currentPath = CURRENT_PATH;
         if (currentPath) {
@@ -5396,6 +5406,7 @@ document.addEventListener('keydown', function (e) {
             window.location.href = parentPath ? `/${parentPath}` : '/';
         }
     }
+}
 
     // F5 or Ctrl/Cmd + R - Enhanced refresh with cleanup warning
     if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && e.key === 'r')) {
