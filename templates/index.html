@@ -350,17 +350,17 @@
                         <td></td> <!-- Empty checkbox column for consistency -->
                         <td>
                             <div class="file-name">
-                                <i class="fas fa-level-up-alt file-icon" style="color: #3498db;"></i>
+                                <i class="fas fa-level-up-alt file-icon folder-icon"></i>
                                 {% if '/' in path %}
                                     {% set parent_path = '/'.join(path.split('/')[:-1]) %}
                                     <a href="#" onclick="navigateToFolder('{{ parent_path }}'); return false;" 
                                        style="color: #3498db; font-weight: 600;">
-                                        .. (Go Up)
+                                        .. (Parent Directory)
                                     </a>
                                 {% else %}
                                     <a href="#" onclick="navigateToFolder(''); return false;" 
                                        style="color: #3498db; font-weight: 600;">
-                                        .. (Go Up)
+                                        .. (Parent Directory)
                                     </a>
                                 {% endif %}
                             </div>
