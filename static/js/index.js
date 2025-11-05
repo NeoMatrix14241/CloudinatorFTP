@@ -1410,7 +1410,7 @@ function updateBreadcrumb(path) {
     // Update path display
     const pathDisplay = breadcrumbContainer.querySelector('h3');
     if (pathDisplay) {
-        const newPath = path ? `/Root/${path}` : '/Root';
+        const newPath = path ? `/Root/${path}` : '/Root/';
         pathDisplay.innerHTML = `<i class="fas fa-folder-open"></i> ${newPath}`;
         console.log(`🍞 Updated breadcrumb display to: "${newPath}"`);
     } else {
