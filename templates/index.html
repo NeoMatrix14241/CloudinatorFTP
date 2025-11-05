@@ -1,21 +1,23 @@
 <!doctype html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>File Manager - Cloudinator FTP</title>
     <meta name="description" content="Secure file sharing platform">
     <meta name="keywords" content="file management, ftp, https">
-    
+
     <!-- Prevent caching of authenticated content -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    
+
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="{{ url_for('static', filename='css/index.css') }}" rel="stylesheet">
     <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp">
 </head>
+
 <body>
     <!-- Header -->
     <header class="header">
@@ -56,7 +58,7 @@
                     <i class="fas fa-refresh"></i> Retry
                 </button>
                 <button class="btn btn-outline btn-sm" id="speedTestBtn">
-	            <i class="fas fa-tachometer-alt"></i> Speed Test
+                    <i class="fas fa-tachometer-alt"></i> Speed Test
                 </button>
             </h4>
             <div class="stats-grid">
@@ -116,13 +118,15 @@
                         <i class="fas fa-info-circle"></i>
                         <span id="uploadModeHint">Multiple file selection supported</span>
                         <div class="upload-instructions" id="uploadInstructions" style="display: none;">
-                            <small>💡 For multiple folders: Click repeatedly OR Ctrl+select in Explorer then drag here</small>
+                            <small>💡 For multiple folders: Click repeatedly OR Ctrl+select in Explorer then drag
+                                here</small>
                         </div>
                     </div>
                 </div>
                 <div class="file-input-wrapper">
                     <input type="file" id="fileInput" class="file-input" multiple required>
-                    <input type="file" id="folderInput" class="file-input" webkitdirectory multiple style="display: none;">
+                    <input type="file" id="folderInput" class="file-input" webkitdirectory multiple
+                        style="display: none;">
                     <div class="file-input-display" id="fileInputDisplay">
                         <i class="fas fa-upload" style="font-size: 20px;"></i>
                         <div>
@@ -145,14 +149,17 @@
                     </div>
                     <div class="queue-actions">
                         <!-- Parallel Upload Controls -->
-                        <div class="parallel-upload-controls" style="display: flex; align-items: center; gap: 8px; margin-right: 10px; font-size: 12px;">
+                        <div class="parallel-upload-controls"
+                            style="display: flex; align-items: center; gap: 8px; margin-right: 10px; font-size: 12px;">
                             <label style="color: #fff; display: flex; align-items: center; gap: 4px;">
-                                <input type="checkbox" id="enableParallelUploads" checked style="transform: scale(0.9);">
+                                <input type="checkbox" id="enableParallelUploads" checked
+                                    style="transform: scale(0.9);">
                                 <span>⚡ Parallel</span>
                             </label>
                             <label style="color: #fff; display: flex; align-items: center; gap: 4px;">
                                 <span>Max:</span>
-                                <select id="maxConcurrentUploads" style="background: rgba(255,255,255,0.1); color: #fff; border: 1px solid rgba(255,255,255,0.3); border-radius: 3px; padding: 2px 4px; font-size: 11px;">
+                                <select id="maxConcurrentUploads"
+                                    style="background: rgba(255,255,255,0.1); color: #fff; border: 1px solid rgba(255,255,255,0.3); border-radius: 3px; padding: 2px 4px; font-size: 11px;">
                                     <option value="1" selected>1</option>
                                     <option value="2">2</option>
                                     <option value="3">3</option>
@@ -166,7 +173,7 @@
                                 </select>
                             </label>
                         </div>
-                        
+
                         <button id="clearAllBtn" class="btn btn-warning btn-sm">
                             <i class="fas fa-trash-alt"></i> Clear All
                         </button>
@@ -243,7 +250,8 @@
                     <i class="fas fa-trash"></i> Delete
                 </button>
                 {% endif %}
-                <button class="btn btn-outline btn-sm" onclick="clearSelection()" style="color: white; border-color: rgba(255,255,255,0.4);">
+                <button class="btn btn-outline btn-sm" onclick="clearSelection()"
+                    style="color: white; border-color: rgba(255,255,255,0.4);">
                     <i class="fas fa-times"></i> Clear
                 </button>
             </div>
@@ -251,7 +259,8 @@
 
         <!-- Mobile scroll hint (only visible on mobile) -->
         <div class="mobile-scroll-hint" style="display: none;">
-            <div style="background: rgba(52, 152, 219, 0.08); border-radius: 6px; padding: 8px; margin-bottom: 8px; border-left: 2px solid #3498db;">
+            <div
+                style="background: rgba(52, 152, 219, 0.08); border-radius: 6px; padding: 8px; margin-bottom: 8px; border-left: 2px solid #3498db;">
                 <i class="fas fa-info-circle" style="color: #3498db; margin-right: 6px; font-size: 12px;"></i>
                 <span style="color: white; font-size: 12px;">Mobile view - Some columns hidden for better viewing</span>
             </div>
@@ -262,52 +271,71 @@
             <div style="display: flex; align-items: center; justify-content: space-between;">
                 <h3><i class="fas fa-folder-open"></i> /{{ 'Root/' + path if path else 'Root/' }}</h3>
                 {% if path and path != '' %}
+                <div class="btn-group" style="display: flex; gap: 5px;">
+                    <!-- Root button with home icon -->
+                    <a href="#" onclick="navigateToFolder(''); return false;" class="btn btn-outline btn-sm"
+                        style="color: white; border-color: rgba(255,255,255,0.4);" title="Go to root folder">
+                        <i class="fas fa-home"></i> Root
+                    </a>
+
+                    <!-- Up button with level-up icon -->
                     {% if '/' in path %}
-                        {% set parent_path = '/'.join(path.split('/')[:-1]) %}
-                        <a href="#" onclick="navigateToFolder('{{ parent_path }}'); return false;" 
-                           class="btn btn-outline btn-sm" style="color: white; border-color: rgba(255,255,255,0.4);">
-                            <i class="fas fa-level-up-alt"></i> Up
-                        </a>
+                    {% set parent_path = '/'.join(path.split('/')[:-1]) %}
+                    <a href="#" onclick="navigateToFolder('{{ parent_path }}'); return false;"
+                        class="btn btn-outline btn-sm" style="color: white; border-color: rgba(255,255,255,0.4);"
+                        title="Go up one level to: {{ parent_path or 'Root' }}">
+                        <i class="fas fa-level-up-alt"></i> Up
+                    </a>
                     {% else %}
-                        <a href="#" onclick="navigateToFolder(''); return false;" 
-                           class="btn btn-outline btn-sm" style="color: white; border-color: rgba(255,255,255,0.4);">
-                            <i class="fas fa-level-up-alt"></i> Up
-                        </a>
+                    <!-- If we're only one level deep, up button also goes to root -->
+                    <a href="#" onclick="navigateToFolder(''); return false;" class="btn btn-outline btn-sm"
+                        style="color: white; border-color: rgba(255,255,255,0.4);" title="Go up to root folder">
+                        <i class="fas fa-level-up-alt"></i> Up
+                    </a>
                     {% endif %}
+                </div>
                 {% endif %}
             </div>
             {% if role == 'readwrite' %}
-                <div class="controls" style="margin-top: 16px; margin-bottom: 4px;">
-                    <form id="createFolderForm" class="create-folder-form">
-                        <input type="text" id="folderNameInput" name="foldername" placeholder="Enter folder name" required>
-                        <input type="hidden" name="path" value="{{ path }}">
-                        <button type="submit" class="btn btn-primary">
-                            <i class="fas fa-folder-plus"></i> Create Folder
-                        </button>
-                    </form>
-                </div>
+            <div class="controls" style="margin-top: 16px; margin-bottom: 4px;">
+                <form id="createFolderForm" class="create-folder-form">
+                    <input type="text" id="folderNameInput" name="foldername" placeholder="Enter folder name" required>
+                    <input type="hidden" name="path" value="{{ path }}">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-folder-plus"></i> Create Folder
+                    </button>
+                </form>
+            </div>
             {% endif %}
         </div>
 
         <!-- Search and Sort Controls -->
         <div class="table-controls" style="margin-bottom: 20px;">
-            <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 15px;">
+            <div
+                style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 15px;">
                 <div class="search-wrapper" style="position: relative; max-width: 400px; flex: 1; min-width: 250px;">
-                    <i class="fas fa-search" style="position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: rgba(255,255,255,0.6); z-index: 2;"></i>
-                    <input type="text" id="tableSearch" placeholder="🔍 Search files and folders (2+ chars for deep search)..." 
-                           onkeyup="searchTable(this.value)" title="Type 2 or more characters to search through all nested folders" />
-                    <button id="clearSearch" onclick="clearSearch()" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: rgba(255,255,255,0.6); cursor: pointer; display: none;">
+                    <i class="fas fa-search"
+                        style="position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: rgba(255,255,255,0.6); z-index: 2;"></i>
+                    <input type="text" id="tableSearch"
+                        placeholder="🔍 Search files and folders (2+ chars for deep search)..."
+                        onkeyup="searchTable(this.value)"
+                        title="Type 2 or more characters to search through all nested folders" />
+                    <button id="clearSearch" onclick="clearSearch()"
+                        style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: rgba(255,255,255,0.6); cursor: pointer; display: none;">
                         <i class="fas fa-times"></i>
                     </button>
                 </div>
                 <div class="sort-controls" style="display: flex; gap: 10px; align-items: center;">
-                    <button id="resetSort" onclick="resetSorting()" class="btn btn-outline btn-sm" style="color: white; border-color: rgba(255,255,255,0.4); display: none;" title="Reset sorting to default">
+                    <button id="resetSort" onclick="resetSorting()" class="btn btn-outline btn-sm"
+                        style="color: white; border-color: rgba(255,255,255,0.4); display: none;"
+                        title="Reset sorting to default">
                         <i class="fas fa-undo"></i> Reset Sort
                     </button>
                 </div>
             </div>
             <div class="sort-info" style="margin-top: 10px; color: rgba(255,255,255,0.7); font-size: 12px;">
-                <i class="fas fa-info-circle"></i> Click column headers to sort • Currently showing: <span id="visibleCount">{{ items|length if items else 0 }}</span> items
+                <i class="fas fa-info-circle"></i> Click column headers to sort • Currently showing: <span
+                    id="visibleCount">{{ items|length if items else 0 }}</span> items
                 <span id="currentSortInfo" style="margin-left: 15px; color: rgba(255,255,255,0.5);"></span>
             </div>
         </div>
@@ -326,19 +354,19 @@
                             {% endif %}
                         </th>
                         <th class="sortable" data-sort="name" style="cursor: pointer;">
-                            <i class="fas fa-file"></i> Name 
+                            <i class="fas fa-file"></i> Name
                             <i class="fas fa-sort sort-icon" style="margin-left: 5px; opacity: 0.5;"></i>
                         </th>
                         <th class="sortable" data-sort="size" style="cursor: pointer;">
-                            <i class="fas fa-weight-hanging"></i> Size 
+                            <i class="fas fa-weight-hanging"></i> Size
                             <i class="fas fa-sort sort-icon" style="margin-left: 5px; opacity: 0.5;"></i>
                         </th>
                         <th class="sortable" data-sort="type" style="cursor: pointer;">
-                            <i class="fas fa-tag"></i> Type 
+                            <i class="fas fa-tag"></i> Type
                             <i class="fas fa-sort sort-icon" style="margin-left: 5px; opacity: 0.5;"></i>
                         </th>
                         <th class="sortable" data-sort="modified" style="cursor: pointer;">
-                            <i class="fas fa-clock"></i> Modified 
+                            <i class="fas fa-clock"></i> Modified
                             <i class="fas fa-sort sort-icon" style="margin-left: 5px; opacity: 0.5;"></i>
                         </th>
                         <th><i class="fas fa-cogs"></i> Actions</th>
@@ -353,16 +381,16 @@
                             <div class="file-name">
                                 <i class="fas fa-level-up-alt file-icon folder-icon"></i>
                                 {% if '/' in path %}
-                                    {% set parent_path = '/'.join(path.split('/')[:-1]) %}
-                                    <a href="#" onclick="navigateToFolder('{{ parent_path }}'); return false;" 
-                                       style="color: #3498db; font-weight: 600;">
-                                        .. (Parent Directory)
-                                    </a>
+                                {% set parent_path = '/'.join(path.split('/')[:-1]) %}
+                                <a href="#" onclick="navigateToFolder('{{ parent_path }}'); return false;"
+                                    style="color: #3498db; font-weight: 600;">
+                                    .. (Parent Directory)
+                                </a>
                                 {% else %}
-                                    <a href="#" onclick="navigateToFolder(''); return false;" 
-                                       style="color: #3498db; font-weight: 600;">
-                                        .. (Parent Directory)
-                                    </a>
+                                <a href="#" onclick="navigateToFolder(''); return false;"
+                                    style="color: #3498db; font-weight: 600;">
+                                    .. (Parent Directory)
+                                </a>
                                 {% endif %}
                             </div>
                         </td>
@@ -384,17 +412,16 @@
                         </td>
                     </tr>
                     {% endif %}
-                    
+
                     {% if items %}
-                        {% for item in items %}
+                    {% for item in items %}
                     <tr class="file-row" data-path="{{ (path + '/' + item.name) if path else item.name }}">
                         <td>
                             {% if role == 'readwrite' or role == 'readonly' %}
-                            <input type="checkbox" class="file-checkbox item-checkbox" 
-                                   data-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                   data-name="{{ item.name }}"
-                                   data-is-dir="{{ item.is_dir|lower }}"
-                                   onchange="updateSelection()">
+                            <input type="checkbox" class="file-checkbox item-checkbox"
+                                data-path="{{ (path + '/' + item.name) if path else item.name }}"
+                                data-name="{{ item.name }}" data-is-dir="{{ item.is_dir|lower }}"
+                                onchange="updateSelection()">
                             {% else %}
                             <!-- Empty checkbox column for layout consistency -->
                             {% endif %}
@@ -402,137 +429,143 @@
                         <td>
                             <div class="file-name">
                                 {% if item.is_dir %}
-                                    <i class="fas fa-folder file-icon folder-icon"></i>
-                                    <a href="#" onclick="navigateToFolder('{{ (path + '/' + item.name) if path else item.name }}'); return false;" 
-                                       data-folder-path="{{ (path + '/' + item.name) if path else item.name }}" 
-                                       class="folder-link">
-                                        {{ item.name }}
-                                    </a>
-                                {% else %}
-                                    <i class="fas fa-file file-icon file-icon-default"></i>
+                                <i class="fas fa-folder file-icon folder-icon"></i>
+                                <a href="#"
+                                    onclick="navigateToFolder('{{ (path + '/' + item.name) if path else item.name }}'); return false;"
+                                    data-folder-path="{{ (path + '/' + item.name) if path else item.name }}"
+                                    class="folder-link">
                                     {{ item.name }}
+                                </a>
+                                {% else %}
+                                <i class="fas fa-file file-icon file-icon-default"></i>
+                                {{ item.name }}
                                 {% endif %}
                             </div>
                         </td>
                         <td>
                             {% if item.is_dir %}
-                                <span style="color: white; font-size: 13px;">
-                                    {% if item.item_count %}
-                                        {{ item.item_count.files }} files, {{ item.item_count.dirs }} folders
-                                        {% if item.size > 0 %}
-                                            <br><small style="color: white;">
-                                                {% if item.size >= 1024*1024*1024 %}
-                                                    {{ "%.2f"|format(item.size / (1024*1024*1024)) }} GB
-                                                {% elif item.size >= 1024*1024 %}
-                                                    {{ "%.1f"|format(item.size / (1024*1024)) }} MB
-                                                {% else %}
-                                                    {{ "%.1f"|format(item.size / 1024) }} KB
-                                                {% endif %}
-                                            </small>
-                                        {% endif %}
-                                    {% else %}
-                                        --
-                                    {% endif %}
-                                </span>
-                            {% else %}
-                                <span style="color: white; font-weight: 500;">
+                            <span style="color: white; font-size: 13px;">
+                                {% if item.item_count %}
+                                {{ item.item_count.files }} files, {{ item.item_count.dirs }} folders
+                                {% if item.size > 0 %}
+                                <br><small style="color: white;">
                                     {% if item.size >= 1024*1024*1024 %}
-                                        {{ "%.2f"|format(item.size / (1024*1024*1024)) }} GB
+                                    {{ "%.2f"|format(item.size / (1024*1024*1024)) }} GB
                                     {% elif item.size >= 1024*1024 %}
-                                        {{ "%.1f"|format(item.size / (1024*1024)) }} MB
-                                    {% elif item.size >= 1024 %}
-                                        {{ "%.1f"|format(item.size / 1024) }} KB
+                                    {{ "%.1f"|format(item.size / (1024*1024)) }} MB
                                     {% else %}
-                                        {{ item.size }} bytes
+                                    {{ "%.1f"|format(item.size / 1024) }} KB
                                     {% endif %}
-                                </span>
+                                </small>
+                                {% endif %}
+                                {% else %}
+                                --
+                                {% endif %}
+                            </span>
+                            {% else %}
+                            <span style="color: white; font-weight: 500;">
+                                {% if item.size >= 1024*1024*1024 %}
+                                {{ "%.2f"|format(item.size / (1024*1024*1024)) }} GB
+                                {% elif item.size >= 1024*1024 %}
+                                {{ "%.1f"|format(item.size / (1024*1024)) }} MB
+                                {% elif item.size >= 1024 %}
+                                {{ "%.1f"|format(item.size / 1024) }} KB
+                                {% else %}
+                                {{ item.size }} bytes
+                                {% endif %}
+                            </span>
                             {% endif %}
                         </td>
                         <td>
                             <span class="file-type">
                                 {% if item.is_dir %}
-                                    <i class="fas fa-folder"></i> Folder
+                                <i class="fas fa-folder"></i> Folder
                                 {% else %}
-                                    <i class="fas fa-file"></i> File
+                                <i class="fas fa-file"></i> File
                                 {% endif %}
                             </span>
                         </td>
                         <td>
                             {% if item.modified %}
-                                <span style="color: white; font-size: 13px; white-space: nowrap;">
-                                    {{ item.modified|int|timestamp_to_date }}
-                                </span>
+                            <span style="color: white; font-size: 13px; white-space: nowrap;">
+                                {{ item.modified|int|timestamp_to_date }}
+                            </span>
                             {% else %}
-                                <span style="color: white; font-size: 13px;">--</span>
+                            <span style="color: white; font-size: 13px;">--</span>
                             {% endif %}
                         </td>
                         <td>
                             <div class="actions">
                                 {% if not item.is_dir %}
-                                <button type="button" class="btn btn-outline btn-sm download-btn" 
-                                        data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                        onclick="downloadItem('{{ (path + '/' + item.name) if path else item.name }}')"
-                                        title="Download file">
+                                <button type="button" class="btn btn-outline btn-sm download-btn"
+                                    data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
+                                    onclick="downloadItem('{{ (path + '/' + item.name) if path else item.name }}')"
+                                    title="Download file">
                                     <i class="fas fa-download"></i> Download
                                 </button>
                                 {% else %}
-                                <button type="button" class="btn btn-outline btn-sm download-btn" 
-                                        data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                        onclick="downloadFolderAsZip('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
-                                        title="Download folder as ZIP">
+                                <button type="button" class="btn btn-outline btn-sm download-btn"
+                                    data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
+                                    onclick="downloadFolderAsZip('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
+                                    title="Download folder as ZIP">
                                     <i class="fas fa-download"></i> Download
                                 </button>
                                 </button>
                                 {% endif %}
-                                
+
                                 {% if role == 'readwrite' %}
-                                <button type="button" class="btn btn-warning btn-sm move-btn" 
-                                        data-item-name="{{ item.name }}"
-                                        data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                        onclick="showSingleMoveModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
-                                        title="Move item">
+                                <button type="button" class="btn btn-warning btn-sm move-btn"
+                                    data-item-name="{{ item.name }}"
+                                    data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
+                                    onclick="showSingleMoveModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
+                                    title="Move item">
                                     <i class="fas fa-cut"></i> Move
                                 </button>
-                                
-                                <button type="button" class="btn btn-success btn-sm copy-btn" 
-                                        data-item-name="{{ item.name }}"
-                                        data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                        onclick="showSingleCopyModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
-                                        title="Copy item">
+
+                                <button type="button" class="btn btn-success btn-sm copy-btn"
+                                    data-item-name="{{ item.name }}"
+                                    data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
+                                    onclick="showSingleCopyModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
+                                    title="Copy item">
                                     <i class="fas fa-copy"></i> Copy
                                 </button>
-                                
-                                <button type="button" class="btn btn-primary btn-sm rename-btn" 
-                                        data-item-name="{{ item.name }}"
-                                        data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                        onclick="showSingleRenameModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
-                                        title="Rename item">
+
+                                <button type="button" class="btn btn-primary btn-sm rename-btn"
+                                    data-item-name="{{ item.name }}"
+                                    data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
+                                    onclick="showSingleRenameModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
+                                    title="Rename item">
                                     <i class="fas fa-edit"></i> Rename
                                 </button>
-                                
-                                <button type="button" class="btn btn-danger btn-sm delete-btn" 
-                                        data-item-name="{{ item.name }}"
-                                        data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                        onclick="showSingleDeleteModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
-                                        title="Delete item">
+
+                                <button type="button" class="btn btn-danger btn-sm delete-btn"
+                                    data-item-name="{{ item.name }}"
+                                    data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
+                                    onclick="showSingleDeleteModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
+                                    title="Delete item">
                                     <i class="fas fa-trash"></i> Delete
                                 </button>
                                 {% endif %}
                             </div>
                         </td>
                     </tr>
-                        {% endfor %}
+                    {% endfor %}
                     {% else %}
-                        <!-- Empty directory message within the table -->
-                        <tr>
-                            <td colspan="6" style="text-align: center; padding: 40px 20px; vertical-align: middle;">
-                                <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 120px;">
-                                    <i class="fas fa-folder-open" style="font-size: 36px; color: #95a5a6; margin-bottom: 15px; opacity: 0.7;"></i>
-                                    <div style="color: #7f8c8d; font-weight: 500; margin-bottom: 8px; font-size: 18px;">This folder is empty</div>
-                                    <div style="color: #95a5a6; font-size: 14px; text-align: center; max-width: 300px;">{% if role == 'readwrite' %}Upload files or create folders to get started{% else %}No files available{% endif %}</div>
-                                </div>
-                            </td>
-                        </tr>
+                    <!-- Empty directory message within the table -->
+                    <tr>
+                        <td colspan="6" style="text-align: center; padding: 40px 20px; vertical-align: middle;">
+                            <div
+                                style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 120px;">
+                                <i class="fas fa-folder-open"
+                                    style="font-size: 36px; color: #95a5a6; margin-bottom: 15px; opacity: 0.7;"></i>
+                                <div style="color: #7f8c8d; font-weight: 500; margin-bottom: 8px; font-size: 18px;">This
+                                    folder is empty</div>
+                                <div style="color: #95a5a6; font-size: 14px; text-align: center; max-width: 300px;">{%
+                                    if role == 'readwrite' %}Upload files or create folders to get started{% else %}No
+                                    files available{% endif %}</div>
+                            </div>
+                        </td>
+                    </tr>
                     {% endif %}
                 </tbody>
             </table>
@@ -550,50 +583,59 @@
             <div class="modal-body">
                 <div class="form-group">
                     <label for="destinationPath">Select Destination Folder:</label>
-                    
+
                     <!-- Current Path Display -->
-                    <div class="current-destination" style="background: rgba(255,255,255,0.1); padding: 8px 12px; border-radius: 6px; margin-bottom: 10px; border: 1px solid rgba(255,255,255,0.2);">
+                    <div class="current-destination"
+                        style="background: rgba(255,255,255,0.1); padding: 8px 12px; border-radius: 6px; margin-bottom: 10px; border: 1px solid rgba(255,255,255,0.2);">
                         <i class="fas fa-folder-open" style="color: #f39c12; margin-right: 8px;"></i>
                         <span id="currentDestinationPath" style="color: #fff; font-weight: 500;">Root Directory</span>
                     </div>
-                    
+
                     <!-- Folder Browser -->
-                    <div class="folder-browser" style="max-height: 300px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.3); border-radius: 8px; background: rgba(255,255,255,0.05);">
+                    <div class="folder-browser"
+                        style="max-height: 300px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.3); border-radius: 8px; background: rgba(255,255,255,0.05);">
                         <!-- Quick Actions -->
-                        <div class="browser-actions" style="padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.1);">
-                            <button type="button" class="btn btn-sm btn-outline" onclick="goToRoot()" style="font-size: 11px; padding: 4px 8px;">
+                        <div class="browser-actions"
+                            style="padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.1);">
+                            <button type="button" class="btn btn-sm btn-outline" onclick="goToRoot()"
+                                style="font-size: 11px; padding: 4px 8px;">
                                 <i class="fas fa-home"></i> Root
                             </button>
-                            <button type="button" class="btn btn-sm btn-outline" onclick="goUpOneLevel()" id="upButton" style="font-size: 11px; padding: 4px 8px; margin-left: 8px;" disabled>
+                            <button type="button" class="btn btn-sm btn-outline" onclick="goUpOneLevel()" id="upButton"
+                                style="font-size: 11px; padding: 4px 8px; margin-left: 8px;" disabled>
                                 <i class="fas fa-level-up-alt"></i> Up
                             </button>
-                            <button type="button" class="btn btn-sm btn-success" onclick="createNewFolderInBrowser()" style="font-size: 11px; padding: 4px 8px; margin-left: 8px;">
+                            <button type="button" class="btn btn-sm btn-success" onclick="createNewFolderInBrowser()"
+                                style="font-size: 11px; padding: 4px 8px; margin-left: 8px;">
                                 <i class="fas fa-plus"></i> New Folder
                             </button>
                         </div>
-                        
+
                         <!-- Loading State -->
-                        <div id="browserLoading" class="browser-loading" style="padding: 20px; text-align: center; color: rgba(255,255,255,0.7); display: none;">
+                        <div id="browserLoading" class="browser-loading"
+                            style="padding: 20px; text-align: center; color: rgba(255,255,255,0.7); display: none;">
                             <i class="fas fa-spinner fa-spin"></i> Loading folders...
                         </div>
-                        
+
                         <!-- Folder List -->
                         <div id="folderList" class="folder-list" style="padding: 8px;">
                             <!-- Folders will be populated here -->
                         </div>
-                        
+
                         <!-- Empty State -->
-                        <div id="emptyFolderState" class="empty-state" style="padding: 20px; text-align: center; color: rgba(255,255,255,0.5); display: none;">
-                            <i class="fas fa-folder-open" style="font-size: 24px; margin-bottom: 8px; display: block;"></i>
+                        <div id="emptyFolderState" class="empty-state"
+                            style="padding: 20px; text-align: center; color: rgba(255,255,255,0.5); display: none;">
+                            <i class="fas fa-folder-open"
+                                style="font-size: 24px; margin-bottom: 8px; display: block;"></i>
                             No folders in this directory
                         </div>
                     </div>
-                    
+
                     <small style="color: #7f8c8d; font-size: 12px; margin-top: 8px; display: block;">
                         💡 Click on folders to navigate, or use "New Folder" to create a destination
                     </small>
                 </div>
-                
+
                 <div id="selectedItems" style="margin-top: 15px;">
                     <strong>Selected items:</strong>
                     <ul id="selectedItemsList" style="margin-top: 8px; padding-left: 20px; color: #7f8c8d;">
@@ -626,7 +668,8 @@
                 </div>
                 <div id="renameItemInfo" style="margin-top: 15px;">
                     <strong>Renaming:</strong>
-                    <div id="currentItemName" style="margin-top: 8px; padding: 10px; background: rgba(52, 152, 219, 0.1); border-radius: 8px; color: #2c3e50;">
+                    <div id="currentItemName"
+                        style="margin-top: 8px; padding: 10px; background: rgba(52, 152, 219, 0.1); border-radius: 8px; color: #2c3e50;">
                     </div>
                 </div>
             </div>
@@ -706,20 +749,18 @@
             </div>
             <div class="modal-footer">
                 <button class="btn btn-outline" onclick="closeConfirmationModal()">Cancel</button>
-                <button id="confirmationConfirmBtn" class="btn btn-primary" onclick="executeConfirmedAction()">Confirm</button>
+                <button id="confirmationConfirmBtn" class="btn btn-primary"
+                    onclick="executeConfirmedAction()">Confirm</button>
             </div>
         </div>
     </div>
 
     <!-- Store Flask template values in HTML data attributes for JavaScript access -->
-    <div id="flask-config" 
-         data-chunk-size="{{ CHUNK_SIZE }}"
-         data-upload-url="{{ url_for('upload') }}"
-         data-current-path="{{ path }}"
-         data-user-role="{{ role }}"
-         style="display: none;"></div>
-         
+    <div id="flask-config" data-chunk-size="{{ CHUNK_SIZE }}" data-upload-url="{{ url_for('upload') }}"
+        data-current-path="{{ path }}" data-user-role="{{ role }}" style="display: none;"></div>
+
     <!-- External JavaScript files -->
     <script src="{{ url_for('static', filename='js/index.js') }}"></script>
 </body>
+
 </html>

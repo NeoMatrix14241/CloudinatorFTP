@@ -6,10 +6,10 @@ const CURRENT_PATH = configElement.dataset.currentPath || "";
 const USER_ROLE = configElement.dataset.userRole || "readonly";
 
 // Browser history management for authentication
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     // Immediate authentication check on page load
     checkAuthenticationOnPageLoad();
-    
+
     // Clean up browser history to prevent login page from being accessible via back button
     cleanupAuthenticationHistory();
     // Transform any server-rendered rows to use detailed file type & icon mapping
@@ -19,12 +19,12 @@ document.addEventListener('DOMContentLoaded', function() {
     if (createFolderForm) {
         createFolderForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            
+
             const folderName = document.getElementById('folderNameInput').value;
-            
+
             // Use the global currentPath variable
             console.log('Current global path:', currentPath);
-            
+
             await createFolder(folderName, currentPath);
         });
     }
@@ -33,14 +33,14 @@ document.addEventListener('DOMContentLoaded', function() {
 // Function to protect all modal inputs from event delegation
 function protectModalInputs() {
     const modals = document.querySelectorAll('.modal');
-    
+
     modals.forEach(modal => {
         const inputs = modal.querySelectorAll('input, textarea, select');
-        
+
         inputs.forEach(input => {
             // Stop propagation for all events that might interfere
             ['click', 'keydown', 'keyup', 'keypress', 'input', 'focus', 'blur'].forEach(eventType => {
-                input.addEventListener(eventType, function(e) {
+                input.addEventListener(eventType, function (e) {
                     e.stopPropagation();
                 }, true);
             });
@@ -61,14 +61,14 @@ async function checkAuthenticationOnPageLoad() {
                 'Cache-Control': 'no-cache'
             }
         });
-        
+
         // If we get redirected to login or get a 401/403, we're not authenticated
         if (!response.ok || response.url.includes('/login')) {
             console.log('🔒 Not authenticated, redirecting to login...');
             window.location.replace('/login');
             return;
         }
-        
+
         console.log('✅ Authentication verified');
     } catch (error) {
         console.log('🔒 Authentication check failed, redirecting to login...');
@@ -83,23 +83,23 @@ function cleanupAuthenticationHistory() {
         // Replace the current history state to remove login page from history
         const currentUrl = window.location.href;
         console.log('🔄 Cleaning up authentication history');
-        
+
         // Replace current state to ensure login page is not in history
-        window.history.replaceState({authenticated: true}, '', currentUrl);
-        
+        window.history.replaceState({ authenticated: true }, '', currentUrl);
+
         // Add a state to prevent accidental back navigation to login
-        window.history.pushState({authenticated: true}, '', currentUrl);
-        
+        window.history.pushState({ authenticated: true }, '', currentUrl);
+
         // Handle popstate events to prevent going back to login
-        window.addEventListener('popstate', function(event) {
+        window.addEventListener('popstate', function (event) {
             if (event.state && event.state.authenticated) {
                 // User is authenticated, prevent going back to login
                 console.log('🔒 Preventing navigation back to login page');
-                window.history.pushState({authenticated: true}, '', window.location.href);
+                window.history.pushState({ authenticated: true }, '', window.location.href);
             }
         });
     }
-    
+
     // Add periodic authentication check
     setInterval(checkAuthenticationStatus, 30000); // Check every 30 seconds
 }
@@ -113,7 +113,7 @@ async function checkAuthenticationStatus() {
                 'Cache-Control': 'no-cache'
             }
         });
-        
+
         if (!response.ok || response.url.includes('/login')) {
             console.log('🔒 Session expired, redirecting to login...');
             window.location.replace('/login');
@@ -166,7 +166,7 @@ let searchTimeout = null;
 // Search functionality
 function searchTable(searchTerm) {
     clearTimeout(searchTimeout);
-    
+
     // Show/hide clear button
     const clearButton = document.getElementById('clearSearch');
     if (searchTerm.trim()) {
@@ -174,7 +174,7 @@ function searchTable(searchTerm) {
     } else {
         clearButton.style.display = 'none';
     }
-    
+
     // Debounce search to avoid too many API calls
     searchTimeout = setTimeout(() => {
         if (searchTerm.trim().length >= 2) {
@@ -195,19 +195,19 @@ function performLocalSearch(searchTerm) {
     const tbody = table.querySelector('tbody');
     const rows = tbody.querySelectorAll('tr');
     let visibleCount = 0;
-    
+
     const term = searchTerm.toLowerCase().trim();
-    
+
     // Hide any deep search results first
     hideDeepSearchResults();
-    
+
     rows.forEach(row => {
         // Skip parent directory row
-        if (row.style.background === 'rgba(52, 152, 219, 0.1)' || 
+        if (row.style.background === 'rgba(52, 152, 219, 0.1)' ||
             row.innerHTML.includes('.. (Parent Directory)')) {
             return;
         }
-        
+
         if (!term) {
             // No search term - show all rows
             row.classList.remove('hidden-by-search');
@@ -217,11 +217,11 @@ function performLocalSearch(searchTerm) {
             // Get searchable text from the row
             const nameCell = row.querySelector('td:nth-child(2)');
             const typeCell = row.querySelector('td:nth-child(4)');
-            
+
             let searchableText = '';
             if (nameCell) searchableText += nameCell.textContent.toLowerCase() + ' ';
             if (typeCell) searchableText += typeCell.textContent.toLowerCase() + ' ';
-            
+
             if (searchableText.includes(term)) {
                 row.classList.remove('hidden-by-search');
                 highlightSearchTerm(row, term);
@@ -232,20 +232,20 @@ function performLocalSearch(searchTerm) {
             }
         }
     });
-    
+
     // Update visible count
     updateVisibleCount(visibleCount);
-    
+
     console.log(`🔍 Local search for "${term}" found ${visibleCount} items`);
 }
 
 // Deep search using API to scan nested folders
 function performDeepSearch(searchTerm) {
     console.log(`🔍 Starting deep search for: "${searchTerm}"`);
-    
+
     // Show loading indicator
     showSearchLoading(true);
-    
+
     fetch(`/api/search?q=${encodeURIComponent(searchTerm)}`)
         .then(response => response.json())
         .then(data => {
@@ -268,16 +268,16 @@ function performSearch(searchTerm) {
     const tbody = table.querySelector('tbody');
     const rows = tbody.querySelectorAll('tr');
     let visibleCount = 0;
-    
+
     const term = searchTerm.toLowerCase().trim();
-    
+
     rows.forEach(row => {
         // Skip parent directory row
-        if (row.style.background === 'rgba(52, 152, 219, 0.1)' || 
+        if (row.style.background === 'rgba(52, 152, 219, 0.1)' ||
             row.innerHTML.includes('.. (Parent Directory)')) {
             return;
         }
-        
+
         if (!term) {
             // No search term - show all rows
             row.classList.remove('hidden-by-search');
@@ -287,11 +287,11 @@ function performSearch(searchTerm) {
             // Get searchable text from the row
             const nameCell = row.querySelector('td:nth-child(2)');
             const typeCell = row.querySelector('td:nth-child(4)');
-            
+
             let searchableText = '';
             if (nameCell) searchableText += nameCell.textContent.toLowerCase() + ' ';
             if (typeCell) searchableText += typeCell.textContent.toLowerCase() + ' ';
-            
+
             if (searchableText.includes(term)) {
                 row.classList.remove('hidden-by-search');
                 highlightSearchTerm(row, term);
@@ -302,13 +302,13 @@ function performSearch(searchTerm) {
             }
         }
     });
-    
+
     // Update visible count
     const visibleCountSpan = document.getElementById('visibleCount');
     if (visibleCountSpan) {
         visibleCountSpan.textContent = visibleCount;
     }
-    
+
     console.log(`🔍 Search for "${term}" found ${visibleCount} items`);
 }
 
@@ -317,10 +317,10 @@ function highlightSearchTerm(row, term) {
     if (nameCell) {
         const originalText = nameCell.dataset.originalText || nameCell.textContent;
         nameCell.dataset.originalText = originalText;
-        
+
         const regex = new RegExp(`(${term})`, 'gi');
         const highlightedText = originalText.replace(regex, '<span class="search-highlight">$1</span>');
-        
+
         // Only update if we have a match and it's different
         if (highlightedText !== originalText) {
             const linkElement = nameCell.querySelector('a');
@@ -347,35 +347,35 @@ function displayDeepSearchResults(data, searchTerm) {
         performLocalSearch(searchTerm); // Fallback to local search
         return;
     }
-    
+
     // Clear any existing search results FIRST to prevent duplicates
     hideDeepSearchResults();
-    
+
     // Hide local results
     hideLocalResults();
-    
+
     // Mark that search results are now displayed
     isSearchResultsDisplayed = true;
-    
+
     // Show deep search results with header above table
     const table = document.getElementById('filesTable');
     const tbody = table.querySelector('tbody');
-    
+
     // Create search results header as a separate element
     const searchHeader = createSearchResultsHeaderDiv(data);
-    
+
     // Insert header before the table
     table.parentNode.insertBefore(searchHeader, table);
-    
+
     // Add search results to table
     data.results.forEach(result => {
         const row = createSearchResultRow(result, searchTerm);
         tbody.appendChild(row);
     });
-    
+
     // Update visible count
     updateVisibleCount(data.results.length);
-    
+
     const truncatedMsg = data.truncated ? ` (showing first ${data.total_found})` : '';
     showNotification(`Found ${data.total_found} results${truncatedMsg} in ${data.search_time}s`, 'SUCCESS');
 }
@@ -384,7 +384,7 @@ function createSearchResultsHeaderDiv(data) {
     const headerDiv = document.createElement('div');
     headerDiv.className = 'search-results-header-div';
     headerDiv.id = 'searchResultsHeader';
-    
+
     headerDiv.innerHTML = `
         <div class="search-header-content">
             <div class="search-header-main">
@@ -401,7 +401,7 @@ function createSearchResultsHeaderDiv(data) {
             </div>
         </div>
     `;
-    
+
     return headerDiv;
 }
 
@@ -413,10 +413,10 @@ function createSearchResultsHeader(data) {
     row.style.visibility = 'visible';
     row.style.opacity = '1';
     row.style.minHeight = '50px';
-    
+
     // Detect mobile screen size
     const isMobile = window.innerWidth <= 480;
-    
+
     row.innerHTML = `
         <td colspan="6" class="search-header-cell" style="display: table-cell !important; visibility: visible !important; width: 100% !important; ${isMobile ? 'font-size: 12px !important; padding: 10px !important;' : ''}">
             <div class="search-header-content" style="display: flex !important; visibility: visible !important; padding: ${isMobile ? '10px' : '12px 15px'}; ${isMobile ? 'flex-direction: column; gap: 8px; min-height: 40px;' : ''}">
@@ -442,14 +442,14 @@ function createSearchResultRow(result, searchTerm) {
     const row = document.createElement('tr');
     row.className = 'file-row search-result-row';
     row.dataset.path = result.path;
-    
+
     const sizeDisplay = result.is_dir ? `<span class="folder-size-text">Folder</span>` : formatFileSize(result.size);
-    
+
     // Extract folder path (excluding filename)
     const pathParts = result.path.split('/');
     const folderPath = pathParts.slice(0, -1).join('/');
     const displayPath = folderPath || 'Root';
-    
+
     // Build safer name HTML using escapeHtml and mapping for icon/type
     let nameHtml = '';
     if (result.is_dir) {
@@ -492,8 +492,8 @@ function createSearchResultRow(result, searchTerm) {
         // expose type for the column below
         result._derived_type = typeText;
     }
-    
-    const actionsHtml = result.is_dir ? 
+
+    const actionsHtml = result.is_dir ?
         `<div class="search-result-actions">
             <button class="btn btn-sm btn-primary" onclick="navigateToFolder('${result.path}')" title="Open folder">
                 <i class="fas fa-folder-open"></i>
@@ -513,7 +513,7 @@ function createSearchResultRow(result, searchTerm) {
                 <i class="fas fa-folder-open"></i>
             </button>
         </div>`;
-    
+
     row.innerHTML = `
         <td class="search-checkbox-cell">
             <input type="checkbox" class="file-checkbox item-checkbox" 
@@ -528,7 +528,7 @@ function createSearchResultRow(result, searchTerm) {
         <td class="search-date-cell">${result.modified}</td>
         <td class="search-actions-cell">${actionsHtml}</td>
     `;
-    
+
     return row;
 }
 
@@ -541,7 +541,7 @@ function hideLocalResults() {
     const table = document.getElementById('filesTable');
     const tbody = table.querySelector('tbody');
     const rows = tbody.querySelectorAll('tr:not(.search-results-header):not(.search-result-row)');
-    
+
     rows.forEach(row => {
         if (!row.innerHTML.includes('.. (Parent Directory)')) {
             row.style.display = 'none';
@@ -552,22 +552,22 @@ function hideLocalResults() {
 function hideDeepSearchResults() {
     // Mark that search results are no longer displayed
     isSearchResultsDisplayed = false;
-    
+
     // Remove table-based search headers
     const searchRows = document.querySelectorAll('.search-results-header, .search-result-row');
     searchRows.forEach(row => row.remove());
-    
+
     // Remove div-based search header
     const searchHeaderDiv = document.getElementById('searchResultsHeader');
     if (searchHeaderDiv) {
         searchHeaderDiv.remove();
     }
-    
+
     // Show local results again
     const table = document.getElementById('filesTable');
     const tbody = table.querySelector('tbody');
     const localRows = tbody.querySelectorAll('tr');
-    
+
     localRows.forEach(row => {
         row.style.display = '';
     });
@@ -605,12 +605,12 @@ function openFileLocation(folderPath) {
     console.log(`🔍 Input folderPath: "${folderPath}"`);
     console.log(`🔍 folderPath type: ${typeof folderPath}`);
     console.log(`🔍 Current path before: "${currentPath}"`);
-    
+
     // IMPORTANT: Clear search when opening file location
     console.log(`🧹 Clearing search before navigation...`);
     clearSearch();
     hideDeepSearchResults();
-    
+
     // Clean and validate the folder path
     let targetPath = '';
     if (!folderPath || folderPath === 'Root' || folderPath === '' || folderPath === '/') {
@@ -621,10 +621,10 @@ function openFileLocation(folderPath) {
         targetPath = String(folderPath).replace(/^\/+/, '').trim();
         console.log(`📁 Cleaned target path: "${targetPath}"`);
     }
-    
+
     console.log(`� Final target path: "${targetPath}"`);
     console.log(`🔍 Calling navigateToFolder...`);
-    
+
     // Navigate to the folder containing the file
     console.log("🚀 About to call navigateToFolder...");
     navigateToFolder(targetPath).then(() => {
@@ -637,10 +637,10 @@ function openFileLocation(folderPath) {
 function clearSearch() {
     const searchInput = document.getElementById('tableSearch');
     const clearButton = document.getElementById('clearSearch');
-    
+
     searchInput.value = '';
     clearButton.style.display = 'none';
-    
+
     // Clear both local and deep search results
     hideDeepSearchResults();
     performLocalSearch('');
@@ -651,7 +651,7 @@ function sortTable(column) {
     const table = document.getElementById('filesTable');
     const tbody = table.querySelector('tbody');
     const rows = Array.from(tbody.querySelectorAll('tr'));
-    
+
     // Update sort state
     if (currentSort.column === column) {
         currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
@@ -659,24 +659,24 @@ function sortTable(column) {
         currentSort.column = column;
         currentSort.direction = 'asc';
     }
-    
+
     // Update header styles
     updateSortHeaders(column, currentSort.direction);
-    
+
     // Separate parent directory row and file rows
-    const parentRow = rows.find(row => 
-        row.style.background === 'rgba(52, 152, 219, 0.1)' || 
+    const parentRow = rows.find(row =>
+        row.style.background === 'rgba(52, 152, 219, 0.1)' ||
         row.innerHTML.includes('.. (Parent Directory)')
     );
     const fileRows = rows.filter(row => row !== parentRow);
-    
+
     // Sort function that replicates Windows Explorer behavior
     const sortFunction = (a, b) => {
         const aValue = getSortValue(a, column);
         const bValue = getSortValue(b, column);
         const aIsFolder = a.querySelector('.fa-folder, .folder-icon') && !a.querySelector('a[href*="/download/"]');
         const bIsFolder = b.querySelector('.fa-folder, .folder-icon') && !b.querySelector('a[href*="/download/"]');
-        
+
         // WINDOWS EXPLORER RULE: For ALL columns, always group folders first, then files
         if (aIsFolder && !bIsFolder) {
             return currentSort.direction === 'asc' ? -1 : 1;
@@ -684,13 +684,13 @@ function sortTable(column) {
         if (!aIsFolder && bIsFolder) {
             return currentSort.direction === 'asc' ? 1 : -1;
         }
-        
+
         // Both are same type - now sort by the selected column
         let comparison;
         if (column === 'name') {
             // If both are same type, sort alphabetically
-            comparison = aValue.localeCompare(bValue, undefined, { 
-                numeric: true, 
+            comparison = aValue.localeCompare(bValue, undefined, {
+                numeric: true,
                 sensitivity: 'base'
             });
         } else if (column === 'size') {
@@ -700,24 +700,24 @@ function sortTable(column) {
         } else if (column === 'type') {
             comparison = aValue.localeCompare(bValue, undefined, { numeric: true, sensitivity: 'base' });
         }
-        
+
         return currentSort.direction === 'asc' ? comparison : -comparison;
     };
-    
+
     // Sort all file rows together using Windows Explorer logic
     fileRows.sort(sortFunction);
-    
+
     // Clear tbody and re-add rows in Windows Explorer order
     tbody.innerHTML = '';
-    
+
     // Add parent row first if it exists
     if (parentRow) {
         tbody.appendChild(parentRow);
     }
-    
+
     // Add all sorted file rows (folders and files mixed, but folders first when names are equal)
     fileRows.forEach(row => tbody.appendChild(row));
-    
+
     console.log(`📊 Sorted by ${column} (${currentSort.direction})`);
 }
 
@@ -726,13 +726,13 @@ function getSortValue(row, column) {
         case 'name':
             const nameCell = row.querySelector('td:nth-child(2)');
             if (!nameCell) return '';
-            
+
             // For folders, get text from the link
             const folderLink = nameCell.querySelector('.folder-link');
             if (folderLink) {
                 return folderLink.textContent.trim();
             }
-            
+
             // For files, get text content but exclude icon text
             const fileDiv = nameCell.querySelector('.file-name');
             if (fileDiv) {
@@ -742,7 +742,7 @@ function getSortValue(row, column) {
                 icons.forEach(icon => icon.remove());
                 return clone.textContent.trim();
             }
-            
+
             // Fallback to full text content
             return nameCell.textContent.trim();
         case 'size':
@@ -769,13 +769,13 @@ function parseSize(sizeStr) {
     if (!sizeStr || sizeStr === '--' || sizeStr.includes('files,')) {
         return 0;
     }
-    
+
     const match = sizeStr.match(/([\d.]+)\s*(bytes?|KB|MB|GB|TB)?/i);
     if (!match) return 0;
-    
+
     const number = parseFloat(match[1]);
     const unit = (match[2] || '').toLowerCase();
-    
+
     switch (unit) {
         case 'tb': return number * 1024 * 1024 * 1024 * 1024;
         case 'gb': return number * 1024 * 1024 * 1024;
@@ -789,7 +789,7 @@ function compareDates(a, b) {
     if (a === '--' && b === '--') return 0;
     if (a === '--') return -1;
     if (b === '--') return 1;
-    
+
     // Simple string comparison should work for ISO dates
     return a.localeCompare(b);
 }
@@ -801,7 +801,7 @@ function updateSortHeaders(activeColumn, direction) {
         const icon = header.querySelector('.sort-icon');
         if (icon) icon.className = 'fas fa-sort sort-icon';
     });
-    
+
     // Update active header
     const activeHeader = document.querySelector(`[data-sort="${activeColumn}"]`);
     if (activeHeader) {
@@ -811,7 +811,7 @@ function updateSortHeaders(activeColumn, direction) {
             icon.className = `fas fa-sort-${direction === 'asc' ? 'up' : 'down'} sort-icon`;
         }
     }
-    
+
     // Update sort info and show/hide reset button
     updateSortInfo(activeColumn, direction);
 }
@@ -820,13 +820,13 @@ function updateSortHeaders(activeColumn, direction) {
 function storeOriginalTableOrder() {
     const table = document.getElementById('filesTable');
     if (!table) return;
-    
+
     const tbody = table.querySelector('tbody');
     const rows = Array.from(tbody.querySelectorAll('tr'));
-    
+
     // Store clones of all rows in their original order
     originalRowOrder = rows.map(row => row.cloneNode(true));
-    
+
     console.log('📋 Stored original table order:', originalRowOrder.length, 'rows');
 }
 
@@ -834,22 +834,22 @@ function storeOriginalTableOrder() {
 function updateSortInfo(column, direction) {
     const sortInfo = document.getElementById('currentSortInfo');
     const resetButton = document.getElementById('resetSort');
-    
+
     if (column && direction) {
         const columnNames = {
             'name': 'Name',
-            'size': 'Size', 
+            'size': 'Size',
             'type': 'Type',
             'modified': 'Modified'
         };
-        
+
         const directionText = direction === 'asc' ? 'ascending' : 'descending';
         const columnText = columnNames[column] || column;
-        
+
         if (sortInfo) {
             sortInfo.textContent = `• Sorted by ${columnText} (${directionText})`;
         }
-        
+
         if (resetButton) {
             resetButton.style.display = 'inline-flex';
         }
@@ -857,7 +857,7 @@ function updateSortInfo(column, direction) {
         if (sortInfo) {
             sortInfo.textContent = '';
         }
-        
+
         if (resetButton) {
             resetButton.style.display = 'none';
         }
@@ -867,10 +867,10 @@ function updateSortInfo(column, direction) {
 // Reset sorting to default state
 function resetSorting() {
     console.log('🔄 Resetting table sorting to default');
-    
+
     // Clear deep search results first (fixes green background timing display)
     hideDeepSearchResults();
-    
+
     // Clear search input and hide clear button
     const searchInput = document.getElementById('tableSearch');
     const clearButton = document.getElementById('clearSearch');
@@ -880,26 +880,26 @@ function resetSorting() {
     if (clearButton) {
         clearButton.style.display = 'none';
     }
-    
+
     // Reset sort state
     currentSort = { column: null, direction: 'asc' };
-    
+
     // Reset all header styles
     document.querySelectorAll('.sortable').forEach(header => {
         header.classList.remove('sort-asc', 'sort-desc');
         const icon = header.querySelector('.sort-icon');
         if (icon) icon.className = 'fas fa-sort sort-icon';
     });
-    
+
     // Restore original order from stored state
     const table = document.getElementById('filesTable');
     const tbody = table.querySelector('tbody');
-    
+
     if (originalRowOrder.length > 0) {
         // Use stored original order
         console.log('✅ Restoring from stored original order');
         tbody.innerHTML = '';
-        
+
         // Add all original rows back in their original order
         originalRowOrder.forEach(row => {
             tbody.appendChild(row.cloneNode(true));
@@ -908,24 +908,24 @@ function resetSorting() {
         // Fallback: manual sorting if original order not stored
         console.log('⚠️ Fallback: manual sorting since original order not stored');
         const rows = Array.from(tbody.querySelectorAll('tr'));
-        
+
         // Separate parent directory row and file rows
-        const parentRow = rows.find(row => 
-            row.style.background === 'rgba(52, 152, 219, 0.1)' || 
+        const parentRow = rows.find(row =>
+            row.style.background === 'rgba(52, 152, 219, 0.1)' ||
             row.innerHTML.includes('.. (Parent Directory)')
         );
         const fileRows = rows.filter(row => row !== parentRow);
-        
+
         // Separate folders and files (like Windows Explorer)
         const folders = [];
         const files = [];
-        
+
         fileRows.forEach(row => {
             // Check if it's a folder by looking for folder icon specifically
             const hasFolderIcon = row.querySelector('.fa-folder, .folder-icon');
             const hasFileIcon = row.querySelector('.fa-file');
             const hasDownloadLink = row.querySelector('a[href*="/download/"]');
-            
+
             // More precise folder detection: must have folder icon AND no download link
             if (hasFolderIcon && !hasDownloadLink) {
                 folders.push(row);
@@ -933,33 +933,33 @@ function resetSorting() {
                 files.push(row);
             }
         });
-        
+
         // Sort both folders and files by name as default order
         const defaultSort = (a, b) => {
             const aName = getSortValue(a, 'name');
             const bName = getSortValue(b, 'name');
             return aName.localeCompare(bName, undefined, { numeric: true, sensitivity: 'base' });
         };
-        
+
         folders.sort(defaultSort);
         files.sort(defaultSort);
-        
+
         // Clear tbody and re-add rows in Windows Explorer order
         tbody.innerHTML = '';
-        
+
         // Add parent row first if it exists
         if (parentRow) {
             tbody.appendChild(parentRow);
         }
-        
+
         // Add folders first, then files (like Windows Explorer)
         folders.forEach(row => tbody.appendChild(row));
         files.forEach(row => tbody.appendChild(row));
     }
-    
+
     // Update sort info display
     updateSortInfo(null, null);
-    
+
     console.log('✅ Table sorting reset to default order');
 }
 
@@ -970,13 +970,13 @@ function reinitializeTableControls(itemCount) {
     if (visibleCountSpan) {
         visibleCountSpan.textContent = itemCount;
     }
-    
+
     // Clear any existing search if the search input has content
     const searchInput = document.getElementById('tableSearch');
     if (searchInput && searchInput.value.trim()) {
         performSearch(searchInput.value.trim());
     }
-    
+
     // Reapply current sort if any
     if (currentSort.column) {
         const column = currentSort.column;
@@ -985,15 +985,15 @@ function reinitializeTableControls(itemCount) {
         currentSort.column = null;
         sortTable(column);
     }
-    
+
     // Initialize sort event listeners for any new headers
     document.querySelectorAll('.sortable').forEach(header => {
         // Remove existing event listeners by cloning
         const newHeader = header.cloneNode(true);
         header.parentNode.replaceChild(newHeader, header);
-        
+
         // Add new event listener
-        newHeader.addEventListener('click', function() {
+        newHeader.addEventListener('click', function () {
             const column = this.dataset.sort;
             if (column) {
                 sortTable(column);
@@ -1037,34 +1037,34 @@ async function navigateToFolder(newPath) {
         console.log(`📁 Current path: "${currentPath}"`);
         console.log(`📁 Target path: "${newPath}"`);
         console.log(`📁 Path type: ${typeof newPath}`);
-        
+
         showUploadStatus('📁 Loading folder...', 'info');
-        
+
         // Clean and validate the path
         const cleanPath = newPath ? String(newPath).trim() : '';
         console.log(`🧹 Cleaned path: "${cleanPath}"`);
-        
+
         // Update URL without page refresh
         const url = cleanPath ? `/${cleanPath}` : '/';
         console.log(`🔗 Updating URL to: "${url}"`);
-        window.history.pushState({path: cleanPath}, '', url);
-        
+        window.history.pushState({ path: cleanPath }, '', url);
+
         // Fetch folder contents via API
         const apiUrl = cleanPath ? `/api/files/${encodeURIComponent(cleanPath)}` : '/api/files/';
         console.log(`📡 API URL: "${apiUrl}"`);
         console.log(`🔗 Fetching from: ${apiUrl}`);
-        
+
         console.log("🚀 Starting fetch request...");
         const response = await fetch(apiUrl);
         console.log(`📡 Response status: ${response.status} ${response.statusText}`);
         console.log(`📡 Response headers:`, response.headers);
         console.log("📡 Response object:", response);
-        
+
         if (!response.ok) {
             console.error(`❌ Response not OK: ${response.status} ${response.statusText}`);
             throw new Error(`Failed to load folder: ${response.status} ${response.statusText}`);
         }
-        
+
         console.log("🔄 Parsing response as JSON...");
         const data = await response.json();
         console.log(`📊 Raw API response:`, data);
@@ -1072,12 +1072,12 @@ async function navigateToFolder(newPath) {
         console.log(`📊 data.success:`, data.success);
         console.log(`📊 data.files:`, data.files);
         console.log(`📊 data.error:`, data.error);
-        
+
         if (!data.success) {
             console.error(`❌ API returned error:`, data.error);
             throw new Error(data.error || 'Failed to load folder contents');
         }
-        
+
         // Handle different data formats from API
         let files = [];
         if (data.files && Array.isArray(data.files)) {
@@ -1092,10 +1092,10 @@ async function navigateToFolder(newPath) {
             console.warn(`⚠️ data.items:`, data.items);
             files = [];
         }
-        
+
         console.log(`📁 Processed files array:`, files);
         console.log(`📁 Found ${files.length} items in folder`);
-        
+
         // Update current path
         const oldPath = currentPath;
         currentPath = cleanPath;
@@ -1107,7 +1107,7 @@ async function navigateToFolder(newPath) {
             pathInput.value = currentPath;
             console.log(`📝 Updated hidden path input to: "${currentPath}"`);
         }
-        
+
         // Update page content
         console.log(`🔄 Updating file table with ${files.length} items...`);
         console.log(`🔄 Files array:`, files);
@@ -1116,26 +1116,26 @@ async function navigateToFolder(newPath) {
         console.log(`🔄 After update - table body innerHTML length:`, document.querySelector('#filesTable tbody')?.innerHTML?.length || 'not found');
         console.log(`🍞 Updating breadcrumb...`);
         updateBreadcrumb(cleanPath);
-        
+
         // Clear selection when navigating
         clearSelection();
-        
+
         // Also clear any search filters when navigating
         const searchInput = document.getElementById('tableSearch');
         if (searchInput && searchInput.value) {
             console.log(`🧹 Clearing search filter during navigation...`);
             clearSearch();
         }
-        
+
         console.log(`✅ === NAVIGATION SUCCESS ===`);
         showUploadStatus(`📁 Loaded folder: ${cleanPath || 'Root'}`, 'success');
-        
+
     } catch (error) {
         console.error('❌ === NAVIGATION ERROR ===');
         console.error('❌ Error details:', error);
         console.error('❌ Error stack:', error.stack);
         showUploadStatus(`❌ Failed to load folder: ${error.message}`, 'error');
-        
+
         // Fallback to page reload on error
         setTimeout(() => {
             console.log(`🔄 Fallback: Reloading page...`);
@@ -1145,7 +1145,7 @@ async function navigateToFolder(newPath) {
 }
 
 // Handle browser back/forward buttons
-window.addEventListener('popstate', function(event) {
+window.addEventListener('popstate', function (event) {
     const path = event.state?.path || '';
     console.log('🔄 POPSTATE EVENT FIRED - Browser back/forward navigation to:', path);
     navigateToFolder(path);
@@ -1159,7 +1159,7 @@ function updateFileTable(files, path) {
     console.log(`🔄 Files isArray:`, Array.isArray(files));
     console.log(`🔄 Files length:`, files ? files.length : 'null/undefined');
     console.log(`🔄 Path param: "${path}"`);
-    
+
     const tbody = document.querySelector('#filesTable tbody');
     if (!tbody) {
         console.error('❌ File table body not found');
@@ -1167,17 +1167,17 @@ function updateFileTable(files, path) {
         console.error('❌ Available filesTable:', document.querySelector('#filesTable'));
         return;
     }
-    
+
     console.log(`✅ File table body found:`, tbody);
-    
+
     // Clear existing content (including search results)
     console.log(`🧹 Clearing search results...`);
     hideDeepSearchResults();
     console.log(`🧹 Clearing table content...`);
     tbody.innerHTML = '';
-    
+
     console.log(`📝 Adding parent directory row for path: "${path}"`);
-    
+
     // Add parent directory row if not at root
     if (path) {
         const parentPath = path.split('/').slice(0, -1).join('/');
@@ -1211,7 +1211,7 @@ function updateFileTable(files, path) {
         tbody.appendChild(parentRow);
         console.log(`✅ Added parent directory row`);
     }
-    
+
     // Check if files array is valid
     if (!files || !Array.isArray(files)) {
         console.warn(`⚠️ Invalid files data:`, files);
@@ -1223,7 +1223,7 @@ function updateFileTable(files, path) {
         console.log(`📋 === UPDATE FILE TABLE COMPLETE (EMPTY) ===`);
         return;
     }
-    
+
     // Add files to table
     if (files.length === 0) {
         console.log(`📂 Folder is empty, adding empty message`);
@@ -1237,9 +1237,9 @@ function updateFileTable(files, path) {
             tbody.appendChild(row);
         });
     }
-    
+
     console.log(`📋 Updated file table with ${files.length} items`);
-    
+
     // Reinitialize sort functionality for new content
     console.log(`🔄 Reinitializing table controls...`);
     reinitializeTableControls(files.length);
@@ -1265,13 +1265,13 @@ function createEmptyFolderRow() {
 // Create a file table row element
 function createFileTableRow(item, currentPath) {
     const row = document.createElement('tr');
-    
+
     const itemPath = currentPath ? `${currentPath}/${item.name}` : item.name;
-    
+
     // Add the file-row class that matches the original template
     row.className = 'file-row';
     row.setAttribute('data-path', itemPath);
-    
+
     // Use escaped names and mapped icons/types
     const safeName = escapeHtml(item.name);
     const itemIcon = item.is_dir ? 'fas fa-folder' : getFileIcon(item.name);
@@ -1287,51 +1287,51 @@ function createFileTableRow(item, currentPath) {
         </td>
         <td>
             <div class="file-name">
-                ${item.is_dir ? 
-                    `<i class="fas fa-folder file-icon folder-icon"></i>
+                ${item.is_dir ?
+            `<i class="fas fa-folder file-icon folder-icon"></i>
                      <a href="#" onclick="navigateToFolder('${escapeHtml(itemPath)}'); return false;" 
                         data-folder-path="${escapeHtml(itemPath)}" class="folder-link">
                          ${safeName}
                      </a>` :
-                    `<i class="${itemIcon} file-icon file-icon-default" style="color: ${getFileColor(item.name)}"></i>
+            `<i class="${itemIcon} file-icon file-icon-default" style="color: ${getFileColor(item.name)}"></i>
                      ${safeName}`
-                }
+        }
             </div>
         </td>
         <td>
-            ${item.is_dir ? 
-                `<span style="color: white; font-size: 13px;">
+            ${item.is_dir ?
+            `<span style="color: white; font-size: 13px;">
                     ${item.item_count ? `${item.item_count.files || 0} files, ${item.item_count.dirs || 0} folders` : '--'}<br>
                     ${formatFileSize(item.size)}
                 </span>` :
-                `<span class="file-size" style="color: white; font-weight: 500;">${formatFileSize(item.size)}</span>`
-            }
+            `<span class="file-size" style="color: white; font-weight: 500;">${formatFileSize(item.size)}</span>`
+        }
         </td>
         <td class="type-cell">
             ${`<span class="file-type"><i class="${item.is_dir ? 'fas fa-folder folder-icon file-icon' : itemIcon}"></i> ${escapeHtml(itemTypeText)}</span>`}
         </td>
         <td>
-            ${item.modified ? 
-                `<span class="file-date" style="color: white; font-size: 13px;">${new Date(item.modified * 1000).toLocaleString()}</span>` :
-                '<span style="color: white; font-size: 13px;">--</span>'
-            }
+            ${item.modified ?
+            `<span class="file-date" style="color: white; font-size: 13px;">${new Date(item.modified * 1000).toLocaleString()}</span>` :
+            '<span style="color: white; font-size: 13px;">--</span>'
+        }
         </td>
         <td>
             <div class="actions">
-                ${!item.is_dir ? 
-                    `<button type="button" class="btn btn-outline btn-sm download-btn" 
+                ${!item.is_dir ?
+            `<button type="button" class="btn btn-outline btn-sm download-btn" 
                              data-item-path="${itemPath}"
                              onclick="downloadItem('${itemPath}')"
                              title="Download file">
                          <i class="fas fa-download"></i> Download
                      </button>` :
-                    `<button type="button" class="btn btn-outline btn-sm download-btn" 
+            `<button type="button" class="btn btn-outline btn-sm download-btn" 
                              data-item-path="${itemPath}"
                              onclick="downloadFolderAsZip('${itemPath}', '${item.name}')"
                              title="Download folder as ZIP">
                          <i class="fas fa-download"></i> Download
                      </button>`
-                }
+        }
                 
                 ${USER_ROLE === 'readwrite' ? `
                 <button type="button" class="btn btn-warning btn-sm move-btn" 
@@ -1369,52 +1369,86 @@ function createFileTableRow(item, currentPath) {
             </div>
         </td>
     `;
-    
+
     return row;
 }
 
 // Update breadcrumb navigation
 function updateBreadcrumb(path) {
     console.log(`🍞 Updating breadcrumb for path: "${path}"`);
+    
     const breadcrumbContainer = document.querySelector('.breadcrumb');
     if (!breadcrumbContainer) {
         console.error('❌ Breadcrumb container not found!');
         return;
     }
+
+    // Find or create the flex container (first div child with flex styling)
+    let flexContainer = breadcrumbContainer.querySelector('div[style*="display: flex"]');
     
-    // Find the "Up" button container
-    const upButtonContainer = breadcrumbContainer.querySelector('div[style*="display: flex"]');
-    if (!upButtonContainer) {
-        console.error('❌ Up button container not found!');
-        return;
-    }
-    
-    // Update the Up button
-    const upButton = upButtonContainer.querySelector('a');
-    if (upButton) {
-        if (path && path.includes('/')) {
-            const parentPath = path.split('/').slice(0, -1).join('/');
-            upButton.onclick = () => { navigateToFolder(parentPath); return false; };
-            upButton.style.display = '';
-            console.log(`🍞 Updated up button for parent path: "${parentPath}"`);
-        } else if (path) {
-            upButton.onclick = () => { navigateToFolder(''); return false; };
-            upButton.style.display = '';
-            console.log(`🍞 Updated up button to go to root`);
+    if (!flexContainer) {
+        console.log('📦 Creating new flex container...');
+        flexContainer = document.createElement('div');
+        flexContainer.style.cssText = 'display: flex; align-items: center; justify-content: space-between;';
+        
+        // Insert before controls div if it exists
+        const controlsDiv = breadcrumbContainer.querySelector('.controls');
+        if (controlsDiv) {
+            breadcrumbContainer.insertBefore(flexContainer, controlsDiv);
         } else {
-            upButton.style.display = 'none';
-            console.log(`🍞 Hidden up button (already at root)`);
+            breadcrumbContainer.insertBefore(flexContainer, breadcrumbContainer.firstChild);
         }
     }
-    
-    // Update path display
-    const pathDisplay = breadcrumbContainer.querySelector('h3');
-    if (pathDisplay) {
-        const newPath = path ? `/Root/${path}` : '/Root/';
-        pathDisplay.innerHTML = `<i class="fas fa-folder-open"></i> ${newPath}`;
-        console.log(`🍞 Updated breadcrumb display to: "${newPath}"`);
-    } else {
-        console.error('❌ Path display (h3) not found!');
+
+    // Build the flex container content
+    const displayPath = path ? `/Root/${path}` : '/Root/';
+    let flexHTML = `<h3><i class="fas fa-folder-open"></i> ${displayPath}</h3>`;
+
+    // Add navigation buttons if not at root
+    if (path && path !== '') {
+        flexHTML += '<div class="btn-group" style="display: flex; gap: 5px;">';
+
+        // Root button
+        flexHTML += `
+            <a href="#" onclick="navigateToFolder(''); return false;" 
+               class="btn btn-outline btn-sm"
+               style="color: white; border-color: rgba(255,255,255,0.4);" 
+               title="Go to root folder">
+                <i class="fas fa-home"></i> Root
+            </a>`;
+
+        // Calculate parent path for Up button
+        let parentPath = '';
+        if (path.includes('/')) {
+            const pathParts = path.split('/');
+            pathParts.pop();
+            parentPath = pathParts.join('/');
+        }
+
+        // Escape single quotes in parentPath for onclick
+        const escapedParentPath = parentPath.replace(/'/g, "\\'");
+
+        // Up button
+        flexHTML += `
+            <a href="#" onclick="navigateToFolder('${escapedParentPath}'); return false;"
+               class="btn btn-outline btn-sm"
+               style="color: white; border-color: rgba(255,255,255,0.4);"
+               title="Go up one level to: ${parentPath || 'Root'}">
+                <i class="fas fa-level-up-alt"></i> Up
+            </a>`;
+
+        flexHTML += '</div>';
+    }
+
+    // Update the flex container
+    flexContainer.innerHTML = flexHTML;
+    console.log(`✅ Updated breadcrumb to: "${displayPath}"`);
+
+    // Update hidden path input if it exists
+    const pathInput = breadcrumbContainer.querySelector('input[name="path"]');
+    if (pathInput) {
+        pathInput.value = path || '';
+        console.log(`📝 Updated hidden path input to: "${path || ''}"`);
     }
 }
 
@@ -1695,7 +1729,7 @@ function addFilesToQueue(files) {
         // Determine the destination path for the file
         let destinationPath = currentPath;
         let displayName = file.name;
-        
+
         // If file has relativePath (from folder upload), preserve folder structure
         // Support both webkitRelativePath (desktop) and relativePath (mobile fallback)
         const folderPath = file.relativePath || file.webkitRelativePath;
@@ -1703,17 +1737,17 @@ function addFilesToQueue(files) {
             // Remove leading slash and get directory path
             const relativePath = folderPath.startsWith('/') ? folderPath.slice(1) : folderPath;
             const pathParts = relativePath.split('/');
-            
+
             // Remove the filename to get just the directory structure
             pathParts.pop();
-            
+
             if (pathParts.length > 0) {
                 // Combine current path with relative directory structure
                 const relativeDir = pathParts.join('/');
                 destinationPath = currentPath ? `${currentPath}/${relativeDir}` : relativeDir;
                 displayName = `${relativeDir}/${file.name}`;
             }
-            
+
             console.log('📁 Folder file:', file.name, 'Path source:', file.relativePath ? 'relativePath' : 'webkitRelativePath', 'Value:', folderPath, 'Destination:', destinationPath);
         } else {
             console.log('📄 Regular file:', file.name, 'Size:', file.size);
@@ -1722,11 +1756,11 @@ function addFilesToQueue(files) {
         const fileId = generateFileId(file);
 
         // Check if file already in queue by relative path and size
-        const existingFile = uploadQueue.find(item => 
+        const existingFile = uploadQueue.find(item =>
             (item.destinationPath === destinationPath && item.name === file.name && item.size === file.size) ||
             (item.displayName === displayName && item.size === file.size)
         );
-        
+
         if (existingFile) {
             console.log('⚠️ File already in queue:', displayName);
             showUploadStatus(`📁 File "${displayName}" is already in the queue`, 'info');
@@ -1915,26 +1949,26 @@ function clearAllQueue() {
 
 function clearCompletedItems() {
     console.log('🧹 Clearing completed items from queue');
-    
+
     // Count completed items before clearing
-    const completedCount = uploadQueue.filter(item => 
-        item.status === 'completed' || 
+    const completedCount = uploadQueue.filter(item =>
+        item.status === 'completed' ||
         item.status === 'assembled' ||
         (item.error && item.error.includes('File ready!'))
     ).length;
-    
+
     if (completedCount === 0) {
         showUploadStatus('ℹ️ No completed items to clear', 'info');
         return;
     }
-    
+
     // Remove completed items from queue
-    uploadQueue = uploadQueue.filter(item => 
-        item.status !== 'completed' && 
+    uploadQueue = uploadQueue.filter(item =>
+        item.status !== 'completed' &&
         item.status !== 'assembled' &&
         !(item.error && item.error.includes('File ready!'))
     );
-    
+
     updateQueueDisplay();
     showUploadStatus(`🧹 Cleared ${completedCount} completed item${completedCount > 1 ? 's' : ''}`, 'success');
 }
@@ -2017,7 +2051,7 @@ function updateQueueDisplay() {
     // Update stats
     const totalSize = uploadQueue.reduce((sum, item) => sum + item.size, 0);
     const pendingCount = uploadQueue.filter(item => item.status === 'pending').length;
-    
+
     // Count unique folders
     const folders = new Set();
     uploadQueue.forEach(item => {
@@ -2029,7 +2063,7 @@ function updateQueueDisplay() {
             }
         }
     });
-    
+
     let statsText = `(${uploadQueue.length} files, ${formatFileSize(totalSize)})`;
     if (folders.size > 0) {
         statsText = `(${uploadQueue.length} files from ${folders.size} folder${folders.size > 1 ? 's' : ''}, ${formatFileSize(totalSize)})`;
@@ -2099,9 +2133,9 @@ function createQueueItemElement(item) {
                         <div class="file-info-meta">
                             <span><i class="fas fa-weight-hanging"></i> ${formatFileSize(item.size)}</span>
                             <span><i class="fas fa-clock"></i> ${ageDisplay}</span>
-                            ${item.destinationPath && item.destinationPath !== currentPath ? 
-                                `<span><i class="fas fa-folder"></i> ${item.destinationPath}</span>` : ''
-                            }
+                            ${item.destinationPath && item.destinationPath !== currentPath ?
+            `<span><i class="fas fa-folder"></i> ${item.destinationPath}</span>` : ''
+        }
                             ${item.status === 'uploading' ? `<span><i class="fas fa-percentage"></i> ${item.progress}%</span>` : ''}
                             ${item.status === 'assembling' ? `<span><i class="fas fa-cog"></i> Processing</span>` : ''}
                             ${item.error ? `<span><i class="fas fa-exclamation"></i> ${item.error}</span>` : ''}
@@ -2183,55 +2217,55 @@ function getFileColor(filename) {
 }
 
 // Centralized extension -> {type, icon, color} mapping (partial but extensive)
-const EXTENSION_MAP = (function(){
+const EXTENSION_MAP = (function () {
     // Helper to build entries quickly
     const e = (exts, type, icon, color) => exts.forEach(x => map[x] = { type, icon, color });
     const map = Object.create(null);
 
     // Documents & Text
-    e(['txt','rtf','doc','docx','odt','pdf','tex','log','csv','tsv','md','xml','json','ini','cfg','yaml','yml','nfo','readme','wps','dot','dotx'], 'Document', 'fas fa-file-alt', '#34495e');
+    e(['txt', 'rtf', 'doc', 'docx', 'odt', 'pdf', 'tex', 'log', 'csv', 'tsv', 'md', 'xml', 'json', 'ini', 'cfg', 'yaml', 'yml', 'nfo', 'readme', 'wps', 'dot', 'dotx'], 'Document', 'fas fa-file-alt', '#34495e');
 
     // Spreadsheets & Data
-    e(['xls','xlsx','ods','db','mdb','accdb','sqlite','sqlite3','sql','sav','dat','dbf','parquet','arff','rdata','dta','pivot'], 'Spreadsheet / Data', 'fas fa-file-excel', '#27ae60');
+    e(['xls', 'xlsx', 'ods', 'db', 'mdb', 'accdb', 'sqlite', 'sqlite3', 'sql', 'sav', 'dat', 'dbf', 'parquet', 'arff', 'rdata', 'dta', 'pivot'], 'Spreadsheet / Data', 'fas fa-file-excel', '#27ae60');
 
     // Presentations
-    e(['ppt','pptx','odp','key','pub','msg','eml','oft','note'], 'Presentation / Mail', 'fas fa-file-powerpoint', '#e67e22');
+    e(['ppt', 'pptx', 'odp', 'key', 'pub', 'msg', 'eml', 'oft', 'note'], 'Presentation / Mail', 'fas fa-file-powerpoint', '#e67e22');
 
     // Images
-    e(['jpg','jpeg','png','gif','bmp','tif','tiff','ico','svg','webp','heic','heif','psd','psb','ai','eps','ind','indd','idml','xcf','cpt','exr','hdr','raw','nef','cr2','arw','dng','sketch','fig','xd'], 'Image', 'fas fa-file-image', '#9b59b6');
+    e(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tif', 'tiff', 'ico', 'svg', 'webp', 'heic', 'heif', 'psd', 'psb', 'ai', 'eps', 'ind', 'indd', 'idml', 'xcf', 'cpt', 'exr', 'hdr', 'raw', 'nef', 'cr2', 'arw', 'dng', 'sketch', 'fig', 'xd'], 'Image', 'fas fa-file-image', '#9b59b6');
 
     // Video
-    e(['mp4','avi','mov','wmv','mkv','flv','webm','mpeg','mpg','m4v','3gp','mxf','f4v','vob','swf','blend','aep','prproj','drp','veg'], 'Video', 'fas fa-file-video', '#e74c3c');
+    e(['mp4', 'avi', 'mov', 'wmv', 'mkv', 'flv', 'webm', 'mpeg', 'mpg', 'm4v', '3gp', 'mxf', 'f4v', 'vob', 'swf', 'blend', 'aep', 'prproj', 'drp', 'veg'], 'Video', 'fas fa-file-video', '#e74c3c');
 
     // Audio
-    e(['mp3','wav','ogg','flac','wma','aac','m4a','mid','midi','aiff','aif','oma','pcm','stem'], 'Audio', 'fas fa-file-audio', '#f39c12');
+    e(['mp3', 'wav', 'ogg', 'flac', 'wma', 'aac', 'm4a', 'mid', 'midi', 'aiff', 'aif', 'oma', 'pcm', 'stem'], 'Audio', 'fas fa-file-audio', '#f39c12');
 
     // 3D / CAD
-    e(['dwg','dxf','dwf','dwt','dgn','rvt','rfa','rte','ifc','step','stp','stl','iges','igs','sldprt','sldasm','ipt','iam','f3d','fbx','obj','3ds','max','skp','plt','cam','cnc','nc','scad'], '3D / CAD', 'fas fa-cube', '#16a085');
+    e(['dwg', 'dxf', 'dwf', 'dwt', 'dgn', 'rvt', 'rfa', 'rte', 'ifc', 'step', 'stp', 'stl', 'iges', 'igs', 'sldprt', 'sldasm', 'ipt', 'iam', 'f3d', 'fbx', 'obj', '3ds', 'max', 'skp', 'plt', 'cam', 'cnc', 'nc', 'scad'], '3D / CAD', 'fas fa-cube', '#16a085');
 
     // Dev / Code
-    e(['py','ipynb','js','jsx','ts','tsx','html','htm','css','java','class','jar','c','cpp','h','hpp','cs','vb','php','asp','aspx','jsp','go','rb','pl','sh','bat','cmd','ps1','lua','sql','yaml','yml','toml','r','m','scala','kt','swift','rs','jsonl','env','config','jsonc'], 'Code / Script', 'fas fa-code', '#2ecc71');
+    e(['py', 'ipynb', 'js', 'jsx', 'ts', 'tsx', 'html', 'htm', 'css', 'java', 'class', 'jar', 'c', 'cpp', 'h', 'hpp', 'cs', 'vb', 'php', 'asp', 'aspx', 'jsp', 'go', 'rb', 'pl', 'sh', 'bat', 'cmd', 'ps1', 'lua', 'sql', 'yaml', 'yml', 'toml', 'r', 'm', 'scala', 'kt', 'swift', 'rs', 'jsonl', 'env', 'config', 'jsonc'], 'Code / Script', 'fas fa-code', '#2ecc71');
 
     // Archives
-    e(['zip','rar','7z','tar','gz','gzip','bz2','tgz','iso','img','cab','arj','lzh','pkg'], 'Archive', 'fas fa-file-archive', '#95a5a6');
+    e(['zip', 'rar', '7z', 'tar', 'gz', 'gzip', 'bz2', 'tgz', 'iso', 'img', 'cab', 'arj', 'lzh', 'pkg'], 'Archive', 'fas fa-file-archive', '#95a5a6');
 
     // Executables & System
-    e(['exe','msi','bat','cmd','ps1','vbs','dll','sys','drv','ocx','reg','inf','scr','com','cpl'], 'Executable / System', 'fas fa-cogs', '#7f8c8d');
+    e(['exe', 'msi', 'bat', 'cmd', 'ps1', 'vbs', 'dll', 'sys', 'drv', 'ocx', 'reg', 'inf', 'scr', 'com', 'cpl'], 'Executable / System', 'fas fa-cogs', '#7f8c8d');
 
     // Web
-    e(['map','sitemap','url','lnk','cache','cookie'], 'Web / Shortcut', 'fas fa-globe', '#3498db');
+    e(['map', 'sitemap', 'url', 'lnk', 'cache', 'cookie'], 'Web / Shortcut', 'fas fa-globe', '#3498db');
 
     // Security / Certs
-    e(['cer','crt','pem','pfx','p12','key','csr','enc','sig','asc'], 'Certificate / Key', 'fas fa-shield-alt', '#c0392b');
+    e(['cer', 'crt', 'pem', 'pfx', 'p12', 'key', 'csr', 'enc', 'sig', 'asc'], 'Certificate / Key', 'fas fa-shield-alt', '#c0392b');
 
     // Project / Config
-    e(['project','workspace','sln','solution','config','settings','prefs','manifest','lock','jsonc'], 'Project / Config', 'fas fa-folder-tree', '#34495e');
+    e(['project', 'workspace', 'sln', 'solution', 'config', 'settings', 'prefs', 'manifest', 'lock', 'jsonc'], 'Project / Config', 'fas fa-folder-tree', '#34495e');
 
     // Backups / Logs / Misc
-    e(['tmp','bak','old','log','err','torrent','dmp','cache','backup','copy'], 'Backup / Log / Temp', 'fas fa-file', '#95a5a6');
+    e(['tmp', 'bak', 'old', 'log', 'err', 'torrent', 'dmp', 'cache', 'backup', 'copy'], 'Backup / Log / Temp', 'fas fa-file', '#95a5a6');
 
     // Specialized enterprise
-    e(['pst','ost','ics','vcf','contact','form','template','report','policy','license','audit','script','blueprint','model','sim'], 'Enterprise / Specialized', 'fas fa-file-alt', '#9b59b6');
+    e(['pst', 'ost', 'ics', 'vcf', 'contact', 'form', 'template', 'report', 'policy', 'license', 'audit', 'script', 'blueprint', 'model', 'sim'], 'Enterprise / Specialized', 'fas fa-file-alt', '#9b59b6');
 
     // Default PDF mapping (also included above) ensure 'pdf' explicit
     map['pdf'] = { type: 'PDF Document', icon: 'fas fa-file-pdf', color: '#e74c3c' };
@@ -2241,7 +2275,7 @@ const EXTENSION_MAP = (function(){
 
 function escapeHtml(unsafe) {
     return String(unsafe).replace(/[&<>"'`]/g, function (c) {
-        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;","`":"&#96;"}[c];
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": "&#39;", "`": "&#96;" }[c];
     });
 }
 
@@ -2289,7 +2323,7 @@ function transformInitialRows() {
             } else {
                 // Remove existing text nodes after icon
                 const clone = nameCell.cloneNode(true);
-                const icons = clone.querySelectorAll('i'); icons.forEach(i=>i.remove());
+                const icons = clone.querySelectorAll('i'); icons.forEach(i => i.remove());
                 const rawText = clone.textContent.trim();
                 nameCell.innerHTML = `<i class="${iconClass} file-icon file-icon-default" style="color: ${getFileColor(filename)}"></i> ${escapeHtml(rawText)}`;
             }
@@ -2499,16 +2533,16 @@ function updateItemStatus(fileId, status, error = null) {
 async function refreshFileTable() {
     const startTime = Date.now();
     console.log('📁 refreshFileTable() started...');
-    
+
     // Check if search results are currently displayed - don't refresh if they are
     const searchHeader = document.getElementById('searchResultsHeader');
     const searchRows = document.querySelectorAll('.search-result-row');
-    
+
     if (isSearchResultsDisplayed || searchHeader || searchRows.length > 0) {
         console.log('🔍 Search results currently displayed - skipping refresh to preserve search view');
         return;
     }
-    
+
     try {
         // Use the current path from navigation state, not the static page load path
         const pathToUse = currentPath || '';
@@ -2528,7 +2562,7 @@ async function refreshFileTable() {
 
         // Update the file table with new data
         updateFileTableContent(data.files);
-        
+
         const endTime = Date.now();
         console.log(`✅ refreshFileTable() completed in ${endTime - startTime}ms`);
 
@@ -2642,7 +2676,7 @@ function updateFileTableContent(files) {
             </span>`;
 
             typeHtml = '<span class="file-type"><i class="fas fa-folder folder-icon file-icon"></i> Folder</span>';
-            
+
             actionsHtml = `
                 <button type="button" class="btn btn-outline btn-sm" 
                         data-action="download-folder"
@@ -2691,14 +2725,14 @@ function updateFileTableContent(files) {
             const fileIcon = getFileIcon(file.name);
             const fileColor = getFileColor(file.name);
             const fileType = typeof getFileType === 'function' ? getFileType(file.name) : 'File';
-            
+
             // Only apply color to the icon in the name column, not the text
             iconHtml = `<i class="${fileIcon} file-icon file-icon-default" style="color: ${fileColor};"></i>${file.name}`;
             sizeHtml = `<span style="color: white; font-weight: 500;">${formatFileSize(file.size)}</span>`;
-            
+
             // Type cell icon should NOT have color applied
             typeHtml = `<span class="file-type"><i class="${fileIcon} file-icon file-icon-default"></i> ${fileType}</span>`;
-            
+
             actionsHtml = `
                 <button type="button" class="btn btn-outline btn-sm" 
                         data-action="download"
@@ -2781,9 +2815,9 @@ function updateFileTableContent(files) {
     if (oldListener) {
         tbody.removeEventListener('click', oldListener);
     }
-    
+
     // Create new listener
-    const actionListener = function(e) {
+    const actionListener = function (e) {
         // Handle navigation links
         const navLink = e.target.closest('a[data-action="navigate"]');
         if (navLink) {
@@ -2792,18 +2826,18 @@ function updateFileTableContent(files) {
             navigateToFolder(path);
             return;
         }
-        
+
         // Handle action buttons
         const button = e.target.closest('button[data-action]');
         if (!button) return;
-        
+
         const action = button.getAttribute('data-action');
         const itemPath = button.getAttribute('data-item-path');
         const itemName = button.getAttribute('data-item-name');
-        
+
         console.log(`🔘 Action: ${action}, Path: ${itemPath}, Name: ${itemName}`);
-        
-        switch(action) {
+
+        switch (action) {
             case 'download':
                 downloadItem(itemPath);
                 break;
@@ -2824,14 +2858,14 @@ function updateFileTableContent(files) {
                 break;
         }
     };
-    
+
     // Store reference and add listener
     tbody._actionListener = actionListener;
     tbody.addEventListener('click', actionListener);
 
     // Update selection state to ensure UI is in sync
     updateSelection();
-    
+
     // Reinitialize search and sort controls
     reinitializeTableControls(files.length);
 }
@@ -2992,7 +3026,7 @@ async function startBatchUpload() {
         isUploading = false;
         PARALLEL_UPLOAD_CONFIG.activeUploads.clear();
         PARALLEL_UPLOAD_CONFIG.completedUploads.clear();
-        
+
         if (uploadBtn) {
             uploadBtn.disabled = false;
             uploadBtn.innerHTML = '<i class="fas fa-upload"></i> Upload All (<span id="uploadCount">0</span>)';
@@ -3007,31 +3041,31 @@ async function startBatchUpload() {
 // Parallel upload implementation
 async function startParallelUploads(pendingFiles) {
     console.log(`⚡ Starting parallel uploads with max concurrency: ${PARALLEL_UPLOAD_CONFIG.maxConcurrentUploads}`);
-    
+
     const fileQueue = [...pendingFiles]; // Copy array to avoid mutations
     let completedCount = 0;
     let errorCount = 0;
-    
+
     // Create upload worker function
     const uploadWorker = async () => {
         while (fileQueue.length > 0) {
             const item = fileQueue.shift();
             if (!item || cancelledUploads.has(item.id)) continue;
-            
+
             console.log(`⚡ Worker starting upload: ${item.name} (${completedCount + errorCount + 1}/${pendingFiles.length})`);
-            
+
             try {
                 // Update status to uploading
                 updateItemStatus(item.id, 'uploading');
                 PARALLEL_UPLOAD_CONFIG.activeUploads.add(item.id);
-                
+
                 showUploadStatus(
                     `⬆️ Uploading "${item.name}" (${PARALLEL_UPLOAD_CONFIG.activeUploads.size} active, ${completedCount}/${pendingFiles.length} completed)`,
                     'info'
                 );
 
                 await uploadSingleFile(item);
-                
+
                 // Check if this item is now assembling (chunked upload with assembly queued)
                 const currentItem = uploadQueue.find(queueItem => queueItem.id === item.id);
                 if (currentItem && currentItem.status === 'assembling') {
@@ -3041,14 +3075,14 @@ async function startParallelUploads(pendingFiles) {
                     // Regular completion for non-chunked or non-assembly uploads
                     updateItemStatus(item.id, 'completed');
                 }
-                
+
                 PARALLEL_UPLOAD_CONFIG.activeUploads.delete(item.id);
                 PARALLEL_UPLOAD_CONFIG.completedUploads.add(item.id);
                 completedCount++;
                 cancelledUploads.delete(item.id);
-                
+
                 console.log(`✅ Parallel upload completed: ${item.name} (${completedCount}/${pendingFiles.length})`);
-                
+
                 showUploadStatus(
                     `✅ "${item.name}" uploaded (${completedCount}/${pendingFiles.length} completed)`,
                     'success'
@@ -3072,23 +3106,23 @@ async function startParallelUploads(pendingFiles) {
     // Start multiple workers based on concurrency setting
     const workers = [];
     const workerCount = Math.min(PARALLEL_UPLOAD_CONFIG.maxConcurrentUploads, pendingFiles.length);
-    
+
     console.log(`⚡ Starting ${workerCount} upload workers`);
-    
+
     for (let i = 0; i < workerCount; i++) {
         workers.push(uploadWorker());
     }
 
     // Wait for all workers to complete
     await Promise.all(workers);
-    
+
     console.log(`⚡ All parallel upload workers completed. Success: ${completedCount}, Errors: ${errorCount}`);
 }
 
 // Sequential upload implementation (original behavior)
 async function startSequentialUploads(pendingFiles) {
     console.log('📋 Starting sequential uploads (original behavior)');
-    
+
     for (let i = 0; i < pendingFiles.length; i++) {
         const item = pendingFiles[i];
         currentUploadIndex = i + 1;
@@ -3237,7 +3271,7 @@ async function uploadSingleFile(item) {
                             console.log(`🔄 Assembly queued for ${item.name}, starting status polling`);
                             updateItemProgress(item.id, 100, file.size);
                             updateItemStatus(item.id, 'assembling', 'Processing file...');
-                            
+
                             // Immediately protect this assembly job from cleanup
                             try {
                                 await fetch(`/api/protect_assembly/${item.id}`, { method: 'POST' });
@@ -3245,9 +3279,9 @@ async function uploadSingleFile(item) {
                             } catch (protectError) {
                                 console.warn(`⚠️ Failed to protect new assembly job ${item.id}:`, protectError);
                             }
-                            
+
                             startAssemblyPolling(item.id);
-                            
+
                             // Update cleanup button to disable it during assembly
                             updateManualCleanupButton();
                         } else {
@@ -3587,28 +3621,28 @@ async function loadFolderContents(path) {
 
     try {
         console.log(`📁 Loading folder contents for path: "${path}"`);
-        
+
         // Use the existing API endpoint to get folder contents
         const apiUrl = path ? `/api/files/${encodeURIComponent(path)}` : '/api/files/';
         const response = await fetch(apiUrl);
-        
+
         if (!response.ok) {
             throw new Error(`Failed to load folder: ${response.statusText}`);
         }
-        
+
         const data = await response.json();
-        
+
         if (loading) loading.style.display = 'none';
-        
+
         // Filter to show only directories
         const folders = data.files.filter(item => item.is_dir || item.type === 'dir');
-        
+
         if (folders.length === 0) {
             if (emptyState) emptyState.style.display = 'block';
         } else {
             displayFolders(folders);
         }
-        
+
     } catch (error) {
         console.error('❌ Error loading folder contents:', error);
         if (loading) loading.style.display = 'none';
@@ -3628,7 +3662,7 @@ function displayFolders(folders) {
     if (!folderList) return;
 
     folderList.innerHTML = '';
-    
+
     folders.forEach(folder => {
         const folderItem = document.createElement('div');
         folderItem.className = 'folder-item';
@@ -3642,28 +3676,28 @@ function displayFolders(folders) {
             transition: background-color 0.2s ease;
             color: #fff;
         `;
-        
+
         folderItem.innerHTML = `
             <i class="fas fa-folder" style="color: #f39c12; margin-right: 10px; font-size: 14px;"></i>
             <span style="flex: 1;">${folder.name}</span>
             <i class="fas fa-chevron-right" style="color: rgba(255,255,255,0.5); font-size: 12px;"></i>
         `;
-        
+
         // Add hover effect
-        folderItem.addEventListener('mouseenter', function() {
+        folderItem.addEventListener('mouseenter', function () {
             this.style.backgroundColor = 'rgba(255,255,255,0.1)';
         });
-        
-        folderItem.addEventListener('mouseleave', function() {
+
+        folderItem.addEventListener('mouseleave', function () {
             this.style.backgroundColor = 'transparent';
         });
-        
+
         // Add click handler to navigate into folder
-        folderItem.addEventListener('click', function() {
+        folderItem.addEventListener('click', function () {
             const newPath = browserCurrentPath ? `${browserCurrentPath}/${folder.name}` : folder.name;
             navigateFolderBrowser(newPath);
         });
-        
+
         folderList.appendChild(folderItem);
     });
 }
@@ -3695,7 +3729,7 @@ function goToRoot() {
 
 function goUpOneLevel() {
     if (!browserCurrentPath) return;
-    
+
     const pathParts = browserCurrentPath.split('/');
     pathParts.pop();
     const newPath = pathParts.join('/');
@@ -3705,10 +3739,10 @@ function goUpOneLevel() {
 async function createNewFolderInBrowser() {
     const folderName = prompt('Enter new folder name:');
     if (!folderName || !folderName.trim()) return;
-    
+
     try {
         const newFolderPath = browserCurrentPath ? `${browserCurrentPath}/${folderName.trim()}` : folderName.trim();
-        
+
         // Create the folder using existing API
         const response = await fetch('/create_folder', {
             method: 'POST',
@@ -3717,16 +3751,16 @@ async function createNewFolderInBrowser() {
             },
             body: `folder_name=${encodeURIComponent(folderName.trim())}&path=${encodeURIComponent(browserCurrentPath)}`
         });
-        
+
         if (!response.ok) {
             throw new Error('Failed to create folder');
         }
-        
+
         // Refresh the current folder view
         await loadFolderContents(browserCurrentPath);
-        
+
         showUploadStatus(`✅ Created folder: ${folderName}`, 'success');
-        
+
     } catch (error) {
         console.error('❌ Error creating folder:', error);
         showUploadStatus(`❌ Failed to create folder: ${error.message}`, 'error');
@@ -3768,21 +3802,21 @@ function showRenameModal() {
 
     if (newItemNameInput) {
         newItemNameInput.value = itemName;
-        
+
         const stopPropagation = (e) => e.stopPropagation();
-        
+
         newItemNameInput.removeEventListener('click', stopPropagation);
         newItemNameInput.removeEventListener('keydown', stopPropagation);
         newItemNameInput.removeEventListener('keyup', stopPropagation);
         newItemNameInput.removeEventListener('input', stopPropagation);
         newItemNameInput.removeEventListener('focus', stopPropagation);
-        
+
         newItemNameInput.addEventListener('click', stopPropagation);
         newItemNameInput.addEventListener('keydown', stopPropagation);
         newItemNameInput.addEventListener('keyup', stopPropagation);
         newItemNameInput.addEventListener('input', stopPropagation);
         newItemNameInput.addEventListener('focus', stopPropagation);
-        
+
         setTimeout(() => {
             newItemNameInput.focus();
             const lastDotIndex = itemName.lastIndexOf('.');
@@ -3824,7 +3858,7 @@ async function confirmRename() {
 
     // Get current name from selected path
     const currentName = selectedPath.split('/').pop();
-    
+
     if (newName === currentName) {
         showNotification('Same Name', 'The new name is the same as the current name', 'info');
         closeRenameModal();
@@ -3846,7 +3880,7 @@ async function confirmRename() {
 
     const renameButton = document.querySelector('#renameModal .btn-primary');
     const cancelButton = document.querySelector('#renameModal .btn-secondary');
-    
+
     if (renameButton) {
         renameButton.disabled = true;
         renameButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Renaming...';
@@ -3857,10 +3891,10 @@ async function confirmRename() {
 
     try {
         await performRename(selectedPath, newName);
-        
+
         // Small delay for visual feedback
         await new Promise(resolve => setTimeout(resolve, 300));
-        
+
     } finally {
         if (renameButton) {
             renameButton.disabled = false;
@@ -3869,7 +3903,7 @@ async function confirmRename() {
         if (cancelButton) {
             cancelButton.disabled = false;
         }
-        
+
         isOperationInProgress = false;
         closeRenameModal();
     }
@@ -3897,30 +3931,30 @@ async function performRename(oldPath, newName) {
 
         if (response.ok && result.success) {
             showNotification('Success', result.message || 'Item renamed successfully', 'success');
-            
+
             // CRITICAL: Immediately update selectedItems with new path
             // Don't wait for file monitor - backend confirmed the rename!
-            const parentPath = oldPath.includes('/') 
-                ? oldPath.split('/').slice(0, -1).join('/') 
+            const parentPath = oldPath.includes('/')
+                ? oldPath.split('/').slice(0, -1).join('/')
                 : '';
             const newPath = parentPath ? `${parentPath}/${newName}` : newName;
-            
+
             // Update selection immediately
             selectedItems.delete(oldPath);
             selectedItems.add(newPath);
-            
+
             console.log(`✅ Updated selection: "${oldPath}" → "${newPath}"`);
-            
+
             // Clear checkboxes to avoid confusion (optional)
             const selectAllCheckbox = document.getElementById('selectAll');
             if (selectAllCheckbox) {
                 selectAllCheckbox.checked = false;
                 selectAllCheckbox.indeterminate = false;
             }
-            
+
             // Trigger navigation (file monitor will update later)
             navigateToFolder(currentPath || '');
-            
+
         } else {
             showNotification('Rename Failed', result.error || 'Could not rename item', 'error');
         }
@@ -3935,13 +3969,13 @@ function downloadItem(itemPath) {
     // Track download to prevent beforeunload warning
     const downloadId = Date.now() + Math.random();
     activeDownloads.add(downloadId);
-    
+
     // Create a temporary link to track when download completes
     const link = document.createElement('a');
     link.href = `/download/${itemPath}`;
     link.style.display = 'none';
     document.body.appendChild(link);
-    
+
     // Remove from active downloads after a delay (download should start)
     setTimeout(() => {
         activeDownloads.delete(downloadId);
@@ -3949,7 +3983,7 @@ function downloadItem(itemPath) {
             document.body.removeChild(link);
         }
     }, 1000);
-    
+
     // Trigger download
     window.location.href = `/download/${itemPath}`;
 }
@@ -3957,16 +3991,16 @@ function downloadItem(itemPath) {
 function downloadFolderAsZip(folderPath, folderName) {
     console.log(`📁 Downloading folder as ZIP: ${folderName} (${folderPath})`);
     showUploadStatus(`📦 Preparing ZIP download for folder: ${folderName}`, 'info');
-    
+
     // Track download to prevent beforeunload warning
     const downloadId = Date.now() + Math.random();
     activeDownloads.add(downloadId);
-    
+
     // Remove from active downloads after a delay (download should start)
     setTimeout(() => {
         activeDownloads.delete(downloadId);
     }, 3000); // Longer delay for ZIP preparation
-    
+
     // Use the existing bulk download function with single folder path
     performBulkZipDownload([folderPath]);
 }
@@ -4087,12 +4121,12 @@ function confirmMoveOrCopy() {
 
     const actionName = currentModalAction === 'move' ? 'Move' : 'Copy';
     const destinationDisplay = destinationPath || 'Root Directory';
-    
+
     // Confirm the action with professional modal
     const confirmMessage = `${actionName} ${selectedPaths.length} item(s) to "${destinationDisplay}"?`;
     const confirmClass = currentModalAction === 'move' ? 'btn-warning' : 'btn-primary';
     const icon = currentModalAction === 'move' ? 'fa-cut' : 'fa-copy';
-    
+
     showConfirmationModal(
         `Confirm ${actionName}`,
         confirmMessage,
@@ -4234,11 +4268,11 @@ function bulkDownload() {
     // Check if we have only a single FILE (not folder) for direct download
     if (selectedPaths.length === 1) {
         const singlePath = selectedPaths[0];
-        
+
         // Check if it's a file by looking at the table row to determine if it's a directory
         const pathRow = document.querySelector(`tr[data-path="${singlePath}"]`);
         const isDirectory = pathRow && pathRow.querySelector('.folder-icon, .fa-folder');
-        
+
         if (!isDirectory) {
             console.log('📄 Single file selected, doing direct download:', singlePath);
             showUploadStatus('📥 Starting direct download...', 'info');
@@ -4260,28 +4294,28 @@ async function performBulkZipDownload(paths) {
     try {
         console.log('🔄 Initiating ZIP stream download for paths:', paths);
         showUploadStatus('📦 Preparing ZIP download...', 'info');
-        
+
         // Track download to prevent beforeunload warning
         const downloadId = Date.now() + Math.random();
         activeDownloads.add(downloadId);
-        
+
         // Use form submission method for large files - no memory limits
         console.log('📥 Using form submission for large file download (no memory limits)');
-        
+
         const form = document.createElement('form');
         form.method = 'POST';
         form.action = '/bulk-download';
         form.style.display = 'none';
-        
+
         const input = document.createElement('input');
         input.type = 'hidden';
         input.name = 'paths';
         input.value = JSON.stringify(paths);
-        
+
         form.appendChild(input);
         document.body.appendChild(form);
         form.submit();
-        
+
         setTimeout(() => {
             if (document.body.contains(form)) {
                 document.body.removeChild(form);
@@ -4289,11 +4323,11 @@ async function performBulkZipDownload(paths) {
             // Remove from active downloads after form submission completes
             activeDownloads.delete(downloadId);
         }, 2000);
-        
+
         showUploadStatus('✅ Large file ZIP download started', 'success');
         clearSelection();
         return; // Exit early with form method
-        
+
         const response = await fetch('/bulk-download', {
             method: 'POST',
             headers: {
@@ -4331,34 +4365,34 @@ async function performBulkZipDownload(paths) {
         // Create the blob from the stream
         const blob = await response.blob();
         console.log(`📦 Created blob: ${blob.size} bytes, type: ${blob.type}`);
-        
+
         if (blob.size === 0) {
             throw new Error('Received empty file from server');
         }
-        
+
         // Create object URL for download (same approach as single files)
         const url = window.URL.createObjectURL(blob);
-        
+
         // Create hidden link element
         const downloadLink = document.createElement('a');
         downloadLink.href = url;
         downloadLink.download = filename;
         downloadLink.style.display = 'none';
-        
+
         // Add to DOM, click, then remove (instant download, no new tab)
         document.body.appendChild(downloadLink);
         downloadLink.click();
         document.body.removeChild(downloadLink);
-        
+
         // Clean up the object URL
         window.URL.revokeObjectURL(url);
-        
+
         console.log('✅ ZIP download completed via AJAX method');
         showUploadStatus(`✅ ZIP download started: ${filename}`, 'success');
-        
+
         // Clear selection after successful download
         clearSelection();
-        
+
     } catch (error) {
         console.error('❌ ZIP download error:', error);
         showUploadStatus(`❌ Download failed: ${error.message}`, 'error');
@@ -4370,9 +4404,9 @@ async function createFolder(folderName, path) {
     try {
         // Use the global currentPath variable instead of the passed path
         const actualPath = currentPath || path || '';
-        
+
         console.log('Creating folder with currentPath:', actualPath);
-        
+
         const formData = new FormData();
         formData.append('foldername', folderName);
         formData.append('path', actualPath);
@@ -4491,11 +4525,11 @@ function addManualCleanupButton() {
         cleanupBtn.id = 'manualCleanupBtn';
         cleanupBtn.className = 'btn btn-warning btn-sm manual-cleanup-btn';
         cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Temp Files';
-        
+
         // Hide button by default - only show after status check confirms it's safe
         cleanupBtn.style.display = 'none';
         cleanupBtn.title = 'Checking safety status...';
-        
+
         cleanupBtn.onclick = async function () {
             try {
                 // Double-check for active assembly jobs before proceeding
@@ -4503,17 +4537,17 @@ function addManualCleanupButton() {
                 if (assemblyResponse.ok) {
                     const assemblyStatus = await assemblyResponse.json();
                     const activeJobs = assemblyStatus.jobs || [];
-                    const hasActiveAssembly = activeJobs.some(job => 
+                    const hasActiveAssembly = activeJobs.some(job =>
                         job.status === 'pending' || job.status === 'processing'
                     );
-                    
+
                     if (hasActiveAssembly) {
                         showUploadStatus('❌ Cannot cleanup - files are currently being processed/assembled', 'error');
                         console.log('🔐 Manual cleanup blocked - active assembly jobs detected');
                         return;
                     }
                 }
-                
+
                 cleanupBtn.disabled = true;
                 cleanupBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Cleaning...';
 
@@ -4568,10 +4602,10 @@ async function updateManualCleanupButton() {
         if (assemblyResponse.ok) {
             const assemblyStatus = await assemblyResponse.json();
             const activeJobs = assemblyStatus.jobs || [];
-            hasActiveAssembly = activeJobs.some(job => 
+            hasActiveAssembly = activeJobs.some(job =>
                 job.status === 'pending' || job.status === 'processing'
             );
-            
+
             if (hasActiveAssembly) {
                 console.log(`🔐 Cleanup button disabled - ${activeJobs.length} active assembly jobs`);
             }
@@ -4627,7 +4661,7 @@ async function runSpeedTest() {
     try {
         // 1. Latency test (small ping)
         const t0 = performance.now();
-        await fetch('/api/speedtest/ping', {method: 'GET'});
+        await fetch('/api/speedtest/ping', { method: 'GET' });
         const t1 = performance.now();
         latency = t1 - t0;
 
@@ -4636,14 +4670,14 @@ async function runSpeedTest() {
         const uploadForm = new FormData();
         uploadForm.append('data', new Blob([uploadData]), 'speedtest.bin');
         const uploadStart = performance.now();
-        await fetch('/api/speedtest/upload', {method: 'POST', body: uploadForm});
+        await fetch('/api/speedtest/upload', { method: 'POST', body: uploadForm });
         const uploadEnd = performance.now();
         const uploadTime = (uploadEnd - uploadStart) / 1000;
         uploadMbps = (TEST_SIZE / 1024 / 1024) / uploadTime;
 
         // 3. Download test
         const downloadStart = performance.now();
-        const resp = await fetch('/api/speedtest/download', {method: 'GET'});
+        const resp = await fetch('/api/speedtest/download', { method: 'GET' });
         await resp.arrayBuffer();
         const downloadEnd = performance.now();
         const downloadTime = (downloadEnd - downloadStart) / 1000;
@@ -4666,33 +4700,33 @@ async function runSpeedTest() {
 document.addEventListener('DOMContentLoaded', function () {
     // Store original table order for reset functionality
     storeOriginalTableOrder();
-    
+
     // Initialize table sorting functionality
     document.querySelectorAll('.sortable').forEach(header => {
-        header.addEventListener('click', function() {
+        header.addEventListener('click', function () {
             const column = this.dataset.sort;
             if (column) {
                 sortTable(column);
             }
         });
     });
-    
+
     // Initialize search functionality
     const searchInput = document.getElementById('tableSearch');
     if (searchInput) {
         // Set initial visible count
         const rows = document.querySelectorAll('#filesTable tbody tr');
-        const initialCount = Array.from(rows).filter(row => 
-            !row.style.background?.includes('rgba(52, 152, 219, 0.1)') && 
+        const initialCount = Array.from(rows).filter(row =>
+            !row.style.background?.includes('rgba(52, 152, 219, 0.1)') &&
             !row.innerHTML.includes('.. (Parent Directory)')
         ).length;
-        
+
         const visibleCountSpan = document.getElementById('visibleCount');
         if (visibleCountSpan) {
             visibleCountSpan.textContent = initialCount;
         }
     }
-    
+
     const clearBtn = document.getElementById('clearAllBtn');
     const uploadBtn = document.getElementById('startUploadBtn');
     const fileInput = document.getElementById('fileInput');
@@ -4709,7 +4743,7 @@ document.addEventListener('DOMContentLoaded', function () {
         currentUploadMode = mode;
         const uploadModeHint = document.getElementById('uploadModeHint');
         const uploadInstructions = document.getElementById('uploadInstructions');
-        
+
         if (mode === 'files') {
             if (filesBtn) filesBtn.classList.add('active');
             if (foldersBtn) foldersBtn.classList.remove('active');
@@ -4808,7 +4842,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (filesBtn || foldersBtn) {
         setUploadMode('files');
     }
-    
+
     // Update mobile-specific instructions after initialization
     function updateMobileInstructions() {
         const uploadInstructions = document.getElementById('uploadInstructions');
@@ -4820,7 +4854,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
     }
-    
+
     // Apply mobile instructions on load
     setTimeout(updateMobileInstructions, 100);
 
@@ -4836,7 +4870,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const clearCompletedBtn = document.getElementById('clearCompletedBtn');
     if (clearCompletedBtn) {
         console.log('🔧 Setting up clear completed button event listener');
-        clearCompletedBtn.addEventListener('click', function() {
+        clearCompletedBtn.addEventListener('click', function () {
             clearCompletedItems();
         });
     } else {
@@ -4853,12 +4887,12 @@ document.addEventListener('DOMContentLoaded', function () {
     // Setup parallel upload controls
     const enableParallelCheckbox = document.getElementById('enableParallelUploads');
     const maxConcurrentSelect = document.getElementById('maxConcurrentUploads');
-    
+
     if (enableParallelCheckbox) {
-        enableParallelCheckbox.addEventListener('change', function(e) {
+        enableParallelCheckbox.addEventListener('change', function (e) {
             PARALLEL_UPLOAD_CONFIG.enableParallelUploads = e.target.checked;
             console.log(`⚡ Parallel uploads ${e.target.checked ? 'enabled' : 'disabled'}`);
-            
+
             // Update button text to show current mode
             const uploadBtn = document.getElementById('startUploadBtn');
             if (uploadBtn && !isUploading) {
@@ -4867,9 +4901,9 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         });
     }
-    
+
     if (maxConcurrentSelect) {
-        maxConcurrentSelect.addEventListener('change', function(e) {
+        maxConcurrentSelect.addEventListener('change', function (e) {
             const newValue = parseInt(e.target.value);
             PARALLEL_UPLOAD_CONFIG.maxConcurrentUploads = newValue;
             console.log(`⚡ Max concurrent uploads set to: ${newValue}`);
@@ -4949,17 +4983,17 @@ document.addEventListener('DOMContentLoaded', function () {
             // Mobile webkitRelativePath fallback - Android often doesn't populate this properly
             if (type === 'folder' && isMobile) {
                 console.log('📱 Mobile folder upload detected - checking webkitRelativePath support');
-                
+
                 // Check if any files have webkitRelativePath
                 const hasRelativePath = files.some(f => f.webkitRelativePath);
-                
+
                 if (!hasRelativePath && files.length > 0) {
                     console.log('⚠️ Mobile browser not providing webkitRelativePath - applying folder structure fallback');
-                    
+
                     // Create a folder name based on timestamp for this batch
                     const timestamp = new Date().toISOString().slice(0, 19).replace(/[:\-]/g, '').replace('T', '_');
                     const folderName = `MobileUpload_${timestamp}`;
-                    
+
                     // Manually set relativePath for mobile to preserve folder structure
                     files.forEach(file => {
                         if (!file.relativePath && !file.webkitRelativePath) {
@@ -4967,16 +5001,16 @@ document.addEventListener('DOMContentLoaded', function () {
                             console.log(`📱 Mobile fallback: Set relativePath for ${file.name} -> ${file.relativePath}`);
                         }
                     });
-                    
+
                     showUploadStatus(`📱 Mobile: Files grouped into folder "${folderName}"`, 'info');
                 } else if (hasRelativePath) {
                     console.log('✅ Mobile browser supports webkitRelativePath');
                 }
             }
-            
+
             // Process files and add to queue
             addFilesToQueue(files);
-            
+
             const display = document.querySelector('.file-input-display');
             if (display) {
                 let itemType, actionText;
@@ -4984,7 +5018,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     // For folders, show number of files from folders
                     itemType = files.length === 1 ? 'file from folder' : 'files from folders';
                     actionText = 'Click again to add more folders, or drag multiple folders from Explorer';
-                    
+
                     // Show helpful notification for folder mode
                     // Support both webkitRelativePath and mobile fallback relativePath
                     const folderCount = new Set(files.map(f => {
@@ -5000,7 +5034,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     itemType = files.length === 1 ? 'file' : 'files';
                     actionText = 'Click again to add more files';
                 }
-                
+
                 display.innerHTML = `
                     <i class="fas fa-plus-circle" style="font-size: 20px; color: #27ae60;"></i>
                     <div>
@@ -5021,7 +5055,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     display.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
                 }, resetTime);
             }
-            
+
             // Reset input for future selections - this is KEY for multiple folder selection
             e.target.value = '';
         }
@@ -5097,7 +5131,7 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
         window.storageStatsInitialized = true;
-        
+
         console.log('Initializing storage stats...');
 
         // First check if server is reachable
@@ -5114,7 +5148,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Check for existing assembly jobs immediately
     checkExistingAssemblies();
-    
+
     // Initialize real-time monitoring (which handles storage stats internally)
     // Only do this once to prevent duplicate SSE connections
     if (!window.storageMonitoringInitialized) {
@@ -5166,21 +5200,21 @@ function unhighlight(e) {
 
 async function handleDrop(e) {
     const dt = e.dataTransfer;
-    
+
     // Handle both files and directories from drag & drop
     if (dt.items) {
         const allFiles = [];
         const processingPromises = [];
-        
+
         console.log(`📁 Drag & drop: Processing ${dt.items.length} items`);
-        
+
         // Process all dropped items and collect promises
         for (let i = 0; i < dt.items.length; i++) {
             const item = dt.items[i];
-            
+
             if (item.kind === 'file') {
                 const entry = item.webkitGetAsEntry();
-                
+
                 if (entry) {
                     if (entry.isFile) {
                         // Single file
@@ -5201,7 +5235,7 @@ async function handleDrop(e) {
                 }
             }
         }
-        
+
         // Wait for all directories to be processed
         if (processingPromises.length > 0) {
             console.log(`⏳ Waiting for ${processingPromises.length} directories to be processed...`);
@@ -5217,10 +5251,10 @@ async function handleDrop(e) {
                 return;
             }
         }
-        
+
         if (allFiles.length > 0) {
             console.log(`✅ Drag & drop complete: Found ${allFiles.length} total files`);
-            
+
             // Count unique folders for feedback
             const folders = new Set();
             allFiles.forEach(file => {
@@ -5231,7 +5265,7 @@ async function handleDrop(e) {
                     }
                 }
             });
-            
+
             showUploadStatus(`📁 Dropped ${allFiles.length} files from ${folders.size} folder${folders.size !== 1 ? 's' : ''}`, 'success');
             addFilesToQueue(allFiles);
         } else {
@@ -5251,10 +5285,10 @@ async function handleDrop(e) {
 // Recursively read directory contents
 async function readDirectory(directoryEntry) {
     const files = [];
-    
+
     return new Promise((resolve, reject) => {
         const directoryReader = directoryEntry.createReader();
-        
+
         function readEntries() {
             directoryReader.readEntries(async (entries) => {
                 if (entries.length === 0) {
@@ -5262,7 +5296,7 @@ async function readDirectory(directoryEntry) {
                     resolve(files);
                     return;
                 }
-                
+
                 try {
                     // Process all entries in parallel
                     const entryPromises = entries.map(async (entry) => {
@@ -5280,9 +5314,9 @@ async function readDirectory(directoryEntry) {
                         }
                         return null;
                     });
-                    
+
                     const results = await Promise.all(entryPromises);
-                    
+
                     // Add all files to our collection
                     results.forEach(result => {
                         if (result) {
@@ -5293,7 +5327,7 @@ async function readDirectory(directoryEntry) {
                             }
                         }
                     });
-                    
+
                     // Continue reading (directories might have many entries)
                     readEntries();
                 } catch (error) {
@@ -5305,7 +5339,7 @@ async function readDirectory(directoryEntry) {
                 reject(error);
             });
         }
-        
+
         readEntries();
     });
 }
@@ -5387,26 +5421,26 @@ document.addEventListener('keydown', function (e) {
 
     // Backspace or Alt + Left Arrow to go up one level
     if ((e.key === 'Backspace' || (e.altKey && e.key === 'ArrowLeft')) && window.location.pathname !== '/') {
-    // Check if user is typing in an input field
-    const activeElement = document.activeElement;
-    const isInputField = activeElement && (
-        activeElement.tagName === 'INPUT' ||
-        activeElement.tagName === 'TEXTAREA' ||
-        activeElement.contentEditable === 'true'
-    );
-    
-    // Only navigate back if NOT typing in an input field
-    if (!isInputField) {
-        e.preventDefault();
-        const currentPath = CURRENT_PATH;
-        if (currentPath) {
-            const pathParts = currentPath.split('/');
-            pathParts.pop();
-            const parentPath = pathParts.join('/');
-            window.location.href = parentPath ? `/${parentPath}` : '/';
+        // Check if user is typing in an input field
+        const activeElement = document.activeElement;
+        const isInputField = activeElement && (
+            activeElement.tagName === 'INPUT' ||
+            activeElement.tagName === 'TEXTAREA' ||
+            activeElement.contentEditable === 'true'
+        );
+
+        // Only navigate back if NOT typing in an input field
+        if (!isInputField) {
+            e.preventDefault();
+            const currentPath = CURRENT_PATH;
+            if (currentPath) {
+                const pathParts = currentPath.split('/');
+                pathParts.pop();
+                const parentPath = pathParts.join('/');
+                window.location.href = parentPath ? `/${parentPath}` : '/';
+            }
         }
     }
-}
 
     // F5 or Ctrl/Cmd + R - Enhanced refresh with cleanup warning
     if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && e.key === 'r')) {
@@ -5560,7 +5594,7 @@ function showConfirmationModal(title, message, confirmText = 'Confirm', confirmC
 function closeConfirmationModal() {
     const modal = document.getElementById('confirmationModal');
     modal.style.display = 'none';
-    
+
     if (pendingConfirmAction) {
         pendingConfirmAction(false);
         pendingConfirmAction = null;
@@ -5570,7 +5604,7 @@ function closeConfirmationModal() {
 function executeConfirmedAction() {
     const modal = document.getElementById('confirmationModal');
     modal.style.display = 'none';
-    
+
     if (pendingConfirmAction) {
         pendingConfirmAction(true);
         pendingConfirmAction = null;
@@ -5585,13 +5619,13 @@ function startAssemblyPolling(fileId) {
     if (assemblyPollers.has(fileId)) {
         clearInterval(assemblyPollers.get(fileId));
     }
-    
+
     console.log(`🔄 Starting assembly status polling for ${fileId}`);
-    
+
     const pollInterval = setInterval(async () => {
         try {
             const response = await fetch(`/api/assembly_status/${fileId}`);
-            
+
             if (!response.ok) {
                 console.error(`❌ Assembly status check failed for ${fileId}`);
                 clearInterval(pollInterval);
@@ -5599,19 +5633,19 @@ function startAssemblyPolling(fileId) {
                 updateItemStatus(fileId, 'error', 'Assembly status check failed');
                 return;
             }
-            
+
             const status = await response.json();
             console.log(`📊 Assembly status for ${fileId}:`, status.status);
-            
+
             if (status.status === 'completed') {
                 console.log(`✅ Assembly completed for ${status.filename}`);
                 updateItemStatus(fileId, 'completed', 'File ready!');
                 clearInterval(pollInterval);
                 assemblyPollers.delete(fileId);
-                
+
                 // Update cleanup button availability when assembly completes
                 updateManualCleanupButton();
-                
+
                 // Auto-clear the completed item after a short delay
                 setTimeout(() => {
                     console.log(`🧹 Auto-clearing completed assembly item: ${fileId}`);
@@ -5624,17 +5658,17 @@ function startAssemblyPolling(fileId) {
                         }
                     }
                 }, 3000); // Clear after 3 seconds
-                
+
                 // Also trigger the general auto-cleanup function
                 setTimeout(autoCleanupCompletedItems, 5000);
-                
+
                 // Refresh file table to show new file
                 setTimeout(() => {
                     refreshFileTable();
                     // Also refresh storage stats after successful upload
                     refreshStorageStats('upload completed');
                 }, 1000);
-                
+
             } else if (status.status === 'error') {
                 console.error(`❌ Assembly failed for ${status.filename}: ${status.error_message}`);
                 updateItemStatus(fileId, 'error', `Assembly failed: ${status.error_message}`);
@@ -5642,7 +5676,7 @@ function startAssemblyPolling(fileId) {
                 assemblyPollers.delete(fileId);
             }
             // Keep polling if status is 'pending' or 'processing'
-            
+
         } catch (error) {
             console.error(`❌ Assembly polling error for ${fileId}:`, error);
             clearInterval(pollInterval);
@@ -5650,7 +5684,7 @@ function startAssemblyPolling(fileId) {
             updateItemStatus(fileId, 'error', 'Connection error during assembly');
         }
     }, 2000); // Poll every 2 seconds
-    
+
     assemblyPollers.set(fileId, pollInterval);
 }
 
@@ -5658,22 +5692,22 @@ async function checkExistingAssemblies() {
     // Check for any existing assembly jobs on page load
     try {
         const response = await fetch('/api/assembly_status');
-        
+
         if (!response.ok) {
             console.log('No existing assembly jobs found');
             return;
         }
-        
+
         const data = await response.json();
         const jobs = data.jobs || [];
-        
+
         console.log(`🔄 Found ${jobs.length} existing assembly job(s)`);
-        
+
         // Process each job
         for (const job of jobs) {
             if (job.status === 'pending' || job.status === 'processing') {
                 console.log(`🔄 Resuming assembly tracking for ${job.filename}`);
-                
+
                 // IMMEDIATELY protect this job from cleanup
                 try {
                     await fetch(`/api/protect_assembly/${job.file_id}`, { method: 'POST' });
@@ -5681,7 +5715,7 @@ async function checkExistingAssemblies() {
                 } catch (protectError) {
                     console.warn(`⚠️ Failed to protect assembly job ${job.file_id}:`, protectError);
                 }
-                
+
                 // Add to upload queue as assembling
                 addToUploadQueue({
                     id: job.file_id,
@@ -5691,15 +5725,15 @@ async function checkExistingAssemblies() {
                     message: job.status === 'processing' ? 'Processing file...' : 'Queued for processing...',
                     size: 0 // Unknown size for resumed uploads
                 });
-                
+
                 // Start polling for this job
                 startAssemblyPolling(job.file_id);
-                
+
                 // Update cleanup button to disable it during assembly
                 updateManualCleanupButton();
             }
         }
-        
+
     } catch (error) {
         console.error('❌ Error checking existing assemblies:', error);
     }
@@ -5723,34 +5757,34 @@ console.log('✅ Cloudinator Enhanced Upload System Ready');
 // Auto-clear completed items from upload queue
 function autoCleanupCompletedItems() {
     console.log('🧹 Checking for completed items to auto-clear...');
-    
+
     // Count completed items before clearing
-    const completedItems = uploadQueue.filter(item => 
-        item.status === 'completed' || 
+    const completedItems = uploadQueue.filter(item =>
+        item.status === 'completed' ||
         item.status === 'assembled' ||
         (item.error && item.error.includes('File ready!'))
     );
-    
+
     if (completedItems.length === 0) {
         console.log('🧹 No completed items found for auto-cleanup');
         return;
     }
-    
-    console.log(`🧹 Found ${completedItems.length} completed items to auto-clear:`, 
+
+    console.log(`🧹 Found ${completedItems.length} completed items to auto-clear:`,
         completedItems.map(item => `${item.name} (${item.status})`));
-    
+
     // Remove completed items from queue
-    uploadQueue = uploadQueue.filter(item => 
-        item.status !== 'completed' && 
+    uploadQueue = uploadQueue.filter(item =>
+        item.status !== 'completed' &&
         item.status !== 'assembled' &&
         !(item.error && item.error.includes('File ready!'))
     );
-    
+
     // Update display
     updateQueueDisplay();
-    
+
     console.log(`🧹 Auto-cleared ${completedItems.length} completed items`);
-    
+
     // If queue is now empty, hide it
     if (uploadQueue.length === 0) {
         const queueContainer = document.getElementById('uploadQueue');
@@ -5797,16 +5831,16 @@ const INSTANT_LOAD_SETTINGS = {
 
 function initializeRealTimeMonitoring() {
     console.log('📡 Initializing INSTANT real-time storage monitoring...');
-    
+
     // Skip duplicate initialization if already done
     if (window.storageMonitoringInitialized) {
         console.log('📡 Real-time monitoring already initialized, skipping...');
         return;
     }
     window.storageMonitoringInitialized = true;
-    
+
     // Add Page Visibility API handling to prevent issues on tab switching
-    document.addEventListener('visibilitychange', function() {
+    document.addEventListener('visibilitychange', function () {
         if (document.hidden) {
             console.log('📱 Tab became hidden - monitoring continues in background');
         } else {
@@ -5815,22 +5849,22 @@ function initializeRealTimeMonitoring() {
             // This prevents the "+1 files" issue when switching tabs
         }
     });
-    
+
     // Reset fallback state
     sseFailedPermanently = false;
     pollingEnabled = false;
-    
+
     // Use manual timing controls
     const sseTimeout = INSTANT_LOAD_SETTINGS.enableInstantMode ? INSTANT_LOAD_SETTINGS.sseTimeout : 2000;
     const initialDelay = INSTANT_LOAD_SETTINGS.enableInstantMode ? INSTANT_LOAD_SETTINGS.initialDelay : 100;
-    
+
     console.log(`📡 Using instant mode: SSE timeout=${sseTimeout}ms, initial delay=${initialDelay}ms`);
-    
+
     // Try SSE first with minimal delay
     setTimeout(() => {
         console.log('📡 Attempting SSE connection...');
         connectToStorageStream();
-        
+
         // Fast fallback to polling if SSE fails
         setTimeout(() => {
             if (connectionStatus !== 'connected' && !window.storageStatsInitialized && !sseFailedPermanently) {
@@ -5839,7 +5873,7 @@ function initializeRealTimeMonitoring() {
                 setupFallbackPolling();
             }
         }, sseTimeout);
-        
+
     }, initialDelay);
 }
 
@@ -5849,7 +5883,7 @@ async function initializeStorageStats() {
         console.log('📊 Storage stats already initialized by main handler, skipping fallback...');
         return;
     }
-    
+
     console.log('📊 Initializing storage stats at startup...');
     try {
         const response = await fetch('/api/storage_stats');
@@ -5884,7 +5918,7 @@ function handleStatsUpdate(data) {
             refreshFileTable();
         }
     }
-    
+
     // Update stored values and display
     lastKnownFileCount = data.file_count;
     lastKnownDirCount = data.dir_count;
@@ -5893,18 +5927,18 @@ function handleStatsUpdate(data) {
 
 function activateEventDrivenUpdates() {
     console.log('🚀 Activating event-driven storage updates (no polling)...');
-    
+
     // Clear any existing polling
     if (window.realtimePollingInterval) {
         clearInterval(window.realtimePollingInterval);
         window.realtimePollingInterval = null;
     }
-    
+
     // Set connection status to active
     document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
     connectionStatus = 'connected';
     window.storageStatsInitialized = true;
-    
+
     console.log('✅ Event-driven updates active - storage stats will update only when files change');
 }
 
@@ -5936,18 +5970,18 @@ async function refreshStorageStats(reason = 'manual') {
 function setupFallbackPolling() {
     let sseFailureCount = 0;
     let fallbackPollingInterval = null;
-    
+
     // Only activate fallback if SSE consistently fails
     const checkSSEHealth = () => {
         if (!storageEventSource || storageEventSource.readyState === EventSource.CLOSED) {
             sseFailureCount++;
             console.warn(`⚠️ SSE connection issue detected (${sseFailureCount}/1)`);
-            
+
             if (sseFailureCount >= 1 && !fallbackPollingInterval) {
                 console.log('🔄 SSE failed - using event-driven updates instead of polling...');
                 // Instead of polling, use event-driven updates
                 activateEventDrivenUpdates();
-                
+
                 // Optional: Very infrequent fallback check (every 5 minutes) only for connection health
                 fallbackPollingInterval = setInterval(async () => {
                     try {
@@ -5959,7 +5993,7 @@ function setupFallbackPolling() {
                                 // Only update if there are significant changes
                                 if (data.file_count !== undefined && data.dir_count !== undefined) {
                                     if (lastKnownFileCount !== null && lastKnownDirCount !== null) {
-                                        if (Math.abs(data.file_count - lastKnownFileCount) > 5 || 
+                                        if (Math.abs(data.file_count - lastKnownFileCount) > 5 ||
                                             Math.abs(data.dir_count - lastKnownDirCount) > 2) {
                                             console.log(`🔄 Health check detected significant changes: ${lastKnownFileCount}→${data.file_count} files, ${lastKnownDirCount}→${data.dir_count} dirs`);
                                             await refreshFileTable();
@@ -5992,7 +6026,7 @@ function setupFallbackPolling() {
             }
         }
     };
-    
+
     // Check SSE health every 15 seconds
     setInterval(checkSSEHealth, 15000);
 }
@@ -6009,16 +6043,16 @@ function connectToStorageStream() {
 
         console.log('📡 Connecting to storage stats stream...');
         console.log('🔍 EventSource URL:', '/api/storage_stats_stream');
-        
+
         // Show connecting state
         document.title = '🟠 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
         console.log('🟠 Set title to connecting state');
-        
+
         // Create EventSource with credentials to include session cookies
         storageEventSource = new EventSource('/api/storage_stats_stream', { withCredentials: true });
         console.log('🔍 EventSource created with credentials:', storageEventSource);
         console.log('🔍 Initial readyState:', storageEventSource.readyState);
-        
+
         // POLL the readyState to detect connection success
         let stateCheckInterval = setInterval(() => {
             console.log('🔍 Checking EventSource readyState:', storageEventSource.readyState);
@@ -6033,10 +6067,10 @@ function connectToStorageStream() {
                 clearInterval(stateCheckInterval);
             }
         }, 100); // Check every 100ms
-        
+
         // IMMEDIATE detection of ANY data
         let dataReceived = false;
-        storageEventSource.addEventListener('message', function(event) {
+        storageEventSource.addEventListener('message', function (event) {
             if (!dataReceived) {
                 dataReceived = true;
                 console.log('🎯 FIRST MESSAGE DETECTED!', event.data);
@@ -6046,36 +6080,36 @@ function connectToStorageStream() {
                 window.storageStatsInitialized = true;
             }
         });
-        
+
         // Keep connection alive by preventing premature closure
-        storageEventSource.addEventListener('error', function(event) {
+        storageEventSource.addEventListener('error', function (event) {
             console.warn('⚠️ SSE error event:', event);
             console.warn('⚠️ EventSource readyState:', storageEventSource.readyState);
             console.warn('⚠️ EventSource url:', storageEventSource.url);
             // Don't immediately close on errors - let the reconnect logic handle it
         });
-        
-        storageEventSource.onopen = function(event) {
+
+        storageEventSource.onopen = function (event) {
             console.log('✅ SSE connection successful - disabling polling fallback');
             console.log('🟢 SSE onopen fired - changing title to connected');
             console.log('🟢 EventSource readyState:', storageEventSource.readyState);
             connectionStatus = 'connected';
             reconnectAttempts = 0;
-            
+
             // Stop polling if it was running
             stopPolling();
-            
+
             // SSE will provide initial data, no need for separate API call
             window.storageStatsInitialized = true;
-            
+
             // Add clean connection indicator
             document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '') + ' (SSE)';
             console.log('🟢 Title set to connected state:', document.title);
         };
 
-        storageEventSource.onmessage = function(event) {
+        storageEventSource.onmessage = function (event) {
             console.log('📡 Raw SSE message received:', event.data);
-            
+
             // If this is the first message and we're still connecting, treat it as successful connection
             if (document.title.startsWith('🟠')) {
                 console.log('🟢 First SSE message received - treating as successful connection');
@@ -6085,7 +6119,7 @@ function connectToStorageStream() {
                 updateConnectionStatus();
                 window.storageStatsInitialized = true;
             }
-            
+
             try {
                 const data = JSON.parse(event.data);
                 console.log('📡 Parsed SSE data:', data);
@@ -6095,7 +6129,7 @@ function connectToStorageStream() {
             }
         };
 
-        storageEventSource.onerror = function(event) {
+        storageEventSource.onerror = function (event) {
             console.error('❌ Storage stats stream error:', event);
             console.log('🔴 SSE onerror fired - connection failed');
             console.log('🔴 EventSource readyState:', storageEventSource.readyState);
@@ -6103,11 +6137,11 @@ function connectToStorageStream() {
             console.log('🔴 Event type:', event.type);
             console.log('🔴 Event target:', event.target);
             connectionStatus = 'error';
-            
+
             // Add clean disconnection indicator
             document.title = '🔴 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
             console.log('🔴 Title set to error state');
-            
+
             // Try a few SSE reconnects, then fall back to polling
             if (reconnectAttempts < 2) { // Reduced from 5 to 2 attempts
                 reconnectAttempts++;
@@ -6118,13 +6152,13 @@ function connectToStorageStream() {
             } else {
                 console.error('💀 SSE reconnection failed, switching to polling fallback...');
                 sseFailedPermanently = true;
-                
+
                 // Close SSE connection
                 if (storageEventSource) {
                     storageEventSource.close();
                     storageEventSource = null;
                 }
-                
+
                 // Start polling fallback
                 setupFallbackPolling();
             }
@@ -6143,22 +6177,22 @@ function setupFallbackPolling() {
         console.log('📊 Polling already enabled, skipping setup');
         return;
     }
-    
+
     const pollingDelay = INSTANT_LOAD_SETTINGS.enableInstantMode ? INSTANT_LOAD_SETTINGS.pollingDelay : 0;
-    
+
     console.log(`🔄 Setting up INSTANT polling fallback (delay: ${pollingDelay}ms)...`);
-    
+
     setTimeout(() => {
         pollingEnabled = true;
         lastPollingCheck = 0; // Start with 0 for instant initial load
-        
+
         // Update title to show polling mode
         document.title = '🟠 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '') + ' (Polling)';
-        
+
         // Start polling with configurable interval
         const pollingIntervalTime = INSTANT_LOAD_SETTINGS.pollingIntervalTime || 2000;
         pollingInterval = setInterval(performPollingCheck, pollingIntervalTime);
-        
+
         // Perform immediate initial check
         performPollingCheck();
     }, pollingDelay);
@@ -6169,7 +6203,7 @@ async function performPollingCheck() {
         // Include current file/dir counts for accurate change detection
         const currentFiles = lastKnownFileCount || 0;
         const currentDirs = lastKnownDirCount || 0;
-        
+
         const response = await fetch(`/api/storage_stats_poll?last_check=${lastPollingCheck}&last_files=${currentFiles}&last_dirs=${currentDirs}`, {
             method: 'GET',
             cache: 'no-cache',
@@ -6177,28 +6211,28 @@ async function performPollingCheck() {
                 'Cache-Control': 'no-cache'
             }
         });
-        
+
         if (!response.ok) {
             throw new Error(`Polling failed: ${response.status}`);
         }
-        
+
         const data = await response.json();
         console.log('📊 Polling response:', data);
-        
+
         // Update connection status on successful poll
         if (connectionStatus !== 'connected') {
             connectionStatus = 'connected';
             document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '') + ' (Polling)';
             console.log('🟢 Polling connection established');
         }
-        
+
         // Update last check timestamp
         lastPollingCheck = data.timestamp;
-        
+
         // Handle the data same way as SSE
         if (data.changed || !window.storageStatsInitialized) {
             console.log('🔄 Changes detected via polling, updating display...');
-            
+
             // Convert polling response to SSE-like format
             const sseData = {
                 type: 'storage_stats_update',
@@ -6206,11 +6240,11 @@ async function performPollingCheck() {
                 initial: !window.storageStatsInitialized,
                 data: data.data
             };
-            
+
             handleStorageUpdate(sseData);
             window.storageStatsInitialized = true;
         }
-        
+
     } catch (error) {
         console.error('❌ Polling check failed:', error);
         connectionStatus = 'error';
@@ -6229,25 +6263,25 @@ function stopPolling() {
 
 function handleStorageUpdate(data) {
     console.log('📊 Real-time storage update received:', data);
-    
+
     switch (data.type) {
         case 'connected':
             console.log('📡 SSE connection established');
             break;
-            
+
         case 'storage_stats_update':
             console.log('🔄 Processing storage_stats_update...', data.data);
-            
+
             // Brief flash to show SSE activity
             document.title = '⚡ ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
             setTimeout(() => {
                 document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
             }, 2000);
-            
+
             if (data.data) {
                 // Update storage display with real-time data
                 updateStorageDisplay(data.data);
-                
+
                 // Update our tracked file counts
                 if (data.data.file_count !== undefined) {
                     lastKnownFileCount = data.data.file_count;
@@ -6255,13 +6289,13 @@ function handleStorageUpdate(data) {
                 if (data.data.dir_count !== undefined) {
                     lastKnownDirCount = data.data.dir_count;
                 }
-                
+
                 // Check for file/folder changes and refresh table if needed
                 // Skip change notifications for initial data (page load)
                 if (data.data.changes && !data.initial) {
                     const changes = data.data.changes;
                     console.log('🔍 Changes detected:', changes);
-                    
+
                     // Refresh file table for ANY change including modifications and renames
                     // - files_changed/dirs_changed: for file/folder creation/deletion
                     // - size_changed: for file content modifications
@@ -6269,20 +6303,20 @@ function handleStorageUpdate(data) {
                     // - mtime_changed: for any file modifications
                     // Check if there are actual significant changes worth showing to user
                     const hasSignificantChanges = (
-                        changes.files_changed !== 0 || 
-                        changes.dirs_changed !== 0 || 
+                        changes.files_changed !== 0 ||
+                        changes.dirs_changed !== 0 ||
                         changes.size_changed !== 0
                     );
-                    
+
                     // Check if we should refresh the file table (broader criteria)
                     const shouldRefresh = (
-                        changes.files_changed !== 0 || 
-                        changes.dirs_changed !== 0 || 
+                        changes.files_changed !== 0 ||
+                        changes.dirs_changed !== 0 ||
                         changes.size_changed !== 0 ||
                         changes.content_changed === true ||
                         changes.mtime_changed === true
                     );
-                    
+
                     if (shouldRefresh) {
                         // Only show notification for significant changes
                         if (hasSignificantChanges) {
@@ -6295,13 +6329,13 @@ function handleStorageUpdate(data) {
                             if (changes.files_changed === 0 && changes.dirs_changed === 0 && changes.size_changed === 0) {
                                 message += 'files modified/renamed ';
                             }
-                            
+
                             showUploadStatus(`<i class="fas fa-sync-alt"></i> ${message.trim()}`, 'info');
                         } else {
                             // Minor change - refresh table but don't show notification
                             console.log('📊 Minor content change detected - refreshing table silently');
                         }
-                        
+
                         // Refresh file table for any change
                         console.log('🚀 Triggering instant file table refresh via SSE...');
                         // Use requestAnimationFrame for immediate, smooth UI update
@@ -6310,7 +6344,7 @@ function handleStorageUpdate(data) {
                             await refreshFileTable();
                             console.log('✅ SSE triggered refreshFileTable() completed!');
                         });
-                        
+
                         // Skip redundant storage stats call since we already have the data
                         console.log('📊 Using real-time storage data (skipping additional API call)');
                     } else {
@@ -6321,16 +6355,16 @@ function handleStorageUpdate(data) {
                 } else {
                     console.log('📊 No changes data in SSE update');
                 }
-                
+
                 console.log(`📊 Updated file counts: ${lastKnownFileCount} files, ${lastKnownDirCount} dirs`);
             }
             break;
-            
+
         case 'ping':
             // Keep-alive ping, just log it
             console.log('📡 SSE keep-alive ping');
             break;
-            
+
         default:
             console.log('📡 Unknown SSE message type:', data.type);
     }
