@@ -279,7 +279,6 @@ def main():
         main_menu()
         
         print("\n🎯 Setup Complete!")
-        print("Run 'python app.py' to start the FTP server.")
         
         return 0
         
