@@ -390,6 +390,7 @@ Write-Host "Creating config..." -ForegroundColor Green
 $config = @"
 tunnel: $tunnel_id
 credentials-file: C:\Users\$env:USERNAME\.cloudflared\$tunnel_id.json
+protocol: quic
 
 ingress:
   - hostname: $DOMAIN
@@ -399,9 +400,11 @@ ingress:
       tlsTimeout: 0s
       tcpKeepAlive: 0s
       keepAliveTimeout: 0s
+      http2Origin: false
       httpHostHeader: $DOMAIN
       noTLSVerify: true
       disableChunkedEncoding: false
+      keepAliveConnections: 100000000
       proxyConnectTimeout: 0s
       expectContinueTimeout: 0s
   - service: http_status:404
