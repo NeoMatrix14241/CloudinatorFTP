@@ -794,119 +794,7 @@ function compareDates(a, b) {
     return a.localeCompare(b);
 }
 
-// Helper function to parse size strings to bytes
-function parseSize(sizeStr) {
-    if (!sizeStr || sizeStr === '--') return 0;
-    
-    const match = sizeStr.match(/([\d.]+)\s*(GB|MB|KB|bytes?)?/i);
-    if (!match) return 0;
-    
-    const value = parseFloat(match[1]);
-    const unit = (match[2] || 'bytes').toUpperCase();
-    
-    const multipliers = {
-        'GB': 1024 * 1024 * 1024,
-        'MB': 1024 * 1024,
-        'KB': 1024,
-        'BYTES': 1,
-        'BYTE': 1
-    };
-    
-    return value * (multipliers[unit] || 1);
-}
 
-// Function to extract sort values from table cells
-function getSortValue(row, column) {
-    let cell;
-    
-    switch(column) {
-        case 'name':
-            cell = row.cells[1];
-            const link = cell.querySelector('a');
-            const text = link ? link.textContent : cell.textContent;
-            return text.trim().toLowerCase();
-            
-        case 'size':
-            cell = row.cells[2];
-            const sizeText = cell.textContent.trim();
-            
-            if (sizeText === '--' || sizeText === '') return 0;
-            
-            if (sizeText.includes('files') && sizeText.includes('folders')) {
-                const sizeMatch = sizeText.match(/([\d.]+)\s*(GB|MB|KB|bytes?)/i);
-                if (sizeMatch) {
-                    return parseSize(sizeMatch[0]);
-                }
-                const filesMatch = sizeText.match(/(\d+)\s*files/);
-                return filesMatch ? parseInt(filesMatch[1]) : 0;
-            }
-            
-            return parseSize(sizeText);
-            
-        case 'type':
-            cell = row.cells[3];
-            return cell.textContent.trim().toLowerCase();
-            
-        case 'modified':
-            cell = row.cells[4];
-            const dateText = cell.textContent.trim();
-            if (dateText === '--' || dateText === '') return 0;
-            return new Date(dateText).getTime() || 0;
-            
-        default:
-            return '';
-    }
-}
-
-// Main sorting function
-function sortTable(column) {
-    console.log('📊 Sorting by:', column);
-    
-    const table = document.getElementById('filesTable');
-    const tbody = table.querySelector('tbody');
-    const rows = Array.from(tbody.querySelectorAll('tr'));
-    
-    const isParentRow = (row) => {
-        return row.style.background === 'rgba(52, 152, 219, 0.1)' || 
-               row.innerHTML.includes('.. (Parent Directory)');
-    };
-    
-    const parentRow = rows.find(isParentRow);
-    const sortableRows = rows.filter(row => !isParentRow(row));
-    
-    if (currentSort.column === column) {
-        currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
-    } else {
-        currentSort.column = column;
-        currentSort.direction = 'asc';
-    }
-    
-    sortableRows.sort((a, b) => {
-        const aValue = getSortValue(a, column);
-        const bValue = getSortValue(b, column);
-        
-        let comparison = 0;
-        
-        if (column === 'size' || column === 'modified') {
-            comparison = aValue - bValue;
-        } else {
-            if (aValue < bValue) comparison = -1;
-            if (aValue > bValue) comparison = 1;
-        }
-        
-        return currentSort.direction === 'asc' ? comparison : -comparison;
-    });
-    
-    tbody.innerHTML = '';
-    
-    if (parentRow) {
-        tbody.appendChild(parentRow);
-    }
-    
-    sortableRows.forEach(row => tbody.appendChild(row));
-    
-    updateSortHeaders(column, currentSort.direction);
-}
 
 function updateSortHeaders(activeColumn, direction) {
     // Reset all headers
@@ -1353,6 +1241,21 @@ function updateFileTable(files, path) {
     }
 
     console.log(`📋 Updated file table with ${files.length} items`);
+
+    // Store the new original order for this folder (so reset sort works correctly)
+    console.log(`💾 Storing original table order for current folder...`);
+    storeOriginalTableOrder();
+    
+    // Reset sort state when navigating to a new folder
+    console.log(`🔄 Resetting sort state...`);
+    currentSort = { column: null, direction: 'asc' };
+    
+    // Reset sort header styles
+    document.querySelectorAll('.sortable').forEach(header => {
+        header.classList.remove('sort-asc', 'sort-desc');
+        const icon = header.querySelector('.sort-icon');
+        if (icon) icon.className = 'fas fa-sort sort-icon';
+    });
 
     // Reinitialize sort functionality for new content
     console.log(`🔄 Reinitializing table controls...`);
