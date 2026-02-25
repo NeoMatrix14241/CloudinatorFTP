@@ -1009,6 +1009,39 @@ def cancel_upload():
     except Exception as e:
         print(f"❌ Cancel upload error: {e}")
         return jsonify({'error': f'Cancel upload error: {str(e)}'}), 500
+    
+@app.route('/admin/cleanup_cache', methods=['POST'])
+@login_required
+def admin_cleanup_cache():
+    """Delete storage_index.json and trigger a fresh full walk to rebuild it"""
+    try:
+        role = get_role(current_user())
+        if role != 'readwrite':
+            return jsonify({'error': 'Permission denied'}), 403
+
+        from file_monitor import get_file_monitor, CACHE_FILE
+        import os
+
+        # Delete the cache file
+        if os.path.exists(CACHE_FILE):
+            os.remove(CACHE_FILE)
+            print(f"🗑️ Cache file deleted: {CACHE_FILE}")
+        else:
+            print("ℹ️ No cache file found — nothing to delete")
+
+        # Trigger a fresh full reconciliation walk to rebuild it
+        monitor = get_file_monitor()
+        print("🚶 Rebuilding cache from scratch...")
+        monitor._reconcile()
+
+        return jsonify({
+            'success': True,
+            'message': f'Cache cleared and rebuilt: {monitor._file_count:,} files, {monitor._dir_count:,} dirs, {len(monitor._dir_info):,} folders indexed'
+        }), 200
+
+    except Exception as e:
+        print(f"❌ Error during cache cleanup: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/admin/cleanup_chunks', methods=['POST'])
 @login_required
@@ -1535,6 +1568,43 @@ def search_files():
     except Exception as e:
         print(f"❌ Search error: {str(e)}")
         return jsonify({'error': f'Search failed: {str(e)}'}), 500
+
+@app.route('/api/dir_info/', defaults={'path': ''})
+@app.route('/api/dir_info/<path:path>')
+@login_required
+def dir_info(path):
+    """
+    Returns folder size and item count.
+    Hits the in-memory index instantly if indexed.
+    Falls back to live walk for brand-new folders not yet in the index,
+    then stores the result back so subsequent requests are instant.
+    """
+    if path and not storage.is_safe_path(path):
+        return jsonify({'error': 'Invalid path'}), 400
+    try:
+        info = storage.get_dir_info(path)
+
+        # If this was a live walk fallback, store it back into the monitor index
+        # so the next request for this path is instant
+        try:
+            from file_monitor import get_file_monitor
+            monitor = get_file_monitor()
+            rel_path = path.replace('\\', '/').strip('/')
+            if monitor.get_dir_info(rel_path) is None:
+                with monitor.lock:
+                    monitor._dir_info[rel_path] = {
+                        'file_count': info['file_count'],
+                        'dir_count': info['dir_count'],
+                        'total_size': info['total_size']
+                    }
+                print(f"📥 Stored live walk result for '{rel_path}' into index")
+        except Exception:
+            pass
+
+        return jsonify(info), 200
+    except Exception as e:
+        print(f"❌ Error getting dir info for {path}: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/assembly_status', methods=['GET'])
 @login_required 

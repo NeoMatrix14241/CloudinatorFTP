@@ -444,34 +444,25 @@
                         </td>
                         <td>
                             {% if item.is_dir %}
-                            <span style="color: white; font-size: 13px;">
-                                {% if item.item_count %}
-                                {{ item.item_count.files }} files, {{ item.item_count.dirs }} folders
-                                {% if item.size > 0 %}
-                                <br><small style="color: white;">
+                            <span class="dir-info-cell"
+                                  data-dir-path="{{ (path + '/' + item.name) if path else item.name }}"
+                                  style="color: white; font-size: 13px;">
+                                <i class="fas fa-spinner fa-spin" style="opacity: 0.4; font-size: 11px;"></i>
+                            </span>
+                            {% else %}
+                            <span style="color: white; font-weight: 500;">
+                                {% if item.size is not none %}
                                     {% if item.size >= 1024*1024*1024 %}
                                     {{ "%.2f"|format(item.size / (1024*1024*1024)) }} GB
                                     {% elif item.size >= 1024*1024 %}
                                     {{ "%.1f"|format(item.size / (1024*1024)) }} MB
-                                    {% else %}
+                                    {% elif item.size >= 1024 %}
                                     {{ "%.1f"|format(item.size / 1024) }} KB
+                                    {% else %}
+                                    {{ item.size }} bytes
                                     {% endif %}
-                                </small>
-                                {% endif %}
                                 {% else %}
                                 --
-                                {% endif %}
-                            </span>
-                            {% else %}
-                            <span style="color: white; font-weight: 500;">
-                                {% if item.size >= 1024*1024*1024 %}
-                                {{ "%.2f"|format(item.size / (1024*1024*1024)) }} GB
-                                {% elif item.size >= 1024*1024 %}
-                                {{ "%.1f"|format(item.size / (1024*1024)) }} MB
-                                {% elif item.size >= 1024 %}
-                                {{ "%.1f"|format(item.size / 1024) }} KB
-                                {% else %}
-                                {{ item.size }} bytes
                                 {% endif %}
                             </span>
                             {% endif %}
@@ -761,6 +752,13 @@
 
     <!-- External JavaScript files -->
     <script src="{{ url_for('static', filename='js/index.js') }}"></script>
+
+    <!-- Trigger lazy folder info load on initial page render -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            loadDirInfoCells();
+        });
+    </script>
 </body>
 
 </html>

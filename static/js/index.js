@@ -1260,6 +1260,10 @@ function updateFileTable(files, path) {
     // Reinitialize sort functionality for new content
     console.log(`🔄 Reinitializing table controls...`);
     reinitializeTableControls(files.length);
+
+    // Lazy-load folder sizes after table is rendered
+    loadDirInfoCells();
+
     console.log(`📋 === UPDATE FILE TABLE COMPLETE ===`);
 }
 
@@ -1317,9 +1321,8 @@ function createFileTableRow(item, currentPath) {
         </td>
         <td>
             ${item.is_dir ?
-            `<span style="color: white; font-size: 13px;">
-                    ${item.item_count ? `${item.item_count.files || 0} files, ${item.item_count.dirs || 0} folders` : '--'}<br>
-                    ${formatFileSize(item.size)}
+            `<span class="dir-info-cell" data-dir-path="${escapeHtml(itemPath)}" style="color: white; font-size: 13px;">
+                    <i class="fas fa-spinner fa-spin" style="opacity: 0.4; font-size: 11px;"></i>
                 </span>` :
             `<span class="file-size" style="color: white; font-weight: 500;">${formatFileSize(item.size)}</span>`
         }
@@ -1388,6 +1391,42 @@ function createFileTableRow(item, currentPath) {
     `;
 
     return row;
+}
+
+// Lazy-load folder size and item count for all visible dir-info-cell spans.
+// Called after every table render — initial load, navigation, and SSE refresh.
+function loadDirInfoCells() {
+    function formatSize(bytes) {
+        if (!bytes || bytes <= 0) return null;
+        if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+        if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return bytes + ' bytes';
+    }
+
+    const cells = document.querySelectorAll('.dir-info-cell');
+    if (!cells.length) return;
+
+    cells.forEach(function (cell) {
+        if (cell.dataset.loaded === 'true') return;
+        cell.dataset.loaded = 'true';
+
+        const dirPath = cell.dataset.dirPath;
+        // Use raw path in URL — do NOT encodeURIComponent as it encodes slashes
+        // and breaks Flask's <path:path> route matcher
+        fetch('/api/dir_info/' + dirPath)
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.error) { cell.textContent = '--'; return; }
+                var html = data.file_count + ' files, ' + data.dir_count + ' folders';
+                var sizeStr = formatSize(data.total_size);
+                if (sizeStr) {
+                    html += '<br><small style="color:white;">' + sizeStr + '</small>';
+                }
+                cell.innerHTML = html;
+            })
+            .catch(function () { cell.textContent = '--'; });
+    });
 }
 
 // Update breadcrumb navigation
@@ -2687,9 +2726,8 @@ function updateFileTableContent(files) {
             iconHtml = `<i class="fas fa-folder file-icon folder-icon"></i>
                 <a href="#" data-action="navigate" data-path="${itemPath}">${file.name}</a>`;
 
-            sizeHtml = `<span style="color: white; font-size: 13px;">
-                ${file.item_count ? `${file.item_count.files || 0} files, ${file.item_count.dirs || 0} folders` : '--'}<br>
-                ${file.size ? formatFileSize(file.size) : '--'}
+            sizeHtml = `<span class="dir-info-cell" data-dir-path="${itemPath}" style="color: white; font-size: 13px;">
+                <i class="fas fa-spinner fa-spin" style="opacity: 0.4; font-size: 11px;"></i>
             </span>`;
 
             typeHtml = '<span class="file-type"><i class="fas fa-folder folder-icon file-icon"></i> Folder</span>';
@@ -2885,6 +2923,9 @@ function updateFileTableContent(files) {
 
     // Reinitialize search and sort controls
     reinitializeTableControls(files.length);
+
+    // Lazy-load folder sizes after table is rendered
+    loadDirInfoCells();
 }
 
 // Handle delete button clicks
@@ -4541,7 +4582,7 @@ function addManualCleanupButton() {
         const cleanupBtn = document.createElement('button');
         cleanupBtn.id = 'manualCleanupBtn';
         cleanupBtn.className = 'btn btn-warning btn-sm manual-cleanup-btn';
-        cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Temp Files';
+        cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Chunk';
 
         // Hide button by default - only show after status check confirms it's safe
         cleanupBtn.style.display = 'none';
@@ -4584,7 +4625,7 @@ function addManualCleanupButton() {
                 showUploadStatus(`❌ Manual cleanup failed: ${error.message}`, 'error');
             } finally {
                 cleanupBtn.disabled = false;
-                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Temp Files';
+                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Chunk';
             }
         };
 
@@ -4641,10 +4682,10 @@ async function updateManualCleanupButton() {
             // Update title based on whether chunks exist
             if (hasActiveUploads && chunkCount > 0) {
                 cleanupBtn.title = `Clean up ${chunkCount} temporary chunk files (Safe - no active uploads or processing)`;
-                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Temp Files (' + chunkCount + ')';
+                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Chunk (' + chunkCount + ')';
             } else {
                 cleanupBtn.title = 'Clean up temporary chunk files (Safe - no active uploads or processing)';
-                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Temp Files';
+                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Chunk';
             }
         }
     } catch (error) {
@@ -4652,6 +4693,92 @@ async function updateManualCleanupButton() {
         // On error, hide the button to be safe
         cleanupBtn.style.setProperty('display', 'none', 'important');
         cleanupBtn.title = 'Manual cleanup disabled (Status check failed)';
+    }
+}
+
+// Add manual cleanup button for debugging/admin use
+function addManualCleanupButton() {
+    const controls = document.querySelector('.controls');
+    if (controls && USER_ROLE === 'readwrite') {
+
+        // --- Cleanup Chunk button ---
+        const cleanupBtn = document.createElement('button');
+        cleanupBtn.id = 'manualCleanupBtn';
+        cleanupBtn.className = 'btn btn-warning btn-sm manual-cleanup-btn';
+        cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Chunk';
+        cleanupBtn.style.display = 'none';
+        cleanupBtn.title = 'Checking safety status...';
+
+        cleanupBtn.onclick = async function () {
+            try {
+                const assemblyResponse = await fetch('/api/assembly_status');
+                if (assemblyResponse.ok) {
+                    const assemblyStatus = await assemblyResponse.json();
+                    const activeJobs = assemblyStatus.jobs || [];
+                    const hasActiveAssembly = activeJobs.some(job =>
+                        job.status === 'pending' || job.status === 'processing'
+                    );
+                    if (hasActiveAssembly) {
+                        showUploadStatus('❌ Cannot cleanup - files are currently being processed/assembled', 'error');
+                        return;
+                    }
+                }
+                cleanupBtn.disabled = true;
+                cleanupBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Cleaning...';
+                const response = await fetch('/admin/cleanup_chunks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    showUploadStatus('🧹 Temp chunked files cleanup completed', 'success');
+                } else {
+                    throw new Error(result.error || 'Cleanup failed');
+                }
+            } catch (error) {
+                showUploadStatus(`❌ Cleanup failed: ${error.message}`, 'error');
+            } finally {
+                cleanupBtn.disabled = false;
+                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Chunk';
+                updateManualCleanupButton();
+            }
+        };
+
+        controls.appendChild(cleanupBtn);
+
+        // --- Cleanup Cache button ---
+        const cacheBtn = document.createElement('button');
+        cacheBtn.id = 'cleanupCacheBtn';
+        cacheBtn.className = 'btn btn-warning btn-sm manual-cleanup-btn';
+        cacheBtn.innerHTML = '<i class="fas fa-database"></i> Cleanup Cache';
+        cacheBtn.title = 'Delete storage_index.json and rebuild the index from scratch';
+
+        cacheBtn.onclick = async function () {
+            if (!confirm('This will delete the storage index cache and rebuild it from scratch.\nThe server will re-scan all files — this may take a few seconds.\n\nContinue?')) {
+                return;
+            }
+            try {
+                cacheBtn.disabled = true;
+                cacheBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Rebuilding...';
+                const response = await fetch('/admin/cleanup_cache', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    showUploadStatus('✅ Cache cleared and rebuilt successfully', 'success');
+                } else {
+                    throw new Error(result.error || 'Cache cleanup failed');
+                }
+            } catch (error) {
+                showUploadStatus(`❌ Cache cleanup failed: ${error.message}`, 'error');
+            } finally {
+                cacheBtn.disabled = false;
+                cacheBtn.innerHTML = '<i class="fas fa-database"></i> Cleanup Cache';
+            }
+        };
+
+        controls.appendChild(cacheBtn);
     }
 }
 

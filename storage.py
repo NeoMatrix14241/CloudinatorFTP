@@ -60,39 +60,40 @@ def list_dir(path):
                 # Skip hidden files and chunk directories
                 if entry.name.startswith('.'):
                     continue
-                
+
                 try:
-                    # Get size information
+                    stat = entry.stat()
+
                     if entry.is_dir():
-                        # For directories, calculate total size
-                        size = get_directory_size(os.path.join(path, entry.name) if path else entry.name)
-                        item_count = count_directory_items(os.path.join(path, entry.name) if path else entry.name)
-                    else:
-                        # For files, get file size
-                        size = entry.stat().st_size
+                        # Never recursively walk directories on listing —
+                        # that caused 8+ second page loads with large file trees.
+                        # Size and item_count are returned as None and rendered
+                        # as '--' in the template. Use the /api/dir_info endpoint
+                        # for on-demand lazy loading if needed.
+                        size = None
                         item_count = None
-                    
-                    # Get modification time
-                    mtime = entry.stat().st_mtime
-                    
+                    else:
+                        # Single stat call — already fetched above, instant
+                        size = stat.st_size
+                        item_count = None
+
                     items.append({
                         'name': entry.name,
                         'is_dir': entry.is_dir(),
                         'size': size,
                         'item_count': item_count,
-                        'modified': mtime
+                        'modified': stat.st_mtime
                     })
                 except (OSError, IOError):
-                    # If we can't get stats, add basic info
                     items.append({
                         'name': entry.name,
                         'is_dir': entry.is_dir(),
-                        'size': 0,
+                        'size': None,
                         'item_count': None,
                         'modified': None
                     })
-                    
-        # Sort: directories first, then files alphabetically
+
+        # Sort: directories first, then files, both alphabetically
         items.sort(key=lambda x: (not x['is_dir'], x['name'].lower()))
     except (OSError, PermissionError):
         return []
@@ -542,6 +543,65 @@ def get_directory_size(path):
         return total_size
     except (OSError, IOError):
         return 0
+
+def get_dir_info(path):
+    """
+    Get shallow item count + recursive total size for a directory.
+    Checks file_monitor index first — instant if indexed.
+    Falls back to a live walk only if the path isn't in the index yet
+    (e.g. brand-new folder not yet reconciled).
+    """
+    # Normalize to forward slashes, strip leading/trailing slashes
+    rel_path = path.replace('\\', '/').strip('/')
+
+    # Try the in-memory index first — this is the fast path
+    try:
+        from file_monitor import get_file_monitor
+        monitor = get_file_monitor()
+        cached = monitor.get_dir_info(rel_path)
+        if cached is not None:
+            return {
+                'file_count': cached.get('file_count', 0),
+                'dir_count': cached.get('dir_count', 0),
+                'total_size': cached.get('total_size', 0)
+            }
+    except Exception as e:
+        print(f"⚠️ Cache lookup failed for '{rel_path}': {e}")
+
+    # Fallback — live walk for paths not yet indexed
+    print(f"⚠️ '{rel_path}' not in index yet — doing live walk (will be cached after next reconcile)")
+    full_path = os.path.join(ROOT_DIR, path)
+    file_count = 0
+    dir_count = 0
+    total_size = 0
+
+    try:
+        with os.scandir(full_path) as it:
+            for entry in it:
+                if entry.name.startswith('.'):
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    dir_count += 1
+                else:
+                    file_count += 1
+
+        for dirpath, dirnames, filenames in os.walk(full_path):
+            dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+            for filename in filenames:
+                if filename.startswith('.'):
+                    continue
+                try:
+                    total_size += os.path.getsize(os.path.join(dirpath, filename))
+                except (OSError, IOError):
+                    continue
+    except (OSError, IOError):
+        pass
+
+    return {
+        'file_count': file_count,
+        'dir_count': dir_count,
+        'total_size': total_size
+    }
 
 def is_safe_path(path):
     """Check if path is safe (no directory traversal)"""
