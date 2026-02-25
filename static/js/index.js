@@ -747,7 +747,16 @@ function getSortValue(row, column) {
             return nameCell.textContent.trim();
         case 'size':
             const sizeCell = row.querySelector('td:nth-child(3)');
-            return sizeCell ? sizeCell.textContent.trim() : '';
+            if (!sizeCell) return '';
+            
+            // For folders with dir-info-cell, extract size from <small> tag
+            const dirInfoCell = sizeCell.querySelector('.dir-info-cell small');
+            if (dirInfoCell) {
+                return dirInfoCell.textContent.trim();
+            }
+            
+            // For regular files or folders without size info yet
+            return sizeCell.textContent.trim();
         case 'type':
             const typeCell = row.querySelector('td:nth-child(4)');
             return typeCell ? typeCell.textContent.trim() : '';
@@ -766,10 +775,11 @@ function compareSizes(a, b) {
 }
 
 function parseSize(sizeStr) {
-    if (!sizeStr || sizeStr === '--' || sizeStr.includes('files,')) {
+    if (!sizeStr || sizeStr === '--') {
         return 0;
     }
 
+    // Try to extract size value (works for both files and folders)
     const match = sizeStr.match(/([\d.]+)\s*(bytes?|KB|MB|GB|TB)?/i);
     if (!match) return 0;
 
