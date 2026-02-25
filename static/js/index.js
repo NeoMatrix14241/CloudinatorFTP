@@ -962,6 +962,15 @@ function resetSorting() {
     // Update sort info display
     updateSortInfo(null, null);
 
+    // Reset the data-loaded attribute on all dir-info-cell spans so they reload
+    document.querySelectorAll('.dir-info-cell').forEach(cell => {
+        cell.dataset.loaded = 'false';
+        cell.innerHTML = '<i class="fas fa-spinner fa-spin" style="color: #95a5a6;"></i>';
+    });
+
+    // Reload directory info cells (size column)
+    loadDirInfoCells();
+
     console.log('✅ Table sorting reset to default order');
 }
 
