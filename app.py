@@ -187,11 +187,10 @@ def cancel_bulk_zip():
 # Add Jinja2 filter for timestamp formatting
 @app.template_filter('timestamp_to_date')
 def timestamp_to_date_filter(timestamp):
-    """Convert Unix timestamp to readable date format"""
+    """Convert Unix timestamp to time on first line, date on second"""
     try:
         dt = datetime.fromtimestamp(timestamp)
-        # Format as mm/dd/yyyy HH:MM AM/PM
-        return dt.strftime('%m/%d/%Y %I:%M %p')
+        return dt.strftime('%m/%d/%Y') + '||' + dt.strftime('%I:%M %p')
     except (ValueError, OSError):
         return '--'
 

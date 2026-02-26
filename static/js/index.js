@@ -28,7 +28,38 @@ document.addEventListener('DOMContentLoaded', function () {
             await createFolder(folderName, currentPath);
         });
     }
+
+    // Lock column widths from initial render so AJAX navigation never changes them
+    lockTableColumnWidths();
 });
+
+/**
+ * Reads computed widths from the <thead> <th> elements after initial render
+ * and stores them. Call applyColumnWidths(row) on every AJAX-created row
+ * to force inline widths that override any CSS recalculation.
+ */
+let _lockedColWidths = [];
+
+function lockTableColumnWidths() {
+    const table = document.getElementById('filesTable');
+    if (!table) return;
+    const headers = Array.from(table.querySelectorAll('thead th'));
+    if (!headers.length) return;
+    _lockedColWidths = headers.map(th => th.getBoundingClientRect().width);
+    console.log('📐 Locked column widths:', _lockedColWidths);
+}
+
+function applyColumnWidths(row) {
+    if (!_lockedColWidths.length) return;
+    const cells = row.querySelectorAll('td');
+    cells.forEach((td, i) => {
+        if (i === 0) return; // skip checkbox column — border-left on selection causes ellipsis
+        if (_lockedColWidths[i]) {
+            td.style.width = _lockedColWidths[i] + 'px';
+            td.style.minWidth = _lockedColWidths[i] + 'px';
+        }
+    });
+}
 
 // Function to protect all modal inputs from event delegation
 function protectModalInputs() {
@@ -1221,7 +1252,6 @@ function updateFileTable(files, path) {
             </td>
             <td class="type-cell">
                 <span class="file-type">
-                    <i class="fas fa-arrow-up"></i> Parent Directory
                 </span>
             </td>
             <td class="date-cell">
@@ -1264,17 +1294,16 @@ function updateFileTable(files, path) {
     // Store the new original order for this folder (so reset sort works correctly)
     console.log(`💾 Storing original table order for current folder...`);
     storeOriginalTableOrder();
-    
-    // Reset sort state when navigating to a new folder
-    console.log(`🔄 Resetting sort state...`);
-    currentSort = { column: null, direction: 'asc' };
-    
-    // Reset sort header styles
-    document.querySelectorAll('.sortable').forEach(header => {
-        header.classList.remove('sort-asc', 'sort-desc');
-        const icon = header.querySelector('.sort-icon');
-        if (icon) icon.className = 'fas fa-sort sort-icon';
-    });
+
+    // Reapply current sort if active — do NOT reset sort on navigation
+    if (currentSort.column) {
+        console.log(`🔄 Reapplying sort: ${currentSort.column} ${currentSort.direction}`);
+        const savedColumn = currentSort.column;
+        const savedDirection = currentSort.direction;
+        currentSort.column = null; // reset so sortTable triggers fresh sort
+        currentSort.direction = savedDirection;
+        sortTable(savedColumn);
+    }
 
     // Reinitialize sort functionality for new content
     console.log(`🔄 Reinitializing table controls...`);
@@ -1325,7 +1354,7 @@ function createFileTableRow(item, currentPath) {
                    data-is-dir="${item.is_dir ? 'true' : 'false'}"
                    onchange="updateSelection()" ${selectedItems.has(itemPath) ? 'checked' : ''}>
         </td>
-        <td>
+        <td class="name-cell">
             <div class="file-name">
                 ${item.is_dir ?
             `<i class="fas fa-folder file-icon folder-icon"></i>
@@ -1338,7 +1367,7 @@ function createFileTableRow(item, currentPath) {
         }
             </div>
         </td>
-        <td>
+        <td class="size-cell">
             ${item.is_dir ?
             `<span class="dir-info-cell" data-dir-path="${escapeHtml(itemPath)}" style="color: white; font-size: 13px;">
                     <i class="fas fa-spinner fa-spin" style="opacity: 0.4; font-size: 11px;"></i>
@@ -1349,13 +1378,13 @@ function createFileTableRow(item, currentPath) {
         <td class="type-cell">
             ${`<span class="file-type"><i class="${item.is_dir ? 'fas fa-folder folder-icon file-icon' : itemIcon}"></i> ${escapeHtml(itemTypeText)}</span>`}
         </td>
-        <td>
+        <td class="date-cell">
             ${item.modified ?
-            `<span class="file-date" style="color: white; font-size: 13px;">${new Date(item.modified * 1000).toLocaleString()}</span>` :
+            `<span class="file-date" style="color: white; font-size: 13px; line-height:1.6">${(() => { const d = new Date(item.modified * 1000); return d.toLocaleDateString('en-US') + '<br>' + d.toLocaleTimeString('en-US', {hour:'2-digit',minute:'2-digit'}); })()}</span>` :
             '<span style="color: white; font-size: 13px;">--</span>'
         }
         </td>
-        <td>
+        <td class="actions-cell" style="min-width:320px;width:20%">
             <div class="actions">
                 ${!item.is_dir ?
             `<button type="button" class="btn btn-outline btn-sm download-btn" 
@@ -1409,6 +1438,7 @@ function createFileTableRow(item, currentPath) {
         </td>
     `;
 
+    applyColumnWidths(row);
     return row;
 }
 
@@ -2325,7 +2355,7 @@ const EXTENSION_MAP = (function () {
     e(['zip', 'rar', '7z', 'tar', 'gz', 'gzip', 'bz2', 'tgz', 'iso', 'img', 'cab', 'arj', 'lzh', 'pkg'], 'Archive', 'fas fa-file-archive', '#95a5a6');
 
     // Executables & System
-    e(['exe', 'msi', 'bat', 'cmd', 'ps1', 'vbs', 'dll', 'sys', 'drv', 'ocx', 'reg', 'inf', 'scr', 'com', 'cpl'], 'Executable / System', 'fas fa-cogs', '#7f8c8d');
+    e(['exe', 'msi', 'bat', 'cmd', 'ps1', 'vbs', 'dll', 'sys', 'drv', 'ocx', 'reg', 'inf', 'scr', 'com', 'cpl'], 'Binaries', 'fas fa-cogs', '#7f8c8d');
 
     // Web
     e(['map', 'sitemap', 'url', 'lnk', 'cache', 'cookie'], 'Web / Shortcut', 'fas fa-globe', '#3498db');
@@ -2860,26 +2890,27 @@ function updateFileTableContent(files) {
                            onchange="updateSelection()">
                 ` : ''}
             </td>
-            <td>
+            <td class="name-cell">
                 <div class="file-name">
                     ${iconHtml}
                 </div>
             </td>
-            <td>${sizeHtml}</td>
+            <td class="size-cell">${sizeHtml}</td>
             <td class="type-cell">${typeHtml}</td>
-            <td>
+            <td class="date-cell">
                 ${file.modified ?
-                `<span style="color: white; font-size: 13px; white-space: nowrap;">${formatTimestamp(file.modified)}</span>` :
+                `<span style="color: white; font-size: 13px;">${formatTimestamp(file.modified)}</span>` :
                 `<span style="color: white; font-size: 13px;">--</span>`
             }
             </td>
-            <td>
+            <td class="actions-cell" style="min-width:320px;width:20%">
                 <div class="actions">
                     ${actionsHtml}
                 </div>
             </td>
         `;
 
+        applyColumnWidths(row);
         tbody.appendChild(row);
     });
 
@@ -2983,8 +3014,9 @@ function formatFileSize(bytes) {
 function formatTimestamp(timestamp) {
     try {
         const date = new Date(timestamp * 1000);
-        return date.toLocaleDateString('en-US') + ' ' +
-            date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        const time = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        const day = date.toLocaleDateString('en-US');
+        return `<span style="line-height:1.6">${day}<br>${time}</span>`;
     } catch (e) {
         return '--';
     }

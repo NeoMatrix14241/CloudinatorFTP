@@ -426,7 +426,7 @@
                             <!-- Empty checkbox column for layout consistency -->
                             {% endif %}
                         </td>
-                        <td>
+                        <td class="name-cell">
                             <div class="file-name">
                                 {% if item.is_dir %}
                                 <i class="fas fa-folder file-icon folder-icon"></i>
@@ -442,7 +442,7 @@
                                 {% endif %}
                             </div>
                         </td>
-                        <td>
+                        <td class="size-cell">
                             {% if item.is_dir %}
                             <span class="dir-info-cell"
                                   data-dir-path="{{ (path + '/' + item.name) if path else item.name }}"
@@ -467,7 +467,7 @@
                             </span>
                             {% endif %}
                         </td>
-                        <td>
+                        <td class="type-cell">
                             <span class="file-type">
                                 {% if item.is_dir %}
                                 <i class="fas fa-folder"></i> Folder
@@ -476,16 +476,18 @@
                                 {% endif %}
                             </span>
                         </td>
-                        <td>
+                        <td class="date-cell">
                             {% if item.modified %}
-                            <span style="color: white; font-size: 13px; white-space: nowrap;">
-                                {{ item.modified|int|timestamp_to_date }}
+                            {% set dt = item.modified|int|timestamp_to_date %}
+                            {% set parts = dt.split('||') %}
+                            <span style="color: white; font-size: 13px; line-height: 1.6;">
+                                {{ parts[0] }}<br>{{ parts[1] }}
                             </span>
                             {% else %}
                             <span style="color: white; font-size: 13px;">--</span>
                             {% endif %}
                         </td>
-                        <td>
+                        <td class="actions-cell">
                             <div class="actions">
                                 {% if not item.is_dir %}
                                 <button type="button" class="btn btn-outline btn-sm download-btn"
