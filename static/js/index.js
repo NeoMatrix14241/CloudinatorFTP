@@ -53,10 +53,10 @@ function applyColumnWidths(row) {
     if (!_lockedColWidths.length) return;
     const cells = row.querySelectorAll('td');
     cells.forEach((td, i) => {
-        if (i === 0) return; // skip checkbox column — border-left on selection causes ellipsis
         if (_lockedColWidths[i]) {
             td.style.width = _lockedColWidths[i] + 'px';
             td.style.minWidth = _lockedColWidths[i] + 'px';
+            td.style.maxWidth = _lockedColWidths[i] + 'px';
         }
     });
 }
@@ -4041,25 +4041,10 @@ async function performRename(oldPath, newName) {
         if (response.ok && result.success) {
             showNotification('Success', result.message || 'Item renamed successfully', 'success');
 
-            // CRITICAL: Immediately update selectedItems with new path
-            // Don't wait for file monitor - backend confirmed the rename!
-            const parentPath = oldPath.includes('/')
-                ? oldPath.split('/').slice(0, -1).join('/')
-                : '';
-            const newPath = parentPath ? `${parentPath}/${newName}` : newName;
-
-            // Update selection immediately
-            selectedItems.delete(oldPath);
-            selectedItems.add(newPath);
-
-            console.log(`✅ Updated selection: "${oldPath}" → "${newPath}"`);
-
-            // Clear checkboxes to avoid confusion (optional)
-            const selectAllCheckbox = document.getElementById('selectAll');
-            if (selectAllCheckbox) {
-                selectAllCheckbox.checked = false;
-                selectAllCheckbox.indeterminate = false;
-            }
+            // Clear selection immediately before navigating — stale selectedItems
+            // causes isOperationInProgress check to block the next rename attempt
+            selectedItems.clear();
+            isOperationInProgress = false;
 
             // Trigger navigation (file monitor will update later)
             navigateToFolder(currentPath || '');
