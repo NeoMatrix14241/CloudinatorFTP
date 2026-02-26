@@ -110,13 +110,14 @@ class InstantFileEventHandler(FileSystemEventHandler):
                 except OSError:
                     pass
 
-                # Update dir_info for every parent folder up to root
+                # Update dir_info for immediate parent AND all ancestors
                 parent_rel = _rel(os.path.dirname(event.src_path), str(self.monitor.root_path))
                 if parent_rel in self.monitor._dir_info:
                     self.monitor._dir_info[parent_rel]['file_count'] += 1
                     self.monitor._dir_info[parent_rel]['total_size'] += file_size
                 for ancestor in _parents(parent_rel):
                     if ancestor in self.monitor._dir_info:
+                        self.monitor._dir_info[ancestor]['file_count'] += 1
                         self.monitor._dir_info[ancestor]['total_size'] += file_size
 
         print(f"⚡ Created: {'dir' if event.is_directory else 'file'} '{src_rel}' → "
@@ -134,6 +135,7 @@ class InstantFileEventHandler(FileSystemEventHandler):
                 # Remove folder and all children from dir_info
                 removed_size = 0
                 removed_dirs = 0
+                removed_files = 0
                 keys_to_remove = [
                     k for k in self.monitor._dir_info
                     if k == src_rel or k.startswith(src_rel + '/')
@@ -146,20 +148,23 @@ class InstantFileEventHandler(FileSystemEventHandler):
                         removed_files = entry.get('file_count', 0)
 
                 self.monitor._dir_count = max(0, self.monitor._dir_count - removed_dirs)
+                self.monitor._file_count = max(0, self.monitor._file_count - removed_files)
                 self.monitor._total_size = max(0, self.monitor._total_size - removed_size)
 
-                # Update parent dir_count and total_size
+                # Bubble all three counts up to all ancestors
                 for parent in _parents(src_rel):
                     if parent in self.monitor._dir_info:
                         self.monitor._dir_info[parent]['dir_count'] = max(
-                            0, self.monitor._dir_info[parent]['dir_count'] - 1
+                            0, self.monitor._dir_info[parent]['dir_count'] - removed_dirs
+                        )
+                        self.monitor._dir_info[parent]['file_count'] = max(
+                            0, self.monitor._dir_info[parent]['file_count'] - removed_files
                         )
                         self.monitor._dir_info[parent]['total_size'] = max(
                             0, self.monitor._dir_info[parent]['total_size'] - removed_size
                         )
             else:
-                # Deleted file — we don't know the size, reconcile will fix total_size
-                # But we can update file counts immediately
+                # Deleted file — bubble file_count down from all ancestors
                 self.monitor._file_count = max(0, self.monitor._file_count - 1)
 
                 parent_rel = _rel(os.path.dirname(event.src_path), str(self.monitor.root_path))
@@ -167,7 +172,12 @@ class InstantFileEventHandler(FileSystemEventHandler):
                     self.monitor._dir_info[parent_rel]['file_count'] = max(
                         0, self.monitor._dir_info[parent_rel]['file_count'] - 1
                     )
-                # Size drift is corrected by 15min reconcile
+                for ancestor in _parents(parent_rel):
+                    if ancestor in self.monitor._dir_info:
+                        self.monitor._dir_info[ancestor]['file_count'] = max(
+                            0, self.monitor._dir_info[ancestor]['file_count'] - 1
+                        )
+                # Size drift corrected by 15min reconcile
 
         print(f"⚡ Deleted: {'dir' if event.is_directory else 'file'} '{src_rel}' → "
               f"files={self.monitor._file_count:,}, dirs={self.monitor._dir_count:,}")
@@ -371,7 +381,7 @@ class FileSystemMonitor:
                 if root_rel not in dir_info:
                     dir_info[root_rel] = {'file_count': 0, 'dir_count': 0, 'total_size': 0}
 
-                # Register immediate subdirs
+                # Register immediate subdirs and bubble dir_count up to all ancestors
                 for d in dirs:
                     if d.startswith('.'):
                         continue
@@ -380,6 +390,10 @@ class FileSystemMonitor:
                         dir_info[sub_rel] = {'file_count': 0, 'dir_count': 0, 'total_size': 0}
                     dir_info[root_rel]['dir_count'] += 1
                     dir_count += 1
+                    # Bubble dir count up to all ancestors
+                    for ancestor in _parents(root_rel):
+                        if ancestor in dir_info:
+                            dir_info[ancestor]['dir_count'] += 1
 
                 # Count files in this directory
                 for fname in files:
@@ -400,9 +414,10 @@ class FileSystemMonitor:
                         dir_info[root_rel]['file_count'] += 1
                         dir_info[root_rel]['total_size'] += fsize
 
-                        # Bubble size up to all ancestors
+                        # Bubble file_count and size up to all ancestors
                         for ancestor in _parents(root_rel):
                             if ancestor in dir_info:
+                                dir_info[ancestor]['file_count'] += 1
                                 dir_info[ancestor]['total_size'] += fsize
 
                     except (OSError, IOError):
