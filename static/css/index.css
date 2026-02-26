@@ -247,7 +247,7 @@ body {
     left: -100%;
     width: 100%;
     height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
     transition: left 0.5s ease;
 }
 
@@ -299,7 +299,8 @@ body {
 
 /* File table */
 .file-table {
-    background: rgba(48,84,140,255); /* Theme-matched light blue background */
+    background: rgba(48, 84, 140, 255);
+    /* Theme-matched light blue background */
     border-radius: 12px;
     overflow: hidden;
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
@@ -327,7 +328,7 @@ body {
 }
 
 .table tbody tr {
-    border-bottom: 1px solid rgba(48,84,140,255);
+    border-bottom: 1px solid rgba(48, 84, 140, 255);
     transition: background-color 0.3s ease;
     white-space: nowrap;
 }
@@ -417,20 +418,22 @@ i.fa-file {
 /* Desktop-specific table styling for better file name handling */
 @media (min-width: 769px) {
 
-.table th:nth-child(2),
-.table td:nth-child(2) {
-    width: 35%;
-    max-width: 400px;
-    min-width: 220px;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
-}    /* Size column for desktop - ensure proper formatting */
+    .table th:nth-child(2),
+    .table td:nth-child(2) {
+        width: 25%;
+        max-width: 400px;
+        min-width: 220px;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+    }
+
+    /* Size column for desktop - ensure proper formatting */
     .table th:nth-child(3),
     .table td:nth-child(3) {
-        width: 140px;
+        width: 235px;
         /* Increased width for proper display */
-        min-width: 140px;
+        min-width: 235px;
         white-space: normal;
         line-height: 1.3;
     }
@@ -443,9 +446,9 @@ i.fa-file {
     /* Actions column for desktop - accommodate text buttons */
     .table th:last-child,
     .table td:last-child {
-        width: 30%;
+        width: 20%;
         /* More space for actions and SIZE */
-        min-width: 320px;
+        min-width: 130px;
     }
 
     .table tbody tr {
@@ -501,8 +504,10 @@ i.fa-file {
     .file-table .table .file-name a,
     .file-table .table .file-name span {
         display: inline-block !important;
-        white-space: normal !important; /* allow breaks */
-        overflow: visible !important;   /* show wrapped content */
+        white-space: normal !important;
+        /* allow breaks */
+        overflow: visible !important;
+        /* show wrapped content */
         text-overflow: clip !important;
         line-height: 1.3 !important;
         word-break: break-word !important;
@@ -1011,6 +1016,7 @@ i.fa-file {
         transform: translateX(100%);
         opacity: 0;
     }
+
     to {
         transform: translateX(0);
         opacity: 1;
@@ -1448,7 +1454,7 @@ td .fa-file {
     .file-name {
         max-width: 100% !important;
     }
-    
+
     .file-name a,
     .file-name span,
     .file-name .folder-link {
@@ -1471,7 +1477,8 @@ td .fa-file {
 
     /* Ensure file table maintains theme background on mobile */
     .file-table {
-        background: rgba(48,84,140,255) !important; /* Force theme-matched light blue background */
+        background: rgba(48, 84, 140, 255) !important;
+        /* Force theme-matched light blue background */
         border-radius: 12px;
         overflow: hidden;
         box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
@@ -1480,8 +1487,10 @@ td .fa-file {
 
     /* Ensure table rows maintain theme styling on mobile */
     .table tbody tr {
-        border-bottom: 1px solid rgba(48,84,140,255) !important; /* Light blue border to complement theme */
-        background: transparent !important; /* Allow parent background to show through */
+        border-bottom: 1px solid rgba(48, 84, 140, 255) !important;
+        /* Light blue border to complement theme */
+        background: transparent !important;
+        /* Allow parent background to show through */
     }
 
     .table tbody tr:hover {
@@ -1609,13 +1618,13 @@ td .fa-file {
         border-collapse: collapse;
         font-size: 14px;
     }
-    
+
     /* Ensure table rows have theme background on mobile */
     .table tbody tr {
         background: rgba(48, 84, 140, 255) !important;
         border-bottom: 1px solid rgba(48, 84, 140, 255) !important;
     }
-    
+
     /* Ensure file icons are white on mobile */
     .file-icon-default {
         color: white !important;
@@ -1628,18 +1637,18 @@ td .fa-file {
         vertical-align: middle;
         color: white !important;
     }
-    
+
     /* Keep header styling consistent with desktop - solid color instead of gradient */
     .table th {
         background: #34495e !important;
         color: white !important;
     }
-    
+
     /* Only table body cells get the blue theme background */
     .table td {
         background: rgba(48, 84, 140, 255) !important;
     }
-    
+
     /* Override specific file name and folder colors on mobile */
     .folder-item .folder-name,
     .current-destination span,
@@ -1651,7 +1660,7 @@ td .fa-file {
     .table td span {
         color: white !important;
     }
-    
+
     /* Smaller checkboxes for mobile */
     input[type="checkbox"].file-checkbox,
     input[type="checkbox"].item-checkbox,
@@ -1668,15 +1677,17 @@ td .fa-file {
     }
 
     /* Allow name column to expand naturally for full file names */
-.table th:nth-child(2),
-.table td:nth-child(2) {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 150px;
-    max-width: 300px;
-    padding: 12px 8px;
-}    /* Specific column widths for mobile */
+    .table th:nth-child(2),
+    .table td:nth-child(2) {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 150px;
+        max-width: 300px;
+        padding: 12px 8px;
+    }
+
+    /* Specific column widths for mobile */
     .table th:nth-child(1),
     /* Checkbox */
     .table td:nth-child(1) {
@@ -2203,6 +2214,7 @@ td .fa-file {
 
 /* Large mobile devices (iPhone 14 Pro Max, etc.) */
 @media (max-width: 900px) and (orientation: portrait) {
+
     /* Ensure small checkboxes for large mobile devices */
     input[type="checkbox"].file-checkbox,
     input[type="checkbox"].item-checkbox,
@@ -2280,32 +2292,33 @@ td .fa-file {
 
 /* Medium mobile screens (between very small and tablet) */
 @media (min-width: 481px) and (max-width: 768px) {
+
     /* Ensure theme background colors are maintained on medium mobile screens */
     .file-table {
         background: rgba(48, 84, 140, 255) !important;
     }
-    
+
     .table tbody tr {
         background: rgba(48, 84, 140, 255) !important;
         border-bottom: 1px solid rgba(48, 84, 140, 255) !important;
     }
-    
+
     /* Ensure white text color for table cells on medium mobile */
     .table td {
         color: white !important;
         background: rgba(48, 84, 140, 255) !important;
     }
-    
+
     .table th {
         background: #34495e !important;
         color: white !important;
     }
-    
+
     /* Ensure white text for file icons */
     .file-icon-default {
         color: white !important;
     }
-    
+
     /* Override specific file name and folder colors on medium mobile */
     .folder-item .folder-name,
     .current-destination span,
@@ -2317,7 +2330,7 @@ td .fa-file {
     .table td span {
         color: white !important;
     }
-    
+
     /* Smaller checkboxes for medium mobile */
     input[type="checkbox"].file-checkbox,
     input[type="checkbox"].item-checkbox,
@@ -2354,32 +2367,33 @@ td .fa-file {
 
 /* Very small screens (phones in portrait) */
 @media (max-width: 480px) {
+
     /* Ensure theme background colors are maintained on very small screens */
     .file-table {
         background: rgba(48, 84, 140, 255) !important;
     }
-    
+
     .table tbody tr {
         background: rgba(48, 84, 140, 255) !important;
         border-bottom: 1px solid rgba(48, 84, 140, 255) !important;
     }
-    
+
     /* Ensure white text color for table cells on very small screens */
     .table td {
         color: white !important;
         background: rgba(48, 84, 140, 255) !important;
     }
-    
+
     .table th {
         background: #34495e !important;
         color: white !important;
     }
-    
+
     /* Ensure white text for file icons */
     .file-icon-default {
         color: white !important;
     }
-    
+
     /* Override specific file name and folder colors on very small screens */
     .folder-item .folder-name,
     .current-destination span,
@@ -2391,7 +2405,7 @@ td .fa-file {
     .table td span {
         color: white !important;
     }
-    
+
     /* Much smaller checkboxes for very small screens like iPhone SE */
     input[type="checkbox"].file-checkbox,
     input[type="checkbox"].item-checkbox,
@@ -2461,7 +2475,8 @@ td .fa-file {
         /* Changed from negative margins to positive */
         overflow-x: auto;
         border-radius: 10px !important;
-        background: rgba(48,84,140,255) !important; /* Ensure theme background on very small screens */
+        background: rgba(48, 84, 140, 255) !important;
+        /* Ensure theme background on very small screens */
     }
 
     .table {
@@ -2474,7 +2489,7 @@ td .fa-file {
 
     /* Ensure table rows maintain theme styling on very small screens */
     .table tbody tr {
-        border-bottom: 1px solid rgba(48,84,140,255) !important;
+        border-bottom: 1px solid rgba(48, 84, 140, 255) !important;
         background: transparent !important;
     }
 
@@ -2929,8 +2944,15 @@ td .fa-file {
 }
 
 @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.7; }
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.7;
+    }
 }
 
 /* Search and sorting styles */
@@ -2960,13 +2982,15 @@ td .fa-file {
 }
 
 .sortable.sort-asc .sort-icon:before {
-    content: "\f0de"; /* fa-sort-up */
+    content: "\f0de";
+    /* fa-sort-up */
     color: #3498db;
     opacity: 1;
 }
 
 .sortable.sort-desc .sort-icon:before {
-    content: "\f0dd"; /* fa-sort-down */
+    content: "\f0dd";
+    /* fa-sort-down */
     color: #3498db;
     opacity: 1;
 }
@@ -2993,7 +3017,7 @@ td .fa-file {
 .search-results-header {
     background: linear-gradient(135deg, #2e7d32 0%, #388e3c 100%) !important;
     border: none !important;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
     /* Ensure always visible */
     display: table-row !important;
     visibility: visible !important;
@@ -3014,7 +3038,7 @@ td .fa-file {
     background: linear-gradient(135deg, #2e7d32 0%, #388e3c 100%);
     border-radius: 8px;
     margin-bottom: 8px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
     width: 100%;
     display: block !important;
     visibility: visible !important;
@@ -3048,7 +3072,7 @@ td .fa-file {
 }
 
 .search-count {
-    background: rgba(255,255,255,0.2);
+    background: rgba(255, 255, 255, 0.2);
     padding: 4px 12px;
     border-radius: 20px;
     font-size: 14px;
@@ -3056,7 +3080,7 @@ td .fa-file {
 }
 
 .search-truncated {
-    background: rgba(255,193,7,0.2);
+    background: rgba(255, 193, 7, 0.2);
     color: #ffc107;
     padding: 4px 8px;
     border-radius: 12px;
@@ -3068,13 +3092,13 @@ td .fa-file {
     display: flex;
     align-items: center;
     gap: 15px;
-    color: rgba(255,255,255,0.8);
+    color: rgba(255, 255, 255, 0.8);
     font-size: 13px;
 }
 
 .btn-close-search {
-    background: rgba(255,255,255,0.1);
-    border: 1px solid rgba(255,255,255,0.2);
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
     color: white;
     padding: 6px 12px;
     border-radius: 6px;
@@ -3084,12 +3108,12 @@ td .fa-file {
 }
 
 .btn-close-search:hover {
-    background: rgba(255,255,255,0.2);
-    border-color: rgba(255,255,255,0.3);
+    background: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.3);
 }
 
 .search-result-row {
-    background: rgba(48,84,140,255) !important;
+    background: rgba(48, 84, 140, 255) !important;
     border-left: 4px solid #4caf50 !important;
     transition: all 0.2s ease;
     color: white !important;
@@ -3098,7 +3122,7 @@ td .fa-file {
 .search-result-row:hover {
     background: rgba(52, 152, 219, 0.05) !important;
     transform: translateX(2px);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .search-result-row td {
@@ -3244,7 +3268,9 @@ td .fa-file {
     max-width: 400px;
 }
 
-.search-size-cell, .search-type-cell, .search-date-cell {
+.search-size-cell,
+.search-type-cell,
+.search-date-cell {
     font-size: 13px;
     color: #5a6c7d;
 }
@@ -3263,6 +3289,7 @@ td .fa-file {
 
 /* Responsive adjustments for search results */
 @media (max-width: 768px) {
+
     /* Force search header to display on mobile */
     .search-results-header {
         display: table-row !important;
@@ -3271,14 +3298,14 @@ td .fa-file {
         height: auto !important;
         min-height: 60px !important;
     }
-    
+
     .search-header-cell {
         display: table-cell !important;
         visibility: visible !important;
         width: 100% !important;
         padding: 0 !important;
     }
-    
+
     .search-header-content {
         flex-direction: column;
         align-items: flex-start;
@@ -3289,7 +3316,7 @@ td .fa-file {
         visibility: visible !important;
         opacity: 1 !important;
     }
-    
+
     .search-header-main {
         flex-wrap: wrap;
         gap: 8px;
@@ -3298,65 +3325,65 @@ td .fa-file {
         display: flex !important;
         visibility: visible !important;
     }
-    
+
     .search-title {
         font-size: 14px;
         /* Force visibility */
         display: inline !important;
         visibility: visible !important;
     }
-    
+
     .search-count {
         font-size: 12px;
         padding: 4px 8px;
     }
-    
+
     .search-truncated {
         font-size: 11px;
         width: 100%;
         margin-top: 4px;
         display: block;
     }
-    
+
     .search-header-meta {
         width: 100%;
         justify-content: space-between;
         flex-wrap: wrap;
         gap: 8px;
     }
-    
+
     .search-time {
         font-size: 12px;
     }
-    
+
     .btn-close-search {
         font-size: 12px;
         padding: 6px 12px;
         min-width: auto;
     }
-    
+
     .btn-close-search i {
         margin-right: 4px;
     }
-    
+
     .search-result-name {
         gap: 8px;
     }
-    
+
     .search-result-icon {
         width: 20px;
         height: 20px;
         font-size: 12px;
     }
-    
+
     .search-result-title {
         font-size: 13px;
     }
-    
+
     .search-result-path {
         font-size: 11px;
     }
-    
+
     /* Mobile search result actions - maintain desktop style */
     .search-result-actions {
         flex-direction: row;
@@ -3365,7 +3392,7 @@ td .fa-file {
         align-items: center;
         flex-wrap: wrap;
     }
-    
+
     .search-result-actions .btn {
         padding: 4px 8px;
         font-size: 10px;
@@ -3373,12 +3400,12 @@ td .fa-file {
         min-width: auto;
         flex-shrink: 0;
     }
-    
+
     .search-result-actions .btn i {
         font-size: 9px;
         margin-right: 2px;
     }
-    
+
     .search-actions-cell {
         min-width: 220px;
         text-align: left;
@@ -3390,30 +3417,30 @@ td .fa-file {
     .search-header-content {
         padding: 10px 12px;
     }
-    
+
     .search-header-main {
         font-size: 13px;
     }
-    
+
     .search-header-main i {
         font-size: 16px;
     }
-    
+
     .search-title {
         font-size: 13px;
         font-weight: 700;
     }
-    
+
     .search-count {
         font-size: 11px;
         padding: 3px 6px;
     }
-    
+
     .btn-close-search {
         font-size: 11px;
         padding: 4px 8px;
     }
-    
+
     /* Ensure search results table is visible on mobile */
     .search-results-header {
         display: table-row !important;
@@ -3421,7 +3448,7 @@ td .fa-file {
         min-height: 50px !important;
         height: auto !important;
     }
-    
+
     .search-header-cell {
         display: table-cell !important;
         width: 100% !important;
@@ -3430,7 +3457,7 @@ td .fa-file {
         padding: 0 !important;
         min-width: 100% !important;
     }
-    
+
     /* Override the tiny mobile table styles specifically for search header */
     .search-results-header .search-header-cell {
         font-size: 12px !important;
@@ -3438,7 +3465,7 @@ td .fa-file {
         min-width: 100% !important;
         width: 100% !important;
     }
-    
+
     .search-results-header .search-header-content {
         font-size: 12px !important;
         padding: 10px !important;
@@ -3447,31 +3474,31 @@ td .fa-file {
         gap: 8px !important;
         min-height: 40px !important;
     }
-    
+
     .search-results-header .search-title {
         font-size: 12px !important;
         font-weight: bold !important;
         display: inline-block !important;
         visibility: visible !important;
     }
-    
+
     /* Make search results more readable on very small screens */
     .search-result-row td {
         padding: 8px 4px !important;
         font-size: 12px !important;
     }
-    
+
     /* Ensure search result rows maintain proper background */
     .search-result-row {
         background: rgba(255, 255, 255, 0.95) !important;
         color: #2c3e50 !important;
     }
-    
+
     .search-result-row td {
         background: transparent !important;
         color: #2c3e50 !important;
     }
-    
+
     /* Mobile search actions styling - keep desktop look but smaller */
     .search-result-actions {
         flex-direction: row;
@@ -3480,7 +3507,7 @@ td .fa-file {
         align-items: center;
         flex-wrap: wrap;
     }
-    
+
     .search-result-actions .btn {
         padding: 3px 6px;
         font-size: 9px;
@@ -3488,12 +3515,12 @@ td .fa-file {
         margin: 1px;
         flex-shrink: 0;
     }
-    
+
     .search-result-actions .btn i {
         font-size: 8px;
         margin-right: 2px;
     }
-    
+
     .search-actions-cell {
         min-width: 180px;
         text-align: left;
@@ -3502,19 +3529,19 @@ td .fa-file {
 
 /* Empty folder styling */
 .empty-folder-row {
-    background: rgba(255,255,255,0.02) !important;
+    background: rgba(255, 255, 255, 0.02) !important;
 }
 
 .empty-folder-row:hover {
-    background: rgba(255,255,255,0.02) !important;
+    background: rgba(255, 255, 255, 0.02) !important;
 }
 
 /* Search input styling */
 #tableSearch {
     width: 100% !important;
     padding: 12px 15px 12px 45px !important;
-    background: rgba(255,255,255,0.1) !important;
-    border: 2px solid rgba(255,255,255,0.2) !important;
+    background: rgba(255, 255, 255, 0.1) !important;
+    border: 2px solid rgba(255, 255, 255, 0.2) !important;
     border-radius: 8px !important;
     color: white !important;
     font-size: 14px !important;
@@ -3522,13 +3549,13 @@ td .fa-file {
 }
 
 #tableSearch::placeholder {
-    color: rgba(255,255,255,0.6) !important;
+    color: rgba(255, 255, 255, 0.6) !important;
 }
 
 #tableSearch:focus {
     outline: none !important;
     border-color: #3498db !important;
-    background: rgba(255,255,255,0.15) !important;
+    background: rgba(255, 255, 255, 0.15) !important;
 }
 
 /* Sort direction indicators */
@@ -3547,6 +3574,7 @@ td .fa-file {
 /* ===== Layout fixes: allow file names to wrap and ensure actions/buttons are visible ===== */
 /* These overrides focus on desktop/tablet where we previously forced single-line ellipses. */
 @media (min-width: 769px) {
+
     /* Let the name column expand and wrap instead of truncating. This keeps the table layout
        but allows long filenames to occupy multiple lines and keeps action buttons visible. */
     .table th:nth-child(2),
@@ -3573,6 +3601,7 @@ td .fa-file {
     .table tbody tr {
         max-height: none !important;
     }
+
     .file-name {
         max-height: none !important;
     }
@@ -3609,6 +3638,7 @@ td .fa-file {
 
 /* Strong mobile override: ensure Name column wraps and Actions can wrap on narrow screens */
 @media (max-width: 768px) {
+
     /* Target both the generic and file-table scoped selectors */
     .file-table .table th:nth-child(2),
     .file-table .table td:nth-child(2),
@@ -3616,7 +3646,8 @@ td .fa-file {
     .table td:nth-child(2) {
         /* Make the Name column wider on mobile so filenames wrap less and rows stay compact */
         white-space: normal !important;
-        overflow: hidden !important; /* prevent visual overlap into other columns */
+        overflow: hidden !important;
+        /* prevent visual overlap into other columns */
         text-overflow: ellipsis !important;
         /* Prefer a percentage width but provide a sensible minimum to avoid extreme wrapping */
         width: 55% !important;
@@ -3677,27 +3708,36 @@ td .fa-file {
         align-items: center !important;
         overflow-x: auto !important;
         -webkit-overflow-scrolling: touch !important;
-        padding-bottom: 4px !important; /* small padding so scroll area is tappable */
+        padding-bottom: 4px !important;
+        /* small padding so scroll area is tappable */
     }
 
     /* Ensure each button keeps its content but doesn't force wrapping; allow horizontal scroll */
     .actions .btn-sm {
         white-space: nowrap !important;
-        flex: 0 0 auto !important; /* don't grow or shrink — stay inline */
+        flex: 0 0 auto !important;
+        /* don't grow or shrink — stay inline */
         min-width: 34px !important;
         padding: 4px 8px !important;
     }
 
     /* Small visual tweak: hide overflowing scrollbar on most platforms but keep functionality */
-    .actions::-webkit-scrollbar { height: 6px; }
-    .actions::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+    .actions::-webkit-scrollbar {
+        height: 6px;
+    }
+
+    .actions::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.12);
+        border-radius: 3px;
+    }
 
     /* Avoid forcing fixed column widths that could reintroduce truncation */
     .file-table .table th:nth-child(2),
     .file-table .table td:nth-child(2) {
         /* Prevent the name column from collapsing to an extremely narrow width */
         width: auto !important;
-        min-width: 120px !important; /* sensible minimum so text can wrap naturally */
+        min-width: 120px !important;
+        /* sensible minimum so text can wrap naturally */
         max-width: none !important;
     }
 }
@@ -3723,6 +3763,7 @@ td .fa-file {
 
 /* Force the name column to be wider on small screens, reduce vertical wrapping */
 @media (max-width: 768px) {
+
     .file-table .table th:nth-child(2),
     .file-table .table td:nth-child(2),
     .table th:nth-child(2),
@@ -3739,6 +3780,7 @@ td .fa-file {
         width: 18% !important;
         min-width: 90px !important;
     }
+
     .file-table .table th:nth-child(4),
     .file-table .table td:nth-child(4) {
         width: 12% !important;
@@ -3752,6 +3794,7 @@ td .fa-file {
 
 /* Desktop fallback: ensure wrapping applied there too */
 @media (min-width: 769px) {
+
     .file-table .table td:nth-child(2) .file-name a,
     .file-table .table td:nth-child(2) .file-name span {
         white-space: normal !important;
