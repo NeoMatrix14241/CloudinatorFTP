@@ -53,6 +53,7 @@ function applyColumnWidths(row) {
     if (!_lockedColWidths.length) return;
     const cells = row.querySelectorAll('td');
     cells.forEach((td, i) => {
+        if (i === 0) return;
         if (_lockedColWidths[i]) {
             td.style.width = _lockedColWidths[i] + 'px';
             td.style.minWidth = _lockedColWidths[i] + 'px';
