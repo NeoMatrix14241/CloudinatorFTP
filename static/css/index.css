@@ -308,6 +308,75 @@ body {
     margin: 25px 0;
 }
 
+/* Scrollable wrapper inside .file-table */
+.table-scroll-wrapper {
+    max-height: calc(100vh - 150px);
+    min-height: 150px;
+    overflow-y: auto;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch; /* smooth scroll on iOS */
+}
+
+/* Sticky header inside scroll wrapper */
+.table-scroll-wrapper .table thead {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+}
+
+/* Custom scrollbar styling for table */
+.table-scroll-wrapper::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+.table-scroll-wrapper::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
+}
+.table-scroll-wrapper::-webkit-scrollbar-thumb {
+    background: rgba(52, 152, 219, 0.5);
+    border-radius: 4px;
+}
+.table-scroll-wrapper::-webkit-scrollbar-thumb:hover {
+    background: rgba(52, 152, 219, 0.8);
+}
+
+/* Virtual scroll sentinel + loading indicator */
+#vtSentinel {
+    height: 1px;
+    width: 100%;
+}
+.vt-loading-row td {
+    text-align: center;
+    padding: 12px;
+    color: rgba(255,255,255,0.6);
+    font-size: 13px;
+}
+
+/* ── Sticky parent-directory row ─────────────────────────────────────
+   Sits just below the sticky thead. `top` is written by JS via
+   --table-thead-h on .table-scroll-wrapper after measuring the thead.
+──────────────────────────────────────────────────────────────────── */
+#filesTable tbody tr.parent-dir-sticky {
+    position: sticky;
+    top: var(--table-thead-h, 57px);
+    z-index: 15;
+    background: rgba(22, 48, 95, 0.97) !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    border-bottom: 1px solid rgba(52, 152, 219, 0.3) !important;
+}
+#filesTable tbody tr.parent-dir-sticky:hover {
+    background: rgba(32, 65, 118, 0.97) !important;
+    cursor: pointer;
+}
+#filesTable tbody tr.parent-dir-sticky .folder-link {
+    color: #5dade2 !important;
+    font-weight: 600;
+}
+#filesTable tbody tr.parent-dir-sticky .file-icon {
+    color: #5dade2 !important;
+}
+
 .table {
     width: 100%;
     border-collapse: collapse;
@@ -433,9 +502,9 @@ i.fa-file {
     .table th:nth-child(3),
     .table td:nth-child(3),
     .table td.size-cell {
-        width: 235px;
+        width: 220px;
         /* Increased width for proper display */
-        min-width: 235px;
+        min-width: 220px;
         white-space: normal;
         line-height: 1.3;
     }
@@ -477,7 +546,14 @@ i.fa-file {
 
     /* Enable horizontal scrolling for better name display */
     .file-table {
+        overflow: hidden !important;
+    }
+
+    .table-scroll-wrapper {
         overflow-x: auto !important;
+        overflow-y: auto !important;
+        max-height: calc(100vh - 100px) !important;
+        min-height: 100px !important;
     }
 
     .table {
@@ -1487,7 +1563,7 @@ td .fa-file {
         background: rgba(48, 84, 140, 255) !important;
         /* Force theme-matched light blue background */
         border-radius: 12px;
-        overflow: hidden;
+        overflow: hidden !important;
         box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
         border: 1px solid rgba(255, 255, 255, 0.2);
     }

@@ -15,6 +15,9 @@ document.addEventListener('DOMContentLoaded', function () {
     // Transform any server-rendered rows to use detailed file type & icon mapping
     try { transformInitialRows(); } catch (e) { console.warn('transformInitialRows not available yet', e); }
 
+    // Initialize VT engine from server-rendered JSON (replaces the inline HTML script)
+    _initVTFromPageData();
+
     const createFolderForm = document.getElementById('createFolderForm');
     if (createFolderForm) {
         createFolderForm.addEventListener('submit', async (e) => {
@@ -252,52 +255,14 @@ function searchTable(searchTerm) {
 }
 
 function performLocalSearch(searchTerm) {
-    const table = document.getElementById('filesTable');
-    const tbody = table.querySelector('tbody');
-    const rows = tbody.querySelectorAll('tr');
-    let visibleCount = 0;
-
-    const term = searchTerm.toLowerCase().trim();
-
-    // Hide any deep search results first
+    // Hide any deep search results overlay first
     hideDeepSearchResults();
 
-    rows.forEach(row => {
-        // Skip parent directory row
-        if (row.style.background === 'rgba(52, 152, 219, 0.1)' ||
-            row.innerHTML.includes('.. (Parent Directory)')) {
-            return;
-        }
+    // Delegate filter to VT engine — works on data array, re-renders visible rows
+    VT.applyFilter(searchTerm);
 
-        if (!term) {
-            // No search term - show all rows
-            row.classList.remove('hidden-by-search');
-            removeHighlights(row);
-            visibleCount++;
-        } else {
-            // Get searchable text from the row
-            const nameCell = row.querySelector('td:nth-child(2)');
-            const typeCell = row.querySelector('td:nth-child(4)');
-
-            let searchableText = '';
-            if (nameCell) searchableText += nameCell.textContent.toLowerCase() + ' ';
-            if (typeCell) searchableText += typeCell.textContent.toLowerCase() + ' ';
-
-            if (searchableText.includes(term)) {
-                row.classList.remove('hidden-by-search');
-                highlightSearchTerm(row, term);
-                visibleCount++;
-            } else {
-                row.classList.add('hidden-by-search');
-                removeHighlights(row);
-            }
-        }
-    });
-
-    // Update visible count
-    updateVisibleCount(visibleCount);
-
-    console.log(`🔍 Local search for "${term}" found ${visibleCount} items`);
+    const count = document.getElementById('visibleCount');
+    console.log(`🔍 Local VT filter for "${searchTerm}"`);
 }
 
 // Deep search using API to scan nested folders
@@ -324,54 +289,6 @@ function performDeepSearch(searchTerm) {
         });
 }
 
-function performSearch(searchTerm) {
-    const table = document.getElementById('filesTable');
-    const tbody = table.querySelector('tbody');
-    const rows = tbody.querySelectorAll('tr');
-    let visibleCount = 0;
-
-    const term = searchTerm.toLowerCase().trim();
-
-    rows.forEach(row => {
-        // Skip parent directory row
-        if (row.style.background === 'rgba(52, 152, 219, 0.1)' ||
-            row.innerHTML.includes('.. (Parent Directory)')) {
-            return;
-        }
-
-        if (!term) {
-            // No search term - show all rows
-            row.classList.remove('hidden-by-search');
-            removeHighlights(row);
-            visibleCount++;
-        } else {
-            // Get searchable text from the row
-            const nameCell = row.querySelector('td:nth-child(2)');
-            const typeCell = row.querySelector('td:nth-child(4)');
-
-            let searchableText = '';
-            if (nameCell) searchableText += nameCell.textContent.toLowerCase() + ' ';
-            if (typeCell) searchableText += typeCell.textContent.toLowerCase() + ' ';
-
-            if (searchableText.includes(term)) {
-                row.classList.remove('hidden-by-search');
-                highlightSearchTerm(row, term);
-                visibleCount++;
-            } else {
-                row.classList.add('hidden-by-search');
-                removeHighlights(row);
-            }
-        }
-    });
-
-    // Update visible count
-    const visibleCountSpan = document.getElementById('visibleCount');
-    if (visibleCountSpan) {
-        visibleCountSpan.textContent = visibleCount;
-    }
-
-    console.log(`🔍 Search for "${term}" found ${visibleCount} items`);
-}
 
 function highlightSearchTerm(row, term) {
     const nameCell = row.querySelector('td:nth-child(2) .file-name');
@@ -709,79 +626,12 @@ function clearSearch() {
 
 // Column sorting functionality
 function sortTable(column, forceDirection) {
-    const table = document.getElementById('filesTable');
-    const tbody = table.querySelector('tbody');
-    const rows = Array.from(tbody.querySelectorAll('tr'));
+    // Show reset button
+    const resetBtn = document.getElementById('resetSort');
+    if (resetBtn) resetBtn.style.display = 'inline-block';
 
-    // Update sort state
-    if (forceDirection) {
-        // Restore exact column+direction without toggling (used after navigation/refresh)
-        currentSort.column = column;
-        currentSort.direction = forceDirection;
-    } else if (currentSort.column === column) {
-        currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
-    } else {
-        currentSort.column = column;
-        currentSort.direction = 'asc';
-    }
-
-    // Update header styles
-    updateSortHeaders(column, currentSort.direction);
-
-    // Separate parent directory row and file rows
-    const parentRow = rows.find(row =>
-        row.style.background === 'rgba(52, 152, 219, 0.1)' ||
-        row.innerHTML.includes('.. (Parent Directory)')
-    );
-    const fileRows = rows.filter(row => row !== parentRow);
-
-    // Sort function that replicates Windows Explorer behavior
-    const sortFunction = (a, b) => {
-        const aValue = getSortValue(a, column);
-        const bValue = getSortValue(b, column);
-        const aIsFolder = a.querySelector('.fa-folder, .folder-icon') && !a.querySelector('a[href*="/download/"]');
-        const bIsFolder = b.querySelector('.fa-folder, .folder-icon') && !b.querySelector('a[href*="/download/"]');
-
-        // WINDOWS EXPLORER RULE: For ALL columns, always group folders first, then files
-        if (aIsFolder && !bIsFolder) {
-            return currentSort.direction === 'asc' ? -1 : 1;
-        }
-        if (!aIsFolder && bIsFolder) {
-            return currentSort.direction === 'asc' ? 1 : -1;
-        }
-
-        // Both are same type - now sort by the selected column
-        let comparison;
-        if (column === 'name') {
-            // If both are same type, sort alphabetically
-            comparison = aValue.localeCompare(bValue, undefined, {
-                numeric: true,
-                sensitivity: 'base'
-            });
-        } else if (column === 'size') {
-            comparison = compareSizes(aValue, bValue);
-        } else if (column === 'modified') {
-            comparison = compareDates(aValue, bValue);
-        } else if (column === 'type') {
-            comparison = aValue.localeCompare(bValue, undefined, { numeric: true, sensitivity: 'base' });
-        }
-
-        return currentSort.direction === 'asc' ? comparison : -comparison;
-    };
-
-    // Sort all file rows together using Windows Explorer logic
-    fileRows.sort(sortFunction);
-
-    // Clear tbody and re-add rows in Windows Explorer order
-    tbody.innerHTML = '';
-
-    // Add parent row first if it exists
-    if (parentRow) {
-        tbody.appendChild(parentRow);
-    }
-
-    // Add all sorted file rows (folders and files mixed, but folders first when names are equal)
-    fileRows.forEach(row => tbody.appendChild(row));
+    // Delegate to VT engine (works on data array, handles re-render)
+    VT.applySort(column, forceDirection);
 
     console.log(`📊 Sorted by ${column} (${currentSort.direction})`);
 }
@@ -983,18 +833,13 @@ function reinitializeTableControls(itemCount) {
         visibleCountSpan.textContent = itemCount;
     }
 
-    // Clear any existing search if the search input has content
-    const searchInput = document.getElementById('tableSearch');
-    if (searchInput && searchInput.value.trim()) {
-        performSearch(searchInput.value.trim());
-    }
+    // NOTE: do NOT call VT.applyFilter here either — VT._renderAll already
+    // applies the current _filter before rendering rows. Calling applyFilter
+    // here would re-trigger _renderAll (another infinite loop).
 
-    // Reapply current sort if any - pass direction explicitly so it is not toggled
-    if (currentSort.column) {
-        const column = currentSort.column;
-        const direction = currentSort.direction;
-        sortTable(column, direction);
-    }
+    // NOTE: do NOT call sortTable here — VT already sorts on the data array
+    // before rendering. Calling sortTable here would cause an infinite loop:
+    // _renderAll → reinitializeTableControls → sortTable → VT.applySort → _renderAll
 
     // Initialize sort event listeners for any new headers
     document.querySelectorAll('.sortable').forEach(header => {
@@ -1196,114 +1041,341 @@ window.addEventListener('popstate', function (event) {
 });
 
 // Update file table with new content
-function updateFileTable(files, path) {
-    console.log(`🔄 === UPDATE FILE TABLE START ===`);
-    console.log(`🔄 Files param:`, files);
-    console.log(`🔄 Files type:`, typeof files);
-    console.log(`🔄 Files isArray:`, Array.isArray(files));
-    console.log(`🔄 Files length:`, files ? files.length : 'null/undefined');
-    console.log(`🔄 Path param: "${path}"`);
-
+// ═══════════════════════════════════════════════════════════════
+// VIRTUAL TABLE SCROLL ENGINE
+// Stores full item data, renders rows in chunks, supports
+// sort (on data), search/filter (on data), IntersectionObserver
+// ═══════════════════════════════════════════════════════════════
+/**
+ * Initialize the VT engine from the initialFilesData JSON blob on page load.
+ * Called from DOMContentLoaded.
+ *
+ * The HTML <tbody> is now a skeleton only (no server-rendered rows), so VT
+ * always owns the table from the very first paint — no flash of old content,
+ * no slow parse of thousands of <tr> elements, no stale parent dir row.
+ */
+function _initVTFromPageData() {
     const tbody = document.querySelector('#filesTable tbody');
-    if (!tbody) {
-        console.error('❌ File table body not found');
-        console.error('❌ Available tbody elements:', document.querySelectorAll('tbody'));
-        console.error('❌ Available filesTable:', document.querySelector('#filesTable'));
-        return;
+    if (!tbody) return;
+
+    // Remove the initial loading spinner row if present
+    const loader = document.getElementById('vtInitialLoader');
+    if (loader) loader.remove();
+
+    const dataEl = document.getElementById('initialFilesData');
+    let files = [];
+    if (dataEl) {
+        try {
+            files = JSON.parse(dataEl.textContent || '[]');
+        } catch (e) {
+            console.warn('⚠️ _initVTFromPageData: JSON parse failed, starting empty', e);
+        }
     }
 
-    console.log(`✅ File table body found:`, tbody);
-
-    // Clear existing content (including search results)
-    console.log(`🧹 Clearing search results...`);
-    hideDeepSearchResults();
-    console.log(`🧹 Clearing table content...`);
+    // Always init VT — even for empty folders it must set _curPath so the
+    // sticky parent row and sort/filter work correctly on first load.
     tbody.innerHTML = '';
+    VT.init(files, CURRENT_PATH);
+}
 
-    console.log(`📝 Adding parent directory row for path: "${path}"`);
+/** Parse "1.5 MB" / "230 KB" / "4.2 GB" → approximate bytes for sort */
+function _parseDisplaySize(str) {
+    if (!str || str === '--') return 0;
+    const m = str.match(/([\d.]+)\s*(bytes?|KB|MB|GB|TB)?/i);
+    if (!m) return 0;
+    const n = parseFloat(m[1]);
+    switch ((m[2] || '').toLowerCase()) {
+        case 'tb': return n * 1e12;
+        case 'gb': return n * 1e9;
+        case 'mb': return n * 1e6;
+        case 'kb': return n * 1024;
+        default:   return n;
+    }
+}
 
-    // Add parent directory row if not at root
-    if (path) {
-        const parentPath = path.split('/').slice(0, -1).join('/');
-        console.log(`📝 Parent path calculated: "${parentPath}"`);
-        const parentRow = document.createElement('tr');
-        parentRow.style.background = 'rgba(52, 152, 219, 0.1)';
-        parentRow.innerHTML = `
-            <td></td>
-            <td>
-                <div class="file-name">
+/** Parse displayed date string → Unix timestamp (approximate, for sort only) */
+function _parseDisplayDate(str) {
+    if (!str || str === '--') return 0;
+    try { return Math.floor(new Date(str.replace(/\n/g, ' ')).getTime() / 1000) || 0; }
+    catch (e) { return 0; }
+}
+
+const VT = (() => {
+    const CHUNK = 80;     // rows to render per batch
+    let _allFiles   = []; // raw server data for current folder
+    let _curPath    = '';
+    let _filter     = ''; // active search term
+    let _sortCol    = null;
+    let _sortDir    = 'asc';
+    let _rendered   = 0;
+    let _observer   = null;
+    let _searchResultsMode = false; // true when deep-search is active
+
+    // ── public API ────────────────────────────────────────────
+    function init(files, path) {
+        _allFiles  = Array.isArray(files) ? files : [];
+        _curPath   = path;
+        _filter    = '';
+        _rendered  = 0;
+        _searchResultsMode = false;
+        // preserve existing sort state
+        _sortCol   = currentSort.column;
+        _sortDir   = currentSort.direction;
+        _renderAll();
+    }
+
+    function applySort(col, forceDir) {
+        if (_searchResultsMode) return; // don't overwrite deep-search results
+        if (forceDir) {
+            currentSort.column    = col;
+            currentSort.direction = forceDir;
+        } else if (currentSort.column === col) {
+            currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+        } else {
+            currentSort.column    = col;
+            currentSort.direction = 'asc';
+        }
+        _sortCol = currentSort.column;
+        _sortDir = currentSort.direction;
+        updateSortHeaders(_sortCol, _sortDir);
+        _rendered = 0;
+        _renderAll();
+    }
+
+    function applyFilter(term) {
+        _filter   = (term || '').toLowerCase().trim();
+        _rendered = 0;
+        _searchResultsMode = false;
+        _renderAll();
+        const clearBtn = document.getElementById('clearSearch');
+        if (clearBtn) clearBtn.style.display = _filter ? 'block' : 'none';
+    }
+
+    function markSearchResults() {
+        // Called when deep-search takes over the display
+        _searchResultsMode = true;
+        _disconnectObserver();
+    }
+
+    function getAll() { return _allFiles; }
+    function getPath() { return _curPath; }
+
+    // ── internals ─────────────────────────────────────────────
+    function _getDisplayFiles() {
+        let list = _allFiles;
+
+        // 1. filter
+        if (_filter) {
+            list = list.filter(item =>
+                item.name.toLowerCase().includes(_filter) ||
+                (item.is_dir ? 'folder' : _getTypeName(item.name)).toLowerCase().includes(_filter)
+            );
+        }
+
+        // 2. sort
+        if (_sortCol) {
+            const dir = _sortDir === 'asc' ? 1 : -1;
+            list = [...list].sort((a, b) => {
+                // folders always first (Windows Explorer rule)
+                if (a.is_dir && !b.is_dir) return dir === 1 ? -1 : 1;
+                if (!a.is_dir && b.is_dir) return dir === 1 ? 1 : -1;
+
+                let cmp = 0;
+                if (_sortCol === 'name') {
+                    cmp = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+                } else if (_sortCol === 'size') {
+                    const sa = a.is_dir ? -1 : (a.size || 0);
+                    const sb = b.is_dir ? -1 : (b.size || 0);
+                    cmp = sa - sb;
+                } else if (_sortCol === 'modified') {
+                    cmp = (a.modified || 0) - (b.modified || 0);
+                } else if (_sortCol === 'type') {
+                    const ta = a.is_dir ? 'Folder' : _getTypeName(a.name);
+                    const tb = b.is_dir ? 'Folder' : _getTypeName(b.name);
+                    cmp = ta.localeCompare(tb, undefined, { numeric: true, sensitivity: 'base' });
+                }
+                return cmp * dir;
+            });
+        }
+
+        return list;
+    }
+
+    function _getTypeName(filename) {
+        try { return getFileType(filename); } catch(e) { return 'File'; }
+    }
+
+    function _getTbody() { return document.querySelector('#filesTable tbody'); }
+
+    function _renderAll() {
+        const tbody = _getTbody();
+        if (!tbody) return;
+        _disconnectObserver();
+        tbody.innerHTML = '';
+
+        // parent-directory row
+        if (_curPath) {
+            const parentPath = _curPath.split('/').slice(0, -1).join('/');
+            const pRow = document.createElement('tr');
+            pRow.className = 'parent-dir-sticky';
+            pRow.innerHTML = `
+                <td></td>
+                <td><div class="file-name">
                     <i class="fas fa-level-up-alt file-icon folder-icon"></i>
-                    <a href="#" onclick="navigateToFolder('${parentPath}'); return false;" 
-                       class="folder-link">
+                    <a href="#" onclick="navigateToFolder('${parentPath}'); return false;" class="folder-link">
                         .. (Parent Directory)
                     </a>
-                </div>
-            </td>
-            <td class="size-cell">
-                <span style="color: white; font-size: 13px;"></span>
-            </td>
-            <td class="type-cell">
-                <span class="file-type">
-                </span>
-            </td>
-            <td class="date-cell">
-                <span style="color: white; font-size: 13px;"></span>
-            </td>
-            <td></td>
-        `;
-        tbody.appendChild(parentRow);
-        console.log(`✅ Added parent directory row`);
+                </div></td>
+                <td class="size-cell"><span style="color:white;font-size:13px;"></span></td>
+                <td class="type-cell"><span class="file-type"></span></td>
+                <td class="date-cell"><span style="color:white;font-size:13px;"></span></td>
+                <td></td>`;
+            tbody.appendChild(pRow);
+            _updateTheadHeightVar();
+        }
+
+        const display = _getDisplayFiles();
+
+        if (display.length === 0) {
+            tbody.appendChild(createEmptyFolderRow());
+            updateVisibleCount(0);
+            reinitializeTableControls(0);
+            return;
+        }
+
+        // render first chunk
+        const end = Math.min(CHUNK, display.length);
+        for (let i = 0; i < end; i++) {
+            tbody.appendChild(createFileTableRow(display[i], _curPath));
+        }
+        _rendered = end;
+
+        // highlight if filtering
+        if (_filter) {
+            _highlightVisible(_filter);
+        }
+
+        updateVisibleCount(display.length);
+        reinitializeTableControls(display.length);
+
+        // sentinel for infinite scroll
+        if (_rendered < display.length) {
+            _attachSentinel(display);
+        }
+
+        loadDirInfoCells();
+        storeOriginalTableOrder();
     }
 
-    // Check if files array is valid
-    if (!files || !Array.isArray(files)) {
-        console.warn(`⚠️ Invalid files data:`, files);
-        console.warn(`⚠️ Will show empty folder message`);
-        // Add empty folder message
-        const emptyRow = createEmptyFolderRow();
-        tbody.appendChild(emptyRow);
-        reinitializeTableControls(0);
-        console.log(`📋 === UPDATE FILE TABLE COMPLETE (EMPTY) ===`);
-        return;
+    function _renderNextChunk(display) {
+        if (_rendered >= display.length) {
+            _disconnectObserver();
+            _removeSentinel();
+            return;
+        }
+        const tbody = _getTbody();
+        if (!tbody) return;
+
+        // remove old sentinel
+        _removeSentinel();
+
+        const end = Math.min(_rendered + CHUNK, display.length);
+        for (let i = _rendered; i < end; i++) {
+            tbody.appendChild(createFileTableRow(display[i], _curPath));
+        }
+        _rendered = end;
+
+        if (_filter) {
+            _highlightVisible(_filter);
+        }
+
+        loadDirInfoCells();
+
+        if (_rendered < display.length) {
+            _attachSentinel(display);
+        }
     }
 
-    // Add files to table
-    if (files.length === 0) {
-        console.log(`📂 Folder is empty, adding empty message`);
-        const emptyRow = createEmptyFolderRow();
-        tbody.appendChild(emptyRow);
-    } else {
-        console.log(`📁 Adding ${files.length} files to table...`);
-        files.forEach((item, index) => {
-            console.log(`📄 Adding file ${index + 1}:`, item);
-            const row = createFileTableRow(item, path);
-            tbody.appendChild(row);
+    function _attachSentinel(display) {
+        const tbody = _getTbody();
+        if (!tbody) return;
+
+        // loading indicator row
+        const loadRow = document.createElement('tr');
+        loadRow.id = 'vtSentinelRow';
+        loadRow.className = 'vt-loading-row';
+        loadRow.innerHTML = `<td colspan="6">
+            <span id="vtSentinel" style="display:inline-block;height:1px;width:100%;"></span>
+            <i class="fas fa-circle-notch fa-spin" style="margin-right:6px;opacity:0.6;font-size:12px;"></i>
+            <span style="font-size:12px;opacity:0.7;">Loading ${Math.min(CHUNK, display.length - _rendered)} more of ${display.length - _rendered} remaining…</span>
+        </td>`;
+        tbody.appendChild(loadRow);
+
+        const sentinel = document.getElementById('vtSentinel');
+        if (!sentinel) return;
+
+        const wrapper = document.getElementById('tableScrollWrapper');
+        _observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    _disconnectObserver();
+                    _renderNextChunk(display);
+                }
+            });
+        }, { root: wrapper, threshold: 0.1 });
+        _observer.observe(sentinel);
+    }
+
+    function _removeSentinel() {
+        const row = document.getElementById('vtSentinelRow');
+        if (row) row.remove();
+    }
+
+    function _disconnectObserver() {
+        if (_observer) { _observer.disconnect(); _observer = null; }
+    }
+
+    function _highlightVisible(term) {
+        const tbody = _getTbody();
+        if (!tbody) return;
+        tbody.querySelectorAll('tr.file-row').forEach(row => {
+            highlightSearchTerm(row, term);
         });
     }
 
-    console.log(`📋 Updated file table with ${files.length} items`);
+    function _updateTheadHeightVar() {
+        // Measures real thead height → writes CSS var so the sticky
+        // parent row top offset is always pixel-perfect.
+        requestAnimationFrame(() => {
+            const thead = document.querySelector('#filesTable thead');
+            const wrapper = document.getElementById('tableScrollWrapper');
+            if (thead && wrapper) {
+                wrapper.style.setProperty('--table-thead-h', thead.offsetHeight + 'px');
+            }
+        });
+    }
 
-    // Invalidate all dir-info-cell caches so they re-fetch fresh data.
-    // Without this, cells marked loaded='true' skip re-fetching after deletes,
-    // showing stale counts ("0 files, 7 folders") until a manual cache clear.
+    return { init, applySort, applyFilter, getAll, getPath, markSearchResults };
+})();
+
+function updateFileTable(files, path) {
+    console.log(`🔄 updateFileTable: ${files ? files.length : 0} items at "${path}"`);
+
+    const tbody = document.querySelector('#filesTable tbody');
+    if (!tbody) { console.error('❌ File table body not found'); return; }
+
+    // Clear deep search results from overlay
+    hideDeepSearchResults();
+
+    // Invalidate dir-info caches
     document.querySelectorAll('.dir-info-cell').forEach(cell => {
         cell.dataset.loaded = 'false';
     });
 
-    // Store the new original order for this folder (so reset sort works correctly)
-    console.log(`💾 Storing original table order for current folder...`);
-    storeOriginalTableOrder();
+    // Hand off to virtual table engine
+    VT.init(files || [], path);
 
-    // reinitializeTableControls reapplies the current sort with the correct direction.
-    // Do NOT also call sortTable here - that caused a double-sort that always
-    // forced direction back to asc (the null-column trick discarded savedDirection).
-    console.log(`🔄 Reinitializing table controls...`);
-    reinitializeTableControls(files.length);
-
-    // Lazy-load folder sizes after table is rendered
-    loadDirInfoCells();
-
-    console.log(`📋 === UPDATE FILE TABLE COMPLETE ===`);
+    console.log(`📋 updateFileTable complete (VT engine)`);
 }
 
 // Create empty folder message row
@@ -2738,14 +2810,14 @@ const EXTENSION_MAP = (function () {
     const e = (exts, type, icon, color) => exts.forEach(x => map[x] = { type, icon, color });
     const map = Object.create(null);
 
-    // Documents & Text
+    // Documents
     e(['txt', 'rtf', 'doc', 'docx', 'odt', 'pdf', 'tex', 'log', 'csv', 'tsv', 'md', 'xml', 'json', 'ini', 'cfg', 'yaml', 'yml', 'nfo', 'readme', 'wps', 'dot', 'dotx'], 'Document', 'fas fa-file-alt', '#34495e');
 
-    // Spreadsheets & Data
-    e(['xls', 'xlsx', 'ods', 'db', 'mdb', 'accdb', 'sqlite', 'sqlite3', 'sql', 'sav', 'dat', 'dbf', 'parquet', 'arff', 'rdata', 'dta', 'pivot'], 'Spreadsheet / Data', 'fas fa-file-excel', '#27ae60');
+    // Data
+    e(['xls', 'xlsx', 'ods', 'db', 'mdb', 'accdb', 'sqlite', 'sqlite3', 'sql', 'sav', 'dat', 'dbf', 'parquet', 'arff', 'rdata', 'dta', 'pivot'], 'Data', 'fas fa-file-excel', '#27ae60');
 
     // Presentations
-    e(['ppt', 'pptx', 'odp', 'key', 'pub', 'msg', 'eml', 'oft', 'note'], 'Presentation / Mail', 'fas fa-file-powerpoint', '#e67e22');
+    e(['ppt', 'pptx', 'odp', 'key', 'pub', 'msg', 'eml', 'oft', 'note'], 'Presentation', 'fas fa-file-powerpoint', '#e67e22');
 
     // Images
     e(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tif', 'tiff', 'ico', 'svg', 'webp', 'heic', 'heif', 'psd', 'psb', 'ai', 'eps', 'ind', 'indd', 'idml', 'xcf', 'cpt', 'exr', 'hdr', 'raw', 'nef', 'cr2', 'arw', 'dng', 'sketch', 'fig', 'xd'], 'Image', 'fas fa-file-image', '#9b59b6');
@@ -2759,32 +2831,32 @@ const EXTENSION_MAP = (function () {
     // 3D / CAD
     e(['dwg', 'dxf', 'dwf', 'dwt', 'dgn', 'rvt', 'rfa', 'rte', 'ifc', 'step', 'stp', 'stl', 'iges', 'igs', 'sldprt', 'sldasm', 'ipt', 'iam', 'f3d', 'fbx', 'obj', '3ds', 'max', 'skp', 'plt', 'cam', 'cnc', 'nc', 'scad'], '3D / CAD', 'fas fa-cube', '#16a085');
 
-    // Dev / Code
-    e(['py', 'ipynb', 'js', 'jsx', 'ts', 'tsx', 'html', 'htm', 'css', 'java', 'class', 'jar', 'c', 'cpp', 'h', 'hpp', 'cs', 'vb', 'php', 'asp', 'aspx', 'jsp', 'go', 'rb', 'pl', 'sh', 'bat', 'cmd', 'ps1', 'lua', 'sql', 'yaml', 'yml', 'toml', 'r', 'm', 'scala', 'kt', 'swift', 'rs', 'jsonl', 'env', 'config', 'jsonc'], 'Code / Script', 'fas fa-code', '#2ecc71');
+    // Code
+    e(['py', 'ipynb', 'js', 'jsx', 'ts', 'tsx', 'html', 'htm', 'css', 'java', 'class', 'jar', 'c', 'cpp', 'h', 'hpp', 'cs', 'vb', 'php', 'asp', 'aspx', 'jsp', 'go', 'rb', 'pl', 'sh', 'bat', 'cmd', 'ps1', 'lua', 'sql', 'yaml', 'yml', 'toml', 'r', 'm', 'scala', 'kt', 'swift', 'rs', 'jsonl', 'env', 'config', 'jsonc'], 'Code', 'fas fa-code', '#2ecc71');
 
     // Archives
     e(['zip', 'rar', '7z', 'tar', 'gz', 'gzip', 'bz2', 'tgz', 'iso', 'img', 'cab', 'arj', 'lzh', 'pkg'], 'Archive', 'fas fa-file-archive', '#95a5a6');
 
-    // Executables & System
+    // Binaries
     e(['exe', 'msi', 'bat', 'cmd', 'ps1', 'vbs', 'dll', 'sys', 'drv', 'ocx', 'reg', 'inf', 'scr', 'com', 'cpl'], 'Binaries', 'fas fa-cogs', '#7f8c8d');
 
     // Web
-    e(['map', 'sitemap', 'url', 'lnk', 'cache', 'cookie'], 'Web / Shortcut', 'fas fa-globe', '#3498db');
+    e(['map', 'sitemap', 'url', 'lnk', 'cache', 'cookie'], 'Web', 'fas fa-globe', '#3498db');
 
     // Security / Certs
-    e(['cer', 'crt', 'pem', 'pfx', 'p12', 'key', 'csr', 'enc', 'sig', 'asc'], 'Certificate / Key', 'fas fa-shield-alt', '#c0392b');
+    e(['cer', 'crt', 'pem', 'pfx', 'p12', 'key', 'csr', 'enc', 'sig', 'asc'], 'Cert/Key', 'fas fa-shield-alt', '#c0392b');
 
     // Project / Config
-    e(['project', 'workspace', 'sln', 'solution', 'config', 'settings', 'prefs', 'manifest', 'lock', 'jsonc'], 'Project / Config', 'fas fa-folder-tree', '#34495e');
+    e(['project', 'workspace', 'sln', 'solution', 'config', 'settings', 'prefs', 'manifest', 'lock', 'jsonc'], 'Config', 'fas fa-folder-tree', '#34495e');
 
     // Backups / Logs / Misc
-    e(['tmp', 'bak', 'old', 'log', 'err', 'torrent', 'dmp', 'cache', 'backup', 'copy'], 'Backup / Log / Temp', 'fas fa-file', '#95a5a6');
+    e(['tmp', 'bak', 'old', 'log', 'err', 'torrent', 'dmp', 'cache', 'backup', 'copy'], 'Misc Files', 'fas fa-file', '#95a5a6');
 
     // Specialized enterprise
-    e(['pst', 'ost', 'ics', 'vcf', 'contact', 'form', 'template', 'report', 'policy', 'license', 'audit', 'script', 'blueprint', 'model', 'sim'], 'Enterprise / Specialized', 'fas fa-file-alt', '#9b59b6');
+    e(['pst', 'ost', 'ics', 'vcf', 'contact', 'form', 'template', 'report', 'policy', 'license', 'audit', 'script', 'blueprint', 'model', 'sim'], 'Specialized', 'fas fa-file-alt', '#9b59b6');
 
     // Default PDF mapping (also included above) ensure 'pdf' explicit
-    map['pdf'] = { type: 'PDF Document', icon: 'fas fa-file-pdf', color: '#e74c3c' };
+    map['pdf'] = { type: 'Document', icon: 'fas fa-file-pdf', color: '#e74c3c' };
 
     return map;
 })();
@@ -3174,7 +3246,7 @@ function updateFileTableContent(files) {
             : '';
 
         const goUpRow = document.createElement('tr');
-        goUpRow.style.background = 'rgba(52, 152, 219, 0.1)';
+        goUpRow.className = 'parent-dir-sticky';
         goUpRow.innerHTML = `
             <td></td>
             <td>
@@ -3197,6 +3269,11 @@ function updateFileTableContent(files) {
             <td></td>
         `;
         tbody.appendChild(goUpRow);
+        requestAnimationFrame(() => {
+            const thead = document.querySelector('#filesTable thead');
+            const wrapper = document.getElementById('tableScrollWrapper');
+            if (thead && wrapper) wrapper.style.setProperty('--table-thead-h', thead.offsetHeight + 'px');
+        });
     }
 
     if (files.length === 0) {

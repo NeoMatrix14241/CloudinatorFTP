@@ -342,6 +342,7 @@
 
         <!-- File table -->
         <div class="file-table slide-in">
+            <div id="tableScrollWrapper" class="table-scroll-wrapper">
             <table id="filesTable" class="table table-{{ role }}">
                 <thead>
                     <tr>
@@ -372,195 +373,19 @@
                         <th><i class="fas fa-cogs"></i> Actions</th>
                     </tr>
                 </thead>
-                <tbody>
-                    {% if path %}
-                    <!-- Parent directory row - always show when not at root -->
-                    <tr style="background: rgba(52, 152, 219, 0.1);">
-                        <td></td> <!-- Empty checkbox column for consistency -->
-                        <td>
-                            <div class="file-name">
-                                <i class="fas fa-level-up-alt file-icon folder-icon"></i>
-                                {% if '/' in path %}
-                                {% set parent_path = '/'.join(path.split('/')[:-1]) %}
-                                <a href="#" onclick="navigateToFolder('{{ parent_path }}'); return false;"
-                                    style="color: #3498db; font-weight: 600;">
-                                    .. (Parent Directory)
-                                </a>
-                                {% else %}
-                                <a href="#" onclick="navigateToFolder(''); return false;"
-                                    style="color: #3498db; font-weight: 600;">
-                                    .. (Parent Directory)
-                                </a>
-                                {% endif %}
-                            </div>
-                        </td>
-                        <td>
-                            <span style="color: #ffffff; font-size: 12px;"></span>
-                        </td>
-                        <td>
-                            <span class="file-type">
-                            </span>
-                        </td>
-                        <td>
-                            <span style="color: #ffffff; font-size: 12px;"></span>
-                        </td>
-                        <td>
-                            <div class="actions">
-                                <span style="color: #ffffff; font-size: 12px;"></span>
-                            </div>
+                <tbody id="filesTableBody">
+                    <!-- VT engine populates this from the initialFilesData JSON blob.
+                         Server no longer renders rows here — this eliminates the flash
+                         of old/non-sticky content on page load and the slow parse of
+                         thousands of <tr> elements before DOMContentLoaded fires. -->
+                    <tr id="vtInitialLoader">
+                        <td colspan="6" style="text-align:center;padding:32px 20px;">
+                            <i class="fas fa-circle-notch fa-spin" style="font-size:22px;opacity:0.5;"></i>
                         </td>
                     </tr>
-                    {% endif %}
-
-                    {% if items %}
-                    {% for item in items %}
-                    <tr class="file-row" data-path="{{ (path + '/' + item.name) if path else item.name }}">
-                        <td>
-                            {% if role == 'readwrite' or role == 'readonly' %}
-                            <input type="checkbox" class="file-checkbox item-checkbox"
-                                data-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                data-name="{{ item.name }}" data-is-dir="{{ item.is_dir|lower }}"
-                                onchange="updateSelection()">
-                            {% else %}
-                            <!-- Empty checkbox column for layout consistency -->
-                            {% endif %}
-                        </td>
-                        <td class="name-cell">
-                            <div class="file-name">
-                                {% if item.is_dir %}
-                                <i class="fas fa-folder file-icon folder-icon"></i>
-                                <a href="#"
-                                    onclick="navigateToFolder('{{ (path + '/' + item.name) if path else item.name }}'); return false;"
-                                    data-folder-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                    class="folder-link">
-                                    {{ item.name }}
-                                </a>
-                                {% else %}
-                                <i class="fas fa-file file-icon file-icon-default"></i>
-                                {{ item.name }}
-                                {% endif %}
-                            </div>
-                        </td>
-                        <td class="size-cell">
-                            {% if item.is_dir %}
-                            <span class="dir-info-cell"
-                                  data-dir-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                  style="color: white; font-size: 13px;">
-                                <i class="fas fa-spinner fa-spin" style="opacity: 0.4; font-size: 11px;"></i>
-                            </span>
-                            {% else %}
-                            <span style="color: white; font-weight: 500;">
-                                {% if item.size is not none %}
-                                    {% if item.size >= 1024*1024*1024 %}
-                                    {{ "%.2f"|format(item.size / (1024*1024*1024)) }} GB
-                                    {% elif item.size >= 1024*1024 %}
-                                    {{ "%.1f"|format(item.size / (1024*1024)) }} MB
-                                    {% elif item.size >= 1024 %}
-                                    {{ "%.1f"|format(item.size / 1024) }} KB
-                                    {% else %}
-                                    {{ item.size }} bytes
-                                    {% endif %}
-                                {% else %}
-                                --
-                                {% endif %}
-                            </span>
-                            {% endif %}
-                        </td>
-                        <td class="type-cell">
-                            <span class="file-type">
-                                {% if item.is_dir %}
-                                <i class="fas fa-folder"></i> Folder
-                                {% else %}
-                                <i class="fas fa-file"></i> File
-                                {% endif %}
-                            </span>
-                        </td>
-                        <td class="date-cell">
-                            {% if item.modified %}
-                            {% set dt = item.modified|int|timestamp_to_date %}
-                            {% set parts = dt.split('||') %}
-                            <span style="color: white; font-size: 13px; line-height: 1.6;">
-                                {{ parts[0] }}<br>{{ parts[1] }}
-                            </span>
-                            {% else %}
-                            <span style="color: white; font-size: 13px;">--</span>
-                            {% endif %}
-                        </td>
-                        <td class="actions-cell">
-                            <div class="actions">
-                                {% if not item.is_dir %}
-                                <button type="button" class="btn btn-outline btn-sm download-btn"
-                                    data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                    onclick="downloadItem('{{ (path + '/' + item.name) if path else item.name }}')"
-                                    title="Download file">
-                                    <i class="fas fa-download"></i> Download
-                                </button>
-                                {% else %}
-                                <button type="button" class="btn btn-outline btn-sm download-btn"
-                                    data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                    onclick="downloadFolderAsZip('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
-                                    title="Download folder as ZIP">
-                                    <i class="fas fa-download"></i> Download
-                                </button>
-                                </button>
-                                {% endif %}
-
-                                {% if role == 'readwrite' %}
-                                <button type="button" class="btn btn-warning btn-sm move-btn"
-                                    data-item-name="{{ item.name }}"
-                                    data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                    onclick="showSingleMoveModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
-                                    title="Move item">
-                                    <i class="fas fa-cut"></i> Move
-                                </button>
-
-                                <button type="button" class="btn btn-success btn-sm copy-btn"
-                                    data-item-name="{{ item.name }}"
-                                    data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                    onclick="showSingleCopyModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
-                                    title="Copy item">
-                                    <i class="fas fa-copy"></i> Copy
-                                </button>
-
-                                <button type="button" class="btn btn-primary btn-sm rename-btn"
-                                    data-item-name="{{ item.name }}"
-                                    data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                    onclick="showSingleRenameModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
-                                    title="Rename item">
-                                    <i class="fas fa-edit"></i> Rename
-                                </button>
-
-                                <button type="button" class="btn btn-danger btn-sm delete-btn"
-                                    data-item-name="{{ item.name }}"
-                                    data-item-path="{{ (path + '/' + item.name) if path else item.name }}"
-                                    onclick="showSingleDeleteModal('{{ (path + '/' + item.name) if path else item.name }}', '{{ item.name }}')"
-                                    title="Delete item">
-                                    <i class="fas fa-trash"></i> Delete
-                                </button>
-                                {% endif %}
-                            </div>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                    {% else %}
-                    <!-- Empty directory message within the table -->
-                    <tr>
-                        <td colspan="6" style="text-align: center; padding: 40px 20px; vertical-align: middle;">
-                            <div
-                                style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 120px;">
-                                <i class="fas fa-folder-open"
-                                    style="font-size: 36px; color: #95a5a6; margin-bottom: 15px; opacity: 0.7;"></i>
-                                <div style="color: #7f8c8d; font-weight: 500; margin-bottom: 8px; font-size: 18px;">This
-                                    folder is empty</div>
-                                <div style="color: #95a5a6; font-size: 14px; text-align: center; max-width: 300px;">{%
-                                    if role == 'readwrite' %}Upload files or create folders to get started{% else %}No
-                                    files available{% endif %}</div>
-                            </div>
-                        </td>
-                    </tr>
-                    {% endif %}
                 </tbody>
             </table>
+            </div><!-- end tableScrollWrapper -->
         </div>
     </div>
 
@@ -751,15 +576,11 @@
     <div id="flask-config" data-chunk-size="{{ CHUNK_SIZE }}" data-upload-url="{{ url_for('upload') }}"
         data-current-path="{{ path }}" data-user-role="{{ role }}" style="display: none;"></div>
 
+    <!-- Initial file listing JSON for virtual scroll seeding (avoids rendering 50k DOM rows) -->
+    <script id="initialFilesData" type="application/json">{{ items | tojson if items else '[]' }}</script>
+
     <!-- External JavaScript files -->
     <script src="{{ url_for('static', filename='js/index.js') }}"></script>
-
-    <!-- Trigger lazy folder info load on initial page render -->
-    <script>
-        document.addEventListener('DOMContentLoaded', function () {
-            loadDirInfoCells();
-        });
-    </script>
 </body>
 
 </html>
