@@ -31,6 +31,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Lock column widths from initial render so AJAX navigation never changes them
     lockTableColumnWidths();
+
+    // Stop-folder delegation — survives any innerHTML rebuild on folder rows
+    const _fqEl = document.getElementById('fileQueue');
+    if (_fqEl) {
+        _fqEl.addEventListener('click', function(e) {
+            const b = e.target.closest('.fg-stop-btn');
+            if (b) { e.stopPropagation(); e.preventDefault(); _stopFolderGroup(b.dataset.gid); }
+        });
+    }
 });
 
 /**
@@ -85,17 +94,19 @@ document.addEventListener('DOMContentLoaded', protectModalInputs);
 
 async function checkAuthenticationOnPageLoad() {
     try {
-        // Make a quick authentication check
         const response = await fetch('/admin/upload_status', {
             method: 'GET',
             cache: 'no-cache',
-            headers: {
-                'Cache-Control': 'no-cache'
-            }
+            headers: { 'Cache-Control': 'no-cache' }
         });
 
-        // If we get redirected to login or get a 401/403, we're not authenticated
         if (!response.ok || response.url.includes('/login')) {
+            // FIX: Never redirect mid-upload — the page-load check fires on each hard
+            // reload, but if somehow called while uploading is in progress, don't kill it.
+            if (isUploading) {
+                console.warn('🔒 Page-load auth check failed but upload in progress — skipping redirect');
+                return;
+            }
             console.log('🔒 Not authenticated, redirecting to login...');
             window.location.replace('/login');
             return;
@@ -103,6 +114,10 @@ async function checkAuthenticationOnPageLoad() {
 
         console.log('✅ Authentication verified');
     } catch (error) {
+        if (isUploading) {
+            console.warn('🔒 Page-load auth check error during upload — skipping redirect:', error.message);
+            return;
+        }
         console.log('🔒 Authentication check failed, redirecting to login...');
         window.location.replace('/login');
     }
@@ -136,23 +151,37 @@ function cleanupAuthenticationHistory() {
     setInterval(checkAuthenticationStatus, 30000); // Check every 30 seconds
 }
 
+// FIX: Track consecutive auth failures — transient network blips must not kill active uploads
+let _authFailCount = 0;
+const _AUTH_FAIL_THRESHOLD = 3;
+
 async function checkAuthenticationStatus() {
+    // Always ping the server — this refreshes the session cookie even on background tabs.
+    // Never skip the fetch during upload; only skip the *redirect* so uploads aren't interrupted.
     try {
         const response = await fetch('/admin/upload_status', {
             method: 'GET',
             cache: 'no-cache',
-            headers: {
-                'Cache-Control': 'no-cache'
-            }
+            headers: { 'Cache-Control': 'no-cache' }
         });
 
         if (!response.ok || response.url.includes('/login')) {
-            console.log('🔒 Session expired, redirecting to login...');
-            window.location.replace('/login');
+            _authFailCount++;
+            console.log(`🔒 Auth check failed (${_authFailCount}/${_AUTH_FAIL_THRESHOLD})`);
+            if (_authFailCount >= _AUTH_FAIL_THRESHOLD && !isUploading) {
+                console.log('🔒 Session expired, redirecting to login...');
+                window.location.replace('/login');
+            }
+        } else {
+            _authFailCount = 0;
         }
     } catch (error) {
-        console.log('🔒 Session check failed, redirecting to login...');
-        window.location.replace('/login');
+        _authFailCount++;
+        console.log(`🔒 Auth check error (${_authFailCount}/${_AUTH_FAIL_THRESHOLD}):`, error.message);
+        if (_authFailCount >= _AUTH_FAIL_THRESHOLD && !isUploading) {
+            console.log('🔒 Repeated auth errors, redirecting to login...');
+            window.location.replace('/login');
+        }
     }
 }
 
@@ -679,13 +708,17 @@ function clearSearch() {
 }
 
 // Column sorting functionality
-function sortTable(column) {
+function sortTable(column, forceDirection) {
     const table = document.getElementById('filesTable');
     const tbody = table.querySelector('tbody');
     const rows = Array.from(tbody.querySelectorAll('tr'));
 
     // Update sort state
-    if (currentSort.column === column) {
+    if (forceDirection) {
+        // Restore exact column+direction without toggling (used after navigation/refresh)
+        currentSort.column = column;
+        currentSort.direction = forceDirection;
+    } else if (currentSort.column === column) {
         currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
     } else {
         currentSort.column = column;
@@ -912,18 +945,14 @@ function updateSortInfo(column, direction) {
 function resetSorting() {
     console.log('🔄 Resetting table sorting to default');
 
-    // Clear deep search results first (fixes green background timing display)
+    // Clear deep search results first
     hideDeepSearchResults();
 
     // Clear search input and hide clear button
     const searchInput = document.getElementById('tableSearch');
     const clearButton = document.getElementById('clearSearch');
-    if (searchInput) {
-        searchInput.value = '';
-    }
-    if (clearButton) {
-        clearButton.style.display = 'none';
-    }
+    if (searchInput) searchInput.value = '';
+    if (clearButton) clearButton.style.display = 'none';
 
     // Reset sort state
     currentSort = { column: null, direction: 'asc' };
@@ -935,85 +964,15 @@ function resetSorting() {
         if (icon) icon.className = 'fas fa-sort sort-icon';
     });
 
-    // Restore original order from stored state
-    const table = document.getElementById('filesTable');
-    const tbody = table.querySelector('tbody');
-
-    if (originalRowOrder.length > 0) {
-        // Use stored original order
-        console.log('✅ Restoring from stored original order');
-        tbody.innerHTML = '';
-
-        // Add all original rows back in their original order
-        originalRowOrder.forEach(row => {
-            tbody.appendChild(row.cloneNode(true));
-        });
-    } else {
-        // Fallback: manual sorting if original order not stored
-        console.log('⚠️ Fallback: manual sorting since original order not stored');
-        const rows = Array.from(tbody.querySelectorAll('tr'));
-
-        // Separate parent directory row and file rows
-        const parentRow = rows.find(row =>
-            row.style.background === 'rgba(52, 152, 219, 0.1)' ||
-            row.innerHTML.includes('.. (Parent Directory)')
-        );
-        const fileRows = rows.filter(row => row !== parentRow);
-
-        // Separate folders and files (like Windows Explorer)
-        const folders = [];
-        const files = [];
-
-        fileRows.forEach(row => {
-            // Check if it's a folder by looking for folder icon specifically
-            const hasFolderIcon = row.querySelector('.fa-folder, .folder-icon');
-            const hasFileIcon = row.querySelector('.fa-file');
-            const hasDownloadLink = row.querySelector('a[href*="/download/"]');
-
-            // More precise folder detection: must have folder icon AND no download link
-            if (hasFolderIcon && !hasDownloadLink) {
-                folders.push(row);
-            } else {
-                files.push(row);
-            }
-        });
-
-        // Sort both folders and files by name as default order
-        const defaultSort = (a, b) => {
-            const aName = getSortValue(a, 'name');
-            const bName = getSortValue(b, 'name');
-            return aName.localeCompare(bName, undefined, { numeric: true, sensitivity: 'base' });
-        };
-
-        folders.sort(defaultSort);
-        files.sort(defaultSort);
-
-        // Clear tbody and re-add rows in Windows Explorer order
-        tbody.innerHTML = '';
-
-        // Add parent row first if it exists
-        if (parentRow) {
-            tbody.appendChild(parentRow);
-        }
-
-        // Add folders first, then files (like Windows Explorer)
-        folders.forEach(row => tbody.appendChild(row));
-        files.forEach(row => tbody.appendChild(row));
-    }
-
     // Update sort info display
     updateSortInfo(null, null);
 
-    // Reset the data-loaded attribute on all dir-info-cell spans so they reload
-    document.querySelectorAll('.dir-info-cell').forEach(cell => {
-        cell.dataset.loaded = 'false';
-        cell.innerHTML = '<i class="fas fa-spinner fa-spin" style="color: #95a5a6;"></i>';
-    });
+    // Always fetch fresh data — never restore stale DOM clones.
+    // Clones captured at render time show deleted files if any refresh
+    // was blocked between the delete and this reset call.
+    refreshFileTable();
 
-    // Reload directory info cells (size column)
-    loadDirInfoCells();
-
-    console.log('✅ Table sorting reset to default order');
+    console.log('✅ Table sorting reset — fetching fresh data from server');
 }
 
 // Reinitialize table controls after content update
@@ -1030,13 +989,11 @@ function reinitializeTableControls(itemCount) {
         performSearch(searchInput.value.trim());
     }
 
-    // Reapply current sort if any
+    // Reapply current sort if any - pass direction explicitly so it is not toggled
     if (currentSort.column) {
         const column = currentSort.column;
         const direction = currentSort.direction;
-        // Reset sort state to trigger a fresh sort
-        currentSort.column = null;
-        sortTable(column);
+        sortTable(column, direction);
     }
 
     // Initialize sort event listeners for any new headers
@@ -1057,13 +1014,30 @@ function reinitializeTableControls(itemCount) {
 
 // Upload queue management
 let uploadQueue = [];
+// Folder groups — keyed by groupId, one entry per folder upload
+const folderGroups = new Map();
+// O(1) duplicate check — replaces O(n) uploadQueue.find()
+const _seenFileKeys = new Set();
 let isUploading = false;
+let _mutationInFlight = false; // blocks SSE refresh during delete/move
+let _lastTableRefresh = 0;
 let currentUploadIndex = 0;
 let currentUploadingFile = null;
 let cancelledUploads = new Set(); // Track cancelled upload IDs
 let uploadStartTime = 0;
 let totalBytesToUpload = 0;
 let totalBytesUploaded = 0;
+let lazyBytesUploaded = 0; // bytes from completed lazy folder files
+
+// --- Upload freeze/resume protection ---
+// Tracks the last time any file completed uploading. Used by the stall detector
+// to decide if the upload loop froze when the tab was backgrounded.
+let _lastUploadActivity = 0;
+// Cooldown tracker: prevents _resumeStalledUploads from spawning duplicate loops
+// when the user switches tabs multiple times in quick succession.
+let _lastResumeTime = 0;
+// Interval handle for session keepalive pings (sent every 60s during uploads)
+let _sessionKeepAliveInterval = null;
 
 // Parallel upload configuration
 const PARALLEL_UPLOAD_CONFIG = {
@@ -1114,8 +1088,26 @@ async function navigateToFolder(newPath) {
         console.log("📡 Response object:", response);
 
         if (!response.ok) {
-            console.error(`❌ Response not OK: ${response.status} ${response.statusText}`);
+            // 401 means session expired — show message, redirect only if not uploading
+            if (response.status === 401) {
+                showUploadStatus('⚠️ Session expired — please log in again', 'error');
+                if (!isUploading) {
+                    setTimeout(() => { window.location.href = '/login'; }, 1500);
+                }
+                return;
+            }
             throw new Error(`Failed to load folder: ${response.status} ${response.statusText}`);
+        }
+
+        // Guard: if the server returned HTML instead of JSON (e.g. session redirect),
+        // handle gracefully without a JSON parse explosion.
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+            showUploadStatus('⚠️ Session expired — please log in again', 'error');
+            if (!isUploading) {
+                setTimeout(() => { window.location.href = '/login'; }, 1500);
+            }
+            return;
         }
 
         console.log("🔄 Parsing response as JSON...");
@@ -1184,16 +1176,15 @@ async function navigateToFolder(newPath) {
         showUploadStatus(`📁 Loaded folder: ${cleanPath || 'Root'}`, 'success');
 
     } catch (error) {
-        console.error('❌ === NAVIGATION ERROR ===');
-        console.error('❌ Error details:', error);
-        console.error('❌ Error stack:', error.stack);
+        console.error('❌ Navigation error:', error.message);
         showUploadStatus(`❌ Failed to load folder: ${error.message}`, 'error');
 
-        // Fallback to page reload on error
-        setTimeout(() => {
-            console.log(`🔄 Fallback: Reloading page...`);
-            window.location.href = newPath ? `/${newPath}` : '/';
-        }, 2000);
+        // Only fallback-reload if not uploading — a reload kills the active upload
+        if (!isUploading) {
+            setTimeout(() => {
+                window.location.href = newPath ? `/${newPath}` : '/';
+            }, 2000);
+        }
     }
 }
 
@@ -1292,21 +1283,20 @@ function updateFileTable(files, path) {
 
     console.log(`📋 Updated file table with ${files.length} items`);
 
+    // Invalidate all dir-info-cell caches so they re-fetch fresh data.
+    // Without this, cells marked loaded='true' skip re-fetching after deletes,
+    // showing stale counts ("0 files, 7 folders") until a manual cache clear.
+    document.querySelectorAll('.dir-info-cell').forEach(cell => {
+        cell.dataset.loaded = 'false';
+    });
+
     // Store the new original order for this folder (so reset sort works correctly)
     console.log(`💾 Storing original table order for current folder...`);
     storeOriginalTableOrder();
 
-    // Reapply current sort if active — do NOT reset sort on navigation
-    if (currentSort.column) {
-        console.log(`🔄 Reapplying sort: ${currentSort.column} ${currentSort.direction}`);
-        const savedColumn = currentSort.column;
-        const savedDirection = currentSort.direction;
-        currentSort.column = null; // reset so sortTable triggers fresh sort
-        currentSort.direction = savedDirection;
-        sortTable(savedColumn);
-    }
-
-    // Reinitialize sort functionality for new content
+    // reinitializeTableControls reapplies the current sort with the correct direction.
+    // Do NOT also call sortTable here - that caused a double-sort that always
+    // forced direction back to asc (the null-column trick discarded savedDirection).
     console.log(`🔄 Reinitializing table controls...`);
     reinitializeTableControls(files.length);
 
@@ -1560,6 +1550,7 @@ function updateBreadcrumb(path) {
 
 // Selection management
 let selectedItems = new Set();
+let _lastRenderedPath = undefined;
 let currentModalAction = '';
 
 // Storage stats loading with enhanced error handling
@@ -1788,18 +1779,22 @@ window.addEventListener('beforeunload', function (e) {
     }
 });
 
-// Enhanced page visibility handling with better interruption detection
+// Page visibility handling
 document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'hidden') {
-        // Page is being hidden - cleanup if needed
+        // Only cleanup if NOT uploading — never interrupt active uploads
         if (!isUploading && uploadQueue.some(item => item.status === 'pending' || item.status === 'error')) {
             console.log('🧹 Page hidden - cleaning up abandoned uploads');
             cleanupUnfinishedChunks().catch(console.error);
         }
     } else if (document.visibilityState === 'visible') {
-        // Page became visible again - check for any server-side cleanup needed
-        console.log('👀 Page visible again - checking upload status');
-        updateManualCleanupButton();
+        console.log('👀 Page visible again');
+        // IMPORTANT: do NOT call updateManualCleanupButton() here while uploading.
+        // That fires two fetch requests to the server which can interrupt in-flight
+        // upload connections when the browser re-prioritizes tasks on tab return.
+        if (!isUploading) {
+            updateManualCleanupButton();
+        }
     }
 });
 
@@ -1828,74 +1823,371 @@ document.getElementById('fileInput')?.addEventListener('change', function (e) {
 });
 
 function addFilesToQueue(files) {
-    console.log('📂 addFilesToQueue called with:', files.length, 'files');
-    let addedCount = 0;
-
+    // Separate folder uploads (have relativePath / webkitRelativePath) from plain files
+    const folderFiles = [];
+    const plainFiles  = [];
     files.forEach(file => {
-        // Determine the destination path for the file
-        let destinationPath = currentPath;
-        let displayName = file.name;
-
-        // If file has relativePath (from folder upload), preserve folder structure
-        // Support both webkitRelativePath (desktop) and relativePath (mobile fallback)
-        const folderPath = file.relativePath || file.webkitRelativePath;
-        if (folderPath) {
-            // Remove leading slash and get directory path
-            const relativePath = folderPath.startsWith('/') ? folderPath.slice(1) : folderPath;
-            const pathParts = relativePath.split('/');
-
-            // Remove the filename to get just the directory structure
-            pathParts.pop();
-
-            if (pathParts.length > 0) {
-                // Combine current path with relative directory structure
-                const relativeDir = pathParts.join('/');
-                destinationPath = currentPath ? `${currentPath}/${relativeDir}` : relativeDir;
-                displayName = `${relativeDir}/${file.name}`;
-            }
-
-            console.log('📁 Folder file:', file.name, 'Path source:', file.relativePath ? 'relativePath' : 'webkitRelativePath', 'Value:', folderPath, 'Destination:', destinationPath);
-        } else {
-            console.log('📄 Regular file:', file.name, 'Size:', file.size);
-        }
-
-        const fileId = generateFileId(file);
-
-        // Check if file already in queue by relative path and size
-        const existingFile = uploadQueue.find(item =>
-            (item.destinationPath === destinationPath && item.name === file.name && item.size === file.size) ||
-            (item.displayName === displayName && item.size === file.size)
-        );
-
-        if (existingFile) {
-            console.log('⚠️ File already in queue:', displayName);
-            showUploadStatus(`📁 File "${displayName}" is already in the queue`, 'info');
-            return;
-        }
-
-        const queueItem = {
-            id: fileId,
-            file: file,
-            name: file.name, // original filename
-            displayName: displayName, // display name with path
-            destinationPath: destinationPath, // where to upload the file
-            size: file.size,
-            status: 'pending',
-            progress: 0,
-            error: null,
-            uploadedBytes: 0,
-            createdTime: Date.now()
-        };
-
-        uploadQueue.push(queueItem);
-        addedCount++;
-        console.log('✅ Added to queue:', displayName, 'ID:', fileId);
+        const fp = file.relativePath || file.webkitRelativePath || '';
+        if (fp.includes('/')) folderFiles.push(file);
+        else plainFiles.push(file);
     });
 
-    console.log('📊 Queue status - Total items:', uploadQueue.length, 'Added:', addedCount);
-    updateQueueDisplay();
-    showUploadStatus(`➕ Added ${addedCount} file(s) to upload queue`, 'success');
+    // Plain files — one queue row each, O(1) duplicate check
+    let added = 0;
+    plainFiles.forEach(file => {
+        const key = `${currentPath}::${file.name}::${file.size}`;
+        if (_seenFileKeys.has(key)) { showUploadStatus(`⚠️ "${file.name}" already in queue`, 'info'); return; }
+        _seenFileKeys.add(key);
+        uploadQueue.push({
+            id: generateFileId(file), file,
+            name: file.name, displayName: file.name,
+            destinationPath: currentPath,
+            size: file.size, status: 'pending',
+            progress: 0, error: null, uploadedBytes: 0,
+            createdTime: Date.now(),
+            _seenKey: key  // stored so we can remove it from _seenFileKeys on cleanup
+        });
+        added++;
+    });
+    if (added > 0) {
+        updateQueueDisplay();
+        showUploadStatus(`➕ Added ${added} file(s) to queue`, 'success');
+        _spawnFileWorkersIfNeeded();
+    }
+
+    // Folder files (webkitdirectory fallback) — group by root folder, show 1 row per folder
+    if (folderFiles.length > 0) {
+        _addFolderFilesToQueue(folderFiles);
+    }
 }
+
+/**
+ * Called from drag-drop path — groups files by root folder, registers lazily.
+ * Does NOT push into uploadQueue upfront (avoids memory spike).
+ * Files are iterated one-at-a-time when upload actually starts.
+ */
+function _addFolderFilesToQueue(files) {
+    // Group by root folder name to detect which distinct folders were dropped
+    const byRoot = new Map();
+    for (let i = 0; i < files.length; i++) {
+        const fp = (files[i].relativePath || files[i].webkitRelativePath || '').replace(/^\//, '');
+        const root = fp.split('/')[0] || 'Upload';
+        if (!byRoot.has(root)) byRoot.set(root, []);
+        byRoot.get(root).push(files[i]);
+    }
+
+    byRoot.forEach((groupFiles, rootName) => {
+        for (const g of folderGroups.values()) {
+            if (g.rootName === rootName) {
+                showUploadStatus(`📁 "${rootName}" is already in the queue`, 'info');
+                return;
+            }
+        }
+        const groupId = `fg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        const group = {
+            id: groupId, rootName,
+            basePath: currentPath || '',  // frozen at queue time — never changes when user browses
+            // Store array of File refs (already in RAM from drag-drop, can't avoid)
+            // but don't duplicate into uploadQueue — iterate lazily at upload time
+            pendingFiles: groupFiles,
+            totalCount: groupFiles.length,
+            scanned: groupFiles.length,
+            completed: 0, errors: 0,
+            totalSize: 0,     // filled progressively by _scanSizeChunked
+            status: 'pending',
+            cancelled: false,
+            createdTime: Date.now()
+        };
+        folderGroups.set(groupId, group);
+        updateQueueDisplay();
+        showUploadStatus(`✅ "${rootName}" ready — ${groupFiles.length.toLocaleString()} files (computing size…)`, 'success');
+        // Non-blocking background size scan
+        _scanSizeChunked(group, groupFiles);
+        _spawnFolderWorkersIfNeeded();
+    });
+}
+
+/**
+ * Registers a webkitdirectory FileList lazily.
+ * Count is instant (fileList.length). Size computed in background without blocking.
+ */
+function _registerFolderGroup(fileArray, mobilePrefix) {
+    if (!fileArray || fileArray.length === 0) return;
+
+    const rootName = mobilePrefix
+        || (fileArray[0].webkitRelativePath || '').split('/')[0]
+        || 'Upload';
+
+    for (const g of folderGroups.values()) {
+        if (g.rootName === rootName) {
+            showUploadStatus(`📁 "${rootName}" is already in the queue`, 'info');
+            return;
+        }
+    }
+
+    const groupId = `fg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const group = {
+        id: groupId,
+        rootName,
+        basePath: currentPath || '',  // frozen at queue time — never changes when user browses
+        pendingFiles: fileArray, // Stable Array snapshot — never invalidated by input reset
+        mobilePrefix,
+        totalCount: fileArray.length,
+        scanned: fileArray.length,
+        completed: 0, errors: 0,
+        totalSize: 0,    // Filled progressively by _scanSizeChunked in background
+        status: 'pending',
+        cancelled: false,
+        createdTime: Date.now()
+    };
+    folderGroups.set(groupId, group);
+    updateQueueDisplay();
+    showUploadStatus(`✅ "${rootName}" queued — ${fileArray.length.toLocaleString()} files (computing size…)`, 'success');
+    _scanSizeChunked(group, fileArray); // Non-blocking background size scan
+    _spawnFolderWorkersIfNeeded();
+}
+
+/**
+ * Reads file.size from a FileList/Array in chunks, yielding between each chunk
+ * so the browser never freezes. Updates group.totalSize live.
+ * FIX: Uses much larger chunks when the tab is hidden to avoid browser setTimeout
+ * throttling (which clamps setTimeout to ~1s when backgrounded), otherwise scanning
+ * 16k+ files would take hours in a background tab.
+ */
+async function _scanSizeChunked(group, source, chunkSize = 1000) {
+    const total = source.length;
+    let i = 0;
+    while (i < total && !group.cancelled) {
+        // FIX: Use bigger chunks when tab is hidden — browsers throttle setTimeout(fn,0)
+        // to ~1 second minimum in background tabs, so 1000-file chunks would stall.
+        // 5000-file chunks means ~3 yields for 16k files instead of 16k yields.
+        const effectiveChunk = document.hidden ? 5000 : chunkSize;
+        const end = Math.min(i + effectiveChunk, total);
+        for (; i < end; i++) {
+            group.totalSize += (source[i].size || 0);
+        }
+        updateQueueDisplay(); // Paint size update after each chunk
+        await new Promise(r => setTimeout(r, 0)); // Yield to browser
+    }
+    updateQueueDisplay(); // Final update
+}
+
+/**
+ * Uploads a folder group lazily at upload time — parallel workers, live X/TOTAL counter.
+ *
+ * KEY DESIGN:
+ * - Iterates source (FileList / Array / pendingEntries) via a shared index, never all at once
+ * - Each worker pushes ONE item into uploadQueue before calling uploadSingleFile(), so that
+ *   uploadSingleFile()'s internal uploadQueue.find() / cancel checks / progress tracking all work
+ * - Item is spliced out of uploadQueue right after completion to keep memory flat
+ * - Worker concurrency matches PARALLEL_UPLOAD_CONFIG so folder uploads respect the thread setting
+ */
+async function _uploadFolderGroupLazy(group, startFrom = 0) {
+    if (group._running) {
+        console.warn(`⚠️ Group "${group.rootName}" loop already running — skipping duplicate start`);
+        return;
+    }
+    group._running = true;
+    group.status = 'uploading';
+    _updateGroupRowInPlace(group);
+
+    const total = group.totalCount || group.scanned;
+    const usePendingFiles = !!group.pendingFiles;
+    const source = usePendingFiles ? group.pendingFiles : (group.pendingEntries || []);
+
+    console.log(`📁 Starting folder upload: "${group.rootName}" — ${total.toLocaleString()} files`);
+
+    function _resolveItem(i) {
+        if (!usePendingFiles) return source[i];
+        const file = source[i];
+        if (!file) return null; // freed slot
+        const fp = group.mobilePrefix
+            ? `${group.mobilePrefix}/${file.name}`
+            : (file.webkitRelativePath || file.relativePath || '').replace(/^\//, '');
+        const parts = fp.split('/'); parts.pop();
+        let relDir = parts.join('/');
+        // If the folder was renamed (user chose "keep both"), swap the root component
+        // so every file lands under the new folder name instead of the original.
+        if (group.rootNameOverride && relDir) {
+            const relParts = relDir.split('/');
+            relParts[0] = group.rootNameOverride;
+            relDir = relParts.join('/');
+        } else if (group.rootNameOverride && !relDir) {
+            relDir = group.rootNameOverride;
+        }
+        // Use group.basePath (frozen when folder was queued), NOT live currentPath.
+        // live currentPath changes whenever the user browses, splitting files across folders.
+        const base = group.basePath || '';
+        const dest = base ? (relDir ? `${base}/${relDir}` : base) : relDir;
+        const displayName = relDir ? `${relDir}/${file.name}` : file.name;
+        return { file, dest, displayName };
+    }
+
+    // Throttle DOM updates — 5KB files upload near-instantly, avoid constant thrash
+    const uiEvery = 1; // Update group row on every file — _updateGroupRowInPlace is cheap
+    // Log progress every 1000 files
+    const logEvery = 1000;
+
+    try {
+        for (let i = startFrom; i < source.length; i++) {
+            if (group.cancelled || !isUploading) break;
+
+            group._currentIndex = i;
+
+            const _resolved = _resolveItem(i);
+            if (!_resolved) continue; // freed slot from previous run
+            const { file, dest, displayName } = _resolved;
+
+            const ac = new AbortController();
+            group._activeController = ac;
+
+            const queueItem = {
+                id: generateFileId(file), file,
+                name: file.name, displayName,
+                destinationPath: dest,
+                size: file.size, status: 'pending',
+                progress: 0, error: null, uploadedBytes: 0,
+                createdTime: Date.now(),
+                _groupId: group.id,
+                _abortSignal: ac.signal
+            };
+
+            uploadQueue.push(queueItem);
+            updateItemStatus(queueItem.id, 'uploading');
+
+            try {
+                await uploadSingleFile(queueItem);
+                if (!group.cancelled) {
+                    updateItemStatus(queueItem.id, 'completed');
+                    lazyBytesUploaded += file.size;
+                    // NOTE: totalBytesUploaded is NOT incremented here.
+                    // uploadSingleFile already calls updateItemProgress(item.id, 100, file.size)
+                    // which does delta = file.size - 0 -> totalBytesUploaded += file.size.
+                    // Adding it again here caused every folder file to be counted twice,
+                    // making the uploaded total balloon past the expected size.
+                    _recordSpeedSample(totalBytesUploaded);
+                    _lastUploadActivity = Date.now();
+                }
+            } catch (err) {
+                // Only treat as user-cancel if group.cancelled was ALREADY true before
+                // this error. An unexpected AbortError (browser GC, network blip) must
+                // NOT set group.cancelled — that silently kills all remaining files.
+                const userCancelled = group.cancelled
+                                   || err.message === 'Upload cancelled by user';
+                const unexpectedAbort = !userCancelled && err.name === 'AbortError';
+
+                const isNetworkError = unexpectedAbort || (!userCancelled && (
+                    err.message.includes('Failed to fetch') ||
+                    err.message.includes('NetworkError') ||
+                    err.message.includes('net::ERR_') ||
+                    err.name === 'TypeError'
+                ));
+
+                if (userCancelled) {
+                    group.cancelled = true;
+                    updateItemStatus(queueItem.id, 'cancelled', 'Stopped');
+                } else if (isNetworkError && isUploading) {
+                    updateItemStatus(queueItem.id, 'pending', 'Waiting to retry…');
+                    if (document.hidden) {
+                        await new Promise(resolve => {
+                            const handler = () => { document.removeEventListener('visibilitychange', handler); resolve(); };
+                            document.addEventListener('visibilitychange', handler);
+                        });
+                    }
+                    await new Promise(r => setTimeout(r, 1500));
+                    const retryIdx = uploadQueue.findIndex(q => q.id === queueItem.id);
+                    if (retryIdx !== -1) uploadQueue.splice(retryIdx, 1);
+                    i--;
+                    continue;
+                } else {
+                    updateItemStatus(queueItem.id, 'error', err.message);
+                }
+            } finally {
+                group._activeController = null;
+            }
+
+            const idx = uploadQueue.findIndex(q => q.id === queueItem.id);
+            if (idx !== -1) uploadQueue.splice(idx, 1);
+
+            if (usePendingFiles && source[i]) {
+                source[i] = null;
+            }
+
+            const done = group.completed + group.errors;
+
+            // Folder-level progress log every 1000 files
+            if (done > 0 && done % logEvery === 0) {
+                const pct = Math.round((done / total) * 100);
+                console.log(`📁 "${group.rootName}": ${done.toLocaleString()} / ${total.toLocaleString()} files (${pct}%) — ${group.errors} errors`);
+            }
+
+            if (done % uiEvery === 0 || done === total) {
+                _updateGroupRowInPlace(group);
+                updateOverallProgress();
+            }
+        }
+    } finally {
+        group._running = false;
+        group._currentIndex = null;
+    }
+
+    const finalStatus = group.cancelled ? 'cancelled' : (group.errors > 0 ? 'done with errors' : 'done');
+    console.log(`📁 "${group.rootName}" finished: ${group.completed.toLocaleString()} uploaded, ${group.errors} errors — ${finalStatus}`);
+
+    group.status = group.cancelled ? 'error' : (group.errors > 0 ? 'error' : 'done');
+    group._activeController = null;
+    group.pendingFiles = null;
+    group.pendingEntries = null;
+    _updateGroupRowInPlace(group);
+    updateOverallProgress();
+
+    // Each folder removes itself 2s after finishing — independent of other folders.
+    if (group.status === 'done') {
+        setTimeout(() => {
+            if (folderGroups.has(group.id)) {
+                folderGroups.delete(group.id);
+                updateQueueDisplay();
+            }
+        }, 2000);
+    }
+}
+
+/** Remove a pending folder group from queue */
+function _cancelFolderGroup(groupId) {
+    const group = folderGroups.get(groupId);
+    if (!group) return;
+    group.cancelled = true;
+    uploadQueue = uploadQueue.filter(item => item._groupId !== groupId);
+    folderGroups.delete(groupId);
+    updateQueueDisplay();
+    showUploadStatus('🗑️ Folder removed from queue', 'info');
+}
+
+/** Stop an in-progress folder upload — aborts current fetch + sets cancelled flag */
+function _stopFolderGroup(groupId) {
+    const group = folderGroups.get(groupId);
+    if (!group) return;
+
+    group.cancelled = true;
+
+    // Abort the in-flight fetch immediately (works for both whole-file and chunked)
+    if (group._activeController) {
+        try { group._activeController.abort(); } catch(e) {}
+        group._activeController = null;
+    }
+
+    // Mark any items in the queue so chunked loops exit at next check
+    uploadQueue.filter(item => item._groupId === groupId).forEach(item => {
+        cancelledUploads.add(item.id);
+        item.status = 'cancelled';
+    });
+
+    group.pendingFiles = null;
+    group.pendingEntries = null;
+    showUploadStatus(`⛔ Stopping "${group.rootName}" — ${group.completed} files uploaded`, 'info');
+    _updateGroupRowInPlace(group);
+}
+
 
 function addToUploadQueue(itemData) {
     // Add a single item to the upload queue (for assembly recovery)
@@ -1919,11 +2211,13 @@ function addToUploadQueue(itemData) {
     console.log('📝 Added recovered item to queue:', itemData.name);
 }
 
+// Monotonic counter for file IDs — Date.now() caused duplicate IDs when multiple
+// concurrent workers processed files in the same millisecond, leaving zombie
+// queueItems that never got spliced out and accumulated until Chrome crashed.
+let _fileIdCounter = 0;
+
 function generateFileId(file) {
-    // Only remove slashes, preserve all other characters (including +, spaces, etc.)
-    // This ensures uniqueness for files like "OC Extreme+.html" and "OC+.html"
-    const safeName = file.name.replace(/[\/\\]/g, '');
-    return `${Date.now()}-${safeName}-${file.size}`;
+    return `fid_${++_fileIdCounter}_${file.size}`;
 }
 
 function removeFromQueue(fileId) {
@@ -2036,47 +2330,40 @@ function clearAllQueue() {
         showUploadStatus('❌ Cannot clear queue while uploading', 'error');
         return;
     }
-
-    // Cleanup all pending/error items
-    const itemsToCleanup = uploadQueue.filter(item =>
-        item.status === 'pending' || item.status === 'error'
-    );
-
+    const itemsToCleanup = uploadQueue.filter(item => item.status === 'pending' || item.status === 'error');
     uploadQueue = [];
+    folderGroups.clear();
+    _seenFileKeys.clear();
     updateQueueDisplay();
-
-    // Cleanup chunks in background
-    if (itemsToCleanup.length > 0) {
-        cleanupUnfinishedChunks(itemsToCleanup).catch(console.error);
-    }
-
+    if (itemsToCleanup.length > 0) cleanupUnfinishedChunks(itemsToCleanup).catch(console.error);
     showUploadStatus('🧹 Upload queue cleared', 'success');
 }
 
 function clearCompletedItems() {
-    console.log('🧹 Clearing completed items from queue');
-
-    // Count completed items before clearing
-    const completedCount = uploadQueue.filter(item =>
-        item.status === 'completed' ||
-        item.status === 'assembled' ||
-        (item.error && item.error.includes('File ready!'))
-    ).length;
-
-    if (completedCount === 0) {
-        showUploadStatus('ℹ️ No completed items to clear', 'info');
-        return;
-    }
-
-    // Remove completed items from queue
+    const before = uploadQueue.length;
+    // Release dedup keys of completed/error items so they can be re-queued
+    uploadQueue.forEach(item => {
+        if (item.status !== 'pending' && item.status !== 'uploading' && item.status !== 'assembling') {
+            if (item._seenKey) _seenFileKeys.delete(item._seenKey);
+        }
+    });
     uploadQueue = uploadQueue.filter(item =>
-        item.status !== 'completed' &&
-        item.status !== 'assembled' &&
-        !(item.error && item.error.includes('File ready!'))
+        item.status === 'pending' || item.status === 'uploading' || item.status === 'assembling'
     );
+    const filesCleared = before - uploadQueue.length;
 
+    let groupsCleared = 0;
+    folderGroups.forEach((group, id) => {
+        if (group.status === 'done' || group.status === 'error' || group.status === 'cancelled' || group.cancelled) {
+            folderGroups.delete(id);
+            groupsCleared++;
+        }
+    });
+
+    const total = filesCleared + groupsCleared;
+    if (total === 0) { showUploadStatus('ℹ️ No completed items to clear', 'info'); return; }
     updateQueueDisplay();
-    showUploadStatus(`🧹 Cleared ${completedCount} completed item${completedCount > 1 ? 's' : ''}`, 'success');
+    showUploadStatus(`🧹 Cleared ${total} item${total > 1 ? 's' : ''}`, 'success');
 }
 
 // Enhanced cleanup function with retry logic
@@ -2145,55 +2432,171 @@ function updateQueueDisplay() {
 
     if (!queueContainer) return;
 
-    if (uploadQueue.length === 0) {
+    const hasItems = uploadQueue.length > 0 || folderGroups.size > 0;
+    if (!hasItems) {
         queueContainer.classList.remove('show');
         if (uploadBtn) uploadBtn.disabled = true;
-        if (progressSummary) progressSummary.classList.remove('show');
-        return;
+        return; // progress bar driven by setUploadingState() only
     }
 
     queueContainer.classList.add('show');
 
-    // Update stats
-    const totalSize = uploadQueue.reduce((sum, item) => sum + item.size, 0);
+    const totalSize    = uploadQueue.reduce((sum, item) => sum + (item.size || 0), 0);
     const pendingCount = uploadQueue.filter(item => item.status === 'pending').length;
+    const scanning     = [...folderGroups.values()].some(g => g.status === 'scanning');
 
-    // Count unique folders
-    const folders = new Set();
-    uploadQueue.forEach(item => {
-        if (item.destinationPath && item.destinationPath !== currentPath) {
-            // Get the root folder name from the path
-            const pathParts = item.destinationPath.split('/');
-            if (pathParts.length > 0) {
-                folders.add(pathParts[0]);
+    // Count files + size from ALL lazy folder groups (not yet in uploadQueue)
+    let lazyFileCount = 0, lazySize = 0, hasPendingLazyGroups = false;
+    folderGroups.forEach(g => {
+        if (!g.cancelled) {
+            lazyFileCount += (g.totalCount || g.scanned || 0);
+            lazySize += (g.totalSize || 0);
+            if (g.status === 'pending' && (g.pendingFiles || g.pendingEntries)) {
+                hasPendingLazyGroups = true;
             }
         }
     });
+    const totalFileCount = uploadQueue.length + lazyFileCount;
+    const grandTotalSize = totalSize + lazySize;
+    const sizeStr = scanning ? 'scanning…' : formatFileSize(grandTotalSize);
 
-    let statsText = `(${uploadQueue.length} files, ${formatFileSize(totalSize)})`;
-    if (folders.size > 0) {
-        statsText = `(${uploadQueue.length} files from ${folders.size} folder${folders.size > 1 ? 's' : ''}, ${formatFileSize(totalSize)})`;
-    }
+    let statsText = `(${totalFileCount.toLocaleString()} files, ${sizeStr})`;
+    if (folderGroups.size > 0)
+        statsText = `(${totalFileCount.toLocaleString()} files from ${folderGroups.size} folder${folderGroups.size > 1 ? 's' : ''}, ${sizeStr})`;
+    if (scanning) statsText += ' — scanning…';
 
     if (statsElement) statsElement.textContent = statsText;
-    if (countElement) countElement.textContent = pendingCount;
-    if (uploadBtn) uploadBtn.disabled = pendingCount === 0 || isUploading;
+    if (countElement) countElement.textContent  = pendingCount + lazyFileCount;
+    if (uploadBtn)    uploadBtn.disabled = (pendingCount === 0 && !hasPendingLazyGroups && !scanning) || isUploading;
 
-    // Show progress summary if uploading
-    if (isUploading && progressSummary) {
-        progressSummary.classList.add('show');
-        updateProgressSummary();
-    }
+    // Progress bar driven by setUploadingState() — not here
 
-    // Update queue items
     if (queueElement) {
         queueElement.innerHTML = '';
-        uploadQueue.forEach(item => {
-            const queueItemElement = createQueueItemElement(item);
-            queueElement.appendChild(queueItemElement);
-        });
+        // One row per folder group
+        folderGroups.forEach(group => queueElement.appendChild(_createFolderGroupRow(group)));
+        // Individual rows only for non-folder files
+        uploadQueue.filter(item => !item._groupId).forEach(item => queueElement.appendChild(createQueueItemElement(item)));
     }
 }
+
+function _folderRowContent(group) {
+    const total = group.totalCount || group.scanned;
+    const pct = total > 0 ? Math.round((group.completed / total) * 100) : 0;
+    const sizeStr = group.status === 'scanning'
+        ? 'computing…'
+        : (group.totalSize > 0 ? formatFileSize(group.totalSize) : '0 bytes');
+    const icons = { scanning:'fas fa-circle-notch fa-spin', pending:'fas fa-clock',
+                    uploading:'fas fa-spinner fa-spin', done:'fas fa-check-circle',
+                    error:'fas fa-exclamation-circle' };
+    const labels = {
+        scanning:  `Scanning… ${group.scanned.toLocaleString()} files`,
+        pending:   `Queued — ${total.toLocaleString()} files`,
+        uploading: `${group.completed.toLocaleString()} / ${total.toLocaleString()} (${pct}%)`,
+        done:      `Done — ${total.toLocaleString()} files`,
+        error:     `${group.errors} failed of ${total.toLocaleString()}`
+    };
+    const sc = group.status === 'done' ? 'completed' : group.status;
+    return { total, pct, sizeStr, icons, labels, sc };
+}
+
+function _createFolderGroupRow(group) {
+    const { total, pct, sizeStr, icons, labels, sc } = _folderRowContent(group);
+    const div = document.createElement('div');
+    div.className = `queue-item ${sc}`;
+    div.dataset.groupId = group.id;
+    div.innerHTML = `
+        <div class="file-info">
+            <i class="fas fa-folder" style="color:#f39c12;font-size:20px;margin-right:8px;flex-shrink:0;"></i>
+            <div class="file-info-details">
+                <div class="file-info-name" title="${escapeHtml(group.rootName)}">📁 ${escapeHtml(group.rootName)}</div>
+                <div class="file-info-meta">
+                    <span class="fg-count"><i class="fas fa-file"></i> ${total.toLocaleString()} files</span>
+                    <span class="fg-size"><i class="fas fa-weight-hanging"></i> ${sizeStr}</span>
+                </div>
+            </div>
+        </div>
+        <div class="file-status">
+            ${group.status === 'uploading'
+                ? `<div class="progress-bar-small"><div class="progress-fill-small fg-bar" style="width:${pct}%"></div></div>`
+                : ''}
+            ${group.status === 'scanning'
+                ? `<div class="progress-bar-small"><div class="progress-fill-small" style="width:100%;background:#f39c12;animation:pulse 1s infinite;"></div></div>`
+                : ''}
+            <span class="status-text status-${sc} fg-status">
+                <i class="${icons[group.status] || 'fas fa-folder'}"></i> ${labels[group.status] || group.status}
+            </span>
+            ${(group.status === 'pending' || group.status === 'scanning') ? `
+                <button class="remove-btn" onclick="_cancelFolderGroup('${group.id}')" title="Remove folder">
+                    <i class="fas fa-times"></i>
+                </button>` : ''}
+            ${group.status === 'uploading' ? `
+                <button class="remove-btn cancel-btn fg-stop-btn" data-gid="${group.id}" title="Stop upload">
+                    <i class="fas fa-ban"></i>
+                </button>` : ''}
+        </div>`;
+    return div;
+}
+
+/** Update an existing folder row in-place — never replaces the element, so the Stop button stays clickable */
+function _updateGroupRowInPlace(group) {
+    const el = document.querySelector(`[data-group-id="${group.id}"]`);
+    if (!el) { updateQueueDisplay(); return; }
+
+    const { total, pct, sizeStr, icons, labels, sc } = _folderRowContent(group);
+    el.className = `queue-item ${sc}`;
+
+    const cntEl = el.querySelector('.fg-count');
+    if (cntEl) cntEl.innerHTML = `<i class="fas fa-file"></i> ${total.toLocaleString()} files`;
+
+    const szEl = el.querySelector('.fg-size');
+    if (szEl) szEl.innerHTML = `<i class="fas fa-weight-hanging"></i> ${sizeStr}`;
+
+    const stEl = el.querySelector('.fg-status');
+    if (stEl) {
+        stEl.className = `status-text status-${sc} fg-status`;
+        stEl.innerHTML = `<i class="${icons[group.status] || 'fas fa-folder'}"></i> ${labels[group.status] || group.status}`;
+    }
+
+    const barEl = el.querySelector('.fg-bar');
+    if (barEl) barEl.style.width = pct + '%';
+
+    // Add progress bar when transitioning to uploading
+    if (group.status === 'uploading' && !barEl) {
+        const fs = el.querySelector('.file-status');
+        if (fs) {
+            const wrap = document.createElement('div');
+            wrap.className = 'progress-bar-small';
+            const fill = document.createElement('div');
+            fill.className = 'progress-fill-small fg-bar';
+            fill.style.width = pct + '%';
+            wrap.appendChild(fill);
+            fs.insertBefore(wrap, fs.firstChild);
+        }
+    }
+
+    // Wipe all action buttons then add exactly one for the current status
+    el.querySelectorAll('.remove-btn, .fg-stop-btn').forEach(b => b.remove());
+    const _fs = el.querySelector('.file-status');
+    if (_fs) {
+        if (group.status === 'uploading') {
+            const btn = document.createElement('button');
+            btn.className = 'remove-btn cancel-btn fg-stop-btn';
+            btn.dataset.gid = group.id;
+            btn.title = 'Stop upload';
+            btn.innerHTML = '<i class="fas fa-ban"></i>';
+            _fs.appendChild(btn);
+        } else if (group.status === 'pending' || group.status === 'scanning') {
+            const btn = document.createElement('button');
+            btn.className = 'remove-btn';
+            btn.title = 'Remove folder';
+            btn.onclick = () => _cancelFolderGroup(group.id);
+            btn.innerHTML = '<i class="fas fa-times"></i>';
+            _fs.appendChild(btn);
+        }
+    }
+}
+
 
 function createQueueItemElement(item) {
     const div = document.createElement('div');
@@ -2220,8 +2623,6 @@ function createQueueItemElement(item) {
 
     const statusIcon = statusIcons[item.status] || 'fas fa-question-circle';
     const statusLabel = statusLabels[item.status] || item.status.charAt(0).toUpperCase() + item.status.slice(1);
-
-    console.log(`🏷️ Creating queue item for ${item.name}: status=${item.status}, label=${statusLabel}`);
 
     // Calculate age for display
     const ageInSeconds = Math.floor((Date.now() - (item.createdTime || Date.now())) / 1000);
@@ -2281,18 +2682,27 @@ function updateProgressSummary() {
     const overallPercentageElement = document.getElementById('overallPercentage');
     const overallProgressFill = document.getElementById('overallProgressFill');
 
+    // Grow totalBytesToUpload as _scanSizeChunked fills in group sizes during upload.
+    // IMPORTANT: only include ACTIVE groups (pending/uploading) in the live total.
+    // Including error/done groups from a previous session inflated totalBytesToUpload
+    // on every subsequent upload because the ratchet (live > total) kept bumping it up.
+    if (isUploading) {
+        const live = uploadQueue.reduce((s,i) => s + (i.size||0), 0)
+            + [...folderGroups.values()]
+                .filter(g => g.status === 'pending' || g.status === 'uploading')
+                .reduce((s,g) => s + (g.totalSize||0), 0);
+        if (live > totalBytesToUpload) totalBytesToUpload = live;
+    }
     if (totalBytesToUpload === 0) return;
 
-    const currentTime = Date.now();
-    const elapsedTime = (currentTime - uploadStartTime) / 1000; // seconds
-    const uploadSpeed = elapsedTime > 0 ? totalBytesUploaded / elapsedTime : 0;
-    const remainingBytes = totalBytesToUpload - totalBytesUploaded;
-    const eta = uploadSpeed > 0 ? remainingBytes / uploadSpeed : 0;
-    const overallProgress = (totalBytesUploaded / totalBytesToUpload) * 100;
+    const uploadSpeed    = _rollingSpeed();
+    const remainingBytes = Math.max(0, totalBytesToUpload - totalBytesUploaded);
+    const eta            = uploadSpeed > 0 ? remainingBytes / uploadSpeed : 0;
+    const overallProgress = Math.min(100, (totalBytesUploaded / totalBytesToUpload) * 100);
 
-    if (totalSizeElement) totalSizeElement.textContent = formatFileSize(totalBytesToUpload);
+    if (totalSizeElement)    totalSizeElement.textContent    = formatFileSize(totalBytesToUpload);
     if (uploadedSizeElement) uploadedSizeElement.textContent = formatFileSize(totalBytesUploaded);
-    if (uploadSpeedElement) uploadSpeedElement.textContent = formatFileSize(uploadSpeed) + '/s';
+    if (uploadSpeedElement)  uploadSpeedElement.textContent  = uploadSpeed > 0 ? formatFileSize(uploadSpeed) + '/s' : '...';
     if (etaElement) etaElement.textContent = formatTime(eta);
     if (overallPercentageElement) overallPercentageElement.textContent = Math.round(overallProgress) + '%';
     if (overallProgressFill) overallProgressFill.style.width = overallProgress + '%';
@@ -2452,6 +2862,13 @@ let notificationCount = 0; // Track active notifications
 let notificationTimers = new Map(); // Track timers for consistent timing
 
 function showUploadStatus(message, type = 'info') {
+    // While uploading, only errors pass through — everything else is silent.
+    // This stops per-file toasts from burying the Stop button.
+    if (isUploading && type !== 'error') return;
+
+    // Hard cap: never stack more than 3 at once regardless of source.
+    if (notificationCount >= 3) return;
+
     // Create unique notification element
     const notificationId_current = ++notificationId;
     const notification = document.createElement('div');
@@ -2576,63 +2993,82 @@ function clearNotificationQueue() {
     notificationCount = 0; // Reset count
 }
 
+// Rolling 5-second speed window — accurate for small and large files.
+const _speedSamples = [];
+function _recordSpeedSample(bytes) {
+    const now = Date.now();
+    _speedSamples.push({ t: now, b: bytes });
+    const cutoff = now - 5000;
+    while (_speedSamples.length > 1 && _speedSamples[0].t < cutoff) _speedSamples.shift();
+}
+function _rollingSpeed() {
+    if (_speedSamples.length < 2) return 0;
+    const oldest = _speedSamples[0];
+    const newest = _speedSamples[_speedSamples.length - 1];
+    const dt = (newest.t - oldest.t) / 1000;
+    return dt > 0 ? (newest.b - oldest.b) / dt : 0;
+}
+
 function updateItemProgress(fileId, progress, uploadedBytes = 0) {
     const item = uploadQueue.find(item => item.id === fileId);
     if (item) {
+        // Delta accumulator — O(1), survives auto-clear removing completed items
+        const delta = (uploadedBytes || 0) - (item.uploadedBytes || 0);
+        if (delta > 0) {
+            totalBytesUploaded += delta;
+            _recordSpeedSample(totalBytesUploaded);
+        }
         item.progress = progress;
         item.uploadedBytes = uploadedBytes;
 
-        // Update UI
         const element = document.querySelector(`[data-file-id="${fileId}"]`);
         if (element) {
             const progressBar = element.querySelector('.progress-fill-small');
             const progressText = element.querySelector('.file-info-meta span:nth-child(3)');
-
-            if (progressBar) {
-                progressBar.style.width = progress + '%';
-            }
-            if (progressText) {
-                progressText.innerHTML = `<i class="fas fa-percentage"></i> ${progress}%`;
-            }
+            if (progressBar) progressBar.style.width = progress + '%';
+            if (progressText) progressText.innerHTML = `<i class="fas fa-percentage"></i> ${progress}%`;
         }
 
-        // Update overall progress
         updateOverallProgress();
     }
 }
 
 function updateOverallProgress() {
-    totalBytesUploaded = uploadQueue.reduce((sum, item) => sum + item.uploadedBytes, 0);
+    // totalBytesUploaded is a running accumulator — never re-reduce the queue
     updateProgressSummary();
 }
 
 function updateItemStatus(fileId, status, error = null) {
-    console.log(`🔄 updateItemStatus called: ${fileId} -> ${status}`, error);
     const item = uploadQueue.find(item => item.id === fileId);
-    if (item) {
-        console.log(`✅ Found item for status update: ${item.name}, old status: ${item.status}, new status: ${status}`);
-        item.status = status;
-        item.error = error;
+    if (!item) { return; }
 
-        // Mark completion time for cleanup
-        if (status === 'completed' || status === 'error') {
-            item.completedTime = Date.now();
-            console.log(`⏰ Set completion time for ${item.name}: ${item.completedTime}`);
+    const prevStatus = item.status;
+    item.status = status;
+    item.error  = error;
+    if (status === 'completed' || status === 'error') item.completedTime = Date.now();
 
-            // Auto-remove completed items after 5 seconds
-            // Let startBatchUpload handle cleanup after all files are done.
-            // setTimeout(() => {
-            //     console.log(`🧹 Auto-removing completed item: ${item.name}`);
-            //     removeFromQueue(item.id);
-            // }, 5000);
+    // Keep folder group progress in sync
+    if (item._groupId) {
+        const group = folderGroups.get(item._groupId);
+        if (group) {
+            if (status === 'uploading' && group.status === 'pending') group.status = 'uploading';
+            if (status === 'completed' && prevStatus !== 'completed') group.completed++;
+            if (status === 'error'     && prevStatus !== 'error')     group.errors++;
+            const groupTotal = group.totalCount || group.scanned;
+            if (group.completed + group.errors >= groupTotal && groupTotal > 0)
+                group.status = group.errors > 0 ? 'error' : 'done';
         }
-
-        console.log(`🔄 Calling updateQueueDisplay after status update`);
-        updateQueueDisplay();
-        console.log(`✅ updateQueueDisplay completed for ${item.name}`);
-    } else {
-        console.error(`❌ Item not found for status update: ${fileId}`);
+        // FIX: Folder group items are transient — pushed, uploaded, then spliced out
+        // of uploadQueue in the same loop iteration. They never appear as individual
+        // rows in the UI (updateQueueDisplay filters them out via !item._groupId).
+        // Calling updateQueueDisplay() here caused a full innerHTML wipe + DOM rebuild
+        // on EVERY file — 2 rebuilds × 10 parallel workers = 20 full DOM destructions
+        // per batch. Over 16k files this caused Chrome's DOM GC to crash the renderer.
+        // The group row is managed by _updateGroupRowInPlace (throttled inside the loop).
+        return;
     }
+
+    updateQueueDisplay();
 }
 
 // AJAX function to refresh file table without page reload
@@ -2676,8 +3112,25 @@ async function refreshFileTable() {
 
     } catch (error) {
         console.error('❌ Failed to refresh file table:', error);
+
+        // FIX: Never reload the page while an upload is in progress.
+        // The old code unconditionally called window.location.reload() on any
+        // fetch failure. During a long upload (50k files, 1+ hour) the session
+        // can expire, making /api/files/ return a redirect to /login. The reload
+        // then lands on /login → grey screen and the entire upload is lost.
+        if (isUploading) {
+            console.warn('⚠️ refreshFileTable failed during upload — skipping reload to protect active upload');
+            return;
+        }
+
+        // Also guard against auth redirect specifically (session expired mid-session).
+        const errMsg = error.message || '';
+        if (errMsg.includes('401') || errMsg.includes('403') || errMsg.includes('302')) {
+            console.warn('⚠️ refreshFileTable got auth error — skipping reload');
+            return;
+        }
+
         showUploadStatus('❌ Failed to refresh file list, reloading page...', 'error');
-        // Fallback to page reload if AJAX fails
         setTimeout(() => {
             window.location.reload();
         }, 1000);
@@ -2695,17 +3148,20 @@ function updateFileTableContent(files) {
     // Clear existing content
     tbody.innerHTML = '';
 
-    // Reset all selection state when updating table content
-    selectedItems.clear();
-    const selectAllCheckbox = document.getElementById('selectAll');
-    if (selectAllCheckbox) {
-        selectAllCheckbox.checked = false;
-        selectAllCheckbox.indeterminate = false;
+    // Only wipe selection on actual navigation, NOT background SSE refresh
+    const _incomingPath = currentPath || '';
+    const _isNavigating = (typeof _lastRenderedPath !== 'undefined') && _lastRenderedPath !== _incomingPath;
+    if (_isNavigating || typeof _lastRenderedPath === 'undefined') {
+        selectedItems.clear();
+        const selectAllCheckbox = document.getElementById('selectAll');
+        if (selectAllCheckbox) {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = false;
+        }
+        const bulkActions = document.getElementById('bulkActions');
+        if (bulkActions) bulkActions.classList.remove('show');
     }
-    const bulkActions = document.getElementById('bulkActions');
-    if (bulkActions) {
-        bulkActions.classList.remove('show');
-    }
+    _lastRenderedPath = _incomingPath;
 
     // Use currentPath from navigation state, not CURRENT_PATH from page load
     const pathToUse = currentPath || '';
@@ -2888,7 +3344,7 @@ function updateFileTableContent(files) {
                            data-path="${itemPath}" 
                            data-name="${file.name}" 
                            data-is-dir="${file.is_dir || file.type === 'dir' ? 'true' : 'false'}" 
-                           onchange="updateSelection()">
+                           onchange="updateSelection()" ${selectedItems.has(itemPath) ? 'checked' : ''}>
                 ` : ''}
             </td>
             <td class="name-cell">
@@ -3023,6 +3479,473 @@ function formatTimestamp(timestamp) {
     }
 }
 
+// ── Overwrite decision cache ──────────────────────────────────────────────────
+// Stores per-folder-upload user decisions so we don't re-prompt for every file.
+// 'overwrite' | 'skip' | 'ask' (default)
+const _overwriteDecisions = new Map(); // groupId → 'overwrite' | 'skip' | 'ask'
+
+// ── Conflict Dialog Helpers ──────────────────────────────────────────────────
+
+/**
+ * Creates a themed conflict-dialog overlay that matches the blue app UI.
+ * Returns a Promise that resolves with the chosen action string.
+ *
+ * @param {object} opts
+ *   icon      – FontAwesome class string (e.g. 'fa-file')
+ *   title     – Dialog heading
+ *   body      – HTML string shown in the body area
+ *   buttons   – Array of { id, label, style } objects
+ */
+function _buildConflictDialog(opts) {
+    return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = [
+            'position:fixed', 'inset:0',
+            'background:rgba(0,0,0,0.55)',
+            'backdrop-filter:blur(4px)',
+            '-webkit-backdrop-filter:blur(4px)',
+            'z-index:9999',
+            'display:flex', 'align-items:center', 'justify-content:center'
+        ].join(';');
+
+        const btnHtml = opts.buttons.map(b =>
+            `<button data-action="${b.id}" style="${b.style}">${b.label}</button>`
+        ).join('');
+
+        overlay.innerHTML = `
+        <div style="
+            background:rgba(255,255,255,0.97);
+            border-radius:15px;
+            width:90%;
+            max-width:440px;
+            box-shadow:0 25px 50px rgba(0,0,0,0.35);
+            overflow:hidden;
+            font-family:inherit;
+        ">
+            <!-- Header matching app nav gradient -->
+            <div style="
+                background:linear-gradient(135deg,#1e3c72 0%,#2a5298 100%);
+                padding:18px 22px;
+                display:flex;
+                align-items:center;
+                gap:12px;
+                color:#fff;
+            ">
+                <i class="fas ${opts.icon}" style="font-size:1.25em;opacity:0.9"></i>
+                <span style="font-size:1.05em;font-weight:600;letter-spacing:0.01em">${opts.title}</span>
+            </div>
+            <!-- Body -->
+            <div style="padding:20px 22px;color:#2c3e50;font-size:0.95em;line-height:1.5">
+                ${opts.body}
+            </div>
+            <!-- Buttons -->
+            <div style="
+                padding:0 22px 20px;
+                display:flex;
+                flex-direction:column;
+                gap:9px;
+            ">
+                ${btnHtml}
+            </div>
+        </div>`;
+
+        document.body.appendChild(overlay);
+
+        const SHARED_BTN = [
+            'width:100%', 'padding:10px 16px',
+            'border:none', 'border-radius:8px',
+            'font-size:0.92em', 'font-weight:600',
+            'cursor:pointer', 'text-align:left',
+            'transition:filter .15s',
+            'display:flex', 'align-items:center', 'gap:9px'
+        ].join(';');
+
+        overlay.querySelectorAll('[data-action]').forEach(btn => {
+            btn.style.cssText += ';' + SHARED_BTN;
+            btn.addEventListener('mouseenter', () => btn.style.filter = 'brightness(0.9)');
+            btn.addEventListener('mouseleave', () => btn.style.filter = '');
+            btn.addEventListener('click', () => { overlay.remove(); resolve(btn.dataset.action); });
+        });
+    });
+}
+
+/**
+ * Prompt the user when a file already exists on the server.
+ * Returns one of: 'overwrite-all' | 'overwrite-one' | 'skip-all' | 'skip-one'
+ */
+async function _promptOverwrite(filename) {
+    const safeName = filename.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return _buildConflictDialog({
+        icon: 'fa-file-alt',
+        title: 'File Already Exists',
+        body: `<div style="margin-bottom:12px">
+                   <span style="background:#ebf5fb;border:1px solid #aed6f1;border-radius:6px;
+                         padding:5px 10px;font-family:monospace;word-break:break-all;
+                         display:inline-block;max-width:100%;color:#1a5276">
+                       ${safeName}
+                   </span>
+               </div>
+               <div style="color:#566573">
+                   A file with this name already exists on the server.
+                   Choose how to handle this and any further conflicts.
+               </div>`,
+        buttons: [
+            {
+                id: 'overwrite-all',
+                label: '<i class="fas fa-sync-alt"></i> Overwrite all conflicts',
+                style: 'background:linear-gradient(135deg,#3498db,#2980b9);color:#fff'
+            },
+            {
+                id: 'overwrite-one',
+                label: '<i class="fas fa-file-upload"></i> Overwrite this file only',
+                style: 'background:linear-gradient(135deg,#5dade2,#3498db);color:#fff'
+            },
+            {
+                id: 'rename-all',
+                label: '<i class="fas fa-copy"></i> Keep both — auto-rename all conflicts',
+                style: 'background:linear-gradient(135deg,#27ae60,#229954);color:#fff'
+            },
+            {
+                id: 'rename-one',
+                label: '<i class="fas fa-i-cursor"></i> Keep both — rename this file only',
+                style: 'background:linear-gradient(135deg,#2ecc71,#27ae60);color:#fff'
+            },
+            {
+                id: 'skip-all',
+                label: '<i class="fas fa-forward"></i> Skip all conflicts',
+                style: 'background:linear-gradient(135deg,#f39c12,#e67e22);color:#fff'
+            },
+            {
+                id: 'skip-one',
+                label: '<i class="fas fa-step-forward"></i> Skip this file only',
+                style: 'background:linear-gradient(135deg,#7f8c8d,#636e72);color:#fff'
+            }
+        ]
+    });
+}
+
+/**
+ * Prompt the user when a folder being uploaded already exists on the server.
+ * Returns one of: 'merge' | 'rename' | 'skip' | 'cancel'
+ */
+async function _promptFolderConflict(folderName) {
+    const safeName = folderName.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return _buildConflictDialog({
+        icon: 'fa-folder-open',
+        title: 'Folder Already Exists',
+        body: `<div style="margin-bottom:12px">
+                   <span style="background:#eaf4fb;border:1px solid #aed6f1;border-radius:6px;
+                         padding:5px 10px;font-family:monospace;word-break:break-all;
+                         display:inline-block;max-width:100%;color:#1a5276">
+                       <i class="fas fa-folder" style="color:#f39c12;margin-right:6px"></i>${safeName}
+                   </span>
+               </div>
+               <div style="color:#566573">
+                   A folder named <strong style="color:#2c3e50">${safeName}</strong> already exists
+                   at this location. What would you like to do?
+               </div>`,
+        buttons: [
+            {
+                id: 'merge',
+                label: '<i class="fas fa-code-branch"></i> Merge — upload into existing folder',
+                style: 'background:linear-gradient(135deg,#3498db,#2980b9);color:#fff'
+            },
+            {
+                id: 'rename',
+                label: '<i class="fas fa-copy"></i> Keep both — upload as a new renamed folder',
+                style: 'background:linear-gradient(135deg,#27ae60,#229954);color:#fff'
+            },
+            {
+                id: 'skip',
+                label: '<i class="fas fa-forward"></i> Skip this folder entirely',
+                style: 'background:linear-gradient(135deg,#f39c12,#e67e22);color:#fff'
+            },
+            {
+                id: 'cancel',
+                label: '<i class="fas fa-times"></i> Cancel upload',
+                style: 'background:linear-gradient(135deg,#e74c3c,#c0392b);color:#fff'
+            }
+        ]
+    });
+}
+
+/**
+ * Finds the first non-existing name for a file/folder by appending (1), (2), …
+ * @param {string} destDir  - destination directory path (empty = root)
+ * @param {string} name     - original file or folder name
+ * @returns {Promise<string>} - a free name like "photo (2).jpg" or "myfolder (1)"
+ */
+async function _findFreeName(destDir, name) {
+    const dotIdx = name.lastIndexOf('.');
+    const ext  = dotIdx > 0 ? name.slice(dotIdx)  : '';
+    const base = dotIdx > 0 ? name.slice(0, dotIdx) : name;
+    for (let i = 1; i <= 999; i++) {
+        const candidate = `${base} (${i})${ext}`;
+        const checkPath = destDir ? `${destDir}/${candidate}` : candidate;
+        try {
+            const resp = await fetch(`/api/exists?path=${encodeURIComponent(checkPath)}`);
+            if (resp.ok) {
+                const data = await resp.json();
+                if (!data.exists) return candidate;
+            } else {
+                return candidate; // server error — use this name and let upload handle it
+            }
+        } catch (e) {
+            return candidate; // network error — proceed optimistically
+        }
+    }
+    return `${base} (${Date.now()})${ext}`; // last-resort fallback
+}
+
+/**
+ * Check and interactively resolve conflicts before a move or copy operation.
+ * Calls /api/check_conflicts, then if any conflicts exist shows a themed
+ * batch dialog listing them. Returns a resolution map { filename: 'overwrite'|'rename'|'skip' }
+ * or null if the user cancelled entirely.
+ *
+ * @param {string[]} paths       - source paths being moved/copied
+ * @param {string}   destination - destination directory path
+ * @param {string}   action      - 'move' or 'copy'
+ */
+async function _promptMoveOrCopyConflicts(paths, destination, action) {
+    // Step 1: ask the server which items already exist at the destination
+    let conflicts = [];
+    try {
+        const resp = await fetch('/api/check_conflicts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths, destination })
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            conflicts = data.conflicts || [];
+        }
+    } catch (e) {
+        console.warn('⚠️ Conflict check failed, proceeding without it:', e.message);
+        return {};  // empty map → backend default behaviour
+    }
+
+    if (conflicts.length === 0) return {};  // no conflicts, proceed normally
+
+    // Step 2: build list HTML
+    const listHtml = conflicts.map(c =>
+        `<li style="padding:3px 0;display:flex;align-items:center;gap:7px">
+            <i class="fas ${c.is_dir ? 'fa-folder' : 'fa-file-alt'}"
+               style="color:${c.is_dir ? '#f39c12' : '#3498db'};font-size:0.9em;flex-shrink:0"></i>
+            <span style="font-family:monospace;word-break:break-all">${c.name.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span>
+         </li>`
+    ).join('');
+
+    const destDisplay = destination || 'Root';
+    const verbNoun = action === 'move' ? 'Moving' : 'Copying';
+
+    const choice = await _buildConflictDialog({
+        icon: action === 'move' ? 'fa-arrows-alt' : 'fa-copy',
+        title: `${conflicts.length} Conflict${conflicts.length > 1 ? 's' : ''} at Destination`,
+        body: `<div style="margin-bottom:10px;color:#566573">
+                   ${verbNoun} to <strong style="color:#2c3e50">${destDisplay.replace(/</g,'&lt;')}</strong> —
+                   the following item${conflicts.length > 1 ? 's' : ''} already exist there:
+               </div>
+               <ul style="margin:0 0 12px 0;padding:0 0 0 4px;list-style:none;
+                           max-height:150px;overflow-y:auto;
+                           background:#f8fafc;border:1px solid #d5e8f5;border-radius:6px;padding:8px 12px">
+                   ${listHtml}
+               </ul>
+               <div style="color:#7f8c8d;font-size:0.88em">Choose how to handle all conflicts at once.</div>`,
+        buttons: [
+            {
+                id: 'overwrite',
+                label: `<i class="fas fa-sync-alt"></i> Overwrite existing items`,
+                style: 'background:linear-gradient(135deg,#3498db,#2980b9);color:#fff'
+            },
+            {
+                id: 'rename',
+                label: `<i class="fas fa-copy"></i> Keep both — auto-rename conflicting items`,
+                style: 'background:linear-gradient(135deg,#27ae60,#229954);color:#fff'
+            },
+            {
+                id: 'skip',
+                label: `<i class="fas fa-forward"></i> Skip conflicting items`,
+                style: 'background:linear-gradient(135deg,#f39c12,#e67e22);color:#fff'
+            },
+            {
+                id: 'cancel',
+                label: `<i class="fas fa-times"></i> Cancel`,
+                style: 'background:linear-gradient(135deg,#e74c3c,#c0392b);color:#fff'
+            }
+        ]
+    });
+
+    if (choice === 'cancel') return null;  // signal: abort entirely
+
+    // Build resolution map: { filename -> choice } for every conflict
+    const resolutions = {};
+    for (const c of conflicts) {
+        resolutions[c.name] = choice;  // same resolution for all
+    }
+    return resolutions;
+}
+
+// ── Live folder worker pool ───────────────────────────────────────────────────
+let _activeFolderWorkers = 0;
+let _activeFileWorkers = 0;
+
+function _spawnFileWorkersIfNeeded() {
+    if (!isUploading || !PARALLEL_UPLOAD_CONFIG.enableParallelUploads) return;
+    const max = PARALLEL_UPLOAD_CONFIG.maxConcurrentUploads;
+    const pending = uploadQueue.filter(q => q.status === 'pending' && !cancelledUploads.has(q.id)).length;
+    const toSpawn = Math.min(pending, max - _activeFileWorkers - PARALLEL_UPLOAD_CONFIG.activeUploads.size);
+    for (let i = 0; i < toSpawn; i++) {
+        _activeFileWorkers++;
+        _runFileWorker().finally(() => { _activeFileWorkers--; });
+    }
+}
+
+async function _runFileWorker() {
+    while (isUploading) {
+        const item = uploadQueue.find(q => q.status === 'pending' && !cancelledUploads.has(q.id));
+        if (!item) break;
+        item.status = 'uploading';
+        PARALLEL_UPLOAD_CONFIG.activeUploads.add(item.id);
+        try {
+            updateItemStatus(item.id, 'uploading');
+            await uploadSingleFile(item);
+            const currentItem = uploadQueue.find(q => q.id === item.id);
+            if (!(currentItem && currentItem.status === 'assembling')) {
+                updateItemStatus(item.id, 'completed');
+            }
+            PARALLEL_UPLOAD_CONFIG.activeUploads.delete(item.id);
+            PARALLEL_UPLOAD_CONFIG.completedUploads.add(item.id);
+            cancelledUploads.delete(item.id);
+        } catch (error) {
+            console.error(`❌ Upload failed: ${item.name}`, error.message);
+            updateItemStatus(item.id, 'error', error.message);
+            PARALLEL_UPLOAD_CONFIG.activeUploads.delete(item.id);
+            cancelledUploads.delete(item.id);
+            showUploadStatus(`❌ Failed: "${item.name}" - ${error.message}`, 'error');
+        }
+    }
+}
+
+function _spawnFolderWorkersIfNeeded() {
+    if (!isUploading) return;
+    const max = PARALLEL_UPLOAD_CONFIG.enableParallelUploads
+        ? PARALLEL_UPLOAD_CONFIG.maxConcurrentUploads : 1;
+    const pending = [...folderGroups.values()].filter(
+        g => g.status === 'pending' && !g.cancelled && (g.pendingFiles || g.pendingEntries)
+    ).length;
+    const toSpawn = Math.min(pending, max - _activeFolderWorkers);
+    for (let i = 0; i < toSpawn; i++) {
+        _activeFolderWorkers++;
+        _runFolderWorker().finally(() => { _activeFolderWorkers--; });
+    }
+}
+
+async function _runFolderWorker() {
+    while (isUploading) {
+        const group = [...folderGroups.values()].find(
+            g => g.status === 'pending' && !g.cancelled && (g.pendingFiles || g.pendingEntries)
+        );
+        if (!group) break;
+        // Claim immediately so no other worker grabs same group
+        group.status = 'uploading';
+        _overwriteDecisions.set(group.id, 'ask'); // Reset overwrite decision per folder
+
+        // ── Folder conflict pre-check ──────────────────────────────────────────
+        // Check if the destination folder already exists on the server.
+        // We do this BEFORE any upload so the user can decide up-front.
+        try {
+            const destPath = group.basePath
+                ? `${group.basePath}/${group.rootName}`
+                : group.rootName;
+            const checkResp = await fetch(`/api/exists?path=${encodeURIComponent(destPath)}`);
+            if (checkResp.ok) {
+                const checkData = await checkResp.json();
+                if (checkData.exists && checkData.is_dir) {
+                    _updateGroupRowInPlace(group); // show 'uploading' indicator while dialog shown
+                    const choice = await _promptFolderConflict(group.rootName);
+                    if (choice === 'cancel') {
+                        // Cancel the entire upload session
+                        group.cancelled = true;
+                        group.status = 'cancelled';
+                        group._running = false;
+                        _updateGroupRowInPlace(group);
+                        showUploadStatus(`⛔ Upload cancelled — "${group.rootName}" already exists`, 'info');
+                        continue;  // move to next group in while loop (will find no pending ones if cancelled)
+                    } else if (choice === 'skip') {
+                        group.cancelled = true;
+                        group.status = 'skipped';
+                        group._running = false;
+                        _updateGroupRowInPlace(group);
+                        showUploadStatus(`⏭️ Skipped "${group.rootName}" — folder already exists`, 'info');
+                        continue;
+                    }
+                    // 'merge' → fall through and upload normally (files will get their own 409 prompts)
+                    // Leave as 'ask' so existing file conflicts inside the folder still prompt individually
+
+                    if (choice === 'rename') {
+                        // Find a free folder name, then reroute all files into it
+                        const freeFolder = await _findFreeName(group.basePath || '', group.rootName);
+                        group.rootNameOverride = freeFolder;
+                        group.rootName = freeFolder; // update display name in queue UI
+                        _updateGroupRowInPlace(group);
+                        showUploadStatus(`📁 Uploading as "${freeFolder}"…`, 'info');
+                    }
+                }
+            }
+        } catch (existErr) {
+            // Non-fatal: if the check fails (network issue, old server), proceed normally
+            console.warn('⚠️ Folder existence check failed, proceeding:', existErr.message);
+        }
+        // ──────────────────────────────────────────────────────────────────────
+
+        showUploadStatus(`📂 "${group.rootName}" — ${(group.totalCount || group.scanned).toLocaleString()} files…`, 'info');
+        await _uploadFolderGroupLazy(group);
+        // Guarantee status is finalized — if _uploadFolderGroupLazy returned early
+        // (e.g. _running guard tripped), group.status stays 'uploading' and the
+        // stop button remains visible forever.
+        if (group.status === 'uploading') {
+            group.status = group.errors > 0 ? 'error' : 'done';
+            group._running = false;
+            _updateGroupRowInPlace(group);
+        }
+    }
+}
+
+// Wait until workers are idle AND no scanning/pending groups remain
+function _waitForFolderWorkers() {
+    _spawnFolderWorkersIfNeeded();
+    return new Promise(resolve => {
+        const check = setInterval(() => {
+            if (!isUploading) { clearInterval(check); resolve(); return; }
+            // Still active if: workers running OR groups still scanning/pending
+            const stillBusy = _activeFolderWorkers > 0
+                || [...folderGroups.values()].some(g =>
+                    !g.cancelled && (g.status === 'scanning' || g.status === 'pending'));
+            if (!stillBusy) { clearInterval(check); resolve(); }
+        }, 100);
+    });
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Single source of truth for progress bar visibility ───────────────────────
+let _progressHideTimer = null;
+function setUploadingState(active) {
+    isUploading = active;
+    if (!active) _lastResumeTime = 0; // Reset cooldown so next upload session can resume freely
+    const ps = document.getElementById('uploadProgressSummary');
+    if (!ps) return;
+    if (active) {
+        clearTimeout(_progressHideTimer);
+        ps.classList.add('show');
+        updateProgressSummary();
+    } else {
+        _progressHideTimer = setTimeout(() => {
+            if (!isUploading) ps.classList.remove('show');
+        }, 2500);
+    }
+}
+
 async function startBatchUpload() {
     console.log('🚀 startBatchUpload called, isUploading:', isUploading);
 
@@ -3032,21 +3955,44 @@ async function startBatchUpload() {
     }
 
     const pendingFiles = uploadQueue.filter(item => item.status === 'pending');
-    console.log('📋 Pending files count:', pendingFiles.length);
-    console.log('📋 Total queue size:', uploadQueue.length);
+    // Lazy folder groups: have fileList/pendingFiles/pendingEntries but nothing in uploadQueue yet
+    const pendingLazyGroups = [...folderGroups.values()].filter(
+        g => g.status === 'pending' && (g.pendingFiles || g.pendingEntries)
+    );
+    console.log('📋 Pending files:', pendingFiles.length, '| Lazy groups:', pendingLazyGroups.length);
 
-    if (pendingFiles.length === 0) {
+    if (pendingFiles.length === 0 && pendingLazyGroups.length === 0) {
         console.log('❌ No files to upload');
         showUploadStatus('❌ No files to upload', 'error');
         return;
     }
 
     console.log('✅ Starting upload process...');
-    isUploading = true;
+    setUploadingState(true);
+    _activeFolderWorkers = 0;
+    _activeFileWorkers = 0;
+    _overwriteDecisions.clear();
     currentUploadIndex = 0;
     uploadStartTime = Date.now();
-    totalBytesToUpload = pendingFiles.reduce((sum, item) => sum + item.size, 0);
+    _lastUploadActivity = Date.now(); // FIX: seed heartbeat so stall detector doesn't fire immediately
+
+    // Start session keepalive so long uploads don't expire the server session
+    _startSessionKeepAlive();
+
+    // FIX: Reset SSE reconnect counters so a prior disconnect doesn't permanently
+    // block reconnection during this upload session.
+    reconnectAttempts = 0;
+    sseFailedPermanently = false;
+    // If SSE is dead, revive it now before upload begins
+    if (!storageEventSource || storageEventSource.readyState === EventSource.CLOSED) {
+        console.log('📡 Reviving SSE connection before upload starts...');
+        connectToStorageStream();
+    }
+    totalBytesToUpload = pendingFiles.reduce((sum, item) => sum + item.size, 0)
+        + pendingLazyGroups.reduce((s, g) => s + (g.totalSize || 0), 0);
     totalBytesUploaded = 0;
+    _speedSamples.length = 0; // reset rolling speed window
+    lazyBytesUploaded = 0;
 
     // Reset parallel upload tracking
     PARALLEL_UPLOAD_CONFIG.activeUploads.clear();
@@ -3073,14 +4019,26 @@ async function startBatchUpload() {
         const concurrentInfo = PARALLEL_UPLOAD_CONFIG.enableParallelUploads ? ` (${PARALLEL_UPLOAD_CONFIG.maxConcurrentUploads} concurrent)` : '';
         showUploadStatus(`🚀 Starting ${uploadMode} upload of ${pendingFiles.length} files${concurrentInfo}...`, 'info');
 
-        if (PARALLEL_UPLOAD_CONFIG.enableParallelUploads) {
-            await startParallelUploads(pendingFiles);
-        } else {
-            await startSequentialUploads(pendingFiles);
+        // 1. Upload regular queued files
+        if (pendingFiles.length > 0) {
+            if (PARALLEL_UPLOAD_CONFIG.enableParallelUploads) {
+                await startParallelUploads(pendingFiles);
+            } else {
+                await startSequentialUploads(pendingFiles);
+            }
         }
 
-        const completedCount = uploadQueue.filter(item => item.status === 'completed').length;
-        const errorCount = uploadQueue.filter(item => item.status === 'error').length;
+        // 2. Upload lazy folder groups — live worker pool.
+        //    Workers grab the next 'pending' group from folderGroups on each iteration,
+        //    so folders added DURING upload are picked up without restarting.
+        if (pendingLazyGroups.length > 0 || [...folderGroups.values()].some(g => g.status === 'pending')) {
+            await _waitForFolderWorkers();
+        }
+
+        const completedCount = uploadQueue.filter(item => item.status === 'completed').length
+            + [...folderGroups.values()].reduce((s, g) => s + g.completed, 0);
+        const errorCount = uploadQueue.filter(item => item.status === 'error').length
+            + [...folderGroups.values()].reduce((s, g) => s + g.errors, 0);
         const cancelledCount = uploadQueue.filter(item => item.status === 'cancelled').length;
 
         // Ensure overall progress is set to 100% after all uploads
@@ -3119,9 +4077,16 @@ async function startBatchUpload() {
                 removeFromQueue(item.id);
             });
 
+            // Clear completed folder groups too
+            folderGroups.forEach((group, id) => {
+                if (group.status === 'done' || group.status === 'error') folderGroups.delete(id);
+            });
+
             console.log(`🧹 Auto-cleared ${itemsToRemove.length} finished items from queue`);
 
-            if (uploadQueue.length === 0) {
+            updateQueueDisplay(); // Re-render so cleared folder rows actually disappear
+
+            if (uploadQueue.length === 0 && folderGroups.size === 0) {
                 showUploadStatus('✨ Upload queue cleared automatically', 'success');
             } else {
                 const remainingPending = uploadQueue.filter(item => item.status === 'pending').length;
@@ -3133,7 +4098,7 @@ async function startBatchUpload() {
         console.error('❌ Batch upload error:', error);
         showUploadStatus(`❌ Batch upload failed: ${error.message}`, 'error');
     } finally {
-        isUploading = false;
+        setUploadingState(false);
         PARALLEL_UPLOAD_CONFIG.activeUploads.clear();
         PARALLEL_UPLOAD_CONFIG.completedUploads.clear();
 
@@ -3148,85 +4113,173 @@ async function startBatchUpload() {
     }
 }
 
+// =============================================================================
+// FREEZE / RESUME PROTECTION
+// When the browser freezes a background tab, the upload async loop pauses.
+// These functions detect a stall when the tab becomes visible again and restart
+// any upload group whose loop exited without finishing.
+// =============================================================================
+
+/**
+ * Ping /admin/upload_status every 60 s while uploading.
+ * Flask's SESSION_REFRESH_EACH_REQUEST=True counts this as activity, so the
+ * session cookie stays valid for the full 1-hour SESSION_LIFETIME even when
+ * the tab is frozen and no upload POSTs are being sent.
+ */
+function _startSessionKeepAlive() {
+    if (_sessionKeepAliveInterval) return;
+    _sessionKeepAliveInterval = setInterval(async () => {
+        if (!isUploading) {
+            clearInterval(_sessionKeepAliveInterval);
+            _sessionKeepAliveInterval = null;
+            return;
+        }
+        try {
+            await fetch('/admin/upload_status', { method: 'GET', cache: 'no-cache',
+                headers: { 'Cache-Control': 'no-cache' } });
+            
+        } catch (e) {
+            console.warn('⚠️ Session keepalive failed (non-fatal):', e.message);
+        }
+    }, 30000); // Every 30s — browsers throttle background tabs; 30s gives safety margin
+}
+
+/**
+ * If any folder group is in 'uploading' status but its loop has exited
+ * (group._running === false) and it still has files to process, restart it
+ * from group._currentIndex (the last saved position before freeze).
+ */
+function _resumeStalledUploads() {
+    if (!isUploading) return 0;
+
+    // Cooldown: if we already triggered a resume recently, skip.
+    // This is the key fix for duplicate-loop explosion: each tab-return fired
+    // _resumeStalledUploads, force-reset _running for every group, and spawned
+    // a second concurrent loop per group.  With 10 groups x N duplicate loops
+    // all uploading in parallel, Waitress ran out of threads and the server died.
+    const now = Date.now();
+    const msSinceLastResume = now - _lastResumeTime;
+    if (msSinceLastResume < 20000) {
+        console.log(`⏭️ Resume skipped (cooldown ${Math.round(msSinceLastResume/1000)}s < 20s)`);
+        return 0;
+    }
+    _lastResumeTime = now;
+
+    const stalledMs = now - (_lastUploadActivity || 0);
+    let resumed = 0;
+    for (const [, group] of folderGroups) {
+        if (group.status !== 'uploading' || group.cancelled || !group.pendingFiles) continue;
+
+        if (group._running) {
+            if (stalledMs > 10000) {
+                console.warn(`🔄 Force-resetting frozen group "${group.rootName}" (_running=true but stalled ${Math.round(stalledMs/1000)}s)`);
+                group._running = false;
+            } else {
+                continue;
+            }
+        }
+
+        // Stagger restarts: launch each group 300ms apart to avoid a thundering
+        // herd of simultaneous connections that would exhaust Waitress threads.
+        const delay = resumed * 300;
+        const capturedGroup = group;
+        setTimeout(() => {
+            // Re-check: the group might have already restarted naturally
+            if (capturedGroup._running || capturedGroup.cancelled || !capturedGroup.pendingFiles) return;
+            // Find first non-null slot from _currentIndex (null = already uploaded)
+            let resumeFrom = capturedGroup._currentIndex ?? capturedGroup.completed;
+            const src = capturedGroup.pendingFiles;
+            if (src) {
+                while (resumeFrom < src.length && src[resumeFrom] === null) resumeFrom++;
+            }
+            console.warn(`🔄 Resuming "${capturedGroup.rootName}" from index ${resumeFrom}/${capturedGroup.totalCount} (delay ${delay}ms)`);
+            _uploadFolderGroupLazy(capturedGroup, resumeFrom).catch(err => {
+                console.error(`❌ Resume failed for "${capturedGroup.rootName}":`, err);
+            });
+        }, delay);
+        resumed++;
+    }
+    if (resumed > 0) {
+        showUploadStatus(`▶️ Resuming ${resumed} upload(s) after tab woke up...`, 'info');
+    }
+    return resumed;
+}
+
+// Page Lifecycle API — fires when a frozen tab is unfrozen
+window.addEventListener('resume', () => {
+    if (!isUploading) return;
+    console.log('▶️ Page resumed from frozen state — checking for stalled uploads');
+    // Give the browser 500 ms to settle promise queues before we intervene
+    setTimeout(() => {
+        const stalledMs = Date.now() - _lastUploadActivity;
+        if (stalledMs > 5000) {
+            console.warn(`⚠️ Upload stalled for ${Math.round(stalledMs / 1000)}s — attempting resume`);
+            _resumeStalledUploads();
+        }
+    }, 500);
+});
+
+// visibilitychange — fires every time the tab becomes visible (including after freeze)
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden || !isUploading) return;
+    const stalledMs = Date.now() - _lastUploadActivity;
+    // If no file completed in the last 10 seconds and we're supposed to be uploading,
+    // the loop likely froze.
+    if (stalledMs > 10000) {
+        console.warn(`⚠️ Tab became visible — upload stalled for ${Math.round(stalledMs / 1000)}s`);
+        _resumeStalledUploads();
+    }
+});
+
 // Parallel upload implementation
 async function startParallelUploads(pendingFiles) {
     console.log(`⚡ Starting parallel uploads with max concurrency: ${PARALLEL_UPLOAD_CONFIG.maxConcurrentUploads}`);
 
-    const fileQueue = [...pendingFiles]; // Copy array to avoid mutations
-    let completedCount = 0;
-    let errorCount = 0;
-
-    // Create upload worker function
+    // Upload worker — reads live from uploadQueue so files added mid-upload are picked up.
+    // Workers exit only when there's nothing left AND no other worker is about to claim something.
     const uploadWorker = async () => {
-        while (fileQueue.length > 0) {
-            const item = fileQueue.shift();
-            if (!item || cancelledUploads.has(item.id)) continue;
+        while (isUploading) {
+            // Grab next unclaimed pending item directly from the live queue
+            const item = uploadQueue.find(q => q.status === 'pending' && !cancelledUploads.has(q.id));
+            if (!item) break;
 
-            console.log(`⚡ Worker starting upload: ${item.name} (${completedCount + errorCount + 1}/${pendingFiles.length})`);
+            // Claim it immediately to prevent another worker grabbing the same item
+            item.status = 'uploading';
+            PARALLEL_UPLOAD_CONFIG.activeUploads.add(item.id);
 
             try {
-                // Update status to uploading
                 updateItemStatus(item.id, 'uploading');
-                PARALLEL_UPLOAD_CONFIG.activeUploads.add(item.id);
-
-                showUploadStatus(
-                    `⬆️ Uploading "${item.name}" (${PARALLEL_UPLOAD_CONFIG.activeUploads.size} active, ${completedCount}/${pendingFiles.length} completed)`,
-                    'info'
-                );
-
                 await uploadSingleFile(item);
 
-                // Check if this item is now assembling (chunked upload with assembly queued)
-                const currentItem = uploadQueue.find(queueItem => queueItem.id === item.id);
-                if (currentItem && currentItem.status === 'assembling') {
-                    // Don't overwrite assembling status - keep it as is
-                    console.log(`🔄 Upload completed but keeping assembling status for ${item.name}`);
-                } else {
-                    // Regular completion for non-chunked or non-assembly uploads
+                const currentItem = uploadQueue.find(q => q.id === item.id);
+                if (!(currentItem && currentItem.status === 'assembling')) {
                     updateItemStatus(item.id, 'completed');
                 }
 
                 PARALLEL_UPLOAD_CONFIG.activeUploads.delete(item.id);
                 PARALLEL_UPLOAD_CONFIG.completedUploads.add(item.id);
-                completedCount++;
                 cancelledUploads.delete(item.id);
-
-                console.log(`✅ Parallel upload completed: ${item.name} (${completedCount}/${pendingFiles.length})`);
-
-                showUploadStatus(
-                    `✅ "${item.name}" uploaded (${completedCount}/${pendingFiles.length} completed)`,
-                    'success'
-                );
 
             } catch (error) {
-                console.error(`❌ Parallel upload failed for ${item.name}:`, error);
+                console.error(`❌ Upload failed: ${item.name}`, error.message);
                 updateItemStatus(item.id, 'error', error.message);
                 PARALLEL_UPLOAD_CONFIG.activeUploads.delete(item.id);
-                errorCount++;
                 cancelledUploads.delete(item.id);
-
-                showUploadStatus(
-                    `❌ Failed: "${item.name}" - ${error.message} (${errorCount} errors)`,
-                    'error'
-                );
+                showUploadStatus(`❌ Failed: "${item.name}" - ${error.message}`, 'error');
             }
         }
     };
 
-    // Start multiple workers based on concurrency setting
-    const workers = [];
     const workerCount = Math.min(PARALLEL_UPLOAD_CONFIG.maxConcurrentUploads, pendingFiles.length);
-
     console.log(`⚡ Starting ${workerCount} upload workers`);
 
+    const workers = [];
     for (let i = 0; i < workerCount; i++) {
         workers.push(uploadWorker());
     }
 
-    // Wait for all workers to complete
     await Promise.all(workers);
-
-    console.log(`⚡ All parallel upload workers completed. Success: ${completedCount}, Errors: ${errorCount}`);
+    console.log(`⚡ All parallel upload workers completed`);
 }
 
 // Sequential upload implementation (original behavior)
@@ -3243,11 +4296,6 @@ async function startSequentialUploads(pendingFiles) {
         updateItemStatus(item.id, 'uploading');
         currentUploadingFile = item.id;
 
-        showUploadStatus(
-            `⬆️ Uploading "${item.name}" (${currentUploadIndex}/${pendingFiles.length})`,
-            'info'
-        );
-
         try {
             console.log(`📤 Starting upload for: ${item.name}`);
             await uploadSingleFile(item);
@@ -3255,11 +4303,6 @@ async function startSequentialUploads(pendingFiles) {
             updateItemStatus(item.id, 'completed');
             currentUploadingFile = null;
             cancelledUploads.delete(item.id);
-
-            showUploadStatus(
-                `✅ "${item.name}" uploaded successfully (${currentUploadIndex}/${pendingFiles.length})`,
-                'success'
-            );
 
         } catch (error) {
             console.error(`❌ Upload failed for ${item.name}:`, error);
@@ -3285,11 +4328,7 @@ async function startSequentialUploads(pendingFiles) {
 }
 
 async function uploadSingleFile(item) {
-    console.log('🚀 Starting upload for:', item.name, 'Size:', item.file.size, 'Chunk size:', CHUNK_SIZE);
-
-    // Check for cancellation before starting
     if (cancelledUploads.has(item.id)) {
-        console.log(`🚫 Upload already cancelled for ${item.name}`);
         throw new Error('Upload cancelled by user');
     }
 
@@ -3298,53 +4337,91 @@ async function uploadSingleFile(item) {
 
     try {
         if (file.size <= CHUNK_SIZE) {
-            console.log('📦 Using whole file upload for:', item.name);
-            // Upload whole file
             const formData = new FormData();
             formData.append('filename', file.name);
             formData.append('dest_path', destPath);
             formData.append('file', file);
 
-            const response = await fetch(UPLOAD_URL, {
+            let response = await fetch(UPLOAD_URL, {
                 method: 'POST',
-                body: formData
+                body: formData,
+                signal: item._abortSignal || null
             });
 
-            console.log('📦 Upload response status for', item.name, ':', response.status);
+            // Handle file-already-exists: ask user what to do
+            if (response.status === 409) {
+                response.body?.cancel();
+                const groupDecision = item._groupId ? _overwriteDecisions.get(item._groupId) : 'ask';
+                let action = groupDecision || 'ask';
+
+                if (action === 'ask') {
+                    action = await _promptOverwrite(item.displayName || file.name);
+                    if (item._groupId) {
+                        if (action === 'overwrite-all') _overwriteDecisions.set(item._groupId, 'overwrite');
+                        if (action === 'skip-all')      _overwriteDecisions.set(item._groupId, 'skip');
+                        if (action === 'rename-all')    _overwriteDecisions.set(item._groupId, 'rename');
+                    }
+                }
+
+                const shouldSkip     = action === 'skip-all'     || action === 'skip-one'  || groupDecision === 'skip';
+                const shouldOverwrite = action === 'overwrite-all' || action === 'overwrite-one' || groupDecision === 'overwrite';
+                const shouldRename   = action === 'rename-all'   || action === 'rename-one' || groupDecision === 'rename';
+
+                if (shouldSkip) {
+                    updateItemProgress(item.id, 100, file.size);
+                    return; // Skip silently
+                }
+
+                if (shouldRename) {
+                    const freeName = await _findFreeName(destPath, file.name);
+                    const renameForm = new FormData();
+                    renameForm.append('filename', freeName);
+                    renameForm.append('dest_path', destPath);
+                    renameForm.append('file', file);
+                    response = await fetch(UPLOAD_URL, {
+                        method: 'POST',
+                        body: renameForm,
+                        signal: item._abortSignal || null
+                    });
+                } else if (shouldOverwrite) {
+                    const retryForm = new FormData();
+                    retryForm.append('filename', file.name);
+                    retryForm.append('dest_path', destPath);
+                    retryForm.append('file', file);
+                    retryForm.append('overwrite', '1');
+                    response = await fetch(UPLOAD_URL, {
+                        method: 'POST',
+                        body: retryForm,
+                        signal: item._abortSignal || null
+                    });
+                }
+            }
 
             if (!response.ok) {
                 const errorText = await response.text();
-                console.error('❌ Upload error response for', item.name, ':', errorText);
                 throw new Error(errorText);
             }
 
+            response.body?.cancel();
             updateItemProgress(item.id, 100, file.size);
-            console.log('✅ Whole file upload completed for:', item.name, 'Progress set to 100%');
 
         } else {
-            console.log('🧩 Using chunked upload for:', item.name);
             // Chunked upload
             const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-            console.log('🧩 Total chunks for', item.name, ':', totalChunks);
 
             for (let i = 0; i < totalChunks; i++) {
-                // Check if upload was cancelled (multiple checks for responsiveness)
                 if (cancelledUploads.has(item.id)) {
-                    console.log(`🚫 Upload cancelled for ${item.name} at chunk ${i + 1}/${totalChunks}`);
                     throw new Error('Upload cancelled by user');
                 }
 
                 const currentItem = uploadQueue.find(queueItem => queueItem.id === item.id);
                 if (!currentItem || currentItem.status === 'cancelled') {
-                    console.log(`🚫 Upload cancelled for ${item.name} at chunk ${i + 1}/${totalChunks}`);
                     throw new Error('Upload cancelled by user');
                 }
 
                 const start = i * CHUNK_SIZE;
                 const end = Math.min(file.size, start + CHUNK_SIZE);
                 const chunk = file.slice(start, end);
-
-                console.log(`📤 Uploading chunk ${i + 1}/${totalChunks} for ${item.name}, size: ${chunk.size}`);
 
                 const formData = new FormData();
                 formData.append('file_id', item.id);
@@ -3354,68 +4431,50 @@ async function uploadSingleFile(item) {
                 formData.append('dest_path', destPath);
                 formData.append('chunk', chunk);
 
-                // Final check before sending chunk
                 if (cancelledUploads.has(item.id)) {
-                    console.log(`🚫 Upload cancelled for ${item.name} before sending chunk ${i + 1}/${totalChunks}`);
                     throw new Error('Upload cancelled by user');
                 }
 
                 const response = await fetch(UPLOAD_URL, {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    signal: item._abortSignal || null
                 });
-
-                console.log(`📤 Chunk ${i + 1} response status for ${item.name}:`, response.status);
 
                 if (!response.ok) {
                     const errorText = await response.text();
-                    console.error(`❌ Chunk ${i + 1} error for ${item.name}:`, errorText);
                     throw new Error(`Chunk ${i + 1}/${totalChunks}: ${errorText}`);
                 }
 
-                // Check if this is the last chunk and handle assembly
                 if (i === totalChunks - 1) {
                     try {
                         const responseData = await response.json();
                         if (responseData.assembly_queued) {
-                            console.log(`🔄 Assembly queued for ${item.name}, starting status polling`);
                             updateItemProgress(item.id, 100, file.size);
                             updateItemStatus(item.id, 'assembling', 'Processing file...');
-
-                            // Immediately protect this assembly job from cleanup
                             try {
                                 await fetch(`/api/protect_assembly/${item.id}`, { method: 'POST' });
-                                console.log(`🔐 Protected new assembly job ${item.id} from cleanup`);
                             } catch (protectError) {
-                                console.warn(`⚠️ Failed to protect new assembly job ${item.id}:`, protectError);
+                                console.warn(`⚠️ Failed to protect assembly job ${item.id}:`, protectError);
                             }
-
                             startAssemblyPolling(item.id);
-
-                            // Update cleanup button to disable it during assembly
                             updateManualCleanupButton();
                         } else {
-                            // Fallback for old response format
                             updateItemProgress(item.id, 100, file.size);
                         }
                     } catch (jsonError) {
-                        // Response wasn't JSON, treat as success for backward compatibility
-                        console.log(`✅ Chunk ${i + 1} completed (legacy response) for ${item.name}`);
                         updateItemProgress(item.id, 100, file.size);
                     }
                 } else {
+                    // Intermediate chunk — consume/cancel body to release the ReadableStream
+                    response.body?.cancel();
                     const progress = Math.round(((i + 1) / totalChunks) * 100);
-                    const uploadedBytes = end;
-                    updateItemProgress(item.id, progress, uploadedBytes);
-                    console.log(`✅ Chunk ${i + 1} completed for ${item.name}, progress: ${progress}%`);
+                    updateItemProgress(item.id, progress, end);
                 }
             }
-
-            console.log('🎉 Chunked upload completed for:', item.name, 'All chunks processed');
         }
-        console.log('✅ uploadSingleFile function completing successfully for:', item.name);
     } catch (error) {
-        console.error('❌ Upload failed for:', item.name, error);
+        console.error('❌ Upload failed:', item.name, error.message);
         throw error;
     }
 }
@@ -4191,7 +5250,7 @@ async function performSingleDelete(itemPath, itemName) {
     }
 }
 
-function confirmMoveOrCopy() {
+async function confirmMoveOrCopy() {
     // Use browserCurrentPath instead of text input
     const destinationPath = browserCurrentPath || '';
     const selectedPaths = Array.from(selectedItems);
@@ -4201,10 +5260,11 @@ function confirmMoveOrCopy() {
         return;
     }
 
-    // Check if trying to move/copy to the same location
+    // Moving to the same location is a no-op — block it.
+    // Copying to the same location is fine — the conflict dialog will offer rename/overwrite.
     const currentLocation = currentPath || '';
-    if (destinationPath === currentLocation) {
-        showNotification('Same Location', `Cannot ${currentModalAction} items to the same location`, 'error');
+    if (destinationPath === currentLocation && currentModalAction === 'move') {
+        showNotification('Same Location', 'Cannot move items to the same location', 'error');
         return;
     }
 
@@ -4222,24 +5282,29 @@ function confirmMoveOrCopy() {
     const confirmClass = currentModalAction === 'move' ? 'btn-warning' : 'btn-primary';
     const icon = currentModalAction === 'move' ? 'fa-cut' : 'fa-copy';
 
-    showConfirmationModal(
+    const confirmed = await showConfirmationModal(
         `Confirm ${actionName}`,
         confirmMessage,
         actionName,
         confirmClass,
         icon
-    ).then((confirmed) => {
-        if (!confirmed) return;
+    );
+    if (!confirmed) return;
 
-        // Perform the action
-        if (currentModalAction === 'move') {
-            performBulkMove(selectedPaths, destinationPath);
-        } else if (currentModalAction === 'copy') {
-            performBulkCopy(selectedPaths, destinationPath);
-        }
+    // ── Conflict check ────────────────────────────────────────────────────────
+    const conflictResolutions = await _promptMoveOrCopyConflicts(
+        selectedPaths, destinationPath, currentModalAction
+    );
+    if (conflictResolutions === null) return;  // user cancelled at conflict dialog
+    // ─────────────────────────────────────────────────────────────────────────
 
-        closeModal();
-    });
+    closeModal();
+
+    if (currentModalAction === 'move') {
+        performBulkMove(selectedPaths, destinationPath, conflictResolutions);
+    } else if (currentModalAction === 'copy') {
+        performBulkCopy(selectedPaths, destinationPath, conflictResolutions);
+    }
 }
 
 function isValidPath(path) {
@@ -4247,7 +5312,7 @@ function isValidPath(path) {
     return !/[<>:"|?*\\]/.test(path) && !path.includes('..');
 }
 
-async function performBulkMove(paths, destination) {
+async function performBulkMove(paths, destination, conflictResolutions = {}) {
     try {
         const response = await fetch('/bulk_move', {
             method: 'POST',
@@ -4257,7 +5322,8 @@ async function performBulkMove(paths, destination) {
             body: JSON.stringify({
                 paths: paths,
                 destination: destination,
-                current_path: currentPath || ''
+                current_path: currentPath || '',
+                conflict_resolutions: conflictResolutions
             })
         });
 
@@ -4278,7 +5344,7 @@ async function performBulkMove(paths, destination) {
     }
 }
 
-async function performBulkCopy(paths, destination) {
+async function performBulkCopy(paths, destination, conflictResolutions = {}) {
     try {
         const response = await fetch('/bulk_copy', {
             method: 'POST',
@@ -4288,7 +5354,8 @@ async function performBulkCopy(paths, destination) {
             body: JSON.stringify({
                 paths: paths,
                 destination: destination,
-                current_path: currentPath || ''
+                current_path: currentPath || '',
+                conflict_resolutions: conflictResolutions
             })
         });
 
@@ -4321,31 +5388,26 @@ function bulkDelete() {
 }
 
 async function performBulkDelete(paths) {
+    _mutationInFlight = true;
     try {
         const response = await fetch('/bulk_delete', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                paths: paths
-            })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths })
         });
-
         const result = await response.json();
-
         if (response.ok) {
             showUploadStatus(`🗑️ Successfully deleted ${result.deleted_count} item(s)`, 'success');
-            // Clear selection first, then refresh file table
             clearSelection();
             await refreshFileTable();
-            // Refresh storage stats after bulk delete (multiple files removed, size decreased)
             refreshStorageStats('bulk delete operation');
         } else {
             showUploadStatus(`❌ Bulk delete failed: ${result.error}`, 'error');
         }
     } catch (error) {
         showUploadStatus(`❌ Bulk delete failed: ${error.message}`, 'error');
+    } finally {
+        setTimeout(() => { _mutationInFlight = false; }, 1500);
     }
 }
 
@@ -4586,20 +5648,15 @@ function closeNotificationModal() {
 // Individual Delete Function
 async function deleteItem(itemPath, itemName) {
     console.log('deleteItem called:', itemPath, itemName);
+    _mutationInFlight = true;
     try {
         const response = await fetch('/delete', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-            },
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: `target_path=${encodeURIComponent(itemPath)}`
         });
-
-        console.log('Delete response:', response.status);
-
         if (response.ok) {
             showUploadStatus(`🗑️ Successfully deleted "${itemName}"`, 'success');
-            // Clear selection and refresh file table
             clearSelection();
             await refreshFileTable();
         } else {
@@ -4609,6 +5666,8 @@ async function deleteItem(itemPath, itemName) {
     } catch (error) {
         console.error('Delete error:', error);
         showUploadStatus(`❌ Delete failed: ${error.message}`, 'error');
+    } finally {
+        setTimeout(() => { _mutationInFlight = false; }, 1500);
     }
 }
 
@@ -5131,7 +6190,14 @@ document.addEventListener('DOMContentLoaded', function () {
         });
 
         fileInputDisplay.addEventListener('drop', handleDrop, false);
-    } else if (isAndroid) {
+    } else if (!isAndroid) {
+        // fileInputDisplay not found — attach drop to document.body as fallback
+        console.warn('⚠️ .file-input-display not found — attaching drag-drop to body as fallback');
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            document.body.addEventListener(eventName, preventDefaults, false);
+        });
+        document.body.addEventListener('drop', handleDrop, false);
+    } else {
         console.log('📱 Android detected: Drag & drop disabled due to limited browser support');
     }
 
@@ -5141,7 +6207,16 @@ document.addEventListener('DOMContentLoaded', function () {
             if (currentUploadMode === 'files') {
                 fileInput.click();
             } else {
-                folderInput.click();
+                // Use showDirectoryPicker (File System Access API) for true lazy scanning.
+                // Falls back to webkitdirectory input on mobile / unsupported browsers.
+                if (window.showDirectoryPicker && !isMobile) {
+                    _pickFolderLazy();
+                } else {
+                    // webkitdirectory: browser enumerates all files BEFORE firing change event.
+                    // Show scanning message immediately so user knows it's working.
+                    showUploadStatus('📂 Opening folder — browser is scanning files…', 'info');
+                    folderInput.click();
+                }
             }
         });
 
@@ -5150,7 +6225,7 @@ document.addEventListener('DOMContentLoaded', function () {
             handleInputChange(e, 'file');
         });
 
-        // Update folder input display when folders are selected
+        // webkitdirectory fallback (mobile / browsers without showDirectoryPicker)
         if (folderInput) {
             folderInput.addEventListener('change', function (e) {
                 handleInputChange(e, 'folder');
@@ -5158,86 +6233,161 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function handleInputChange(e, type) {
-        const files = Array.from(e.target.files);
-        if (files.length > 0) {
-            // Mobile webkitRelativePath fallback - Android often doesn't populate this properly
-            if (type === 'folder' && isMobile) {
-                console.log('📱 Mobile folder upload detected - checking webkitRelativePath support');
 
-                // Check if any files have webkitRelativePath
-                const hasRelativePath = files.some(f => f.webkitRelativePath);
+/**
+ * TRUE lazy folder scan using File System Access API (showDirectoryPicker).
+ * Shows the folder row immediately with a live counter.
+ * Reads directory entries one at a time — never loads 50k paths into memory at once.
+ */
+async function _pickFolderLazy() {
+    let dirHandle;
+    try {
+        dirHandle = await window.showDirectoryPicker({ mode: 'read' });
+    } catch (e) {
+        if (e.name !== 'AbortError') console.error('showDirectoryPicker error', e);
+        return;
+    }
 
-                if (!hasRelativePath && files.length > 0) {
-                    console.log('⚠️ Mobile browser not providing webkitRelativePath - applying folder structure fallback');
+    const rootName = dirHandle.name;
+    if (folderGroups.has(rootName)) {
+        showUploadStatus(`📁 "${rootName}" is already in the queue`, 'info');
+        return;
+    }
 
-                    // Create a folder name based on timestamp for this batch
-                    const timestamp = new Date().toISOString().slice(0, 19).replace(/[:\-]/g, '').replace('T', '_');
-                    const folderName = `MobileUpload_${timestamp}`;
+    const groupId = `fg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const group = {
+        id: groupId, rootName,
+        scanned: 0, completed: 0, errors: 0,
+        totalSize: 0,
+        status: 'scanning',
+        cancelled: false,
+        createdTime: Date.now()
+    };
+    folderGroups.set(groupId, group);
+    updateQueueDisplay();
+    showUploadStatus(`📂 Scanning "${rootName}"…`, 'info');
 
-                    // Manually set relativePath for mobile to preserve folder structure
-                    files.forEach(file => {
-                        if (!file.relativePath && !file.webkitRelativePath) {
-                            file.relativePath = `${folderName}/${file.name}`;
-                            console.log(`📱 Mobile fallback: Set relativePath for ${file.name} -> ${file.relativePath}`);
-                        }
-                    });
-
-                    showUploadStatus(`📱 Mobile: Files grouped into folder "${folderName}"`, 'info');
-                } else if (hasRelativePath) {
-                    console.log('✅ Mobile browser supports webkitRelativePath');
-                }
+    // Recursively walk directory entries, yielding File objects
+    async function* walkDir(handle, relPath) {
+        for await (const [name, entry] of handle.entries()) {
+            if (group.cancelled) return;
+            const entryPath = relPath ? `${relPath}/${name}` : name;
+            if (entry.kind === 'file') {
+                const file = await entry.getFile();
+                // Attach relative path so upload logic knows destination
+                Object.defineProperty(file, 'relativePath', { value: `${rootName}/${entryPath}`, writable: false });
+                yield file;
+            } else if (entry.kind === 'directory') {
+                yield* walkDir(entry, entryPath);
             }
+        }
+    }
 
-            // Process files and add to queue
+    // Store lightweight descriptors — NOT in uploadQueue (avoids memory spike).
+    // Files will be iterated one-at-a-time in _uploadFolderGroupLazy at upload time.
+    group.pendingEntries = []; // [{ file, dest, displayName }]
+
+    let uiThrottle = 0;
+    for await (const file of walkDir(dirHandle, '')) {
+        if (group.cancelled) break;
+        const parts = (`${rootName}/${file.relativePath.slice(rootName.length + 1)}`).split('/');
+        parts.pop();
+        const relDir = parts.join('/'); // preserve full path including root folder name
+        // Use group.basePath (frozen at queue time) — user may browse while scanning.
+        const base = group.basePath || '';
+        const dest = base ? (relDir ? `${base}/${relDir}` : base) : relDir;
+        const key  = `${dest}::${file.name}::${file.size}`;
+        if (!_seenFileKeys.has(key)) {
+            _seenFileKeys.add(key);
+            group.pendingEntries.push({ file, dest, displayName: relDir ? `${relDir}/${file.name}` : file.name });
+            group.scanned++;
+            group.totalSize += file.size;  // size is free here — we already awaited getFile()
+        }
+        // Update UI every 200 files: live counter + running size, no freeze
+        if (++uiThrottle % 200 === 0) updateQueueDisplay();
+    }
+
+    if (!group.cancelled) {
+        group.totalCount = group.scanned;
+        group.status = 'pending';
+        updateQueueDisplay();
+        showUploadStatus(`✅ "${rootName}" ready — ${group.scanned.toLocaleString()} files, ${formatFileSize(group.totalSize)}`, 'success');
+        _spawnFolderWorkersIfNeeded();
+    }
+}
+
+
+    function handleInputChange(e, type) {
+        const fileList = e.target.files;
+        if (!fileList || fileList.length === 0) return;
+
+        if (type === 'folder') {
+            // ── FOLDER PATH ─────────────────────────────────────────────────────
+            // CRITICAL: snapshot the FileList into a real Array BEFORE resetting
+            // e.target.value. Chrome/Android invalidates the FileList object when the
+            // input is reset — if we store the raw FileList reference and then clear
+            // the input, fileList.length becomes 0 at upload time → instant "done".
+            //
+            // Array.from on File objects is fast (~5ms for 50k) because File objects
+            // are just lightweight metadata handles. The 15s delay is the browser
+            // enumerating the filesystem before the change event fires — unavoidable.
+            const fileArray = Array.from(fileList); // Stable snapshot, unaffected by reset
+            const count = fileArray.length;
+            e.target.value = ''; // Reset now — fileArray is safe
+
+            let mobilePrefix = null;
+            const hasRelativePath = !!(fileArray[0] && fileArray[0].webkitRelativePath);
+            if (isMobile && !hasRelativePath) {
+                const ts = new Date().toISOString().slice(0, 19).replace(/[:\-T]/g, '_');
+                mobilePrefix = `MobileUpload_${ts}`;
+                console.log('📱 Mobile fallback prefix:', mobilePrefix);
+            }
+            _registerFolderGroup(fileArray, mobilePrefix);
+
+            const display = document.querySelector('.file-input-display');
+            if (display) {
+                display.innerHTML = `
+                    <i class="fas fa-plus-circle" style="font-size:20px;color:#27ae60;"></i>
+                    <div>
+                        <strong>${count.toLocaleString()} files queued</strong>
+                        <div style="font-size:12px;opacity:0.8;margin-top:4px;">Computing size… click again to add more folders</div>
+                    </div>`;
+                display.style.borderColor = '#27ae60';
+                display.style.backgroundColor = 'rgba(39,174,96,0.1)';
+                setTimeout(() => {
+                    updateFileInputDisplay(currentUploadMode);
+                    display.style.borderColor = 'rgba(255,255,255,0.4)';
+                    display.style.backgroundColor = 'rgba(255,255,255,0.1)';
+                }, 4000);
+            }
+            return;
+        }
+
+        // ── REGULAR FILES PATH ───────────────────────────────────────────────
+        const files = Array.from(fileList);
+        if (files.length > 0) {
             addFilesToQueue(files);
 
             const display = document.querySelector('.file-input-display');
             if (display) {
-                let itemType, actionText;
-                if (type === 'folder') {
-                    // For folders, show number of files from folders
-                    itemType = files.length === 1 ? 'file from folder' : 'files from folders';
-                    actionText = 'Click again to add more folders, or drag multiple folders from Explorer';
-
-                    // Show helpful notification for folder mode
-                    // Support both webkitRelativePath and mobile fallback relativePath
-                    const folderCount = new Set(files.map(f => {
-                        const path = f.webkitRelativePath || f.relativePath;
-                        return path ? path.split('/')[0] : 'Unknown';
-                    })).size;
-                    if (folderCount > 0) {
-                        setTimeout(() => {
-                            showUploadStatus(`📁 Added ${files.length} files from ${folderCount} folder${folderCount > 1 ? 's' : ''}. Click again to add more folders!`, 'success');
-                        }, 100);
-                    }
-                } else {
-                    itemType = files.length === 1 ? 'file' : 'files';
-                    actionText = 'Click again to add more files';
-                }
-
+                const itemType = files.length === 1 ? 'file' : 'files';
                 display.innerHTML = `
                     <i class="fas fa-plus-circle" style="font-size: 20px; color: #27ae60;"></i>
                     <div>
                         <strong>Added ${files.length} ${itemType} to queue</strong>
                         <div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">
-                            ${actionText}
+                            Click again to add more files
                         </div>
                     </div>
                 `;
                 display.style.borderColor = '#27ae60';
                 display.style.backgroundColor = 'rgba(39, 174, 96, 0.1)';
-
-                // Reset after 3 seconds for folder mode (longer to read the message)
-                const resetTime = type === 'folder' ? 3000 : 2000;
                 setTimeout(() => {
                     updateFileInputDisplay(currentUploadMode);
                     display.style.borderColor = 'rgba(255, 255, 255, 0.4)';
                     display.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
-                }, resetTime);
+                }, 2000);
             }
-
-            // Reset input for future selections - this is KEY for multiple folder selection
             e.target.value = '';
         }
     }
@@ -5653,10 +6803,10 @@ setInterval(() => {
     }
 }, 1000);
 
-// Check cleanup button state periodically
+// Check cleanup button state periodically (skip during upload to avoid interrupting connections)
 setInterval(() => {
-    updateManualCleanupButton();
-}, 5000); // Check every 5 seconds
+    if (!isUploading) updateManualCleanupButton();
+}, 5000);
 
 // Enhanced connection monitoring
 let isOnline = navigator.onLine;
@@ -5937,7 +7087,7 @@ console.log('✅ Cloudinator Enhanced Upload System Ready');
 
 // Auto-clear completed items from upload queue
 function autoCleanupCompletedItems() {
-    console.log('🧹 Checking for completed items to auto-clear...');
+    
 
     // Count completed items before clearing
     const completedItems = uploadQueue.filter(item =>
@@ -5947,14 +7097,18 @@ function autoCleanupCompletedItems() {
     );
 
     if (completedItems.length === 0) {
-        console.log('🧹 No completed items found for auto-cleanup');
+        
         return;
     }
 
     console.log(`🧹 Found ${completedItems.length} completed items to auto-clear:`,
         completedItems.map(item => `${item.name} (${item.status})`));
 
-    // Remove completed items from queue
+    // Remove completed items from queue, and release their dedup keys so the
+    // same files can be re-added after the user deletes and re-drops them.
+    completedItems.forEach(item => {
+        if (item._seenKey) _seenFileKeys.delete(item._seenKey);
+    });
     uploadQueue = uploadQueue.filter(item =>
         item.status !== 'completed' &&
         item.status !== 'assembled' &&
@@ -6289,7 +7443,7 @@ function connectToStorageStream() {
         };
 
         storageEventSource.onmessage = function (event) {
-            console.log('📡 Raw SSE message received:', event.data);
+            
 
             // If this is the first message and we're still connecting, treat it as successful connection
             if (document.title.startsWith('🟠')) {
@@ -6303,7 +7457,7 @@ function connectToStorageStream() {
 
             try {
                 const data = JSON.parse(event.data);
-                console.log('📡 Parsed SSE data:', data);
+                
                 handleStorageUpdate(data);
             } catch (error) {
                 console.warn('⚠️ Failed to parse SSE data:', error, event.data);
@@ -6314,17 +7468,24 @@ function connectToStorageStream() {
             console.error('❌ Storage stats stream error:', event);
             console.log('🔴 SSE onerror fired - connection failed');
             console.log('🔴 EventSource readyState:', storageEventSource.readyState);
-            console.log('🔴 EventSource url:', storageEventSource.url);
-            console.log('🔴 Event type:', event.type);
-            console.log('🔴 Event target:', event.target);
             connectionStatus = 'error';
 
-            // Add clean disconnection indicator
             document.title = '🔴 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
-            console.log('🔴 Title set to error state');
 
-            // Try a few SSE reconnects, then fall back to polling
-            if (reconnectAttempts < 2) { // Reduced from 5 to 2 attempts
+            // FIX: While an upload is active, never permanently give up on SSE.
+            // Use a short delay and keep reconnecting indefinitely so the server
+            // keeps receiving a live client to broadcast updates to.
+            if (isUploading) {
+                console.log('📤 Upload in progress — reconnecting SSE immediately (no give-up limit)');
+                reconnectAttempts = 0; // Never count against upload sessions
+                setTimeout(() => {
+                    connectToStorageStream();
+                }, 1000); // Reconnect faster during uploads (1s vs 3s)
+                return;
+            }
+
+            // Normal (non-upload) path: try a few SSE reconnects then fall back to polling
+            if (reconnectAttempts < 2) {
                 reconnectAttempts++;
                 console.log(`🔄 Attempting SSE reconnect (${reconnectAttempts}/2) in ${reconnectDelay}ms...`);
                 setTimeout(() => {
@@ -6334,13 +7495,11 @@ function connectToStorageStream() {
                 console.error('💀 SSE reconnection failed, switching to polling fallback...');
                 sseFailedPermanently = true;
 
-                // Close SSE connection
                 if (storageEventSource) {
                     storageEventSource.close();
                     storageEventSource = null;
                 }
 
-                // Start polling fallback
                 setupFallbackPolling();
             }
         };
@@ -6443,7 +7602,7 @@ function stopPolling() {
 }
 
 function handleStorageUpdate(data) {
-    console.log('📊 Real-time storage update received:', data);
+    
 
     switch (data.type) {
         case 'connected':
@@ -6519,12 +7678,12 @@ function handleStorageUpdate(data) {
 
                         // Refresh file table for any change
                         console.log('🚀 Triggering instant file table refresh via SSE...');
-                        // Use requestAnimationFrame for immediate, smooth UI update
-                        requestAnimationFrame(async () => {
-                            console.log('🔄 SSE triggered refreshFileTable() call starting...');
-                            await refreshFileTable();
-                            console.log('✅ SSE triggered refreshFileTable() completed!');
-                        });
+
+                        if (!isUploading && !_mutationInFlight) {
+                            requestAnimationFrame(async () => { await refreshFileTable(); });
+                        } else {
+                            console.log('⏳ SSE refresh skipped — upload or mutation in flight');
+                        }
 
                         // Skip redundant storage stats call since we already have the data
                         console.log('📊 Using real-time storage data (skipping additional API call)');
@@ -6543,7 +7702,7 @@ function handleStorageUpdate(data) {
 
         case 'ping':
             // Keep-alive ping, just log it
-            console.log('📡 SSE keep-alive ping');
+            
             break;
 
         default:

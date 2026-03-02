@@ -4,3 +4,4 @@ bcrypt
 Werkzeug
 zipstream-new
 watchdog
+waitress

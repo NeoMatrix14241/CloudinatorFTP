@@ -223,25 +223,27 @@ def storage_stats_sse():
             event_manager.remove_client(client_queue)
             print(f"📡 SSE client cleanup completed")
 
-    # Create response with Waitress-specific SSE headers
+    # Waitress streams any WSGI iterable chunk-by-chunk as long as:
+    # 1. No Content-Length header is set (so it uses chunked transfer encoding)
+    # 2. direct_passthrough is NOT set (that's Werkzeug-only and breaks Waitress)
+    # 3. The generator yields bytes (already done above with .encode('utf-8'))
     from flask import Response
     response = Response(
         event_stream(),
-        mimetype='text/event-stream'
+        mimetype='text/event-stream',
+        status=200,
     )
-    
-    # Essential headers for Waitress SSE compatibility (no hop-by-hop headers!)
+
     response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
-    # DO NOT SET Connection header - it's handled by WSGI server
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Credentials'] = 'true'
-    response.headers['X-Accel-Buffering'] = 'no'  # Disable nginx buffering if behind proxy
-    
-    # Critical for Waitress: disable response buffering
-    response.direct_passthrough = True
-    
+    response.headers['X-Accel-Buffering'] = 'no'
+    # Remove Content-Length so Waitress uses chunked transfer — required for streaming
+    response.headers.remove('Content-Length')
+    # DO NOT set direct_passthrough — Werkzeug-only, silently breaks Waitress SSE
+
     return response
 
 def trigger_storage_update(old_snapshot, new_snapshot):

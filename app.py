@@ -146,10 +146,23 @@ app.secret_key = SESSION_SECRET
 # Configure session handling
 app.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
-    PERMANENT_SESSION_LIFETIME=300,  # Seconds
+    PERMANENT_SESSION_LIFETIME=86400,  # 24 hours
     SESSION_REFRESH_EACH_REQUEST=True,
     SESSION_COOKIE_NAME='cloudinator_session'
 )
+
+def _trigger_reconcile():
+    """Kick off a background reconcile so file/dir counts correct themselves
+    immediately after mutations (delete, move, rename) instead of waiting 15 min."""
+    import threading
+    from file_monitor import get_file_monitor
+    def _run():
+        try:
+            get_file_monitor()._reconcile()
+        except Exception as e:
+            print(f'⚠️ Background reconcile error: {e}')
+    threading.Thread(target=_run, daemon=True).start()
+
 
 storage.ensure_root()
 
@@ -169,11 +182,8 @@ def validate_session():
         session.clear()
         return redirect(url_for('login'))
         
-    # Validate session age
-    login_time = session.get('login_time', 0)
-    if time.time() - login_time > 3600:  # 1 hour
-        session.clear()
-        return redirect(url_for('login'))
+    # Session lifetime controlled by PERMANENT_SESSION_LIFETIME (86400s = 24h)
+    # and refreshed on every request via SESSION_REFRESH_EACH_REQUEST=True.
 
 @app.route('/cancel_bulk_zip', methods=['POST'])
 def cancel_bulk_zip():
@@ -276,20 +286,22 @@ class ChunkTracker:
                             try:
                                 with open(timestamp_file, 'r') as f:
                                     timestamp = float(f.read().strip())
-                                # Cleanup untracked chunks older than 10 minutes (more aggressive for interruptions)
-                                if current_time - timestamp > 600:  
+                                # Cleanup untracked chunks older than 45 minutes.
+                                # Must be > cleanup_interrupted_uploads timeout (30 min)
+                                # so we never delete chunks that are simply backgrounded.
+                                if current_time - timestamp > 2700:  
                                     should_cleanup = True
-                                    cleanup_reason = f"untracked >10min old (interrupted upload)"
+                                    cleanup_reason = f"untracked >45min old (abandoned upload)"
                             except (ValueError, OSError):
                                 should_cleanup = True
                                 cleanup_reason = "corrupted timestamp file"
                         else:
-                            # No timestamp, cleanup if dir is older than 10 minutes
+                            # No timestamp, cleanup if dir is older than 45 minutes
                             try:
                                 dir_mtime = os.path.getmtime(chunk_dir)
-                                if current_time - dir_mtime > 600:
+                                if current_time - dir_mtime > 2700:
                                     should_cleanup = True
-                                    cleanup_reason = "no timestamp >10min old"
+                                    cleanup_reason = "no timestamp >45min old"
                             except OSError:
                                 should_cleanup = True
                                 cleanup_reason = "cannot read metadata"
@@ -322,7 +334,14 @@ class ChunkTracker:
             print(f"❌ Error in orphaned chunk cleanup: {e}")
 
     def cleanup_interrupted_uploads(self):
-        """Detect and cleanup uploads that were interrupted (no activity for 2+ minutes)"""
+        """Detect and cleanup uploads that were interrupted (no activity for 30+ minutes).
+        
+        NOTE: The timeout is intentionally long (30 min) so that background-tab throttling
+        does NOT trigger premature cleanup.  Browsers freeze JS timers/fetch in hidden tabs,
+        so a 2-minute window incorrectly treated active uploads as abandoned whenever the
+        user switched away for more than 2 minutes.  30 minutes gives plenty of headroom
+        for large folder uploads that are paused while the user works in another tab.
+        """
         current_time = time.time()
         interrupted_uploads = []
         
@@ -331,7 +350,7 @@ class ChunkTracker:
                 for session_id, file_ids in list(self.active_uploads.items()):
                     for file_id in list(file_ids):
                         timestamp = self.upload_timestamps.get(file_id)
-                        if timestamp and (current_time - timestamp) > 120:  # 2 minutes of inactivity
+                        if timestamp and (current_time - timestamp) > 1800:  # 30 minutes of inactivity
                             interrupted_uploads.append((session_id, file_id))
                             print(f"🧹 Detected interrupted upload: {file_id} (inactive for {int(current_time - timestamp)}s)")
                 
@@ -369,6 +388,12 @@ def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         if not is_logged_in():
+            # API and XHR requests: return 401 JSON so the client can handle it
+            # without breaking an in-progress upload with a page redirect.
+            if (request.path.startswith('/api/') or
+                    request.headers.get('X-Requested-With') == 'XMLHttpRequest' or
+                    request.accept_mimetypes.best == 'application/json'):
+                return jsonify({'error': 'Session expired', 'redirect': '/login'}), 401
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated
@@ -882,23 +907,44 @@ def upload():
             # Ensure target directory exists
             os.makedirs(target_dir, exist_ok=True)
 
-            # Save file
-            try:
-                uploaded_file.save(target_path)
-                print(f"✅ Successfully uploaded whole file: {filename}")
-                return 'File uploaded successfully', 200
-            except Exception as e:
-                print(f"❌ Failed to save whole file {filename}: {e}")
-                return f'Failed to save file: {str(e)}', 500
+            # Conflict check: return 409 if file exists and overwrite not explicitly requested
+            overwrite = request.form.get('overwrite', '0')
+            if os.path.exists(target_path) and os.path.isfile(target_path) and overwrite != '1':
+                return 'File already exists', 409
+
+            # Save file — retry on Windows file-lock errors (e.g. FastCopy holding a write lock).
+            # Without this, save() blocks indefinitely waiting for the lock to release,
+            # which stalls the Flask thread and freezes the entire upload queue.
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                try:
+                    uploaded_file.stream.seek(0)
+                    uploaded_file.save(target_path)
+                    return 'File uploaded successfully', 200
+                except PermissionError as e:
+                    if attempt < max_attempts - 1:
+                        time.sleep(0.5)
+                    else:
+                        print(f"❌ File locked after {max_attempts} attempts: {filename} — {e}")
+                        return f'File is locked by another process: {str(e)}', 423
+                except Exception as e:
+                    print(f"❌ Failed to save whole file {filename}: {e}")
+                    return f'Failed to save file: {str(e)}', 500
 
     except ClientDisconnected as e:
         print(f"👋 Client disconnected during upload of {filename or 'unknown file'} (ID: {file_id})")
-        # Always clean up chunks if we have a file_id
+        # Untrack immediately (fast), but run the actual disk cleanup in the background
+        # so this handler returns without blocking a Waitress thread on safe_rmtree.
         if file_id:
             chunk_tracker.untrack_upload(session_id, file_id)
-            storage.cleanup_chunks(file_id)
-        # No need to send response - client is gone
-        return '', 499  # Return 499 Client Closed Request
+            def _bg_disconnect_cleanup(fid):
+                try:
+                    storage.cleanup_chunks(fid)
+                    print(f"🧹 Background disconnect cleanup done: {fid}")
+                except Exception as ex:
+                    print(f"⚠️ Background disconnect cleanup error for {fid}: {ex}")
+            threading.Thread(target=_bg_disconnect_cleanup, args=(file_id,), daemon=True).start()
+        return '', 499
     
     except Exception as e:
         print(f"❌ Upload error: {e}")
@@ -979,23 +1025,33 @@ def cancel_upload():
         chunks_dir = os.path.join(ROOT_DIR, '.chunks', file_id)
         if os.path.exists(chunks_dir):
             try:
-                # Use Windows-safe deletion
-                storage.safe_rmtree(chunks_dir)
-                print(f"🧹 Cancelled upload cleanup completed for: {file_id}")
-                
-                # Try to remove parent chunks directory if empty
-                parent_chunks_dir = os.path.join(ROOT_DIR, '.chunks')
-                if os.path.exists(parent_chunks_dir) and not os.listdir(parent_chunks_dir):
-                    os.rmdir(parent_chunks_dir)
-                    print("🧹 Removed empty chunks directory")
-                    
+                # Run deletion in a daemon thread so this endpoint returns immediately
+                # and does NOT block a Waitress thread (safe_rmtree can stall on Windows
+                # file locks, which previously exhausted the thread pool when multiple
+                # cancellations arrived at the same time).
+                def _bg_cleanup(cdir, fid):
+                    try:
+                        storage.safe_rmtree(cdir)
+                        print(f"🧹 Background cancelled-upload cleanup done: {fid}")
+                        parent = os.path.join(ROOT_DIR, '.chunks')
+                        if os.path.exists(parent):
+                            try:
+                                if not os.listdir(parent):
+                                    os.rmdir(parent)
+                            except OSError:
+                                pass
+                    except Exception as ex:
+                        print(f"⚠️ Background cleanup error for {fid}: {ex}")
+                threading.Thread(target=_bg_cleanup, args=(chunks_dir, file_id), daemon=True).start()
+                print(f"🧹 Queued background cleanup for cancelled upload: {file_id}")
+
                 return jsonify({
-                    'success': True, 
-                    'message': f'Upload cancelled and cleaned up for {filename}',
+                    'success': True,
+                    'message': f'Upload cancelled and cleanup queued for {filename}',
                     'file_id': file_id
                 }), 200
             except Exception as e:
-                print(f"❌ Failed to cleanup cancelled upload {file_id}: {e}")
+                print(f"❌ Failed to queue cleanup for cancelled upload {file_id}: {e}")
                 return jsonify({'error': f'Failed to cleanup cancelled upload: {str(e)}'}), 500
         else:
             # Upload was cancelled before any chunks were created
@@ -1717,8 +1773,19 @@ def bulk_move():
         if destination and not storage.is_safe_path(destination):
             return jsonify({'error': 'Invalid destination path'}), 400
 
+        # conflict_resolutions maps filename -> 'overwrite' | 'rename' | 'skip'
+        conflict_resolutions = data.get('conflict_resolutions', {})
+
         moved_count = 0
         errors = []
+
+        def _find_free_name(dest_dir, filename):
+            base, ext = os.path.splitext(filename)
+            for i in range(1, 1000):
+                candidate = f"{base} ({i}){ext}"
+                if not os.path.exists(os.path.join(dest_dir, candidate)):
+                    return candidate
+            return f"{base} ({int(time.time())}){ext}"
 
         for source_path in paths:
             try:
@@ -1734,20 +1801,27 @@ def bulk_move():
 
                 # Determine destination
                 filename = os.path.basename(source_path)
-                if destination:
-                    dest_full = os.path.join(ROOT_DIR, destination, filename)
-                    dest_dir = os.path.join(ROOT_DIR, destination)
-                else:
-                    dest_full = os.path.join(ROOT_DIR, filename)
-                    dest_dir = ROOT_DIR
+                dest_dir = os.path.join(ROOT_DIR, destination) if destination else ROOT_DIR
+                dest_full = os.path.join(dest_dir, filename)
 
                 # Create destination directory if it doesn't exist
                 os.makedirs(dest_dir, exist_ok=True)
 
-                # Check if destination already exists
+                # Handle conflict
                 if os.path.exists(dest_full):
-                    errors.append(f'Destination already exists: {os.path.join(destination, filename) if destination else filename}')
-                    continue
+                    resolution = conflict_resolutions.get(filename, 'error')
+                    if resolution == 'skip':
+                        continue
+                    elif resolution == 'overwrite':
+                        if os.path.isdir(dest_full):
+                            shutil.rmtree(dest_full)
+                        else:
+                            os.remove(dest_full)
+                    elif resolution == 'rename':
+                        dest_full = os.path.join(dest_dir, _find_free_name(dest_dir, filename))
+                    else:
+                        errors.append(f'Destination already exists: {os.path.join(destination, filename) if destination else filename}')
+                        continue
 
                 # Perform the move
                 shutil.move(source_full, dest_full)
@@ -1792,8 +1866,19 @@ def bulk_copy():
         if destination and not storage.is_safe_path(destination):
             return jsonify({'error': 'Invalid destination path'}), 400
 
+        # conflict_resolutions maps filename -> 'overwrite' | 'rename' | 'skip'
+        conflict_resolutions = data.get('conflict_resolutions', {})
+
         copied_count = 0
         errors = []
+
+        def _find_free_name_copy(dest_dir, filename):
+            base, ext = os.path.splitext(filename)
+            for i in range(1, 1000):
+                candidate = f"{base} ({i}){ext}"
+                if not os.path.exists(os.path.join(dest_dir, candidate)):
+                    return candidate
+            return f"{base} ({int(time.time())}){ext}"
 
         for source_path in paths:
             try:
@@ -1809,35 +1894,31 @@ def bulk_copy():
 
                 # Determine destination
                 filename = os.path.basename(source_path)
-                if destination:
-                    dest_full = os.path.join(ROOT_DIR, destination, filename)
-                    dest_dir = os.path.join(ROOT_DIR, destination)
-                else:
-                    dest_full = os.path.join(ROOT_DIR, filename)
-                    dest_dir = ROOT_DIR
+                dest_dir = os.path.join(ROOT_DIR, destination) if destination else ROOT_DIR
+                dest_full = os.path.join(dest_dir, filename)
 
                 # Create destination directory if it doesn't exist
                 os.makedirs(dest_dir, exist_ok=True)
 
-                # Check if destination already exists
+                # Handle conflict
                 if os.path.exists(dest_full):
-                    # For copies, we can create a new name
-                    base_name, ext = os.path.splitext(filename)
-                    counter = 1
-                    while os.path.exists(dest_full):
-                        new_filename = f"{base_name}_copy{counter}{ext}"
-                        if destination:
-                            dest_full = os.path.join(ROOT_DIR, destination, new_filename)
+                    resolution = conflict_resolutions.get(filename, 'rename')  # default: auto-rename
+                    if resolution == 'skip':
+                        continue
+                    elif resolution == 'overwrite':
+                        if os.path.isdir(dest_full):
+                            shutil.rmtree(dest_full)
                         else:
-                            dest_full = os.path.join(ROOT_DIR, new_filename)
-                        counter += 1
+                            os.remove(dest_full)
+                    else:  # 'rename' or default
+                        dest_full = os.path.join(dest_dir, _find_free_name_copy(dest_dir, filename))
 
                 # Perform the copy
                 if os.path.isdir(source_full):
                     shutil.copytree(source_full, dest_full)
                 else:
                     shutil.copy2(source_full, dest_full)
-                
+
                 copied_count += 1
 
             except Exception as e:
@@ -1898,6 +1979,10 @@ def bulk_delete():
 
             except Exception as e:
                 errors.append(f'Failed to delete {target_path}: {str(e)}')
+
+        # Reconcile immediately so file/dir counts are corrected without waiting 15 min
+        if deleted_count > 0:
+            _trigger_reconcile()
 
         if errors:
             return jsonify({
@@ -2024,6 +2109,7 @@ def delete():
 
         if storage.delete_path(target_path):
             flash('Item deleted successfully')
+            _trigger_reconcile()
         else:
             flash('Error deleting item')
 
@@ -2034,6 +2120,51 @@ def delete():
     except Exception as e:
         flash(f'Error deleting item: {str(e)}')
         return redirect(url_for('index'))
+
+
+@app.route('/api/check_conflicts', methods=['POST'])
+@login_required
+def api_check_conflicts():
+    """Check which of the given paths would conflict at the destination."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'JSON body required'}), 400
+        paths = data.get('paths', [])
+        destination = data.get('destination', '').strip()
+
+        if destination and not storage.is_safe_path(destination):
+            return jsonify({'error': 'Invalid destination path'}), 400
+
+        conflicts = []
+        for source_path in paths:
+            if not storage.is_safe_path(source_path):
+                continue
+            filename = os.path.basename(source_path)
+            dest_full = os.path.join(ROOT_DIR, destination, filename) if destination else os.path.join(ROOT_DIR, filename)
+            if os.path.exists(dest_full):
+                conflicts.append({
+                    'source': source_path,
+                    'name': filename,
+                    'is_dir': os.path.isdir(dest_full)
+                })
+        return jsonify({'conflicts': conflicts})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/exists', methods=['GET'])
+@login_required
+def api_exists():
+    """Check whether a path (file or folder) exists under ROOT_DIR."""
+    path = request.args.get('path', '')
+    if path and not storage.is_safe_path(path):
+        return jsonify({'error': 'Invalid path'}), 400
+    full_path = os.path.join(ROOT_DIR, path) if path else ROOT_DIR
+    exists = os.path.exists(full_path)
+    is_dir = os.path.isdir(full_path) if exists else False
+    return jsonify({'exists': exists, 'is_dir': is_dir, 'path': path})
+
 
 @app.route('/api/speedtest/ping', methods=['GET'])
 def speedtest_ping():

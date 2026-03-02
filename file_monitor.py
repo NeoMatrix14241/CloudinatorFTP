@@ -71,16 +71,33 @@ class InstantFileEventHandler(FileSystemEventHandler):
     def __init__(self, monitor):
         self.monitor = monitor
         self.debounce_timer = None
-        self.debounce_delay = 2.0
+        self.debounce_delay = 0.5   # Fire SSE 0.5s after last change (was 2.0s)
+        self.debounce_lock = threading.Lock()
+        self._first_change_time = None  # For max_wait enforcement
 
     def _schedule_notify(self):
-        if self.debounce_timer:
-            self.debounce_timer.cancel()
-        self.debounce_timer = threading.Timer(
-            self.debounce_delay,
-            self.monitor._notify_and_save
-        )
-        self.debounce_timer.start()
+        # Standard debounce: reset timer on every event.
+        # BUT cap at max_wait=3s so continuous uploads still fire SSE periodically.
+        with self.debounce_lock:
+            now = time.time()
+            if self._first_change_time is None:
+                self._first_change_time = now
+
+            time_since_first = now - self._first_change_time
+            fire_now = time_since_first >= 3.0  # Max wait: force notify every 3s
+
+            if self.debounce_timer:
+                self.debounce_timer.cancel()
+
+            if fire_now:
+                self._first_change_time = None
+                self.debounce_timer = threading.Timer(0, self.monitor._notify_and_save)
+            else:
+                self.debounce_timer = threading.Timer(
+                    self.debounce_delay,
+                    self.monitor._notify_and_save
+                )
+            self.debounce_timer.start()
 
     def on_created(self, event):
         if '.chunks' in event.src_path:
@@ -120,8 +137,6 @@ class InstantFileEventHandler(FileSystemEventHandler):
                         self.monitor._dir_info[ancestor]['file_count'] += 1
                         self.monitor._dir_info[ancestor]['total_size'] += file_size
 
-        print(f"⚡ Created: {'dir' if event.is_directory else 'file'} '{src_rel}' → "
-              f"files={self.monitor._file_count:,}, dirs={self.monitor._dir_count:,}")
         self._schedule_notify()
 
     def on_deleted(self, event):
@@ -179,8 +194,6 @@ class InstantFileEventHandler(FileSystemEventHandler):
                         )
                 # Size drift corrected by 15min reconcile
 
-        print(f"⚡ Deleted: {'dir' if event.is_directory else 'file'} '{src_rel}' → "
-              f"files={self.monitor._file_count:,}, dirs={self.monitor._dir_count:,}")
         self._schedule_notify()
 
     def on_moved(self, event):
@@ -233,7 +246,6 @@ class InstantFileEventHandler(FileSystemEventHandler):
                         self.monitor._dir_info[dest_parent]['file_count'] += 1
                         self.monitor._dir_info[dest_parent]['total_size'] += file_size
 
-        print(f"⚡ Moved: '{src_rel}' → '{dest_rel}'")
         self._schedule_notify()
 
     def on_modified(self, event):

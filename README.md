@@ -41,7 +41,7 @@ pip install -r requirements.txt
 
 OR
 
-pip install flask flask_cors bcrypt werkzeug zipstream-new watchdog
+pip install flask flask_cors bcrypt werkzeug zipstream-new watchdog waitress
 ```
 
 > **⚠️ Troubleshooting bcrypt installation:**
@@ -84,6 +84,17 @@ python create_user.py
 
 #### 6. 🎯 Launch the Server
 
+For Waitress WSGI (Production/Live)
+```bash
+python prod_server.py # Flask Server (WSGI)
+
+or
+
+launch:
+- start_prod_server.bat > Flask Server (WSGI)
+```
+
+For Flask WSGI (Development/Testing)
 ```bash
 python dev_server.py # Flask Server (WSGI)
 
@@ -270,4 +281,3 @@ Apache License - see [LICENSE](LICENSE) file for details.
 
 
 ---
-
