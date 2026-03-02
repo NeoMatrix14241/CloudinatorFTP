@@ -10,8 +10,6 @@ def check_login(username, password):
     if not user:
         return False
     
-    # The stored password is already a string, so we need to encode it back to bytes
-    # The input password needs to be encoded to bytes as well
     stored_hash = user['password'].encode('utf-8')  # Convert string back to bytes
     input_password = password.encode('utf-8')       # Convert input to bytes
     
@@ -34,4 +32,4 @@ def current_user():
     return session.get('username')
 
 def is_logged_in():
-    return 'username' in session
+    return bool(session.get('logged_in')) and 'username' in session

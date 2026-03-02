@@ -181,7 +181,16 @@ def validate_session():
     if not session.get('logged_in'):
         session.clear()
         return redirect(url_for('login'))
-        
+
+    # Verify the account still exists in users.json.
+    # Without this, a deleted account's still-valid cookie causes an infinite
+    # loop: /admin/upload_status returns 403 (role=None) → JS redirects to
+    # /login → /login sees logged_in=True → redirects back to / → repeat.
+    username = session.get('username')
+    if not username or get_role(username) is None:
+        session.clear()
+        return redirect(url_for('login'))
+
     # Session lifetime controlled by PERMANENT_SESSION_LIFETIME (86400s = 24h)
     # and refreshed on every request via SESSION_REFRESH_EACH_REQUEST=True.
 
