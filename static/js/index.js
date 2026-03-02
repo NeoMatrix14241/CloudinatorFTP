@@ -5919,11 +5919,11 @@ function addManualCleanupButton() {
 
         controls.appendChild(cleanupBtn);
 
-        // --- Cleanup Cache button ---
+        // --- Rebuild Cache button ---
         const cacheBtn = document.createElement('button');
         cacheBtn.id = 'cleanupCacheBtn';
         cacheBtn.className = 'btn btn-warning btn-sm manual-cleanup-btn';
-        cacheBtn.innerHTML = '<i class="fas fa-database"></i> Cleanup Cache';
+        cacheBtn.innerHTML = '<i class="fas fa-database"></i> Rebuild Cache';
         cacheBtn.title = 'Delete storage_index.json and rebuild the index from scratch';
 
         cacheBtn.onclick = async function () {
@@ -5947,7 +5947,7 @@ function addManualCleanupButton() {
                 showUploadStatus(`❌ Cache cleanup failed: ${error.message}`, 'error');
             } finally {
                 cacheBtn.disabled = false;
-                cacheBtn.innerHTML = '<i class="fas fa-database"></i> Cleanup Cache';
+                cacheBtn.innerHTML = '<i class="fas fa-database"></i> Rebuild Cache';
             }
         };
 
