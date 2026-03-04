@@ -153,14 +153,39 @@ app.config.update(
 
 def _trigger_reconcile():
     """Kick off a background reconcile so file/dir counts correct themselves
-    immediately after mutations (delete, move, rename) instead of waiting 15 min."""
+    immediately after mutations (delete, move, rename, copy) instead of waiting 15 min.
+
+    IMPORTANT: We capture the snapshot BEFORE reconcile starts and always force-push
+    SSE afterwards. Without this, a race between watchdog and the reconcile walk
+    causes both to see no change and neither fires the SSE update:
+
+      1. Copy finishes -> watchdog on_created events update _file_count/_total_size
+         in memory but have NOT yet called _notify_and_save / updated last_snapshot.
+      2. Reconcile walk finishes -> old_snapshot = build_snapshot() already has the
+         NEW correct counts (watchdog updated the counters) -> old == new ->
+         _notify_changes NOT called -> last_snapshot set to new correct values.
+      3. Watchdog debounce fires -> old = last_snapshot (now the new correct values
+         set by reconcile) -> new = build_snapshot() (same) -> no push again.
+      Result: zero SSE pushes, client stuck until manual refresh.
+
+    Fix: save the pre-reconcile snapshot and always call trigger_storage_update
+    after the walk, bypassing reconcile own change detection.
+    """
     import threading
     from file_monitor import get_file_monitor
+    from realtime_stats import trigger_storage_update
     def _run():
         try:
-            get_file_monitor()._reconcile()
+            monitor = get_file_monitor()
+            old_snap = monitor.get_current_snapshot()
+            monitor._reconcile()
+            new_snap = monitor.get_current_snapshot()
+            # Always push even if reconcile saw no drift (race may have hidden the change)
+            trigger_storage_update(old_snap, new_snap)
+            print(f"\U0001f4e1 Force-pushed SSE after reconcile: "
+                  f"{getattr(old_snap, 'file_count', '?')} -> {getattr(new_snap, 'file_count', '?')} files")
         except Exception as e:
-            print(f'⚠️ Background reconcile error: {e}')
+            print(f'\u26a0\ufe0f Background reconcile error: {e}')
     threading.Thread(target=_run, daemon=True).start()
 
 

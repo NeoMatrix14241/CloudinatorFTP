@@ -4821,6 +4821,88 @@ function clearSelection() {
 // Modal Functions
 let browserCurrentPath = '';  // Track current path in folder browser
 
+// ── VT-style virtual scroll for the selected-items list in Copy/Move modals ──
+// Renders items in batches of VT_LIST_CHUNK (mirrors the main table's CHUNK=80)
+// and uses an IntersectionObserver sentinel to load the next batch on scroll.
+const VT_LIST_CHUNK = 80;
+let _vtListObserver = null;
+
+function _vtListDisconnect() {
+    if (_vtListObserver) { _vtListObserver.disconnect(); _vtListObserver = null; }
+}
+
+function _vtListRenderChunk(ul, items, rendered) {
+    const end = Math.min(rendered + VT_LIST_CHUNK, items.length);
+    for (let i = rendered; i < end; i++) {
+        const li = document.createElement('li');
+        li.textContent = items[i].split('/').pop();
+        li.style.cssText = 'padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+        ul.appendChild(li);
+    }
+    return end;
+}
+
+function _populateSelectedItemsVT(ul) {
+    if (!ul) return;
+    _vtListDisconnect();
+    ul.innerHTML = '';
+
+    ul.style.cssText = [
+        'max-height:320px',
+        'overflow-y:auto',
+        'overflow-x:hidden',
+        'margin:0',
+        'padding:4px 0 4px 18px',
+        'list-style:disc',
+        'scrollbar-width:thin',
+        'font-size:13px',
+        'line-height:1.55',
+    ].join(';');
+
+    const items = [...selectedItems];
+    const total = items.length;
+
+    let badge = ul.previousElementSibling;
+    if (!badge || !badge.classList.contains('vt-list-count')) {
+        badge = document.createElement('div');
+        badge.className = 'vt-list-count';
+        badge.style.cssText = 'font-size:11px;opacity:0.65;margin-bottom:3px;';
+        ul.parentNode.insertBefore(badge, ul);
+    }
+    badge.textContent = `${total} item${total !== 1 ? 's' : ''} selected`;
+
+    if (total === 0) return;
+
+    let rendered = _vtListRenderChunk(ul, items, 0);
+    if (rendered >= total) return;
+
+    function _attachListSentinel() {
+        const old = ul.querySelector('.vt-list-sentinel');
+        if (old) old.remove();
+
+        const remaining = total - rendered;
+        const sentinel = document.createElement('li');
+        sentinel.className = 'vt-list-sentinel';
+        sentinel.style.cssText = 'list-style:none;padding:4px 0;font-size:11px;opacity:0.6;text-align:center;';
+        sentinel.innerHTML = `<i class="fas fa-circle-notch fa-spin" style="margin-right:5px;"></i>`
+            + `Loading ${Math.min(VT_LIST_CHUNK, remaining)} more of ${remaining} remaining…`;
+        ul.appendChild(sentinel);
+
+        _vtListObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (!entry.isIntersecting) return;
+                _vtListDisconnect();
+                sentinel.remove();
+                rendered = _vtListRenderChunk(ul, items, rendered);
+                if (rendered < total) _attachListSentinel();
+            });
+        }, { root: ul, threshold: 0.1 });
+        _vtListObserver.observe(sentinel);
+    }
+
+    _attachListSentinel();
+}
+
 function showMoveModal() {
     if (selectedItems.size === 0) return;
 
@@ -4836,15 +4918,8 @@ function showMoveModal() {
         confirmBtn.className = 'btn btn-warning';
     }
 
-    // Populate selected items list
-    if (selectedItemsList) {
-        selectedItemsList.innerHTML = '';
-        selectedItems.forEach(path => {
-            const li = document.createElement('li');
-            li.textContent = path.split('/').pop(); // Show just filename
-            selectedItemsList.appendChild(li);
-        });
-    }
+    // Populate selected items list with VT-style virtual scroll
+    _populateSelectedItemsVT(selectedItemsList);
 
     // Initialize folder browser
     initializeFolderBrowser();
@@ -4867,15 +4942,8 @@ function showCopyModal() {
         confirmBtn.className = 'btn btn-success';
     }
 
-    // Populate selected items list
-    if (selectedItemsList) {
-        selectedItemsList.innerHTML = '';
-        selectedItems.forEach(path => {
-            const li = document.createElement('li');
-            li.textContent = path.split('/').pop(); // Show just filename
-            selectedItemsList.appendChild(li);
-        });
-    }
+    // Populate selected items list with VT-style virtual scroll
+    _populateSelectedItemsVT(selectedItemsList);
 
     // Initialize folder browser
     initializeFolderBrowser();
@@ -5051,6 +5119,9 @@ async function createNewFolderInBrowser() {
 function closeModal() {
     const modal = document.getElementById('moveModal');
     if (modal) modal.classList.remove('show');
+
+    // Tear down the VT list observer so it doesn't fire after the modal closes
+    _vtListDisconnect();
 
     // Reset form
     const destinationPath = document.getElementById('destinationPath');
@@ -5445,6 +5516,7 @@ async function performBulkMove(paths, destination, conflictResolutions = {}) {
             showNotification('Move Successful', `Successfully moved ${result.moved_count} item(s)`, 'success');
             // Clear selection first, then refresh file table
             clearSelection();
+            VT.clearDirCache(); // Flush stale folder counts so fresh data is fetched
             await refreshFileTable();
             // Refresh storage stats after move (file locations changed)
             refreshStorageStats('move operation');
@@ -5477,6 +5549,7 @@ async function performBulkCopy(paths, destination, conflictResolutions = {}) {
             showNotification('Copy Successful', `Successfully copied ${result.copied_count} item(s)`, 'success');
             // Clear selection first, then refresh file table
             clearSelection();
+            VT.clearDirCache(); // Flush stale folder counts so fresh data is fetched
             await refreshFileTable();
             // Refresh storage stats after copy (new files created, size increased)
             refreshStorageStats('copy operation');
@@ -7847,6 +7920,9 @@ function handleStorageUpdate(data) {
                         console.log('🚀 Triggering instant file table refresh via SSE...');
 
                         if (!isUploading && !_mutationInFlight) {
+                            // Clear stale dir-info cache so loadDirInfoCells() re-fetches
+                            // from the server instead of showing cached pre-copy counts.
+                            VT.clearDirCache();
                             requestAnimationFrame(async () => { await refreshFileTable(); });
                         } else if (isUploading && !_mutationInFlight) {
                             const uploadPaths = new Set();
