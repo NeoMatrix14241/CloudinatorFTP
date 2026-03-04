@@ -1179,15 +1179,28 @@ i.fa-file {
 }
 
 .modal-content {
-    background: rgba(255, 255, 255, 0.95);
+    background: linear-gradient(145deg, rgba(30, 60, 114, 0.97) 0%, rgba(42, 82, 152, 0.97) 100%);
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 15px;
     padding: 30px;
     width: 90%;
     max-width: 500px;
-    box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
-    /* Ensure content is centered */
+    /* Cap height and use flex so the body can scroll instead of overflowing */
+    max-height: calc(100dvh - 40px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
     position: relative;
     margin: auto;
+    color: #fff;
+}
+
+/* Move/Copy modal needs extra width on desktop for the folder browser */
+#moveModal .modal-content {
+    max-width: 600px;
 }
 
 .modal-header {
@@ -1195,12 +1208,13 @@ i.fa-file {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 20px;
+    flex-shrink: 0;
 }
 
 .modal-title {
     font-size: 18px;
     font-weight: 600;
-    color: #2c3e50;
+    color: #fff;
 }
 
 .modal-close {
@@ -1222,7 +1236,12 @@ i.fa-file {
 }
 
 .modal-body {
-    margin-bottom: 20px;
+    flex: 1;
+    min-height: 0;          /* required for flex child to shrink below content size */
+    overflow-y: auto;
+    margin-bottom: 0;
+    padding-bottom: 16px;
+    scrollbar-width: thin;
 }
 
 .form-group {
@@ -1233,52 +1252,67 @@ i.fa-file {
     display: block;
     margin-bottom: 5px;
     font-weight: 500;
-    color: #2c3e50;
+    color: rgba(255, 255, 255, 0.9);
 }
 
 .form-control {
     width: 100%;
     padding: 10px 15px;
-    border: 1px solid #ddd;
+    border: 1px solid rgba(255, 255, 255, 0.25);
     border-radius: 8px;
     font-size: 14px;
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+}
+
+.form-control::placeholder {
+    color: rgba(255, 255, 255, 0.45);
 }
 
 .form-control:focus {
     outline: none;
-    border-color: #3498db;
-    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+    border-color: rgba(255, 255, 255, 0.6);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.18);
 }
 
 .modal-footer {
     display: flex;
     justify-content: flex-end;
     gap: 10px;
+    flex-shrink: 0;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    margin-top: 4px;
 }
 
 /* Folder Browser Styles */
 .folder-browser {
-    background: rgba(240, 240, 240, 0.95);
-    border: 1px solid rgba(200, 200, 200, 0.8);
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 8px;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    /* Responsive height: never less than 160px, targets 35vh, caps at 340px */
+    max-height: clamp(160px, 35vh, 340px);
 }
 
 .current-destination {
-    background: rgba(200, 200, 200, 0.3);
+    background: rgba(255, 255, 255, 0.1);
     padding: 8px 12px;
     border-radius: 6px;
     margin-bottom: 10px;
-    border: 1px solid rgba(150, 150, 150, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.2);
     display: flex;
     align-items: center;
-    color: #333 !important;
+    color: #fff !important;
 }
 
 .browser-actions {
     padding: 8px 12px;
-    border-bottom: 1px solid rgba(150, 150, 150, 0.4);
-    background: rgba(200, 200, 200, 0.2);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.08);
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
@@ -1292,8 +1326,9 @@ i.fa-file {
 
 .folder-list {
     padding: 8px;
-    max-height: 250px;
+    flex: 1;
     overflow-y: auto;
+    scrollbar-width: thin;
 }
 
 .folder-item {
@@ -1304,17 +1339,17 @@ i.fa-file {
     border-radius: 6px;
     margin-bottom: 2px;
     transition: all 0.2s ease;
-    color: #333 !important;
+    color: rgba(255, 255, 255, 0.9) !important;
 }
 
 .folder-item:hover {
-    background-color: rgba(0, 0, 0, 0.05);
+    background-color: rgba(255, 255, 255, 0.12);
     transform: translateX(2px);
 }
 
 .folder-item:active {
     transform: translateX(0px);
-    background-color: rgba(0, 0, 0, 0.1);
+    background-color: rgba(255, 255, 255, 0.18);
 }
 
 .folder-item i.fa-folder {
@@ -1325,7 +1360,7 @@ i.fa-file {
 }
 
 .folder-item i.fa-chevron-right {
-    color: rgba(0, 0, 0, 0.4);
+    color: rgba(255, 255, 255, 0.4);
     font-size: 12px;
     margin-left: auto;
 }
@@ -1333,7 +1368,7 @@ i.fa-file {
 .browser-loading {
     padding: 20px;
     text-align: center;
-    color: rgba(0, 0, 0, 0.6);
+    color: rgba(255, 255, 255, 0.6);
 }
 
 .browser-loading i {
@@ -1341,18 +1376,24 @@ i.fa-file {
 }
 
 .folder-item span,
-.folder-item .folder-name,
-.current-destination span,
-.current-destination {
-    color: #333 !important;
+.folder-item .folder-name {
+    color: rgba(255, 255, 255, 0.9) !important;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     display: block;
 }
 
+.current-destination span {
+    color: rgba(255, 255, 255, 0.9) !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: inline;  /* must stay inline so it sits next to the folder icon */
+}
+
 .current-destination {
-    color: #333 !important;
+    color: #fff !important;
 }
 
 .empty-state {
@@ -2275,23 +2316,30 @@ td .fa-file {
     /* Modal adjustments for mobile */
     .modal-content {
         width: 95%;
-        margin: 20px;
-        padding: 20px;
+        max-height: calc(100dvh - 24px);
+        padding: 18px;
+        border-radius: 12px;
     }
 
     .modal-header {
-        flex-direction: column;
-        text-align: center;
-        gap: 10px;
+        flex-direction: row;  /* keep title + × on the same line */
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 14px;
     }
 
     .modal-footer {
         flex-direction: column;
         gap: 8px;
+        padding-top: 12px;
     }
 
     .modal-footer .btn {
         width: 100%;
+    }
+
+    #moveModal .modal-content {
+        max-width: 98%;
     }
 }
 
@@ -2762,13 +2810,14 @@ td .fa-file {
 
     .modal-content {
         width: 98%;
-        margin: 10px;
-        padding: 15px;
+        max-height: calc(100dvh - 16px);
+        padding: 14px;
+        border-radius: 10px;
     }
 
-    /* Mobile folder browser */
+    /* Mobile folder browser — give it a smaller but still usable height */
     .folder-browser {
-        max-height: 250px;
+        max-height: clamp(140px, 28vh, 240px);
     }
 
     .browser-actions {
@@ -2833,6 +2882,16 @@ td .fa-file {
 
     .file-queue {
         max-height: 200px;
+    }
+
+    /* Landscape: modals are wide but very short — shrink folder browser */
+    .modal-content {
+        max-height: calc(100dvh - 16px);
+        padding: 12px 18px;
+    }
+
+    .folder-browser {
+        max-height: clamp(100px, 22vh, 200px);
     }
 }
 

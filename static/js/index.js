@@ -4848,7 +4848,7 @@ function _populateSelectedItemsVT(ul) {
     ul.innerHTML = '';
 
     ul.style.cssText = [
-        'max-height:320px',
+        'max-height:clamp(120px,22vh,280px)',
         'overflow-y:auto',
         'overflow-x:hidden',
         'margin:0',
