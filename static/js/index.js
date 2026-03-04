@@ -146,7 +146,7 @@ function cleanupAuthenticationHistory() {
     }
 
     // Add periodic authentication check
-    setInterval(checkAuthenticationStatus, 30000); // Check every 30 seconds
+    setInterval(checkAuthenticationStatus, 1000); // Check every 1 second
 }
 
 // FIX: Track consecutive auth failures — transient network blips must not kill active uploads
@@ -157,7 +157,7 @@ async function checkAuthenticationStatus() {
     // Always ping the server — this refreshes the session cookie even on background tabs.
     // Never skip the fetch during upload; only skip the *redirect* so uploads aren't interrupted.
     try {
-        const response = await fetch('/admin/upload_status', {
+        const response = await fetch('/check_session', {
             method: 'GET',
             cache: 'no-cache',
             headers: { 'Cache-Control': 'no-cache' }

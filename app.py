@@ -219,6 +219,12 @@ def validate_session():
     # Session lifetime controlled by PERMANENT_SESSION_LIFETIME (86400s = 24h)
     # and refreshed on every request via SESSION_REFRESH_EACH_REQUEST=True.
 
+@app.route('/check_session')
+def check_session():
+    if not is_logged_in():
+        return jsonify({'error': 'Session expired'}), 401
+    return jsonify({'status': 'ok'}), 200
+
 @app.route('/cancel_bulk_zip', methods=['POST'])
 def cancel_bulk_zip():
     session_id = session.get('session_id') or request.cookies.get('session')
