@@ -45,11 +45,6 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 });
 
-/**
- * Reads computed widths from the <thead> <th> elements after initial render
- * and stores them. Call applyColumnWidths(row) on every AJAX-created row
- * to force inline widths that override any CSS recalculation.
- */
 let _lockedColWidths = [];
 
 function lockTableColumnWidths() {
@@ -1044,20 +1039,6 @@ window.addEventListener('popstate', function (event) {
     navigateToFolder(path);
 });
 
-// Update file table with new content
-// ═══════════════════════════════════════════════════════════════
-// VIRTUAL TABLE SCROLL ENGINE
-// Stores full item data, renders rows in chunks, supports
-// sort (on data), search/filter (on data), IntersectionObserver
-// ═══════════════════════════════════════════════════════════════
-/**
- * Initialize the VT engine from the initialFilesData JSON blob on page load.
- * Called from DOMContentLoaded.
- *
- * The HTML <tbody> is now a skeleton only (no server-rendered rows), so VT
- * always owns the table from the very first paint — no flash of old content,
- * no slow parse of thousands of <tr> elements, no stale parent dir row.
- */
 function _initVTFromPageData() {
     const tbody = document.querySelector('#filesTable tbody');
     if (!tbody) return;
@@ -1115,9 +1096,6 @@ const VT = (() => {
     let _observer   = null;
     let _searchResultsMode = false; // true when deep-search is active
 
-    // Persistent cache: fullPath → { file_count, dir_count, total_size }
-    // Survives VT.init() rebuilds so folder info fetched once is never re-fetched
-    // just because _renderAll recreated the DOM nodes with fresh dir-info-cell elements.
     const _dirInfoCache = new Map();
     // ── public API ────────────────────────────────────────────
     function init(files, path) {
@@ -1167,7 +1145,6 @@ const VT = (() => {
     }
 
     function markSearchResults() {
-        // Called when deep-search takes over the display
         _searchResultsMode = true;
         _disconnectObserver();
     }
@@ -1175,8 +1152,6 @@ const VT = (() => {
     function getAll() { return _allFiles; }
     function getPath() { return _curPath; }
 
-    // BUG FIX: Write resolved folder size back into _allFiles so size-sort works on dirs.
-    // loadDirInfoCells only updated the DOM cell — _allFiles stayed size:null for all folders.
     function patchFolderSize(folderFullPath, totalSize) {
         const existing = _dirInfoCache.get(folderFullPath) || {};
         _dirInfoCache.set(folderFullPath, { ...existing, total_size: totalSize });
@@ -1228,9 +1203,6 @@ const VT = (() => {
                 if (_sortCol === 'name') {
                     cmp = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
                 } else if (_sortCol === 'size') {
-                    // Use the real size if patchFolderSize has populated it (not null/undefined).
-                    // Folders with unknown size (null) sort as -1 so they group at the bottom
-                    // of the folder section; once loadDirInfoCells resolves them they sort properly.
                     const sa = (a.size != null) ? a.size : -1;
                     const sb = (b.size != null) ? b.size : -1;
                     cmp = sa - sb;
@@ -1414,11 +1386,6 @@ function updateFileTable(files, path) {
     // Clear deep search results from overlay
     hideDeepSearchResults();
 
-    // Do NOT clear dir-info-cell data-loaded here — VT.init re-applies sizes from
-    // _dirInfoCache, so _renderAll will re-render cached cells instantly without fetching.
-    // Only invalidate a specific path's cache entry when its content actually changed
-    // (done in the SSE mutation handler and after upload completes).
-
     // Hand off to virtual table engine
     VT.init(files || [], path);
 
@@ -1572,9 +1539,6 @@ function loadDirInfoCells() {
 
         const dirPath = cell.dataset.dirPath;
 
-        // Serve from cache instantly — no network request if we already know this folder.
-        // This prevents all folders re-loading during upload refreshes just because
-        // _renderAll recreated dir-info-cell nodes without data-loaded.
         const cached = VT.getCachedDirInfo(dirPath);
         if (cached !== null) {
             var html = cached.file_count + ' files, ' + cached.dir_count + ' folders';
@@ -1582,7 +1546,7 @@ function loadDirInfoCells() {
                 html += '<br><small style="color:white;">' + formatSize(cached.total_size) + '</small>';
             }
             cell.innerHTML = html;
-            return; // no fetch needed
+            return;
         }
 
         fetch('/api/dir_info/' + dirPath)
@@ -1596,11 +1560,6 @@ function loadDirInfoCells() {
                 }
                 cell.innerHTML = html;
                 VT.cacheDirInfo(dirPath, data);
-                // Intentionally do NOT call applySort here. Calling it from inside a fetch
-                // callback triggers _renderAll which recreates all dir-info-cell nodes, which
-                // triggers loadDirInfoCells again, which re-fetches all dirs — an infinite cycle
-                // that bypasses the cache on every sort. The patched size is now in _allFiles
-                // and will be used correctly the next time the user clicks the sort header.
             })
             .catch(function () { cell.textContent = '--'; });
     });
@@ -1926,9 +1885,6 @@ document.addEventListener('visibilitychange', function () {
         }
     } else if (document.visibilityState === 'visible') {
         console.log('👀 Page visible again');
-        // IMPORTANT: do NOT call updateManualCleanupButton() here while uploading.
-        // That fires two fetch requests to the server which can interrupt in-flight
-        // upload connections when the browser re-prioritizes tasks on tab return.
         if (!isUploading) {
             updateManualCleanupButton();
         }
@@ -2023,16 +1979,14 @@ function _addFolderFilesToQueue(files) {
         const groupId = `fg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
         const group = {
             id: groupId, rootName,
-            basePath: currentPath || '',  // frozen at queue time — never changes when user browses
-            // Store array of File refs (already in RAM from drag-drop, can't avoid)
-            // but don't duplicate into uploadQueue — iterate lazily at upload time
+            basePath: currentPath || '',
             pendingFiles: groupFiles,
             totalCount: groupFiles.length,
             scanned: groupFiles.length,
             completed: 0, errors: 0,
-            totalSize: 0,     // filled progressively by _scanSizeChunked
+            totalSize: 0,
             status: 'pending',
-            scanComplete: true,  // file list is complete — no tree walk in progress
+            scanComplete: true,
             cancelled: false,
             createdTime: Date.now()
         };
@@ -2086,20 +2040,10 @@ function _registerFolderGroup(fileArray, mobilePrefix) {
     _spawnFolderWorkersIfNeeded();
 }
 
-/**
- * Reads file.size from a FileList/Array in chunks, yielding between each chunk
- * so the browser never freezes. Updates group.totalSize live.
- * FIX: Uses much larger chunks when the tab is hidden to avoid browser setTimeout
- * throttling (which clamps setTimeout to ~1s when backgrounded), otherwise scanning
- * 16k+ files would take hours in a background tab.
- */
 async function _scanSizeChunked(group, source, chunkSize = 1000) {
     const total = source.length;
     let i = 0;
     while (i < total && !group.cancelled) {
-        // FIX: Use bigger chunks when tab is hidden — browsers throttle setTimeout(fn,0)
-        // to ~1 second minimum in background tabs, so 1000-file chunks would stall.
-        // 5000-file chunks means ~3 yields for 16k files instead of 16k yields.
         const effectiveChunk = document.hidden ? 5000 : chunkSize;
         const end = Math.min(i + effectiveChunk, total);
         for (; i < end; i++) {
@@ -2111,16 +2055,6 @@ async function _scanSizeChunked(group, source, chunkSize = 1000) {
     updateQueueDisplay(); // Final update
 }
 
-/**
- * Uploads a folder group lazily at upload time — parallel workers, live X/TOTAL counter.
- *
- * KEY DESIGN:
- * - Iterates source (FileList / Array / pendingEntries) via a shared index, never all at once
- * - Each worker pushes ONE item into uploadQueue before calling uploadSingleFile(), so that
- *   uploadSingleFile()'s internal uploadQueue.find() / cancel checks / progress tracking all work
- * - Item is spliced out of uploadQueue right after completion to keep memory flat
- * - Worker concurrency matches PARALLEL_UPLOAD_CONFIG so folder uploads respect the thread setting
- */
 async function _uploadFolderGroupLazy(group, startFrom = 0) {
     if (group._running) {
         console.warn(`⚠️ Group "${group.rootName}" loop already running — skipping duplicate start`);
@@ -2145,8 +2079,6 @@ async function _uploadFolderGroupLazy(group, startFrom = 0) {
             : (file.webkitRelativePath || file.relativePath || '').replace(/^\//, '');
         const parts = fp.split('/'); parts.pop();
         let relDir = parts.join('/');
-        // If the folder was renamed (user chose "keep both"), swap the root component
-        // so every file lands under the new folder name instead of the original.
         if (group.rootNameOverride && relDir) {
             const relParts = relDir.split('/');
             relParts[0] = group.rootNameOverride;
@@ -2154,17 +2086,12 @@ async function _uploadFolderGroupLazy(group, startFrom = 0) {
         } else if (group.rootNameOverride && !relDir) {
             relDir = group.rootNameOverride;
         }
-        // Use group.basePath (frozen when folder was queued), NOT live currentPath.
-        // live currentPath changes whenever the user browses, splitting files across folders.
         const base = group.basePath || '';
         const dest = base ? (relDir ? `${base}/${relDir}` : base) : relDir;
         const displayName = relDir ? `${relDir}/${file.name}` : file.name;
         return { file, dest, displayName };
     }
 
-    // Real-time DOM updates — safe now that the Stop button lives in #uploadProgressSummary
-    // and is never touched by _updateGroupRowInPlace. The old uiEvery=50 throttle was only
-    // needed because the button was being destroyed+recreated inside the row on every tick.
     const uiEvery = 1;
     // Log progress every 1000 files
     const logEvery = 1000;
@@ -2173,8 +2100,6 @@ async function _uploadFolderGroupLazy(group, startFrom = 0) {
         for (let i = startFrom; ; i++) {
             if (group.cancelled || !isUploading) break;
 
-            // If we've consumed all entries so far, check whether the scanner is still running.
-            // If so, wait for it to push more entries rather than exiting the loop early.
             while (i >= source.length) {
                 if (group.scanComplete || group.cancelled || !isUploading) break;
                 await new Promise(r => setTimeout(r, 50)); // yield ~50 ms then re-check
@@ -2188,9 +2113,6 @@ async function _uploadFolderGroupLazy(group, startFrom = 0) {
             const { file, dest, displayName } = _resolved;
 
             const ac = new AbortController();
-            // BUG FIX: Use a Set so all concurrent workers' controllers are reachable.
-            // The old single-slot _activeController was overwritten by each of the 10
-            // parallel workers — only the last writer's controller could ever be aborted.
             if (!group._activeControllers) group._activeControllers = new Set();
             group._activeControllers.add(ac);
 
@@ -2213,18 +2135,10 @@ async function _uploadFolderGroupLazy(group, startFrom = 0) {
                 if (!group.cancelled) {
                     updateItemStatus(queueItem.id, 'completed');
                     lazyBytesUploaded += file.size;
-                    // NOTE: totalBytesUploaded is NOT incremented here.
-                    // uploadSingleFile already calls updateItemProgress(item.id, 100, file.size)
-                    // which does delta = file.size - 0 -> totalBytesUploaded += file.size.
-                    // Adding it again here caused every folder file to be counted twice,
-                    // making the uploaded total balloon past the expected size.
                     _recordSpeedSample(totalBytesUploaded);
                     _lastUploadActivity = Date.now();
                 }
             } catch (err) {
-                // Only treat as user-cancel if group.cancelled was ALREADY true before
-                // this error. An unexpected AbortError (browser GC, network blip) must
-                // NOT set group.cancelled — that silently kills all remaining files.
                 const userCancelled = group.cancelled
                                    || err.message === 'Upload cancelled by user';
                 const unexpectedAbort = !userCancelled && err.name === 'AbortError';
@@ -2306,13 +2220,6 @@ async function _uploadFolderGroupLazy(group, startFrom = 0) {
     }
 }
 
-/**
- * Release all _seenFileKeys entries belonging to a group so the same
- * folder can be re-dropped or re-queued after a skip/cancel/remove.
- * Uses group._ownedKeys (populated as keys are added during scan) rather than
- * reconstructing from pendingEntries — this covers partial scans where the
- * group was skipped/cancelled before the scan finished.
- */
 function _freeSeen(group) {
     if (group._ownedKeys) {
         group._ownedKeys.forEach(key => _seenFileKeys.delete(key));
@@ -2339,9 +2246,6 @@ function _stopFolderGroup(groupId) {
 
     group.cancelled = true;
 
-    // BUG FIX: Abort ALL active controllers (one per concurrent worker), not just one.
-    // The old code stored a single _activeController that 10 workers overwrote constantly,
-    // meaning Stop only ever aborted 1 of 10 in-flight requests.
     if (group._activeControllers && group._activeControllers.size > 0) {
         group._activeControllers.forEach(ac => { try { ac.abort(); } catch(e) {} });
         group._activeControllers.clear();
@@ -2387,9 +2291,6 @@ function addToUploadQueue(itemData) {
     console.log('📝 Added recovered item to queue:', itemData.name);
 }
 
-// Monotonic counter for file IDs — Date.now() caused duplicate IDs when multiple
-// concurrent workers processed files in the same millisecond, leaving zombie
-// queueItems that never got spliced out and accumulated until Chrome crashed.
 let _fileIdCounter = 0;
 
 function generateFileId(file) {
@@ -2751,9 +2652,6 @@ function _updateGroupRowInPlace(group) {
         }
     }
 
-    // BUG FIX: Only touch buttons on status TRANSITIONS, never during steady-state uploading.
-    // Previously every call removed+recreated the stop button. With 10 workers at 100 files/sec
-    // that was ~1000 DOM removals/sec — the button was gone before mouseup could fire.
     const existingStopBtn = el.querySelector('.fg-stop-btn');
     const existingRemoveBtn = el.querySelector('.remove-btn:not(.fg-stop-btn)');
 
@@ -2878,10 +2776,6 @@ function updateProgressSummary() {
     const overallPercentageElement = document.getElementById('overallPercentage');
     const overallProgressFill = document.getElementById('overallProgressFill');
 
-    // Grow totalBytesToUpload as _scanSizeChunked fills in group sizes during upload.
-    // IMPORTANT: only include ACTIVE groups (scanning/pending/uploading) in the live total.
-    // Including error/done groups from a previous session inflated totalBytesToUpload
-    // on every subsequent upload because the ratchet (live > total) kept bumping it up.
     if (isUploading) {
         const live = uploadQueue.reduce((s,i) => s + (i.size||0), 0)
             + [...folderGroups.values()]
@@ -3902,11 +3796,6 @@ async function _findFreeName(destDir, name) {
 }
 
 /**
- * Check and interactively resolve conflicts before a move or copy operation.
- * Calls /api/check_conflicts, then if any conflicts exist shows a themed
- * batch dialog listing them. Returns a resolution map { filename: 'overwrite'|'rename'|'skip' }
- * or null if the user cancelled entirely.
- *
  * @param {string[]} paths       - source paths being moved/copied
  * @param {string}   destination - destination directory path
  * @param {string}   action      - 'move' or 'copy'
@@ -4058,9 +3947,6 @@ async function _runFolderWorker() {
         group.status = 'uploading';
         _overwriteDecisions.set(group.id, 'ask'); // Reset overwrite decision per folder
 
-        // ── Folder conflict pre-check ──────────────────────────────────────────
-        // Check if the destination folder already exists on the server.
-        // We do this BEFORE any upload so the user can decide up-front.
         try {
             const destPath = group.basePath
                 ? `${group.basePath}/${group.rootName}`
@@ -4102,8 +3988,6 @@ async function _runFolderWorker() {
                         }, 2000);
                         continue;
                     }
-                    // 'merge' → fall through and upload normally (files will get their own 409 prompts)
-                    // Leave as 'ask' so existing file conflicts inside the folder still prompt individually
 
                     if (choice === 'rename') {
                         // Find a free folder name, then reroute all files into it
@@ -4119,13 +4003,9 @@ async function _runFolderWorker() {
             // Non-fatal: if the check fails (network issue, old server), proceed normally
             console.warn('⚠️ Folder existence check failed, proceeding:', existErr.message);
         }
-        // ──────────────────────────────────────────────────────────────────────
 
         showUploadStatus(`📂 "${group.rootName}" — ${(group.totalCount || group.scanned).toLocaleString()} files…`, 'info');
         await _uploadFolderGroupLazy(group);
-        // Guarantee status is finalized — if _uploadFolderGroupLazy returned early
-        // (e.g. _running guard tripped), group.status stays 'uploading' and the
-        // stop button remains visible forever.
         if (group.status === 'uploading') {
             group.status = group.errors > 0 ? 'error' : 'done';
             group._running = false;
@@ -4163,11 +4043,6 @@ function setUploadingState(active) {
         ps.classList.add('show');
         updateProgressSummary();
 
-        // BUG FIX: Inject a dedicated Stop All button directly into the progress summary.
-        // It lives completely outside #fileQueue and _updateGroupRowInPlace, so it is NEVER
-        // recreated or touched during uploads — clicks always land on a stable DOM node.
-        // The per-row stop button inside the queue row was getting destroyed/recreated
-        // hundreds of times/sec even with uiEvery=50, eating click events.
         if (!document.getElementById('_stopAllBtn')) {
             const btn = document.createElement('button');
             btn.id = '_stopAllBtn';
@@ -4314,9 +4189,6 @@ async function startBatchUpload() {
                 'success'
             );
 
-            // Clear the entire dir cache so any re-uploaded or newly created folders
-            // fetch fresh file counts — surgical invalidation by destPath missed cases
-            // where the upload destination is a subfolder (e.g. "test") not root.
             VT.clearDirCache();
 
             // Refresh file table via AJAX instead of page reload
@@ -4381,19 +4253,6 @@ async function startBatchUpload() {
     }
 }
 
-// =============================================================================
-// FREEZE / RESUME PROTECTION
-// When the browser freezes a background tab, the upload async loop pauses.
-// These functions detect a stall when the tab becomes visible again and restart
-// any upload group whose loop exited without finishing.
-// =============================================================================
-
-/**
- * Ping /admin/upload_status every 60 s while uploading.
- * Flask's SESSION_REFRESH_EACH_REQUEST=True counts this as activity, so the
- * session cookie stays valid for the full 1-hour SESSION_LIFETIME even when
- * the tab is frozen and no upload POSTs are being sent.
- */
 function _startSessionKeepAlive() {
     if (_sessionKeepAliveInterval) return;
     _sessionKeepAliveInterval = setInterval(async () => {
@@ -4412,19 +4271,9 @@ function _startSessionKeepAlive() {
     }, 30000); // Every 30s — browsers throttle background tabs; 30s gives safety margin
 }
 
-/**
- * If any folder group is in 'uploading' status but its loop has exited
- * (group._running === false) and it still has files to process, restart it
- * from group._currentIndex (the last saved position before freeze).
- */
 function _resumeStalledUploads() {
     if (!isUploading) return 0;
 
-    // Cooldown: if we already triggered a resume recently, skip.
-    // This is the key fix for duplicate-loop explosion: each tab-return fired
-    // _resumeStalledUploads, force-reset _running for every group, and spawned
-    // a second concurrent loop per group.  With 10 groups x N duplicate loops
-    // all uploading in parallel, Waitress ran out of threads and the server died.
     const now = Date.now();
     const msSinceLastResume = now - _lastResumeTime;
     if (msSinceLastResume < 20000) {
@@ -6515,12 +6364,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-
-/**
- * TRUE lazy folder scan using File System Access API (showDirectoryPicker).
- * Shows the folder row immediately with a live counter.
- * Reads directory entries one at a time — never loads 50k paths into memory at once.
- */
 async function _pickFolderLazy() {
     let dirHandle;
     try {
@@ -6567,17 +6410,14 @@ async function _pickFolderLazy() {
         }
     }
 
-    // Store lightweight descriptors — NOT in uploadQueue (avoids memory spike).
-    // Files will be iterated one-at-a-time in _uploadFolderGroupLazy at upload time.
-    group.pendingEntries = []; // [{ file, dest, displayName }]
+    group.pendingEntries = [];
 
     let uiThrottle = 0;
     for await (const file of walkDir(dirHandle, '')) {
         if (group.cancelled) break;
         const parts = (`${rootName}/${file.relativePath.slice(rootName.length + 1)}`).split('/');
         parts.pop();
-        const relDir = parts.join('/'); // preserve full path including root folder name
-        // Use group.basePath (frozen at queue time) — user may browse while scanning.
+        const relDir = parts.join('/');
         const base = group.basePath || '';
         const dest = base ? (relDir ? `${base}/${relDir}` : base) : relDir;
         const key  = `${dest}::${file.name}::${file.size}`;
@@ -6587,11 +6427,9 @@ async function _pickFolderLazy() {
             group._ownedKeys.add(key);
             group.pendingEntries.push({ file, dest, displayName: relDir ? `${relDir}/${file.name}` : file.name });
             group.scanned++;
-            group.totalSize += file.size;  // size is free here — we already awaited getFile()
+            group.totalSize += file.size;
         }
-        // Update UI every 200 files: live counter + running size, no freeze
         if (++uiThrottle % 200 === 0) updateQueueDisplay();
-        // Spawn workers as soon as entries arrive so upload starts while scan is still running.
         if (group.scanned === 1 || group.scanned % 1000 === 0) {
             _spawnFolderWorkersIfNeeded();
         }
@@ -6613,18 +6451,9 @@ async function _pickFolderLazy() {
         if (!fileList || fileList.length === 0) return;
 
         if (type === 'folder') {
-            // ── FOLDER PATH ─────────────────────────────────────────────────────
-            // CRITICAL: snapshot the FileList into a real Array BEFORE resetting
-            // e.target.value. Chrome/Android invalidates the FileList object when the
-            // input is reset — if we store the raw FileList reference and then clear
-            // the input, fileList.length becomes 0 at upload time → instant "done".
-            //
-            // Array.from on File objects is fast (~5ms for 50k) because File objects
-            // are just lightweight metadata handles. The 15s delay is the browser
-            // enumerating the filesystem before the change event fires — unavoidable.
-            const fileArray = Array.from(fileList); // Stable snapshot, unaffected by reset
+            const fileArray = Array.from(fileList);
             const count = fileArray.length;
-            e.target.value = ''; // Reset now — fileArray is safe
+            e.target.value = '';
 
             let mobilePrefix = null;
             const hasRelativePath = !!(fileArray[0] && fileArray[0].webkitRelativePath);
@@ -6843,9 +6672,6 @@ async function handleDrop(e) {
 
         if (plainFiles.length > 0) addFilesToQueue(plainFiles);
 
-        // Register each dropped folder lazily — never materialise all File objects upfront.
-        // The old readDirectory() walked the whole tree into one array; push(...50kFiles)
-        // exceeds V8's argument limit and silently broke drag-drop on large folders.
         for (const dirEntry of dirEntries) {
             _registerDirEntryLazy(dirEntry);
         }
@@ -6856,11 +6682,6 @@ async function handleDrop(e) {
     }
 }
 
-/**
- * Lazily register a FileSystemDirectoryEntry (from drag-drop) as a folder group.
- * Scans entries one-at-a-time via createReader so 50k files never pile up in RAM.
- * Mirrors _pickFolderLazy but uses the FileEntry API instead of File System Access API.
- */
 async function _registerDirEntryLazy(dirEntry) {
     const rootName = dirEntry.name;
 
@@ -6907,9 +6728,6 @@ async function _registerDirEntryLazy(dirEntry) {
                         group.totalSize += file.size;
                     }
                     if (group.scanned % 200 === 0) updateQueueDisplay();
-                    // If the user already clicked Upload, let workers start consuming
-                    // entries as soon as the first batch arrives — no need to wait for
-                    // the full scan to finish before uploading begins.
                     if (group.scanned === 100 || group.scanned % 1000 === 0) {
                         _spawnFolderWorkersIfNeeded();
                     }
@@ -6937,8 +6755,6 @@ async function _registerDirEntryLazy(dirEntry) {
     }
 
     try {
-        // Walk the root directory's children, seeding relPath with rootName so that
-        // the dropped folder itself is preserved: test/file.txt → basePath/test/file.txt
         const reader = dirEntry.createReader();
         await new Promise((resolve, reject) => {
             function readBatch() {
@@ -7830,9 +7646,6 @@ function connectToStorageStream() {
 
             document.title = '🔴 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
 
-            // FIX: While an upload is active, never permanently give up on SSE.
-            // Use a short delay and keep reconnecting indefinitely so the server
-            // keeps receiving a live client to broadcast updates to.
             if (isUploading) {
                 console.log('📤 Upload in progress — reconnecting SSE immediately (no give-up limit)');
                 reconnectAttempts = 0; // Never count against upload sessions
@@ -7996,12 +7809,6 @@ function handleStorageUpdate(data) {
                     const changes = data.data.changes;
                     console.log('🔍 Changes detected:', changes);
 
-                    // Refresh file table for ANY change including modifications and renames
-                    // - files_changed/dirs_changed: for file/folder creation/deletion
-                    // - size_changed: for file content modifications
-                    // - content_changed: for file renames, modifications, permission changes
-                    // - mtime_changed: for any file modifications
-                    // Check if there are actual significant changes worth showing to user
                     const hasSignificantChanges = (
                         changes.files_changed !== 0 ||
                         changes.dirs_changed !== 0 ||
@@ -8042,13 +7849,6 @@ function handleStorageUpdate(data) {
                         if (!isUploading && !_mutationInFlight) {
                             requestAnimationFrame(async () => { await refreshFileTable(); });
                         } else if (isUploading && !_mutationInFlight) {
-                            // Directly refresh dir-info cells for uploading folders on every SSE
-                            // tick — same rate as the storage counter. Bypasses data-loaded and
-                            // cache so the size column updates in real-time without waiting for
-                            // a full table refresh.
-                            // Build the actual dir-info-cell paths: basePath/rootName
-                            // basePath is the destination directory, rootName is the folder being uploaded.
-                            // The dir-info-cell has data-dir-path="basePath/rootName" (or just "rootName" at root).
                             const uploadPaths = new Set();
                             folderGroups.forEach(g => {
                                 if (g.status !== 'uploading' && g.status !== 'pending') return;
@@ -8060,15 +7860,11 @@ function handleStorageUpdate(data) {
                             document.querySelectorAll('.dir-info-cell').forEach(cell => {
                                 const p = cell.dataset.dirPath;
                                 if (!p) return;
-                                // Only update cells that ARE the upload destination or a direct
-                                // parent of it (so ancestor counts update too).
-                                // Do NOT use startsWith('') — empty root matches everything.
                                 const relevant = [...uploadPaths].some(up => {
-                                    if (!up) return false; // skip empty/root — too broad
+                                    if (!up) return false;
                                     return p === up || up.startsWith(p + '/');
                                 });
                                 if (!relevant) return;
-                                // Force re-fetch regardless of data-loaded or cache
                                 VT.invalidateDirCache(p);
                                 cell.dataset.loaded = '';
                                 fetch('/api/dir_info/' + p)
@@ -8098,10 +7894,6 @@ function handleStorageUpdate(data) {
                                 requestAnimationFrame(async () => { await refreshFileTable(); });
                             }
                         } else if (_mutationInFlight) {
-                            // Use free_space delta from SSE (os.statvfs — updates in real-time
-                            // as files are deleted) to show live freed space on the deleting cell.
-                            // /api/dir_info/ uses _dir_info cache which is stale until reconcile,
-                            // so we can't use it for real-time feedback during deletion.
                             const freeNow = data.data.free_space;
                             if (freeNow != null && _lastFreeSpace != null && _deletingPaths.size > 0) {
                                 const freed = freeNow - _lastFreeSpace;
