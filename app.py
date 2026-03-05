@@ -26,6 +26,72 @@ from config import PORT, ROOT_DIR, SESSION_SECRET, CHUNK_SIZE, ENABLE_CHUNKED_UP
 from auth import check_login, login_user, logout_user, current_user, is_logged_in, get_role
 import storage
 
+# ------------------------------------------------------------------
+# Brute-force protection — tracks failed login attempts per IP
+# ------------------------------------------------------------------
+class RateLimiter:
+    """
+    Tracks failed login attempts per IP address.
+    After MAX_ATTEMPTS failures within WINDOW seconds, the IP is locked
+    out for LOCKOUT seconds.
+    All state is in-memory — resets on server restart (intentional).
+    """
+    MAX_ATTEMPTS = 5    # failures before lockout
+    WINDOW       = 60   # seconds — rolling window for counting failures
+    LOCKOUT      = 300  # seconds — how long the IP is blocked (5 minutes)
+
+    def __init__(self):
+        self._attempts: dict = {}   # ip -> list of failure timestamps
+        self._locked:   dict = {}   # ip -> lockout-expiry timestamp
+        self._lock = threading.Lock()
+
+    def _get_ip(self) -> str:
+        return request.headers.get('X-Forwarded-For', request.remote_addr or '').split(',')[0].strip()
+
+    def is_blocked(self) -> bool:
+        ip = self._get_ip()
+        with self._lock:
+            expiry = self._locked.get(ip)
+            if expiry:
+                if time.time() < expiry:
+                    return True
+                else:
+                    del self._locked[ip]
+                    self._attempts.pop(ip, None)
+        return False
+
+    def record_failure(self):
+        ip = self._get_ip()
+        now = time.time()
+        with self._lock:
+            attempts = [t for t in self._attempts.get(ip, []) if now - t < self.WINDOW]
+            attempts.append(now)
+            self._attempts[ip] = attempts
+            if len(attempts) >= self.MAX_ATTEMPTS:
+                self._locked[ip] = now + self.LOCKOUT
+                print(f"IP locked out after {self.MAX_ATTEMPTS} failed attempts: {ip}")
+
+    def record_success(self):
+        ip = self._get_ip()
+        with self._lock:
+            self._attempts.pop(ip, None)
+            self._locked.pop(ip, None)
+
+    def remaining_lockout(self) -> int:
+        ip = self._get_ip()
+        with self._lock:
+            expiry = self._locked.get(ip, 0)
+            return max(0, int(expiry - time.time()))
+
+    def attempts_remaining(self) -> int:
+        ip = self._get_ip()
+        now = time.time()
+        with self._lock:
+            recent = [t for t in self._attempts.get(ip, []) if now - t < self.WINDOW]
+            return max(0, self.MAX_ATTEMPTS - len(recent))
+
+rate_limiter = RateLimiter()
+
 # File monitoring and real-time updates
 from file_monitor import get_file_monitor, init_file_monitor
 from realtime_stats import storage_stats_sse, trigger_storage_update, get_event_manager
@@ -538,10 +604,17 @@ def login():
         return redirect(url_for('index'))
     
     if request.method == 'POST':
+        # Check brute-force lockout before touching DB
+        if rate_limiter.is_blocked():
+            remaining = rate_limiter.remaining_lockout()
+            flash(f'Too many failed attempts. Try again in {remaining} seconds.')
+            return render_template('login.html'), 429
+
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
-        
+
         if check_login(username, password):
+            rate_limiter.record_success()
             # Set up session data
             session.clear()
             session.permanent = True
@@ -551,10 +624,15 @@ def login():
             session['logged_in'] = True
             session['login_time'] = int(time.time())
             session.modified = True
-            
+
             return redirect(url_for('index'))
         else:
-            flash('Invalid username or password')
+            rate_limiter.record_failure()
+            left = rate_limiter.attempts_remaining()
+            if left > 0:
+                flash(f'Invalid username or password. {left} attempt(s) remaining.')
+            else:
+                flash(f'Too many failed attempts. Try again in {RateLimiter.LOCKOUT} seconds.')
             return render_template('login.html'), 401
     
     # Render login page with no-cache headers

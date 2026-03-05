@@ -1,5 +1,5 @@
 // Check if user is already logged in and handle browser history
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     // If we have a logged_out parameter, clean up the URL
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.has('logged_out')) {
@@ -7,7 +7,7 @@ document.addEventListener('DOMContentLoaded', function() {
         window.history.replaceState({}, document.title, window.location.pathname);
         return; // Don't check authentication status after logout
     }
-    
+
     // Only check authentication status if we're not coming from a logout
     // Check URL parameters and referrer to avoid loops
     if (!isComingFromLogout()) {
@@ -19,17 +19,17 @@ function isComingFromLogout() {
     // Check if we have a logout parameter or if we're coming from logout
     const urlParams = new URLSearchParams(window.location.search);
     const referrer = document.referrer;
-    
+
     // If there's a logout parameter or we came from logout route, don't check auth
     if (urlParams.has('logged_out') || referrer.includes('/logout')) {
         return true;
     }
-    
+
     // Also check if this is a fresh login page load (not a redirect)
     if (window.history.length === 1) {
         return false; // This is a direct navigation, safe to check auth
     }
-    
+
     return false;
 }
 
@@ -43,13 +43,13 @@ async function checkAuthenticationStatus() {
                 'Cache-Control': 'no-cache'
             }
         });
-        
+
         // If we get redirected to login, we're not authenticated
         if (response.url.includes('/login')) {
             console.log('User not logged in, staying on login page');
             return;
         }
-        
+
         // If we get a successful response to the main page, we're logged in
         if (response.ok && !response.url.includes('/login')) {
             console.log('User already logged in, redirecting...');
@@ -66,7 +66,7 @@ document.getElementById('loginForm').addEventListener('submit', function (e) {
     const btn = document.getElementById('loginBtn');
     btn.classList.add('loading');
     btn.innerHTML = 'Signing In...';
-    
+
     // Add a small delay to ensure the form processes before any redirect
     setTimeout(() => {
         // After successful login, we'll replace the history state to prevent back button issues
@@ -84,3 +84,56 @@ document.querySelectorAll('.form-control').forEach(input => {
         this.parentElement.style.transform = 'scale(1)';
     });
 });
+
+// Lockout countdown timer
+(function () {
+    const flashText = document.getElementById('flashText');
+    if (!flashText) return;
+
+    const msg = flashText.textContent;
+    const match = msg.match(/Try again in (\d+) seconds/);
+    if (!match) return;
+
+    let seconds = parseInt(match[1], 10);
+
+    // Disable form while locked out
+    const btn = document.getElementById('loginBtn');
+    const inputs = document.querySelectorAll('#loginForm input');
+    btn.disabled = true;
+    inputs.forEach(i => i.disabled = true);
+
+    const interval = setInterval(() => {
+        seconds--;
+        if (seconds <= 0) {
+            clearInterval(interval);
+            flashText.textContent = 'Lockout expired. You may try again.';
+            btn.disabled = false;
+            inputs.forEach(i => i.disabled = false);
+            document.getElementById('username').focus();
+        } else {
+            flashText.textContent = msg.replace(/\d+ seconds/, `${seconds} seconds`);
+        }
+    }, 1000);
+})();
+
+// Browser history management
+window.addEventListener('load', function () {
+    console.log('Login page loaded');
+});
+
+document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) {
+        checkAndRedirectIfLoggedIn();
+    }
+});
+
+async function checkAndRedirectIfLoggedIn() {
+    try {
+        const response = await fetch('/admin/upload_status');
+        if (response.ok) {
+            window.location.replace('/');
+        }
+    } catch (error) {
+        // not logged in
+    }
+}
