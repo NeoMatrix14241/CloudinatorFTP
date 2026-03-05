@@ -23,6 +23,7 @@ from typing import Dict, Set, Optional, Callable
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from config import ROOT_DIR
+from file_index import file_index_manager
 
 # Cache location — anchored to where this file lives (add cache/ to .gitignore)
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
@@ -137,6 +138,15 @@ class InstantFileEventHandler(FileSystemEventHandler):
                         self.monitor._dir_info[ancestor]['file_count'] += 1
                         self.monitor._dir_info[ancestor]['total_size'] += file_size
 
+        # --- file index: re-scan the parent folder (outside monitor lock) ---
+        _parent_abs = os.path.dirname(event.src_path)
+        _parent_rel = _rel(_parent_abs, str(self.monitor.root_path))
+        file_index_manager.update_folder(_parent_rel, _parent_abs)
+        # If a new subdirectory was created, seed it in the index (starts empty,
+        # update_folder will skip it; it will be added once it exceeds threshold)
+        if event.is_directory:
+            file_index_manager.update_folder(src_rel, event.src_path)
+
         self._schedule_notify()
 
     def on_deleted(self, event):
@@ -194,6 +204,18 @@ class InstantFileEventHandler(FileSystemEventHandler):
                         )
                 # Size drift corrected by 15min reconcile
 
+        # --- file index: remove deleted dir (and children) or re-scan parent ---
+        if event.is_directory:
+            file_index_manager.remove_folder(src_rel)
+            # Parent folder lost one entry — re-scan it
+            _parent_abs = os.path.dirname(event.src_path)
+            _parent_rel = _rel(_parent_abs, str(self.monitor.root_path))
+            file_index_manager.update_folder(_parent_rel, _parent_abs)
+        else:
+            _parent_abs = os.path.dirname(event.src_path)
+            _parent_rel = _rel(_parent_abs, str(self.monitor.root_path))
+            file_index_manager.update_folder(_parent_rel, _parent_abs)
+
         self._schedule_notify()
 
     def on_moved(self, event):
@@ -245,6 +267,26 @@ class InstantFileEventHandler(FileSystemEventHandler):
                     if dest_parent in self.monitor._dir_info:
                         self.monitor._dir_info[dest_parent]['file_count'] += 1
                         self.monitor._dir_info[dest_parent]['total_size'] += file_size
+
+        # --- file index: rename dir keys or update both parent folders ---
+        if event.is_directory:
+            file_index_manager.rename_folder(src_rel, dest_rel)
+            # Both old and new parent folders changed their direct entry list
+            _src_parent_abs  = os.path.dirname(event.src_path)
+            _dest_parent_abs = os.path.dirname(event.dest_path)
+            _src_parent_rel  = _rel(_src_parent_abs,  str(self.monitor.root_path))
+            _dest_parent_rel = _rel(_dest_parent_abs, str(self.monitor.root_path))
+            file_index_manager.update_folder(_src_parent_rel,  _src_parent_abs)
+            if _src_parent_rel != _dest_parent_rel:
+                file_index_manager.update_folder(_dest_parent_rel, _dest_parent_abs)
+        else:
+            _src_parent_abs  = os.path.dirname(event.src_path)
+            _dest_parent_abs = os.path.dirname(event.dest_path)
+            _src_parent_rel  = _rel(_src_parent_abs,  str(self.monitor.root_path))
+            _dest_parent_rel = _rel(_dest_parent_abs, str(self.monitor.root_path))
+            file_index_manager.update_folder(_src_parent_rel, _src_parent_abs)
+            if _src_parent_rel != _dest_parent_rel:
+                file_index_manager.update_folder(_dest_parent_rel, _dest_parent_abs)
 
         self._schedule_notify()
 
@@ -330,6 +372,9 @@ class FileSystemMonitor:
                   f"{self._dir_count:,} dirs, "
                   f"{self._total_size / (1024**3):.2f} GB, "
                   f"{len(self._dir_info):,} folders indexed")
+
+            # Load the companion file index
+            file_index_manager.load()
             return True
 
         except Exception as e:
@@ -355,6 +400,9 @@ class FileSystemMonitor:
         except Exception as e:
             print(f"⚠️ Failed to save cache: {e}")
 
+        # Keep file_index.json in sync with storage_index.json
+        file_index_manager.save()
+
     # ------------------------------------------------------------------
     # Full walk — first boot or reconcile
     # ------------------------------------------------------------------
@@ -378,8 +426,13 @@ class FileSystemMonitor:
         # We build it bottom-up by accumulating into each folder
         dir_info: Dict[str, dict] = {}
 
+        # direct_entries[rel_path] = [entry_dict, ...]  — immediate children only,
+        # used to build file_index.json for folders that exceed THRESHOLD entries.
+        direct_entries: Dict[str, list] = {}
+
         # Pre-seed root
         dir_info[''] = {'file_count': 0, 'dir_count': 0, 'total_size': 0}
+        direct_entries[''] = []
 
         try:
             for root, dirs, files in os.walk(str(self.root_path), topdown=True):
@@ -392,6 +445,8 @@ class FileSystemMonitor:
                 # Ensure this dir exists in index
                 if root_rel not in dir_info:
                     dir_info[root_rel] = {'file_count': 0, 'dir_count': 0, 'total_size': 0}
+                if root_rel not in direct_entries:
+                    direct_entries[root_rel] = []
 
                 # Register immediate subdirs and bubble dir_count up to all ancestors
                 for d in dirs:
@@ -400,12 +455,23 @@ class FileSystemMonitor:
                     sub_rel = (root_rel + '/' + d) if root_rel else d
                     if sub_rel not in dir_info:
                         dir_info[sub_rel] = {'file_count': 0, 'dir_count': 0, 'total_size': 0}
+                    if sub_rel not in direct_entries:
+                        direct_entries[sub_rel] = []
                     dir_info[root_rel]['dir_count'] += 1
                     dir_count += 1
                     # Bubble dir count up to all ancestors
                     for ancestor in _parents(root_rel):
                         if ancestor in dir_info:
                             dir_info[ancestor]['dir_count'] += 1
+                    # Record subdir as a direct entry of root_rel (for file index)
+                    d_path = os.path.join(root, d)
+                    try:
+                        d_mtime = os.stat(d_path).st_mtime
+                    except OSError:
+                        d_mtime = None
+                    direct_entries[root_rel].append({
+                        'name': d, 'is_dir': True, 'size': None, 'modified': d_mtime
+                    })
 
                 # Count files in this directory
                 for fname in files:
@@ -432,8 +498,19 @@ class FileSystemMonitor:
                                 dir_info[ancestor]['file_count'] += 1
                                 dir_info[ancestor]['total_size'] += fsize
 
+                        # Record as a direct entry of root_rel (for file index)
+                        direct_entries[root_rel].append({
+                            'name': fname, 'is_dir': False,
+                            'size': fsize, 'modified': fmtime,
+                        })
+
                     except (OSError, IOError):
                         continue
+
+                # Sort direct_entries for root_rel now that all children are known
+                direct_entries[root_rel].sort(
+                    key=lambda x: (not x['is_dir'], x['name'].lower())
+                )
 
         except Exception as e:
             print(f"❌ Error during filesystem walk: {e}")
@@ -444,6 +521,9 @@ class FileSystemMonitor:
                   f"{file_count:,} files, {dir_count:,} dirs, "
                   f"{total_size / (1024**3):.2f} GB, "
                   f"{len(dir_info):,} folders indexed")
+
+        # Build file_index.json for folders exceeding the direct-entry threshold
+        file_index_manager.build_from_walk(direct_entries)
 
         return {
             'file_count': file_count,

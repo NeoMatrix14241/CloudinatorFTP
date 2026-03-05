@@ -6060,7 +6060,7 @@ function addManualCleanupButton() {
             try {
                 cacheBtn.disabled = true;
                 cacheBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Rebuilding...';
-                const response = await fetch('/admin/cleanup_cache', {
+                const response = await fetch('/admin/rebuild_cache', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
                 });

@@ -1105,9 +1105,9 @@ def cancel_upload():
         print(f"❌ Cancel upload error: {e}")
         return jsonify({'error': f'Cancel upload error: {str(e)}'}), 500
     
-@app.route('/admin/cleanup_cache', methods=['POST'])
+@app.route('/admin/rebuild_cache', methods=['POST'])
 @login_required
-def admin_cleanup_cache():
+def admin_rebuild_cache():
     """Delete storage_index.json and trigger a fresh full walk to rebuild it"""
     try:
         role = get_role(current_user())
@@ -1115,23 +1115,38 @@ def admin_cleanup_cache():
             return jsonify({'error': 'Permission denied'}), 403
 
         from file_monitor import get_file_monitor, CACHE_FILE
+        from file_index import file_index_manager, FILE_INDEX_PATH
         import os
 
-        # Delete the cache file
+        # Delete storage_index.json
         if os.path.exists(CACHE_FILE):
             os.remove(CACHE_FILE)
             print(f"🗑️ Cache file deleted: {CACHE_FILE}")
         else:
             print("ℹ️ No cache file found — nothing to delete")
 
-        # Trigger a fresh full reconciliation walk to rebuild it
+        # Delete file_index.json
+        if os.path.exists(FILE_INDEX_PATH):
+            os.remove(FILE_INDEX_PATH)
+            file_index_manager.clear()
+            print(f"🗑️ File index deleted: {FILE_INDEX_PATH}")
+        else:
+            print("ℹ️ No file index found — nothing to delete")
+
+        # Trigger a fresh full reconciliation walk to rebuild both
         monitor = get_file_monitor()
         print("🚶 Rebuilding cache from scratch...")
         monitor._reconcile()
 
+        fi_stats = file_index_manager.get_stats()
         return jsonify({
             'success': True,
-            'message': f'Cache cleared and rebuilt: {monitor._file_count:,} files, {monitor._dir_count:,} dirs, {len(monitor._dir_info):,} folders indexed'
+            'message': (
+                f'Cache cleared and rebuilt: {monitor._file_count:,} files, '
+                f'{monitor._dir_count:,} dirs, {len(monitor._dir_info):,} folders indexed. '
+                f'File index: {fi_stats["indexed_folders"]:,} large folder(s) indexed '
+                f'({fi_stats["total_entries"]:,} entries, threshold={fi_stats["threshold"]})'
+            )
         }), 200
 
     except Exception as e:
