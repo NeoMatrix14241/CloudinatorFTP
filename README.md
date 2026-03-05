@@ -3,13 +3,13 @@
 A lightweight FTP-like file transfer server that runs on Termux and exposes itself to the internet via Cloudflare tunnels. Access your Android device's storage from anywhere!
 
 ## 📷 Login
-<img width="1788" height="897" alt="image" src="https://github.com/user-attachments/assets/06fea1e3-9bae-41fa-9f90-79228a7191e5" />
+<img width="1794" height="892" alt="image" src="https://github.com/user-attachments/assets/6437db54-1e73-4459-ba45-f3552e7bbad6" />
 
 ## 📷 Guest (READONLY)
-<img width="1788" height="899" alt="image" src="https://github.com/user-attachments/assets/aa127a95-07d9-4dbb-9aeb-1ec22de66b4f" />
+<img width="1794" height="1318" alt="image" src="https://github.com/user-attachments/assets/39172a69-7c74-46c6-ba8b-f3e786bc8f43" />
 
 ## 📷 Admin (READWRITE)
-<img width="1788" height="1277" alt="image" src="https://github.com/user-attachments/assets/b025180d-16f6-4551-b552-122056508e86" />
+<img width="1794" height="1648" alt="image" src="https://github.com/user-attachments/assets/93578d61-f486-4463-89c1-1102ca27d456" />
 
 ## 🚀 Quick Start
 
@@ -263,3 +263,4 @@ Apache License - see [LICENSE](LICENSE) file for details.
 
 
 ---
+
