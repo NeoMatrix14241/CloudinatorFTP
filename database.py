@@ -2,26 +2,18 @@
 database.py — SQLite persistence layer for CloudinatorFTP
 ----------------------------------------------------------
 Owns two tables:
-  users        — username, bcrypt password hash, role
+  users        — username, encrypted bcrypt hash, role
   server_token — single-row table holding the current session token
-                 (replaces session_token.txt)
 
-All public functions are thread-safe; sqlite3 connections are created
-per-call (thread-local would also work but per-call is simpler and fast
-enough for this workload).
+Security layers on password_hash:
+  1. bcrypt   — slow hash, immune to brute force even if key is known
+  2. Fernet   — AES-128-CBC + HMAC-SHA256 encryption at rest
+                anyone opening the DB file sees unreadable ciphertext
 
-Usage
------
-    from database import db
-    db.check_login(username, password)   → bool
-    db.get_role(username)                → 'readwrite' | 'readonly' | None
-    db.get_server_token()                → str (uuid4)
-    db.rotate_server_token()             → str  (new token, persisted)
-    db.add_user(username, password, role)
-    db.delete_user(username)
-    db.update_password(username, new_password)
-    db.list_users()                      → list[dict]
-    db.user_exists(username)             → bool
+The Fernet key is stored in db/secret.key — keep this file private.
+Without it the DB is unreadable. Back it up separately from the DB.
+
+All public functions are thread-safe.
 """
 
 import os
@@ -29,30 +21,61 @@ import sqlite3
 import threading
 import uuid
 import bcrypt
+from cryptography.fernet import Fernet
 
 # ------------------------------------------------------------------
-# Path — DB lives in the db/ subfolder of the project root
+# Paths
 # ------------------------------------------------------------------
-_HERE = os.path.dirname(os.path.abspath(__file__))
+_HERE   = os.path.dirname(os.path.abspath(__file__))
 _DB_DIR = os.path.join(_HERE, 'db')
 os.makedirs(_DB_DIR, exist_ok=True)
-DB_PATH = os.path.join(_DB_DIR, 'cloudinator.db')
 
-# One lock for the rare write operations that need serialisation
+DB_PATH   = os.path.join(_DB_DIR, 'cloudinator.db')
+_KEY_PATH = os.path.join(_DB_DIR, 'secret.key')
+
+# One lock for write operations
 _write_lock = threading.Lock()
 
 
+# ------------------------------------------------------------------
+# Fernet encryption — keyed from db/secret.key
+# ------------------------------------------------------------------
+def _load_or_create_key() -> bytes:
+    """Load the Fernet key from disk, generating one on first run."""
+    if os.path.exists(_KEY_PATH):
+        with open(_KEY_PATH, 'rb') as f:
+            return f.read().strip()
+    key = Fernet.generate_key()
+    with open(_KEY_PATH, 'wb') as f:
+        f.write(key)
+    print(f"🔑 Generated new encryption key: {_KEY_PATH}")
+    print("⚠️  Back up this key file separately — losing it means losing access to all accounts!")
+    return key
+
+_fernet = Fernet(_load_or_create_key())
+
+def _encrypt(value: str) -> str:
+    """Encrypt a string, returning a base64 ciphertext string."""
+    return _fernet.encrypt(value.encode()).decode()
+
+def _decrypt(value: str) -> str:
+    """Decrypt a ciphertext string back to plaintext."""
+    return _fernet.decrypt(value.encode()).decode()
+
+
+# ------------------------------------------------------------------
+# SQLite connection
+# ------------------------------------------------------------------
 def _connect() -> sqlite3.Connection:
-    """Open a connection with sensible defaults."""
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")   # concurrent reads + one writer
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
 # ------------------------------------------------------------------
-# Schema bootstrap — called once on import
+# Schema bootstrap
 # ------------------------------------------------------------------
 def _bootstrap():
     with _connect() as conn:
@@ -74,18 +97,19 @@ def _bootstrap():
             );
         """)
 
-        # Seed default users only if the table is empty (first run)
+        # Seed default users only on first run
         count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         if count == 0:
             defaults = [
-                ("admin", "admin123",   "readwrite"),
-                ("guest", "guest123",   "readonly"),
+                ("admin", "admin123", "readwrite"),
+                ("guest", "guest123", "readonly"),
             ]
             for username, password, role in defaults:
-                hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+                bcrypt_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+                encrypted   = _encrypt(bcrypt_hash)
                 conn.execute(
                     "INSERT INTO users(username, password_hash, role) VALUES(?,?,?)",
-                    (username, hashed, role)
+                    (username, encrypted, role)
                 )
             print("👤 Seeded default users: admin (readwrite), guest (readonly)")
             print("⚠️  Remember to change default passwords before exposing to network!")
@@ -94,19 +118,17 @@ def _bootstrap():
 
 
 # ------------------------------------------------------------------
-# Database manager class
+# Database manager
 # ------------------------------------------------------------------
 class _Database:
 
-    # ---- server token ------------------------------------------------
+    # ---- server token --------------------------------------------
 
     def get_server_token(self) -> str:
-        """Return the current server token, creating one if needed."""
         with _connect() as conn:
             row = conn.execute("SELECT token FROM server_token WHERE id=1").fetchone()
             if row:
                 return row["token"]
-            # First run — generate and persist
             token = str(uuid.uuid4())
             conn.execute(
                 "INSERT INTO server_token(id, token, updated_at) VALUES(1,?,unixepoch())",
@@ -116,7 +138,6 @@ class _Database:
             return token
 
     def rotate_server_token(self) -> str:
-        """Generate a new token and persist it (revokes all active sessions)."""
         new_token = str(uuid.uuid4())
         with _write_lock, _connect() as conn:
             conn.execute("""
@@ -125,23 +146,25 @@ class _Database:
                 ON CONFLICT(id) DO UPDATE SET token=excluded.token,
                                                updated_at=excluded.updated_at
             """, (new_token,))
-        print(f"🔑 Server token rotated — all sessions invalidated")
+        print("🔑 Server token rotated — all sessions invalidated")
         return new_token
 
-    # ---- auth --------------------------------------------------------
+    # ---- auth ----------------------------------------------------
 
     def check_login(self, username: str, password: str) -> bool:
-        """Verify username + password. Always reads from DB (never stale)."""
         with _connect() as conn:
             row = conn.execute(
                 "SELECT password_hash FROM users WHERE username=?", (username,)
             ).fetchone()
         if not row:
             return False
-        return bcrypt.checkpw(password.encode(), row["password_hash"].encode())
+        try:
+            bcrypt_hash = _decrypt(row["password_hash"])
+        except Exception:
+            return False  # Corrupted or wrong key
+        return bcrypt.checkpw(password.encode(), bcrypt_hash.encode())
 
     def get_role(self, username: str) -> str | None:
-        """Return the user's role, or None if the user doesn't exist."""
         with _connect() as conn:
             row = conn.execute(
                 "SELECT role FROM users WHERE username=?", (username,)
@@ -154,7 +177,7 @@ class _Database:
                 "UPDATE users SET last_login=unixepoch() WHERE username=?", (username,)
             )
 
-    # ---- user management ---------------------------------------------
+    # ---- user management -----------------------------------------
 
     def user_exists(self, username: str) -> bool:
         with _connect() as conn:
@@ -164,15 +187,15 @@ class _Database:
         return row is not None
 
     def add_user(self, username: str, password: str, role: str = "readonly") -> bool:
-        """Hash password and insert user. Returns False if username already taken."""
         if role not in ("readwrite", "readonly"):
             raise ValueError(f"Invalid role: {role!r}")
-        hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        bcrypt_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        encrypted   = _encrypt(bcrypt_hash)
         try:
             with _write_lock, _connect() as conn:
                 conn.execute(
                     "INSERT INTO users(username, password_hash, role) VALUES(?,?,?)",
-                    (username, hashed, role)
+                    (username, encrypted, role)
                 )
             print(f"👤 User added: {username} ({role})")
             return True
@@ -181,7 +204,6 @@ class _Database:
             return False
 
     def delete_user(self, username: str) -> bool:
-        """Delete a user. Returns False if user didn't exist."""
         with _write_lock, _connect() as conn:
             cur = conn.execute("DELETE FROM users WHERE username=?", (username,))
         deleted = cur.rowcount > 0
@@ -190,12 +212,12 @@ class _Database:
         return deleted
 
     def update_password(self, username: str, new_password: str) -> bool:
-        """Replace a user's password. Returns False if user not found."""
-        hashed = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        bcrypt_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        encrypted   = _encrypt(bcrypt_hash)
         with _write_lock, _connect() as conn:
             cur = conn.execute(
                 "UPDATE users SET password_hash=? WHERE username=?",
-                (hashed, username)
+                (encrypted, username)
             )
         updated = cur.rowcount > 0
         if updated:
@@ -203,7 +225,6 @@ class _Database:
         return updated
 
     def update_role(self, username: str, role: str) -> bool:
-        """Change a user's role. Returns False if user not found."""
         if role not in ("readwrite", "readonly"):
             raise ValueError(f"Invalid role: {role!r}")
         with _write_lock, _connect() as conn:
