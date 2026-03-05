@@ -86,12 +86,12 @@ python create_user.py
 
 For Waitress WSGI (Production/Live)
 ```bash
-python prod_server.py # Flask Server (WSGI)
+python prod_server.py # Waitress Server (WSGI)
 
 or
 
 launch:
-- start_prod_server.bat > Flask Server (WSGI)
+- start_prod_server.bat > Waitress Server (WSGI)
 ```
 
 For Flask WSGI (Development/Testing)
@@ -243,7 +243,8 @@ After uploading files, find them in your Android file manager:
 | Login fails with correct password | Run `python debug_passwords.py` |
 | Forgot password | Use `create_user.py` to reset password |
 | Users file corrupted | Run `debug_passwords.py` → option 4 to regenerate |
-| Looping web refresh | Run `revoke_sessions.py`
+| Looping web refresh | Run `revoke_sessions.py` |
+| Database gets corrupted | Run `reset_db.py` |
 
 ### Server Issues
 

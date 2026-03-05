@@ -7,4 +7,4 @@ __pycache__/
 .venv/
 .hindtrc
 cache/
-session_token.txt
+db/
