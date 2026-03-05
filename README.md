@@ -243,6 +243,7 @@ After uploading files, find them in your Android file manager:
 | Login fails with correct password | Run `python debug_passwords.py` |
 | Forgot password | Use `create_user.py` to reset password |
 | Users file corrupted | Run `debug_passwords.py` → option 4 to regenerate |
+| Looping web refresh | Run `revoke_sessions.py`
 
 ### Server Issues
 
