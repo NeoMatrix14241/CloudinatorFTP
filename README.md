@@ -27,21 +27,24 @@ A lightweight FTP-like file transfer server that runs on Termux and exposes itse
 pkg --check-mirror update && pkg update && pkg upgrade -y
 
 # Install required packages
-pkg install python git cloudflared python-bcrypt
+pkg install python git cloudflared python-bcrypt build-essential libffi openssl rust llvm binutils-is-llvm python-cryptography
 
 # ⚠️ IMPORTANT: Setup storage access for Android file managers
 termux-setup-storage
 ```
 *Grant storage permissions when prompted - this allows files to be accessible from Android file managers*
 
-#### 2. 🐍 Install Python Dependencies
+#### 2. 📥 Clone the Project
+
+```bash
+git clone https://github.com/NeoMatrix14241/CloudinatorFTP.git
+cd CloudinatorFTP
+```
+
+#### 3. 🐍 Install Python Dependencies
 
 ```bash
 pip install -r requirements.txt
-
-OR
-
-pip install flask flask_cors bcrypt werkzeug zipstream-new watchdog waitress
 ```
 
 > **⚠️ Troubleshooting bcrypt installation:**
@@ -49,13 +52,6 @@ pip install flask flask_cors bcrypt werkzeug zipstream-new watchdog waitress
 > ```bash
 > pkg install clang python-dev libcrypt-dev
 > ```
-
-#### 3. 📥 Clone the Project
-
-```bash
-git clone https://github.com/NeoMatrix14241/CloudinatorFTP.git
-cd CloudinatorFTP
-```
 
 #### 4. 📂 Configure Server and Storage Location
 
@@ -180,10 +176,11 @@ python create_user.py
 ```
 
 **Available Options:**
-1. **Add new user** - Create additional user accounts
-2. **Update password** - Change existing user passwords  
-3. **List users** - View all user accounts and roles
-4. **Delete user** - Remove user accounts
+1. **List users** - List all users
+2. **Add user** - Create additional user accounts
+3. **Update password** - Change existing user passwords
+4. **Update role** - Change existing user account role
+5. **Delete user** - Remove user accounts
 
 ### 🔑 Default Credentials
 
@@ -207,23 +204,6 @@ This tool helps:
 - Verify password hashes
 - Regenerate user files if corrupted
 - Debug authentication issues
-
-## 🎉 Usage
-
-1. **Access your server**: Open the Cloudflare URL in any web browser
-2. **Login**: Use your credentials (default: admin/password123)
-3. **Upload files**: Drag and drop or click to select files
-4. **Download files**: Click the download button next to any file
-5. **Create folders**: Use the "Create Folder" form (readwrite users only)
-6. **Navigate**: Click folder names to enter, use "Up" button to go back
-
-### 📱 Android File Manager Access
-
-After uploading files, find them in your Android file manager:
-
-- **Downloads location**: Files app → Downloads → CloudflareFTP
-- **Documents location**: Files app → Documents → CloudflareFTP  
-- **Camera location**: Gallery → CloudflareFTP (photos/videos)
 
 ## 🛠️ Troubleshooting
 
