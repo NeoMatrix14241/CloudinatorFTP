@@ -30,8 +30,9 @@ _HERE   = os.path.dirname(os.path.abspath(__file__))
 _DB_DIR = os.path.join(_HERE, 'db')
 os.makedirs(_DB_DIR, exist_ok=True)
 
-DB_PATH   = os.path.join(_DB_DIR, 'cloudinator.db')
-_KEY_PATH = os.path.join(_DB_DIR, 'secret.key')
+DB_PATH        = os.path.join(_DB_DIR, 'cloudinator.db')
+_KEY_PATH      = os.path.join(_DB_DIR, 'secret.key')
+_SECRET_PATH   = os.path.join(_DB_DIR, 'session.secret')
 
 # One lock for write operations
 _write_lock = threading.Lock()
@@ -61,6 +62,23 @@ def _encrypt(value: str) -> str:
 def _decrypt(value: str) -> str:
     """Decrypt a ciphertext string back to plaintext."""
     return _fernet.decrypt(value.encode()).decode()
+
+
+# ------------------------------------------------------------------
+# Session secret — stored in db/session.secret
+# ------------------------------------------------------------------
+def get_session_secret() -> str:
+    """Load the Flask session secret from disk, generating one on first run."""
+    if os.path.exists(_SECRET_PATH):
+        with open(_SECRET_PATH, 'r') as f:
+            return f.read().strip()
+    import secrets
+    secret = secrets.token_hex(32)  # 256-bit random secret
+    with open(_SECRET_PATH, 'w') as f:
+        f.write(secret)
+    print(f"🔑 Generated new session secret: {_SECRET_PATH}")
+    print("⚠️  Back up this file — losing it logs out all active users immediately!")
+    return secret
 
 
 # ------------------------------------------------------------------

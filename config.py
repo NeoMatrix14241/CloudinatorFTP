@@ -8,7 +8,8 @@ import time
 PORT = 5000
 CHUNK_SIZE = 10 * 1024 * 1024  # 10 MB adjustable chunk size
 ENABLE_CHUNKED_UPLOADS = True
-SESSION_SECRET = 'change_this_secret_in_production'
+from database import get_session_secret
+SESSION_SECRET = get_session_secret()
 HOST = '0.0.0.0'  # Listen on all interfaces
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024 * 1024  # 16GB max file size
 ALLOWED_EXTENSIONS = None  # None = allow all file types
@@ -628,15 +629,9 @@ def configure_host_binding():
         print("❌ Invalid option")
 
 def generate_session_secret():
-    """Generate new session secret"""
-    global SESSION_SECRET
-    import secrets
-    import string
-    
-    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
-    SESSION_SECRET = ''.join(secrets.choice(alphabet) for _ in range(32))
-    print("✅ New session secret generated")
-    print(f"Secret: {SESSION_SECRET[:8]}... (hidden for security)")
+    """Session secret is now auto-managed in db/session.secret"""
+    print("ℹ️  Session secret is auto-generated and stored in db/session.secret")
+    print("   Delete that file to regenerate it (logs out all active users)")
 
 def save_server_config():
     """Save server configuration to file"""
@@ -644,7 +639,6 @@ def save_server_config():
         'PORT': PORT,
         'CHUNK_SIZE': CHUNK_SIZE,
         'ENABLE_CHUNKED_UPLOADS': ENABLE_CHUNKED_UPLOADS,
-        'SESSION_SECRET': SESSION_SECRET,
         'HOST': HOST,
         'MAX_CONTENT_LENGTH': MAX_CONTENT_LENGTH,
         'PERMANENT_SESSION_LIFETIME': PERMANENT_SESSION_LIFETIME,
@@ -671,7 +665,6 @@ def load_server_config():
             PORT = config.get('PORT', PORT)
             CHUNK_SIZE = config.get('CHUNK_SIZE', CHUNK_SIZE)
             ENABLE_CHUNKED_UPLOADS = config.get('ENABLE_CHUNKED_UPLOADS', ENABLE_CHUNKED_UPLOADS)
-            SESSION_SECRET = config.get('SESSION_SECRET', SESSION_SECRET)
             HOST = config.get('HOST', HOST)
             MAX_CONTENT_LENGTH = config.get('MAX_CONTENT_LENGTH', MAX_CONTENT_LENGTH)
             PERMANENT_SESSION_LIFETIME = config.get('PERMANENT_SESSION_LIFETIME', PERMANENT_SESSION_LIFETIME)
@@ -770,7 +763,7 @@ def view_current_settings():
     print(f"   Chunked Uploads: {'Enabled' if ENABLE_CHUNKED_UPLOADS else 'Disabled'}")
     print(f"   Max File Size: {format_bytes(MAX_CONTENT_LENGTH)}")
     print(f"   Session Timeout: {PERMANENT_SESSION_LIFETIME//60} minutes")
-    print(f"   Session Secret: {'Set' if SESSION_SECRET != 'change_this_secret_in_production' else 'Default (Change Required)'}")
+    print(f"   Session Secret: Managed in db/session.secret")
 
 # Load configuration on import
 load_server_config()
