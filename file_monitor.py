@@ -17,7 +17,6 @@ import json
 import time
 import threading
 import hashlib
-import tempfile
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Dict, Set, Optional, Callable
@@ -102,12 +101,30 @@ class InstantFileEventHandler(FileSystemEventHandler):
             self.debounce_timer.start()
 
     def on_created(self, event):
-        if '.chunks' in event.src_path:
+        # Skip hidden files/dirs (matches _full_walk) and anything inside .chunks
+        _name = os.path.basename(event.src_path)
+        if _name.startswith('.') or '.chunks' in event.src_path:
+            return
+
+        # Snapshot epoch BEFORE any path work (outside the lock).
+        # If _reconcile() runs while this event is in flight it will bump the epoch;
+        # we detect that below and skip the counter increment to avoid double-counting.
+        epoch = self.monitor._reconcile_epoch
+
+        # If a settle reconcile is pending, skip counter updates — the event storm
+        # from a bulk op is still draining and would overcount.  Still schedule notify
+        # so the debounce fires and eventually triggers the settle reconcile.
+        if self.monitor._pending_reconcile:
+            self._schedule_notify()
             return
 
         src_rel = _rel(event.src_path, str(self.monitor.root_path))
 
         with self.monitor.lock:
+            if self.monitor._reconcile_epoch != epoch:
+                # A reconcile ran between our path read and now — it already counted
+                # this file via _full_walk.  Skip the increment.
+                return
             if event.is_directory:
                 # New folder — add empty entry, update parent dir counts
                 self.monitor._dir_count += 1
@@ -151,12 +168,22 @@ class InstantFileEventHandler(FileSystemEventHandler):
         self._schedule_notify()
 
     def on_deleted(self, event):
-        if '.chunks' in event.src_path:
+        # Skip hidden files/dirs (matches _full_walk) and anything inside .chunks
+        _name = os.path.basename(event.src_path)
+        if _name.startswith('.') or '.chunks' in event.src_path:
+            return
+
+        epoch = self.monitor._reconcile_epoch
+
+        if self.monitor._pending_reconcile:
+            self._schedule_notify()
             return
 
         src_rel = _rel(event.src_path, str(self.monitor.root_path))
 
         with self.monitor.lock:
+            if self.monitor._reconcile_epoch != epoch:
+                return  # reconcile already corrected the counters
             if event.is_directory:
                 # Remove folder and all children from dir_info
                 removed_size = 0
@@ -220,13 +247,25 @@ class InstantFileEventHandler(FileSystemEventHandler):
         self._schedule_notify()
 
     def on_moved(self, event):
-        if '.chunks' in event.src_path and '.chunks' in event.dest_path:
+        # Skip hidden files/dirs (matches _full_walk) and pure .chunks-to-.chunks moves
+        _src_name = os.path.basename(event.src_path)
+        _dst_name = os.path.basename(event.dest_path)
+        if (_src_name.startswith('.') and _dst_name.startswith('.')) or \
+           ('.chunks' in event.src_path and '.chunks' in event.dest_path):
+            return
+
+        epoch = self.monitor._reconcile_epoch
+
+        if self.monitor._pending_reconcile:
+            self._schedule_notify()
             return
 
         src_rel = _rel(event.src_path, str(self.monitor.root_path))
         dest_rel = _rel(event.dest_path, str(self.monitor.root_path))
 
         with self.monitor.lock:
+            if self.monitor._reconcile_epoch != epoch:
+                return  # reconcile already corrected the counters
             if event.is_directory:
                 # Rename/move folder — migrate all dir_info keys
                 keys_to_migrate = [
@@ -315,6 +354,14 @@ class FileSystemMonitor:
         self.change_callbacks: Set[Callable] = set()
         self.lock = threading.Lock()
         self._save_lock = threading.Lock()   # serialises writes to storage_index.json
+        # Bumped at the START of every _reconcile() run.  Watchdog handlers snapshot
+        # this before doing path work; if it changed by the time they acquire the lock
+        # the reconcile already counted those files — they skip the increment.
+        self._reconcile_epoch: int = 0
+        # When True, watchdog counter updates are suppressed — a bulk op just
+        # finished and a settle reconcile is pending.  Set via set_pending_reconcile().
+        # Cleared at the start of every _reconcile() run.
+        self._pending_reconcile: bool = False
 
         # Global counters
         self._file_count: int = 0
@@ -385,42 +432,22 @@ class FileSystemMonitor:
             return False
 
     def _save_cache(self):
-        """
-        Atomically write storage_index.json.
-
-        Windows fix: _save_lock serialises concurrent saves so two threads
-        never race on the same temp file (WinError 32). tempfile.NamedTemporaryFile
-        with delete=False generates a unique random filename (e.g. tmpXXXXXX.json)
-        in the same directory, so os.replace() is always a same-filesystem rename.
-        """
-        with self._save_lock:
-            tmp = None
-            try:
-                os.makedirs(CACHE_DIR, exist_ok=True)
-                data = {
-                    'file_count': self._file_count,
-                    'dir_count': self._dir_count,
-                    'total_size': self._total_size,
-                    'last_modified': self._last_modified,
-                    'dir_info': self._dir_info,
-                    'saved_at': time.time()
-                }
-                with tempfile.NamedTemporaryFile(
-                    mode='w', encoding='utf-8',
-                    dir=CACHE_DIR, suffix='.tmp',
-                    delete=False,
-                ) as tf:
-                    json.dump(data, tf)
-                    tmp = tf.name
-
-                os.replace(tmp, CACHE_FILE)
-            except Exception as e:
-                print(f"⚠️ Failed to save cache: {e}")
-                try:
-                    if tmp and os.path.exists(tmp):
-                        os.remove(tmp)
-                except OSError:
-                    pass
+        try:
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            data = {
+                'file_count': self._file_count,
+                'dir_count': self._dir_count,
+                'total_size': self._total_size,
+                'last_modified': self._last_modified,
+                'dir_info': self._dir_info,
+                'saved_at': time.time()
+            }
+            tmp = CACHE_FILE + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(data, f)
+            os.replace(tmp, CACHE_FILE)
+        except Exception as e:
+            print(f"⚠️ Failed to save cache: {e}")
 
         # Keep file_index.json in sync with storage_index.json
         file_index_manager.save()
@@ -559,8 +586,28 @@ class FileSystemMonitor:
     # Reconciliation
     # ------------------------------------------------------------------
 
+    def set_pending_reconcile(self):
+        """
+        Arm the settle reconcile.  Call this after a bulk op reconcile finishes
+        so that stale watchdog backlog events don't corrupt the corrected counters.
+
+        While _pending_reconcile is True:
+          - on_created / on_deleted / on_moved skip counter updates entirely
+          - _schedule_notify() still runs so the debounce timer fires
+        When the debounce settles (no events for 0.5 s):
+          - _notify_and_save detects the flag and runs a ground-truth reconcile
+          - That reconcile catches any truly new files and clears the flag
+        """
+        with self.lock:
+            self._pending_reconcile = True
+        print("🔄 Settle reconcile armed — watchdog counter updates suppressed")
+
     def _reconcile(self):
         print("🔄 Background reconciliation walk starting...")
+        # Clear the pending flag before the walk so new events arriving during
+        # the walk are counted normally (epoch guard handles in-flight ones).
+        with self.lock:
+            self._pending_reconcile = False
         result = self._full_walk(silent=True)
         old_snapshot = self._build_snapshot()
 
@@ -570,6 +617,11 @@ class FileSystemMonitor:
             self._total_size = result['total_size']
             self._last_modified = result['last_modified']
             self._dir_info = result['dir_info']
+            # Bump AFTER writing corrected counters, not before the walk.
+            # Events that snapshotted epoch before this lock acquisition will now
+            # see a mismatch and skip their increment — preventing post-reconcile
+            # overshoot from the watchdog backlog draining after the walk finishes.
+            self._reconcile_epoch += 1
 
         new_snapshot = self._build_snapshot()
         self.last_snapshot = new_snapshot
@@ -607,6 +659,19 @@ class FileSystemMonitor:
     # ------------------------------------------------------------------
 
     def _notify_and_save(self):
+        if self._pending_reconcile:
+            # The event storm from a bulk op is settling.  Run a ground-truth
+            # reconcile instead of trusting the incremental counters.
+            # _reconcile() clears _pending_reconcile, corrects all counters,
+            # bumps the epoch, saves cache and calls _notify_changes if drift found.
+            # We force-push SSE afterwards regardless so the UI always updates.
+            print("🔄 Settle reconcile triggered — event storm drained")
+            old_snapshot = self.last_snapshot
+            self._reconcile()
+            new_snapshot = self.last_snapshot
+            self._notify_changes(old_snapshot, new_snapshot)
+            return
+
         old_snapshot = self.last_snapshot
         new_snapshot = self._build_snapshot()
         self.last_snapshot = new_snapshot
@@ -722,6 +787,20 @@ class FileSystemMonitor:
         print("🔍 Force check requested — running reconciliation")
         self._reconcile()
         return self.last_snapshot
+
+    def reconcile_async(self, reason: str = ""):
+        """
+        Trigger a reconciliation in a background thread — non-blocking.
+        Called after upload/copy completes so the count corrects immediately
+        without waiting for the 15-minute scheduled reconcile or debounce timer.
+        """
+        label = f" ({reason})" if reason else ""
+        print(f"🔄 Async reconcile queued{label}")
+        threading.Thread(
+            target=self._reconcile,
+            daemon=True,
+            name="reconcile-on-demand"
+        ).start()
 
 
 # ------------------------------------------------------------------

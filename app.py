@@ -246,6 +246,8 @@ def _trigger_reconcile():
             old_snap = monitor.get_current_snapshot()
             monitor._reconcile()
             new_snap = monitor.get_current_snapshot()
+            # Arm settle: suppress watchdog backlog until event storm drains
+            monitor.set_pending_reconcile()
             # Always push even if reconcile saw no drift (race may have hidden the change)
             trigger_storage_update(old_snap, new_snap)
             print(f"\U0001f4e1 Force-pushed SSE after reconcile: "
@@ -1211,10 +1213,13 @@ def admin_rebuild_cache():
         else:
             print("ℹ️ No file index found — nothing to delete")
 
-        # Trigger a fresh full reconciliation walk to rebuild both
+        # Trigger a fresh full reconciliation walk to rebuild both, and
+        # force-push SSE so the UI updates without a manual page refresh.
         monitor = get_file_monitor()
         print("🚶 Rebuilding cache from scratch...")
         monitor._reconcile()
+        from realtime_stats import trigger_storage_update
+        trigger_storage_update(None, monitor.get_current_snapshot())
 
         fi_stats = file_index_manager.get_stats()
         return jsonify({
@@ -2057,6 +2062,9 @@ def bulk_copy():
             except Exception as e:
                 errors.append(f'Failed to copy {source_path}: {str(e)}')
 
+        if copied_count > 0:
+            _trigger_reconcile()
+
         if errors:
             return jsonify({
                 'copied_count': copied_count,
@@ -2416,6 +2424,13 @@ def assembly_worker():
             
             # Mark queue task as done
             assembly_queue.job_queue.task_done()
+
+            # When the assembly queue drains to zero, trigger an immediate reconcile
+            # so the file count corrects itself right away. Use _trigger_reconcile (not
+            # reconcile_async) so the SSE force-push fires even if watchdog already
+            # updated the counters and _reconcile sees no drift.
+            if assembly_queue.job_queue.empty() and not assembly_queue.active_jobs:
+                _trigger_reconcile()
             
         except queue.Empty:
             # Timeout - cleanup old jobs periodically
