@@ -17,6 +17,7 @@ import json
 import time
 import threading
 import hashlib
+import tempfile
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Dict, Set, Optional, Callable
@@ -313,6 +314,7 @@ class FileSystemMonitor:
         self.reconcile_thread: Optional[threading.Thread] = None
         self.change_callbacks: Set[Callable] = set()
         self.lock = threading.Lock()
+        self._save_lock = threading.Lock()   # serialises writes to storage_index.json
 
         # Global counters
         self._file_count: int = 0
@@ -383,22 +385,42 @@ class FileSystemMonitor:
             return False
 
     def _save_cache(self):
-        try:
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            data = {
-                'file_count': self._file_count,
-                'dir_count': self._dir_count,
-                'total_size': self._total_size,
-                'last_modified': self._last_modified,
-                'dir_info': self._dir_info,
-                'saved_at': time.time()
-            }
-            tmp = CACHE_FILE + '.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(data, f)
-            os.replace(tmp, CACHE_FILE)
-        except Exception as e:
-            print(f"⚠️ Failed to save cache: {e}")
+        """
+        Atomically write storage_index.json.
+
+        Windows fix: _save_lock serialises concurrent saves so two threads
+        never race on the same temp file (WinError 32). tempfile.NamedTemporaryFile
+        with delete=False generates a unique random filename (e.g. tmpXXXXXX.json)
+        in the same directory, so os.replace() is always a same-filesystem rename.
+        """
+        with self._save_lock:
+            tmp = None
+            try:
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                data = {
+                    'file_count': self._file_count,
+                    'dir_count': self._dir_count,
+                    'total_size': self._total_size,
+                    'last_modified': self._last_modified,
+                    'dir_info': self._dir_info,
+                    'saved_at': time.time()
+                }
+                with tempfile.NamedTemporaryFile(
+                    mode='w', encoding='utf-8',
+                    dir=CACHE_DIR, suffix='.tmp',
+                    delete=False,
+                ) as tf:
+                    json.dump(data, tf)
+                    tmp = tf.name
+
+                os.replace(tmp, CACHE_FILE)
+            except Exception as e:
+                print(f"⚠️ Failed to save cache: {e}")
+                try:
+                    if tmp and os.path.exists(tmp):
+                        os.remove(tmp)
+                except OSError:
+                    pass
 
         # Keep file_index.json in sync with storage_index.json
         file_index_manager.save()

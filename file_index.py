@@ -62,6 +62,7 @@ import os
 import json
 import time
 import threading
+import tempfile
 
 # Anchor CACHE_DIR to the directory that contains this file (project root).
 CACHE_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
@@ -125,7 +126,8 @@ class FileIndexManager:
     """
 
     def __init__(self):
-        self.lock  = threading.Lock()
+        self.lock       = threading.Lock()
+        self._save_lock = threading.Lock()   # serialises writes to file_index.json
         # rel_path → {entry_count: int, indexed_at: float, entries: list}
         self._dirs: dict = {}
 
@@ -167,28 +169,44 @@ class FileIndexManager:
     def save(self):
         """
         Atomically write the current index to cache/file_index.json.
-        Uses a .tmp file + os.replace to avoid partial writes.
+
+        Windows fix: _save_lock serialises concurrent saves so two threads
+        never race on the same temp file (WinError 32). tempfile.NamedTemporaryFile
+        with delete=False generates a unique random filename (e.g. tmpXXXXXX.json)
+        in the same directory, so os.replace() is always a same-filesystem rename.
         """
-        try:
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            with self.lock:
-                dirs_snapshot = dict(self._dirs)  # shallow copy under lock
+        with self._save_lock:
+            tmp = None
+            try:
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with self.lock:
+                    dirs_snapshot = dict(self._dirs)  # shallow copy under lock
 
-            data = {
-                'version':   1,
-                'threshold': THRESHOLD,
-                'saved_at':  time.time(),
-                'dir_count': len(dirs_snapshot),
-                'dirs':      dirs_snapshot,
-            }
+                data = {
+                    'version':   1,
+                    'threshold': THRESHOLD,
+                    'saved_at':  time.time(),
+                    'dir_count': len(dirs_snapshot),
+                    'dirs':      dirs_snapshot,
+                }
 
-            tmp = FILE_INDEX_PATH + '.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(data, f)
-            os.replace(tmp, FILE_INDEX_PATH)
+                with tempfile.NamedTemporaryFile(
+                    mode='w', encoding='utf-8',
+                    dir=CACHE_DIR, suffix='.tmp',
+                    delete=False,
+                ) as tf:
+                    json.dump(data, tf)
+                    tmp = tf.name
 
-        except Exception as e:
-            print(f"⚠️  Failed to save file index: {e}")
+                os.replace(tmp, FILE_INDEX_PATH)
+
+            except Exception as e:
+                print(f"⚠️  Failed to save file index: {e}")
+                try:
+                    if tmp and os.path.exists(tmp):
+                        os.remove(tmp)
+                except OSError:
+                    pass
 
     # -----------------------------------------------------------------------
     # Build from full walk
