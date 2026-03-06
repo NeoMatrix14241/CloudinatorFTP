@@ -31,6 +31,12 @@ CACHE_FILE = os.path.join(CACHE_DIR, 'storage_index.json')
 
 # Reconciliation interval
 RECONCILE_INTERVAL = 900  # 15 minutes
+# How long to suppress watchdog counter updates after a bulk-op reconcile
+SETTLE_DELAY = 2.0  # seconds
+# Burst detection: if this many on_created events arrive within BURST_WINDOW seconds
+# the handler auto-arms the settle (same as an explicit bulk_copy reconcile does).
+BURST_THRESHOLD = 50   # events
+BURST_WINDOW    = 3.0  # seconds
 
 
 @dataclass
@@ -75,6 +81,34 @@ class InstantFileEventHandler(FileSystemEventHandler):
         self.debounce_delay = 0.5   # Fire SSE 0.5s after last change (was 2.0s)
         self.debounce_lock = threading.Lock()
         self._first_change_time = None  # For max_wait enforcement
+        # Burst detection: if more than BURST_THRESHOLD on_created events arrive
+        # within BURST_WINDOW seconds, treat it as a bulk op and arm the settle.
+        self._burst_count = 0
+        self._burst_window_start = 0.0
+        self._burst_armed = False    # True once settle has been armed for this burst
+
+    def _check_burst(self):
+        """
+        Called from on_created for every non-suppressed file event.
+        Tracks event rate; if it exceeds BURST_THRESHOLD in BURST_WINDOW seconds,
+        arms the monitor settle so the counters are corrected by a ground-truth walk
+        once the storm quiets — instead of trusting incremental adds that may overcount.
+        Re-arms on every new burst so back-to-back large copies are each handled.
+        """
+        now = time.time()
+        if now - self._burst_window_start > BURST_WINDOW:
+            # Start a fresh window
+            self._burst_window_start = now
+            self._burst_count = 0
+            self._burst_armed = False
+
+        self._burst_count += 1
+
+        if self._burst_count >= BURST_THRESHOLD and not self._burst_armed:
+            self._burst_armed = True
+            print(f"⚡ Burst detected ({self._burst_count} events in "
+                  f"{now - self._burst_window_start:.1f}s) — arming settle reconcile")
+            self.monitor.set_pending_reconcile()
 
     def _schedule_notify(self):
         # Standard debounce: reset timer on every event.
@@ -164,6 +198,10 @@ class InstantFileEventHandler(FileSystemEventHandler):
         # update_folder will skip it; it will be added once it exceeds threshold)
         if event.is_directory:
             file_index_manager.update_folder(src_rel, event.src_path)
+
+        # Auto-arm settle if this looks like a bulk copy from outside the web UI
+        if not event.is_directory:
+            self._check_burst()
 
         self._schedule_notify()
 
@@ -358,10 +396,12 @@ class FileSystemMonitor:
         # this before doing path work; if it changed by the time they acquire the lock
         # the reconcile already counted those files — they skip the increment.
         self._reconcile_epoch: int = 0
-        # When True, watchdog counter updates are suppressed — a bulk op just
-        # finished and a settle reconcile is pending.  Set via set_pending_reconcile().
-        # Cleared at the start of every _reconcile() run.
+        # Hard-timer settle: after a bulk-op reconcile, counter updates are suppressed
+        # for SETTLE_DELAY seconds, then a ground-truth reconcile fires unconditionally.
+        # Using a hard timer (not debounce) so active uploads can't delay it forever.
         self._pending_reconcile: bool = False
+        self._settle_timer: Optional[threading.Timer] = None
+        self._settle_lock = threading.Lock()
 
         # Global counters
         self._file_count: int = 0
@@ -588,19 +628,43 @@ class FileSystemMonitor:
 
     def set_pending_reconcile(self):
         """
-        Arm the settle reconcile.  Call this after a bulk op reconcile finishes
-        so that stale watchdog backlog events don't corrupt the corrected counters.
+        Arm the hard-timer settle after a bulk-op reconcile.
 
-        While _pending_reconcile is True:
-          - on_created / on_deleted / on_moved skip counter updates entirely
-          - _schedule_notify() still runs so the debounce timer fires
-        When the debounce settles (no events for 0.5 s):
-          - _notify_and_save detects the flag and runs a ground-truth reconcile
-          - That reconcile catches any truly new files and clears the flag
+        Sets _pending_reconcile=True so watchdog counter updates are suppressed,
+        then fires a one-shot threading.Timer(SETTLE_DELAY) that runs a ground-truth
+        reconcile unconditionally after SETTLE_DELAY seconds.
+
+        Using a hard timer instead of debounce so active uploads cannot delay
+        the settle indefinitely — the settle always fires within SETTLE_DELAY seconds
+        and catches any genuinely new files (Windows copy, etc.) that arrived during
+        the suppression window.
         """
-        with self.lock:
-            self._pending_reconcile = True
-        print("🔄 Settle reconcile armed — watchdog counter updates suppressed")
+        with self._settle_lock:
+            # Cancel any previous settle timer (e.g. rapid back-to-back bulk ops)
+            if self._settle_timer is not None:
+                self._settle_timer.cancel()
+            with self.lock:
+                self._pending_reconcile = True
+            self._settle_timer = threading.Timer(SETTLE_DELAY, self._settle_reconcile)
+            self._settle_timer.daemon = True
+            self._settle_timer.start()
+        print(f"🔄 Settle reconcile armed — counter updates suppressed for {SETTLE_DELAY}s")
+
+    def _settle_reconcile(self):
+        """Fired by the hard timer — ground-truth walk after suppression window."""
+        print("🔄 Settle reconcile firing (hard timer expired)")
+        try:
+            from realtime_stats import trigger_storage_update
+            old_snap = self.last_snapshot
+            self._reconcile()           # clears _pending_reconcile, bumps epoch
+            new_snap = self.last_snapshot
+            # Force-push SSE regardless of drift so UI always reflects reality
+            trigger_storage_update(old_snap, new_snap)
+        except Exception as e:
+            print(f"⚠️ Settle reconcile error: {e}")
+        finally:
+            with self._settle_lock:
+                self._settle_timer = None
 
     def _reconcile(self):
         print("🔄 Background reconciliation walk starting...")
@@ -659,17 +723,8 @@ class FileSystemMonitor:
     # ------------------------------------------------------------------
 
     def _notify_and_save(self):
+        # Skip SSE push if suppressed — the hard settle timer will push after SETTLE_DELAY
         if self._pending_reconcile:
-            # The event storm from a bulk op is settling.  Run a ground-truth
-            # reconcile instead of trusting the incremental counters.
-            # _reconcile() clears _pending_reconcile, corrects all counters,
-            # bumps the epoch, saves cache and calls _notify_changes if drift found.
-            # We force-push SSE afterwards regardless so the UI always updates.
-            print("🔄 Settle reconcile triggered — event storm drained")
-            old_snapshot = self.last_snapshot
-            self._reconcile()
-            new_snapshot = self.last_snapshot
-            self._notify_changes(old_snapshot, new_snapshot)
             return
 
         old_snapshot = self.last_snapshot

@@ -217,7 +217,7 @@ app.config.update(
     SESSION_COOKIE_NAME='cloudinator_session'
 )
 
-def _trigger_reconcile():
+def _trigger_reconcile(settle=False):
     """Kick off a background reconcile so file/dir counts correct themselves
     immediately after mutations (delete, move, rename, copy) instead of waiting 15 min.
 
@@ -247,10 +247,11 @@ def _trigger_reconcile():
             monitor._reconcile()
             new_snap = monitor.get_current_snapshot()
             # Arm settle: suppress watchdog backlog until event storm drains
-            monitor.set_pending_reconcile()
+            if settle:
+                monitor.set_pending_reconcile()
             # Always push even if reconcile saw no drift (race may have hidden the change)
             trigger_storage_update(old_snap, new_snap)
-            print(f"\U0001f4e1 Force-pushed SSE after reconcile: "
+            print(f"\U0001f4e1 Force-pushed SSE after reconcile (settle={settle}): "
                   f"{getattr(old_snap, 'file_count', '?')} -> {getattr(new_snap, 'file_count', '?')} files")
         except Exception as e:
             print(f'\u26a0\ufe0f Background reconcile error: {e}')
@@ -2063,7 +2064,7 @@ def bulk_copy():
                 errors.append(f'Failed to copy {source_path}: {str(e)}')
 
         if copied_count > 0:
-            _trigger_reconcile()
+            _trigger_reconcile(settle=True)  # copytree fires a backlog storm
 
         if errors:
             return jsonify({
