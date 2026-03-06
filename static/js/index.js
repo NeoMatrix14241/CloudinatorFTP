@@ -2211,6 +2211,7 @@ async function _uploadFolderGroupLazy(group, startFrom = 0) {
 
     // Each folder removes itself 2s after finishing — independent of other folders.
     if (group.status === 'done') {
+        _freeSeen(group); // Release dedup keys immediately so the same folder can be re-queued after deletion
         setTimeout(() => {
             if (folderGroups.has(group.id)) {
                 folderGroups.delete(group.id);
@@ -2432,6 +2433,7 @@ function clearCompletedItems() {
     let groupsCleared = 0;
     folderGroups.forEach((group, id) => {
         if (group.status === 'done' || group.status === 'error' || group.status === 'cancelled' || group.cancelled) {
+            _freeSeen(group); // Release dedup keys so same folder can be re-queued
             folderGroups.delete(id);
             groupsCleared++;
         }
