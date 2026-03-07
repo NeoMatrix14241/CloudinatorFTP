@@ -2071,7 +2071,28 @@ async function _uploadFolderGroupLazy(group, startFrom = 0) {
     console.log(`📁 Starting folder upload: "${group.rootName}" — ${total.toLocaleString()} files`);
 
     function _resolveItem(i) {
-        if (!usePendingFiles) return source[i];
+        if (!usePendingFiles) {
+            const entry = source[i];
+            if (!entry) return null;
+            // pendingEntries have dest baked in at scan time using the original rootName.
+            // If a rename override was applied after scanning, rewrite dest now.
+            if (group.rootNameOverride && group._origRootName) {
+                const origName = group._origRootName;
+                const oldPrefix = group.basePath ? `${group.basePath}/${origName}` : origName;
+                const newPrefix = group.basePath ? `${group.basePath}/${group.rootNameOverride}` : group.rootNameOverride;
+                let newDest = entry.dest;
+                if (newDest === oldPrefix) {
+                    newDest = newPrefix;
+                } else if (newDest.startsWith(oldPrefix + '/')) {
+                    newDest = newPrefix + newDest.slice(oldPrefix.length);
+                }
+                const newDisplay = entry.displayName.startsWith(origName)
+                    ? group.rootNameOverride + entry.displayName.slice(origName.length)
+                    : entry.displayName;
+                return { ...entry, dest: newDest, displayName: newDisplay };
+            }
+            return entry;
+        }
         const file = source[i];
         if (!file) return null; // freed slot
         const fp = group.mobilePrefix
@@ -3994,6 +4015,7 @@ async function _runFolderWorker() {
                     if (choice === 'rename') {
                         // Find a free folder name, then reroute all files into it
                         const freeFolder = await _findFreeName(group.basePath || '', group.rootName);
+                        group._origRootName = group.rootName; // preserve original before mutating
                         group.rootNameOverride = freeFolder;
                         group.rootName = freeFolder; // update display name in queue UI
                         _updateGroupRowInPlace(group);
