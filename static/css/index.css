@@ -4128,4 +4128,314 @@ td .fa-file {
     }
 }
 
+/* ── Office Document Viewer ─────────────────────────────────────────────── */
+
+.file-viewer-body.viewer-office {
+    align-items: flex-start;
+    justify-content: flex-start;
+    overflow: hidden;
+    padding: 0 0 14px 0;
+    flex-direction: column;
+}
+
+.viewer-office-loading {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 14px;
+    margin: auto;
+}
+
+/* ── DOCX ─────────────────────────────────────────────────────────────────── */
+
+.office-docx-body {
+    width: 100%;
+    height: 72vh;
+    overflow-y: auto;
+    padding: 32px 44px;
+    background: #fff;
+    color: #1a1a2e;
+    font-size: 14px;
+    line-height: 1.75;
+    box-sizing: border-box;
+    /* inner scroll, not body scroll */
+}
+
+.office-docx-body h1,
+.office-docx-body h2,
+.office-docx-body h3,
+.office-docx-body h4 {
+    margin: 1.1em 0 0.45em;
+    font-weight: 700;
+    color: #1a3a6b;
+}
+
+.office-docx-body h1 {
+    font-size: 22px;
+}
+
+.office-docx-body h2 {
+    font-size: 18px;
+}
+
+.office-docx-body h3 {
+    font-size: 15px;
+}
+
+.office-docx-body p {
+    margin-bottom: 0.7em;
+}
+
+.office-docx-body ul,
+.office-docx-body ol {
+    margin: 0.5em 0 0.5em 1.5em;
+}
+
+.office-docx-body table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1em 0;
+    font-size: 13px;
+}
+
+.office-docx-body td,
+.office-docx-body th {
+    border: 1px solid #ccc;
+    padding: 6px 10px;
+}
+
+.office-docx-body th {
+    background: #f0f4fa;
+    font-weight: 600;
+}
+
+.office-docx-body strong,
+.office-docx-body b {
+    font-weight: 700;
+}
+
+.office-docx-body em,
+.office-docx-body i {
+    font-style: italic;
+}
+
+/* ── XLSX ─────────────────────────────────────────────────────────────────── */
+
+.office-xlsx-viewer {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+}
+
+.office-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 8px 12px 0;
+    background: rgba(0, 0, 0, 0.25);
+    flex-wrap: wrap;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    flex-shrink: 0;
+}
+
+.office-tab {
+    padding: 5px 16px;
+    border-radius: 5px 5px 0 0;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-bottom: none;
+    background: rgba(255, 255, 255, 0.07);
+    color: rgba(255, 255, 255, 0.6);
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    transition: all 0.15s;
+}
+
+.office-tab:hover {
+    background: rgba(255, 255, 255, 0.14);
+    color: white;
+}
+
+.office-tab.active {
+    background: rgba(255, 255, 255, 0.18);
+    color: white;
+    font-weight: 600;
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.office-sheets {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    position: relative;
+}
+
+.office-sheet-panel {
+    display: none;
+    flex-direction: column;
+    height: 100%;
+}
+
+.office-sheet-panel.active {
+    display: flex;
+}
+
+.office-table-wrap {
+    flex: 1;
+    overflow: auto;
+    min-height: 0;
+    max-height: calc(72vh - 48px);
+    width: 0;
+    min-width: 100%;
+}
+
+.office-table {
+    border-collapse: collapse;
+    font-size: 12px;
+    white-space: nowrap;
+    color: #e8f0fe;
+    width: max-content;
+    min-width: 100%;
+}
+
+.office-table thead th {
+    background: rgba(42, 82, 152, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    padding: 7px 14px;
+    text-align: left;
+    font-weight: 600;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    color: #fff;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.office-table tbody tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.office-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.09);
+}
+
+.office-table td {
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    padding: 5px 14px;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.office-truncation-notice {
+    padding: 6px 14px;
+    background: rgba(243, 156, 18, 0.12);
+    color: rgba(255, 255, 255, 0.65);
+    font-size: 12px;
+    text-align: center;
+    border-top: 1px solid rgba(243, 156, 18, 0.25);
+    flex-shrink: 0;
+}
+
+/* ── PPTX ─────────────────────────────────────────────────────────────────── */
+
+.office-pptx-viewer {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+}
+
+.pptx-slide-panel {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 20px;
+    min-height: 0;
+}
+
+.pptx-slide {
+    background: #ffffff;
+    border-radius: 8px;
+    padding: 40px 48px;
+    min-height: 300px;
+    color: #1a1a2e;
+    max-width: 720px;
+    margin: 0 auto;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
+.pptx-slide-title {
+    font-size: 22px;
+    font-weight: 700;
+    color: #1a3a6b;
+    margin: 0 0 20px;
+    padding-bottom: 14px;
+    border-bottom: 2px solid #2a5298;
+    line-height: 1.3;
+}
+
+.pptx-body {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.pptx-para {
+    font-size: 14px;
+    line-height: 1.65;
+    color: #2c3e50;
+    margin: 0;
+}
+
+.pptx-empty {
+    text-align: center;
+    color: #aaa;
+    font-size: 14px;
+    margin: 40px 0;
+    line-height: 2;
+}
+
+.pptx-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 10px 16px;
+    background: rgba(0, 0, 0, 0.22);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    flex-shrink: 0;
+}
+
+.pptx-counter {
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 13px;
+    min-width: 70px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+.pptx-controls .btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+    pointer-events: none;
+}
+
+/* Mobile tweaks */
+@media (max-width: 768px) {
+    .office-docx-body {
+        padding: 18px 20px;
+        height: 60vh;
+    }
+
+    .pptx-slide {
+        padding: 24px 20px;
+    }
+
+    .pptx-slide-title {
+        font-size: 17px;
+    }
+}
+
 /* ─────────────────────────────────────────────────────────────────────────── */

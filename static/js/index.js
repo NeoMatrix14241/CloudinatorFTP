@@ -2912,12 +2912,13 @@ const VIEWABLE_EXTENSIONS = {
     audio: new Set(['mp3', 'wav', 'ogg', 'oga', 'aac', 'flac', 'm4a', 'opus']),
     pdf: new Set(['pdf']), // PDFs + Office docs (viewed via embedded Google Docs Viewer)
     text: new Set([
-        'txt', 'md', 'json', 'jsonc', 'jsonl', 'xml', 'csv', 'tsv', 'log', 'ini', 'cfg',
+        'txt', 'md', 'json', 'jsonc', 'jsonl', 'xml', 'tsv', 'log', 'ini', 'cfg',
         'yaml', 'yml', 'toml', 'env', 'sh', 'bash', 'bat', 'cmd', 'ps1', 'reg', 'md', 'ahk',
         'py', 'js', 'jsx', 'ts', 'tsx', 'html', 'htm', 'css', 'java', 'c', 'cpp', 'h', 'hpp',
         'cs', 'go', 'rb', 'pl', 'lua', 'rs', 'kt', 'swift', 'php', 'sql', 'r', 'scala', 'crt', 'key',
         'vb', 'asm', 's', 'makefile', 'dockerfile', 'gitignore', 'editorconfig', 'htaccess'
-    ])
+    ]),
+    office: new Set(['docx', 'doc', 'xlsx', 'xls', 'csv', 'pptx', 'ppt'])
 };
 
 /**
@@ -2998,6 +2999,22 @@ function openFileViewer(itemPath, filename) {
                     body.innerHTML = `<p class="viewer-error"><i class="fas fa-exclamation-triangle"></i> Could not load file: ${escapeHtml(err.message)}</p>`;
                 });
             break;
+        case 'office':
+            body.classList.add('viewer-office');
+            inner = `<div class="viewer-office-loading"><i class="fas fa-circle-notch fa-spin"></i> Generating preview…</div>`;
+            fetch(`/office_preview/${itemPath}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) {
+                        body.innerHTML = `<p class="viewer-error"><i class="fas fa-exclamation-triangle"></i> ${escapeHtml(data.error)}</p>`;
+                        return;
+                    }
+                    _renderOfficePreview(body, data);
+                })
+                .catch(err => {
+                    body.innerHTML = `<p class="viewer-error"><i class="fas fa-exclamation-triangle"></i> Could not load preview: ${escapeHtml(err.message)}</p>`;
+                });
+            break;
     }
 
     body.innerHTML = inner;
@@ -3012,6 +3029,201 @@ function closeFileViewer() {
     // Stop video / audio playback
     body.querySelectorAll('video, audio').forEach(m => { m.pause(); m.src = ''; });
     body.innerHTML = '';
+}
+
+function _renderOfficePreview(body, data) {
+    body.innerHTML = '';
+
+    // ── DOCX ──────────────────────────────────────────────────────────────────
+    if (data.type === 'docx') {
+        const wrap = document.createElement('div');
+        wrap.className = 'office-docx-body';
+        wrap.innerHTML = data.html || '<p style="color:#999">No content found.</p>';
+        body.appendChild(wrap);
+
+        // ── XLSX ──────────────────────────────────────────────────────────────────
+    } else if (data.type === 'xlsx') {
+        const sheets = data.sheets || [];
+        if (!sheets.length) {
+            body.innerHTML = '<p class="viewer-error">No sheets found.</p>';
+            return;
+        }
+
+        // Build tab strip
+        const tabStrip = document.createElement('div');
+        tabStrip.className = 'office-tabs';
+        sheets.forEach((s, i) => {
+            const btn = document.createElement('button');
+            btn.className = 'office-tab' + (i === 0 ? ' active' : '');
+            btn.textContent = s.name;
+            btn.dataset.idx = i;
+            tabStrip.appendChild(btn);
+        });
+
+        // Build sheet panels
+        const sheetsWrap = document.createElement('div');
+        sheetsWrap.className = 'office-sheets';
+
+        sheets.forEach((s, i) => {
+            const panel = document.createElement('div');
+            panel.className = 'office-sheet-panel' + (i === 0 ? ' active' : '');
+            panel.dataset.idx = i;
+
+            const tableWrap = document.createElement('div');
+            tableWrap.className = 'office-table-wrap';
+
+            const table = document.createElement('table');
+            table.className = 'office-table';
+
+            const rows = s.rows || [];
+            if (rows.length) {
+                const thead = document.createElement('thead');
+                const headerTr = document.createElement('tr');
+                (rows[0] || []).forEach(cell => {
+                    const th = document.createElement('th');
+                    th.innerHTML = cell;
+                    headerTr.appendChild(th);
+                });
+                thead.appendChild(headerTr);
+                table.appendChild(thead);
+
+                const tbody = document.createElement('tbody');
+                rows.slice(1).forEach(row => {
+                    const tr = document.createElement('tr');
+                    row.forEach(cell => {
+                        const td = document.createElement('td');
+                        td.innerHTML = cell;
+                        tr.appendChild(td);
+                    });
+                    tbody.appendChild(tr);
+                });
+                table.appendChild(tbody);
+            }
+
+            tableWrap.appendChild(table);
+            panel.appendChild(tableWrap);
+
+            if (s.truncated) {
+                const notice = document.createElement('div');
+                notice.className = 'office-truncation-notice';
+                notice.innerHTML = '<i class="fas fa-info-circle"></i> Preview limited to 500 rows. Download the file to view all data.';
+                panel.appendChild(notice);
+            }
+
+            sheetsWrap.appendChild(panel);
+        });
+
+        // Wire up tab switching
+        tabStrip.addEventListener('click', e => {
+            const btn = e.target.closest('.office-tab');
+            if (!btn) return;
+            const idx = btn.dataset.idx;
+            tabStrip.querySelectorAll('.office-tab').forEach(b => b.classList.remove('active'));
+            sheetsWrap.querySelectorAll('.office-sheet-panel').forEach(p => p.classList.remove('active'));
+            btn.classList.add('active');
+            sheetsWrap.querySelector(`.office-sheet-panel[data-idx="${idx}"]`).classList.add('active');
+        });
+
+        const viewer = document.createElement('div');
+        viewer.className = 'office-xlsx-viewer';
+        viewer.appendChild(tabStrip);
+        viewer.appendChild(sheetsWrap);
+        body.appendChild(viewer);
+
+        // ── PPTX ──────────────────────────────────────────────────────────────────
+    } else if (data.type === 'pptx') {
+        const slides = data.slides || [];
+        if (!slides.length) {
+            body.innerHTML = '<p class="viewer-error">No slides found.</p>';
+            return;
+        }
+
+        let currentSlide = 0;
+
+        function buildSlideHtml(idx) {
+            const slide = slides[idx];
+            const titleShape = slide.shapes.find(s => s.is_title);
+            const bodyShapes = slide.shapes.filter(s => !s.is_title);
+
+            let html = '';
+
+            if (titleShape) {
+                const titleText = titleShape.paragraphs.map(p => p.text).join(' ');
+                html += `<h2 class="pptx-slide-title">${titleText}</h2>`;
+            }
+
+            if (bodyShapes.length) {
+                html += '<div class="pptx-body">';
+                bodyShapes.forEach(shape => {
+                    shape.paragraphs.forEach(p => {
+                        const indent = p.level > 0 ? ` style="padding-left:${p.level * 22}px"` : '';
+                        const bullet = p.level === 0 ? '• ' : '◦ ';
+                        html += `<p class="pptx-para"${indent}>${bullet}${p.text}</p>`;
+                    });
+                });
+                html += '</div>';
+            }
+
+            if (!html) {
+                html = '<p class="pptx-empty"><i class="fas fa-image"></i><br>No text content on this slide</p>';
+            }
+
+            return html;
+        }
+
+        function updateSlide() {
+            slidePanel.innerHTML = `<div class="pptx-slide">${buildSlideHtml(currentSlide)}</div>`;
+            counter.textContent = `${currentSlide + 1} / ${slides.length}`;
+            prevBtn.disabled = currentSlide === 0;
+            nextBtn.disabled = currentSlide === slides.length - 1;
+        }
+
+        const viewer = document.createElement('div');
+        viewer.className = 'office-pptx-viewer';
+
+        const slidePanel = document.createElement('div');
+        slidePanel.className = 'pptx-slide-panel';
+
+        const controls = document.createElement('div');
+        controls.className = 'pptx-controls';
+
+        const prevBtn = document.createElement('button');
+        prevBtn.className = 'btn btn-outline btn-sm pptx-prev';
+        prevBtn.innerHTML = '<i class="fas fa-chevron-left"></i> Prev';
+
+        const nextBtn = document.createElement('button');
+        nextBtn.className = 'btn btn-outline btn-sm pptx-next';
+        nextBtn.innerHTML = 'Next <i class="fas fa-chevron-right"></i>';
+
+        const counter = document.createElement('span');
+        counter.className = 'pptx-counter';
+
+        prevBtn.addEventListener('click', () => { if (currentSlide > 0) { currentSlide--; updateSlide(); } });
+        nextBtn.addEventListener('click', () => { if (currentSlide < slides.length - 1) { currentSlide++; updateSlide(); } });
+
+        // Keyboard navigation (only when viewer is open)
+        const _pptxKeyHandler = (e) => {
+            const modal = document.getElementById('fileViewerModal');
+            if (!modal || !modal.classList.contains('show')) return;
+            if (e.key === 'ArrowRight' || e.key === 'ArrowDown') nextBtn.click();
+            if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') prevBtn.click();
+        };
+        document.addEventListener('keydown', _pptxKeyHandler);
+        // Clean up key handler when modal closes
+        const _origClose = window._pptxCloseCleanup;
+        window._pptxCloseCleanup = () => {
+            document.removeEventListener('keydown', _pptxKeyHandler);
+            if (_origClose) _origClose();
+        };
+
+        controls.append(prevBtn, counter, nextBtn);
+        viewer.append(slidePanel, controls);
+        body.appendChild(viewer);
+        updateSlide();
+
+    } else {
+        body.innerHTML = `<p class="viewer-error">Unknown preview type: ${escapeHtml(data.type)}</p>`;
+    }
 }
 
 // Close viewer on outside-click

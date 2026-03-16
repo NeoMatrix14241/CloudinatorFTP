@@ -870,6 +870,131 @@ def view_file(path):
     return send_from_directory(directory, filename, as_attachment=False)
 
 
+@app.route("/office_preview/<path:path>")
+@login_required
+def office_preview(path):
+    """Convert Office documents (docx, xlsx, pptx) to structured data for browser preview."""
+    import html as html_lib
+
+    if not storage.is_safe_path(path):
+        return jsonify({"error": "Invalid file path"}), 400
+    full_path = os.path.join(ROOT_DIR, path)
+    if not os.path.exists(full_path) or os.path.isdir(full_path):
+        return jsonify({"error": "File not found"}), 404
+
+    ext = path.rsplit('.', 1)[-1].lower() if '.' in path else ''
+
+    try:
+        # ── DOCX ──────────────────────────────────────────────────────────────
+        if ext in ('docx', 'doc'):
+            import mammoth
+            with open(full_path, 'rb') as f:
+                result = mammoth.convert_to_html(f)
+            return jsonify({"type": "docx", "html": result.value})
+
+        # ── XLSX / XLS ────────────────────────────────────────────────────────
+        elif ext in ('xlsx', 'xls'):
+            import openpyxl
+            MAX_ROWS = 500
+            MAX_COLS = 50
+            wb = openpyxl.load_workbook(full_path, read_only=True, data_only=True)
+            sheets = []
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                rows = []
+                for r_idx, row in enumerate(ws.iter_rows(values_only=True)):
+                    if r_idx >= MAX_ROWS:
+                        break
+                    cells = [
+                        html_lib.escape(str(c)) if c is not None else ''
+                        for c in list(row)[:MAX_COLS]
+                    ]
+                    rows.append(cells)
+                sheets.append({
+                    "name": html_lib.escape(sheet_name),
+                    "rows": rows,
+                    "truncated": ws.max_row is not None and ws.max_row > MAX_ROWS
+                })
+            wb.close()
+            return jsonify({"type": "xlsx", "sheets": sheets})
+
+        # ── CSV ───────────────────────────────────────────────────────────────────────
+        elif ext == 'csv':
+            import csv as csv_mod
+            MAX_ROWS = 500
+            rows = []
+            with open(full_path, newline='', encoding='utf-8', errors='replace') as f:
+                reader = csv_mod.reader(f)
+                for i, row in enumerate(reader):
+                    if i >= MAX_ROWS:
+                        break
+                    rows.append([html_lib.escape(str(c)) for c in row])
+            truncated = False
+            try:
+                # cheap line-count check without re-reading the whole file
+                with open(full_path, encoding='utf-8', errors='replace') as f:
+                    total_lines = sum(1 for _ in f)
+                truncated = total_lines > MAX_ROWS
+            except Exception:
+                pass
+            return jsonify({
+                "type": "xlsx",          # reuse the same xlsx renderer on the frontend
+                "sheets": [{"name": "CSV", "rows": rows, "truncated": truncated}]
+            })
+
+        # ── PPTX / PPT ────────────────────────────────────────────────────────
+        elif ext in ('pptx', 'ppt'):
+            from pptx import Presentation
+            try:
+                from pptx.enum.shapes import PP_PLACEHOLDER
+                _HAS_PLACEHOLDER_ENUM = True
+            except ImportError:
+                _HAS_PLACEHOLDER_ENUM = False
+
+            prs = Presentation(full_path)
+            slides = []
+            for i, slide in enumerate(prs.slides):
+                shapes_data = []
+                for shape in slide.shapes:
+                    if not shape.has_text_frame:
+                        continue
+                    paragraphs = []
+                    for para in shape.text_frame.paragraphs:
+                        text = para.text.strip()
+                        if not text:
+                            continue
+                        paragraphs.append({
+                            "text": html_lib.escape(text),
+                            "level": para.level
+                        })
+                    if not paragraphs:
+                        continue
+                    is_title = False
+                    if _HAS_PLACEHOLDER_ENUM:
+                        try:
+                            if shape.is_placeholder and shape.placeholder_format.type in (
+                                PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE
+                            ):
+                                is_title = True
+                        except Exception:
+                            pass
+                    shapes_data.append({"is_title": is_title, "paragraphs": paragraphs})
+                slides.append({"index": i + 1, "shapes": shapes_data})
+            return jsonify({"type": "pptx", "slides": slides, "total": len(slides)})
+
+        else:
+            return jsonify({"error": f"Unsupported format: .{ext}"}), 400
+
+    except ImportError as e:
+        missing = str(e).split("'")[1] if "'" in str(e) else str(e)
+        return jsonify({
+            "error": f"Missing package '{missing}'. Install with: pip install mammoth openpyxl python-pptx"
+        }), 500
+    except Exception as e:
+        logging.exception(f"Office preview failed for {path}")
+        return jsonify({"error": f"Preview failed: {str(e)}"}), 500
+
+
 @app.route("/bulk-download", methods=["POST"])
 @login_required
 def bulk_download():
