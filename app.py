@@ -740,6 +740,19 @@ def download(path):
     filename = os.path.basename(full_path)
     return send_from_directory(directory, filename, as_attachment=True)
 
+@app.route('/view/<path:path>')
+@login_required
+def view_file(path):
+    """Serve a file inline (for in-browser preview — images, video, audio, PDF, text)."""
+    if not storage.is_safe_path(path):
+        return 'Invalid file path', 400
+    full_path = os.path.join(ROOT_DIR, path)
+    if not os.path.exists(full_path) or os.path.isdir(full_path):
+        return 'File not found', 404
+    directory = os.path.dirname(full_path)
+    filename  = os.path.basename(full_path)
+    return send_from_directory(directory, filename, as_attachment=False)
+
 @app.route('/bulk-download', methods=['POST'])
 @login_required
 def bulk_download():

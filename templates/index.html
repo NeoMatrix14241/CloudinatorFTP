@@ -12,6 +12,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
+
     <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}">
     <link href="{{ url_for('static', filename='css/index.css') }}" rel="stylesheet">
     <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp">
@@ -568,6 +569,22 @@
                 <button id="confirmationConfirmBtn" class="btn btn-primary"
                     onclick="executeConfirmedAction()">Confirm</button>
             </div>
+        </div>
+    </div>
+
+    <!-- File Preview / Viewer Modal -->
+    <div class="modal" id="fileViewerModal">
+        <div class="modal-content file-viewer-modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title" id="viewerFileName" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:80%;"></h3>
+                <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+                    <a id="viewerDownloadLink" href="#" class="btn btn-outline btn-sm" title="Download" style="color:white;border-color:rgba(255,255,255,.4);">
+                        <i class="fas fa-download"></i>
+                    </a>
+                    <button class="modal-close" onclick="closeFileViewer()" title="Close (Esc)">&times;</button>
+                </div>
+            </div>
+            <div class="modal-body file-viewer-body" id="fileViewerBody"></div>
         </div>
     </div>
 

@@ -1440,7 +1440,7 @@ function createFileTableRow(item, currentPath) {
                          ${safeName}
                      </a>` :
             `<i class="${itemIcon} file-icon file-icon-default" style="color: ${getFileColor(item.name)}"></i>
-                     ${safeName}`
+                     ${safeName}${getViewerType(item.name) ? ` <button type="button" class="btn-eye-view" onclick="event.stopPropagation();openFileViewer('${escapeHtml(itemPath)}','${escapeHtml(item.name)}')" title="Preview"><i class="fas fa-eye"></i></button>` : ''}`
         }
             </div>
         </td>
@@ -2901,6 +2901,132 @@ const EXTENSION_MAP = (function () {
 
     return map;
 })();
+
+// ── File Viewer ───────────────────────────────────────────────────────────────
+// Extensions that can be previewed inline in the browser.
+const VIEWABLE_EXTENSIONS = {
+    image : new Set(['jpg','jpeg','png','gif','bmp','webp','svg','ico','avif']),
+    video : new Set(['mp4','webm','ogv','mov','m4v']),
+    audio : new Set(['mp3','wav','ogg','oga','aac','flac','m4a','opus']),
+    pdf   : new Set(['pdf']),
+    text  : new Set([
+        'txt','md','json','jsonc','jsonl','xml','csv','tsv','log','ini','cfg',
+        'yaml','yml','toml','env','sh','bash','bat','cmd','ps1',
+        'py','js','jsx','ts','tsx','html','htm','css','java','c','cpp','h','hpp',
+        'cs','go','rb','pl','lua','rs','kt','swift','php','sql','r','scala',
+        'vb','asm','s','makefile','dockerfile','gitignore','editorconfig','htaccess'
+    ])
+};
+
+/**
+ * Returns the viewer category for a filename, or null if not viewable.
+ * @param {string} filename
+ * @returns {'image'|'video'|'audio'|'pdf'|'text'|null}
+ */
+function getViewerType(filename) {
+    if (!filename) return null;
+    const ext = String(filename).split('.').pop().toLowerCase();
+    for (const [category, exts] of Object.entries(VIEWABLE_EXTENSIONS)) {
+        if (exts.has(ext)) return category;
+    }
+    return null;
+}
+
+/** Open the file viewer modal for a given server-relative path. */
+function openFileViewer(itemPath, filename) {
+    const viewType = getViewerType(filename);
+    if (!viewType) return;
+
+    const modal    = document.getElementById('fileViewerModal');
+    const body     = document.getElementById('fileViewerBody');
+    const titleEl  = document.getElementById('viewerFileName');
+    const dlLink   = document.getElementById('viewerDownloadLink');
+
+    const viewUrl  = `/view/${itemPath}`;
+    const dlUrl    = `/download/${itemPath}`;
+
+    titleEl.textContent  = filename;
+    dlLink.href          = dlUrl;
+
+    // Clear previous content
+    body.innerHTML = '';
+    body.className = 'modal-body file-viewer-body';
+
+    let inner = '';
+    switch (viewType) {
+        case 'image':
+            body.classList.add('viewer-image');
+            inner = `<img src="${viewUrl}" alt="${escapeHtml(filename)}" class="viewer-img" onerror="this.outerHTML='<p class=viewer-error>Could not load image.</p>'">`;
+            break;
+        case 'video':
+            body.classList.add('viewer-video');
+            inner = `<video controls autoplay class="viewer-video-el">
+                        <source src="${viewUrl}">
+                        Your browser does not support HTML5 video.
+                     </video>`;
+            break;
+        case 'audio':
+            body.classList.add('viewer-audio');
+            inner = `<div class="viewer-audio-wrap">
+                        <i class="fas fa-music viewer-audio-icon"></i>
+                        <div class="viewer-audio-name">${escapeHtml(filename)}</div>
+                        <audio controls autoplay class="viewer-audio-el">
+                            <source src="${viewUrl}">
+                            Your browser does not support HTML5 audio.
+                        </audio>
+                     </div>`;
+            break;
+        case 'pdf':
+            body.classList.add('viewer-pdf');
+            inner = `<iframe src="${viewUrl}" class="viewer-iframe" title="${escapeHtml(filename)}"></iframe>`;
+            break;
+        case 'text':
+            body.classList.add('viewer-text');
+            inner = `<div class="viewer-text-loading"><i class="fas fa-circle-notch fa-spin"></i> Loading…</div>`;
+            // Fetch text asynchronously after rendering the modal
+            fetch(viewUrl)
+                .then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.text();
+                })
+                .then(txt => {
+                    body.innerHTML = `<pre class="viewer-pre"><code>${escapeHtml(txt)}</code></pre>`;
+                })
+                .catch(err => {
+                    body.innerHTML = `<p class="viewer-error"><i class="fas fa-exclamation-triangle"></i> Could not load file: ${escapeHtml(err.message)}</p>`;
+                });
+            break;
+    }
+
+    body.innerHTML = inner;
+    modal.classList.add('show');
+}
+
+/** Close the file viewer and stop any media playback. */
+function closeFileViewer() {
+    const modal = document.getElementById('fileViewerModal');
+    const body  = document.getElementById('fileViewerBody');
+    modal.classList.remove('show');
+    // Stop video / audio playback
+    body.querySelectorAll('video, audio').forEach(m => { m.pause(); m.src = ''; });
+    body.innerHTML = '';
+}
+
+// Close viewer on outside-click
+document.addEventListener('click', function(e) {
+    const modal = document.getElementById('fileViewerModal');
+    if (modal && e.target === modal) closeFileViewer();
+});
+
+// Close viewer on Escape key (registers alongside other modal listeners)
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        const modal = document.getElementById('fileViewerModal');
+        if (modal && modal.classList.contains('show')) closeFileViewer();
+    }
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
 
 function escapeHtml(unsafe) {
     return String(unsafe).replace(/[&<>"'`]/g, function (c) {
