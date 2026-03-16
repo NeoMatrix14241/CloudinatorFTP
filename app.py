@@ -1,3 +1,10 @@
+# ── Ensure db/ and cache/ directories exist at their configured locations ──
+# Must run BEFORE importing config/database/file_index/file_monitor so that
+# those modules find their directories already in place.
+# setup_storage.py and config.py intentionally do NOT call this.
+from paths import ensure_dirs
+ensure_dirs()
+
 # Bulk ZIP progress tracking
 bulk_zip_progress = {}
 
@@ -22,7 +29,9 @@ import io
 import re
 import zipstream
 from datetime import datetime
-from config import PORT, ROOT_DIR, SESSION_SECRET, CHUNK_SIZE, ENABLE_CHUNKED_UPLOADS
+from config import PORT, ROOT_DIR, CHUNK_SIZE, ENABLE_CHUNKED_UPLOADS
+from database import get_session_secret
+SESSION_SECRET = get_session_secret()
 from auth import check_login, login_user, logout_user, current_user, is_logged_in, get_role
 import storage
 

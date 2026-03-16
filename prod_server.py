@@ -17,6 +17,7 @@ os.environ['PYTHONUNBUFFERED'] = '1'  # Immediate console output (like ASGI acce
 os.environ['FLASK_ENV'] = 'development'
 
 # Import the Flask application
+# ensure_dirs() is called inside app.py before anything else loads.
 from app import app
 
 if __name__ == "__main__":

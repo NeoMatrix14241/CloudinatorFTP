@@ -1,293 +1,450 @@
 #!/usr/bin/env python3
 """
-Interactive storage setup script for Cloudflare FTP
+Interactive storage setup script for CloudinatorFTP.
+Configures three independent directories:
+  1. Files      — where uploaded files are stored        (ROOT_DIR)
+  2. Database   — SQLite DB, encryption key, session secret (DB_DIR)
+  3. Cache      — storage_index.json, file_index.json     (CACHE_DIR)
+
+Moving db/ and cache/ outside the server/web root is recommended for
+production: a compromised web directory then cannot expose your keys.
 """
 import os
 import sys
 import json
 
-# Add the current directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    import importlib, config
-    importlib.reload(config)
     import importlib
     import config
-    from config import detect_platform, PRESET_PATHS, format_bytes, set_preset_path, set_custom_storage_path
+    importlib.reload(config)
+    from config import (
+        detect_platform, PRESET_PATHS, format_bytes,
+        set_preset_path, set_custom_storage_path,
+    )
+    from paths import (
+        get_db_dir, get_cache_dir, set_db_dir, set_cache_dir,
+        reset_db_dir, reset_cache_dir, get_all_paths,
+    )
+    # DB_DIR and CACHE_DIR come from paths directly — not from config —
+    # so setup_storage.py works even on an older config.py that doesn't
+    # export them yet.
+    DB_DIR    = get_db_dir()
+    CACHE_DIR = get_cache_dir()
 except ImportError as e:
     print(f"❌ Import error: {e}")
     print("Make sure you're running this script from the project directory.")
     sys.exit(1)
 
+
 def clear_screen():
-    """Clear the terminal screen"""
     os.system('cls' if os.name == 'nt' else 'clear')
 
+
 def print_banner():
-    """Print the setup banner"""
     print("=" * 60)
-    print("🚀 CLOUDFLARE FTP - STORAGE SETUP")
+    print("🚀 CLOUDINATOR FTP — STORAGE SETUP")
     print("=" * 60)
     print()
 
-def print_current_config():
-    """Print current storage configuration"""
-    platform = detect_platform()
-    
-    print(f"📋 Current Configuration:")
-    print(f"   Platform: {platform.title()}")
-    print(f"   Storage Path: {config.ROOT_DIR}")
-    
-    # Check if path exists and is writable
-    if os.path.exists(config.ROOT_DIR):
-        try:
-            test_file = os.path.join(config.ROOT_DIR, '.write_test')
-            with open(test_file, 'w') as f:
-                f.write('test')
-            os.remove(test_file)
-            print(f"   Status: ✅ Accessible and writable")
-            
-            # Show available space
-            try:
-                if platform == 'windows':
-                    import shutil
-                    total, used, free = shutil.disk_usage(config.ROOT_DIR)
-                else:
-                    stat = os.statvfs(config.ROOT_DIR)
-                    free = stat.f_bavail * stat.f_frsize
-                
-                print(f"   Free Space: {format_bytes(free)}")
-            except:
-                print(f"   Free Space: Unknown")
-                
-        except Exception as e:
-            print(f"   Status: ❌ Not writable ({e})")
-    else:
-        print(f"   Status: ❌ Path does not exist")
-    
-    print()
 
-def show_preset_options():
-    """Show available preset paths for current platform"""
-    platform = detect_platform()
-    
-    if platform not in PRESET_PATHS:
-        print(f"❌ No preset paths available for {platform}")
-        return []
-    
-    presets = PRESET_PATHS[platform]
-    print(f"📍 Available Storage Locations for {platform.title()}:")
-    print("-" * 50)
-    
-    options = []
-    for i, (key, path) in enumerate(presets.items(), 1):
-        # Check if parent directory exists and is accessible
-        try:
-            parent = os.path.dirname(path)
-            if os.path.exists(parent) and os.access(parent, os.W_OK):
-                status = "✅"
-            elif os.path.exists(parent):
-                status = "⚠️ "
-            else:
-                status = "❌"
-        except:
-            status = "❌"
-        
-        print(f"{i:2d}. {status} {key.replace('_', ' ').title()}")
-        print(f"     {path}")
-        options.append((key, path))
-        
-        # Add helpful descriptions
-        descriptions = {
-            'downloads': 'Recommended for easy access',
-            'documents': 'Good for document storage', 
-            'desktop': 'Quick access from desktop',
-            'internal': 'Android internal storage root',
-            'dcim': 'Camera/media folder',
-            'termux_home': 'Termux app directory only'
-        }
-        
-        if key in descriptions:
-            print(f"     💡 {descriptions[key]}")
-        print()
-    
-    return options
-
-def get_user_choice(max_choice):
-    """Get user input with validation"""
+def _get_choice(max_choice):
     while True:
         try:
-            choice = input(f"Select option (1-{max_choice}, 0 to cancel): ").strip()
-            if choice == '0':
+            raw = input(f"Select option (1-{max_choice}, 0 to cancel): ").strip()
+            if raw == '0':
                 return 0
-            choice_num = int(choice)
-            if 1 <= choice_num <= max_choice:
-                return choice_num
-            else:
-                print(f"❌ Please enter a number between 1 and {max_choice}")
+            n = int(raw)
+            if 1 <= n <= max_choice:
+                return n
+            print(f"❌ Enter a number between 1 and {max_choice}")
         except ValueError:
             print("❌ Please enter a valid number")
         except KeyboardInterrupt:
-            print("\n👋 Setup cancelled")
+            print("\n👋 Cancelled")
             return 0
 
-def setup_custom_path():
-    """Setup custom storage path"""
-    print("\n🔧 Custom Path Setup")
-    print("-" * 30)
-    print("Enter the full path where you want to store files.")
-    print("No subdirectory will be created; the exact path will be used.")
+
+def _confirm_path(final_path: str, label: str) -> bool:
+    """Show the resolved final path and ask user to confirm before saving."""
     print()
-    
-    examples = {
-        'windows': [
-            'C:\\Users\\YourName\\Desktop',
-            'D:\\MyFiles',
-            'C:\\Users\\YourName\\Documents'
-        ],
-        'linux': [
-            '/home/username/Desktop',
-            '/media/username/USB_Drive',
-            '/opt/storage'
-        ],
-        'termux': [
-            '/storage/emulated/0',
-            '/storage/emulated/0/Download',
-            '/sdcard/Documents'
-        ],
-        'macos': [
-            '/Users/username/Desktop',
-            '/Users/username/Documents',
-            '/Volumes/ExternalDrive'
-        ]
-    }
-    
-    platform = detect_platform()
-    if platform in examples:
-        print("💡 Examples for your platform:")
-        for example in examples[platform]:
-            print(f"   {example}")
-        print()
-    
+    print(f"  📁 {label} will be set to:")
+    print(f"     {final_path}")
+    print()
     while True:
         try:
-            custom_path = input("Enter custom path: ").strip()
-            if not custom_path:
-                print("❌ Path cannot be empty")
-                continue
-            
-            # Expand user paths like ~/Documents
-            expanded_path = os.path.expanduser(custom_path)
-            # For custom path, use exactly what the user specified (no subfolder)
-            if set_custom_storage_path(expanded_path, use_subfolder=False):
-                importlib.reload(config)
+            ans = input("  Confirm? (y/n): ").strip().lower()
+            if ans in ('y', 'yes'):
                 return True
-            else:
-                retry = input("\n❓ Try a different path? (y/n): ").strip().lower()
-                if retry != 'y':
-                    return False
-                    
+            if ans in ('n', 'no'):
+                print("  ↩️  Cancelled.")
+                return False
         except KeyboardInterrupt:
-            print("\n👋 Custom setup cancelled")
+            print("\n👋 Cancelled")
             return False
 
+
+def _check_path(path):
+    if not os.path.exists(path):
+        return False, False
+    try:
+        test = os.path.join(path, '.write_test')
+        with open(test, 'w') as f:
+            f.write('test')
+        os.remove(test)
+        return True, True
+    except Exception:
+        return True, False
+
+
+def _free_space(path):
+    try:
+        if os.name == 'nt':
+            import shutil
+            _, _, free = shutil.disk_usage(path)
+        else:
+            st = os.statvfs(path)
+            free = st.f_bavail * st.f_frsize
+        return format_bytes(free)
+    except Exception:
+        return 'Unknown'
+
+
+def print_current_config():
+    importlib.reload(config)
+    paths = get_all_paths()
+    server_root = os.path.dirname(os.path.abspath(__file__))
+
+    print("📋 Current Configuration:")
+    print()
+
+    rows = [
+        ("Files   (ROOT_DIR) ", config.ROOT_DIR,   "🗂️ "),
+        ("Database (DB_DIR)  ", paths['db_dir'],    "🔐"),
+        ("Cache   (CACHE_DIR)", paths['cache_dir'], "⚡"),
+    ]
+
+    for label, path, icon in rows:
+        exists, writable = _check_path(path)
+        status = "✅" if writable else ("⚠️ " if exists else "❌ missing")
+        inside = " ⚠️  inside server root" if os.path.abspath(path).startswith(os.path.abspath(server_root)) else " ✅ outside server root"
+        print(f"  {icon}  {label}")
+        print(f"      {status} {path}")
+        print(f"         {inside}")
+        if exists:
+            print(f"         Free space: {_free_space(path)}")
+        print()
+
+
+# ---------------------------------------------------------------------------
+# Files (ROOT_DIR) configuration
+# ---------------------------------------------------------------------------
+
+def show_preset_options():
+    platform_type = detect_platform()
+    if platform_type not in PRESET_PATHS:
+        print(f"❌ No preset paths available for {platform_type}")
+        return []
+
+    presets = PRESET_PATHS[platform_type]
+    print(f"📍 Available File Storage Locations for {platform_type.title()}:")
+    print("-" * 50)
+
+    options = []
+    for i, (key, path) in enumerate(presets.items(), 1):
+        try:
+            parent = os.path.dirname(path)
+            status = "✅" if os.path.exists(parent) and os.access(parent, os.W_OK) else (
+                     "⚠️ " if os.path.exists(parent) else "❌")
+        except Exception:
+            status = "❌"
+
+        print(f"{i:2d}. {status} {key.replace('_', ' ').title()}")
+        print(f"      {path}")
+        options.append((key, path))
+
+        descs = {
+            'downloads': 'Recommended for easy access',
+            'documents': 'Good for document storage',
+            'desktop':   'Quick access from desktop',
+            'internal':  'Android internal storage root',
+            'dcim':      'Camera/media folder',
+            'termux_home': 'Termux app directory only',
+        }
+        if key in descs:
+            print(f"      💡 {descs[key]}")
+        print()
+
+    return options
+
+
+def configure_files_path():
+    print("\n🗂️  Files Storage Path Configuration")
+    print("=" * 50)
+    print(f"Current: {config.ROOT_DIR}\n")
+
+    options = show_preset_options()
+    if not options:
+        _configure_custom_files_path()
+        return
+
+    print(f"{len(options) + 1}. 🎯 Enter custom path")
+    print(f"{len(options) + 2}. ↩️  Back")
+    print()
+
+    choice = _get_choice(len(options) + 2)
+    if choice == 0 or choice == len(options) + 2:
+        return
+    elif choice == len(options) + 1:
+        _configure_custom_files_path()
+    elif 1 <= choice <= len(options):
+        key, path = options[choice - 1]
+        if not _confirm_path(path, "Files storage"):
+            return
+        if set_preset_path(key):
+            importlib.reload(config)
+            print(f"✅ Files storage set to: {path}")
+
+
+def _configure_custom_files_path():
+    print("\n🎯 Custom Files Path")
+    print("Enter the exact path where uploaded files should be stored.")
+    try:
+        custom = input("Path: ").strip()
+        if not custom:
+            return
+        expanded = os.path.abspath(os.path.expanduser(custom))
+        if not _confirm_path(expanded, "Files storage"):
+            return
+        if set_custom_storage_path(expanded, use_subfolder=False):
+            importlib.reload(config)
+            print(f"✅ Files storage set to: {expanded}")
+    except KeyboardInterrupt:
+        print("\n👋 Cancelled")
+
+
+# ---------------------------------------------------------------------------
+# DB directory configuration
+# ---------------------------------------------------------------------------
+
+def _db_cache_examples(kind):
+    home = os.path.expanduser('~')
+    platform_type = detect_platform()
+    subfolder = 'cloudinator_db' if kind == 'db' else 'cloudinator_cache'
+
+    if platform_type == 'windows':
+        appdata = os.environ.get('APPDATA', os.path.join(home, 'AppData', 'Roaming'))
+        return [
+            os.path.join(appdata, 'CloudinatorFTP', subfolder),
+            os.path.join(home, '.cloudinator', subfolder),
+        ]
+    elif platform_type == 'termux':
+        return [
+            os.path.join(home, '.cloudinator', subfolder),
+            f'/data/data/com.termux/files/home/.cloudinator/{subfolder}',
+        ]
+    else:
+        return [
+            os.path.join(home, '.cloudinator', subfolder),
+            f'/etc/cloudinator/{subfolder}',
+            f'/var/lib/cloudinator/{subfolder}',
+        ]
+
+
+def _pick_suggested_path(kind, examples):
+    print()
+    for i, ex in enumerate(examples, 1):
+        exists, writable = _check_path(ex)
+        if writable:
+            note = "✅ exists & writable"
+        elif not exists:
+            note = "📁 will be created"
+        else:
+            note = "❌ not writable"
+        print(f"{i}. {ex}  [{note}]")
+    print(f"{len(examples) + 1}. ↩️  Back")
+    print()
+    choice = _get_choice(len(examples) + 1)
+    if choice == 0 or choice == len(examples) + 1:
+        return
+    path = examples[choice - 1]
+    label = "Database" if kind == 'db' else "Cache"
+    if not _confirm_path(path, label):
+        return
+    if kind == 'db':
+        set_db_dir(path)
+    else:
+        set_cache_dir(path)
+
+
+def _configure_custom_dir(kind):
+    label     = 'Database' if kind == 'db' else 'Cache'
+    subfolder = 'db'       if kind == 'db' else 'cache'
+    print(f"\n🎯 Custom {label} Directory")
+    print(f"   Enter a parent folder — '{subfolder}' will be appended automatically.")
+    print(f"   Example: C:\\Server  →  C:\\Server\\{subfolder}")
+    try:
+        custom = input("Path: ").strip()
+        if not custom:
+            return
+        expanded = os.path.abspath(os.path.expanduser(custom))
+        # Preview the final path (mirrors paths.set_db_dir / set_cache_dir logic)
+        if os.path.basename(expanded).lower() != subfolder:
+            final = os.path.join(expanded, subfolder)
+        else:
+            final = expanded
+        if not _confirm_path(final, label):
+            return
+        if kind == 'db':
+            set_db_dir(expanded)
+        else:
+            set_cache_dir(expanded)
+    except KeyboardInterrupt:
+        print("\n👋 Cancelled")
+
+
+def configure_db_path():
+    print("\n🔐 Database Directory Configuration")
+    print("=" * 50)
+    print(f"Current: {get_db_dir()}")
+    print()
+    print("This directory holds three sensitive files:")
+    print("  • cloudinator.db  — SQLite user accounts database")
+    print("  • secret.key      — Fernet AES-128 encryption key")
+    print("  • session.secret  — Flask session cookie signing key")
+    print()
+    print("⚠️  SECURITY: Move this OUTSIDE the server root so that")
+    print("   a path traversal or misconfigured web server cannot")
+    print("   serve these files to an attacker.")
+    print()
+    print("⚠️  After moving: copy your existing db/ files to the new")
+    print("   location BEFORE restarting, or you will lose all accounts.")
+    print()
+
+    examples = _db_cache_examples('db')
+    print("Suggested secure locations:")
+    for ex in examples:
+        print(f"  • {ex}")
+    print()
+
+    print("1. 📁 Use a suggested location")
+    print("2. 🎯 Enter custom path")
+    print("3. 🔄 Reset to default  (inside server root — less secure)")
+    print("4. ↩️  Back")
+    print()
+
+    choice = _get_choice(4)
+    if choice == 0 or choice == 4:
+        return
+    elif choice == 1:
+        _pick_suggested_path('db', examples)
+    elif choice == 2:
+        _configure_custom_dir('db')
+    elif choice == 3:
+        reset_db_dir()
+
+
+# ---------------------------------------------------------------------------
+# Cache directory configuration
+# ---------------------------------------------------------------------------
+
+def configure_cache_path():
+    print("\n⚡ Cache Directory Configuration")
+    print("=" * 50)
+    print(f"Current: {get_cache_dir()}")
+    print()
+    print("This directory holds two auto-generated index files:")
+    print("  • storage_index.json — recursive file/dir counts per folder")
+    print("  • file_index.json    — cached directory listings (speeds up browsing)")
+    print()
+    print("These files are fully rebuilt on next server start if missing.")
+    print("Moving cache outside the server root prevents directory-structure")
+    print("metadata from leaking via a misconfigured web server.")
+    print()
+
+    examples = _db_cache_examples('cache')
+    print("Suggested locations:")
+    for ex in examples:
+        print(f"  • {ex}")
+    print()
+
+    print("1. 📁 Use a suggested location")
+    print("2. 🎯 Enter custom path")
+    print("3. 🔄 Reset to default  (inside server root)")
+    print("4. ↩️  Back")
+    print()
+
+    choice = _get_choice(4)
+    if choice == 0 or choice == 4:
+        return
+    elif choice == 1:
+        _pick_suggested_path('cache', examples)
+    elif choice == 2:
+        _configure_custom_dir('cache')
+    elif choice == 3:
+        reset_cache_dir()
+
+
+
+# ---------------------------------------------------------------------------
+# Main menu
+# ---------------------------------------------------------------------------
+
 def main_menu():
-    """Main interactive menu"""
     while True:
         clear_screen()
         print_banner()
         print_current_config()
-        
-        print("🔧 Setup Options:")
-        print("1. 📍 Choose from preset locations")
-        print("2. 🎯 Enter custom path") 
-        print("3. ✅ Keep current configuration")
-        print("4. 🔄 Refresh/test current path")
+
+        print("🔧 Configuration Options:")
+        print("1. 🗂️  Configure Files storage path   (ROOT_DIR)")
+        print("2. 🔐 Configure Database directory    (DB_DIR)  ← keys & secrets")
+        print("3. ⚡ Configure Cache directory       (CACHE_DIR)")
+        print("4. 📋 Refresh current settings")
         print("5. ❌ Exit")
         print()
-        
-        choice = get_user_choice(5)
-        
+
+        choice = _get_choice(5)
+
         if choice == 0 or choice == 5:
             print("👋 Goodbye!")
             break
-            
         elif choice == 1:
-            # Preset locations
-            options = show_preset_options()
-            if not options:
-                input("Press Enter to continue...")
-                continue
-                
-            print(f"{len(options) + 1}. 🎯 Enter custom path instead")
-            print(f"{len(options) + 2}. ↩️  Back to main menu")
-            print()
-            
-            preset_choice = get_user_choice(len(options) + 2)
-            
-            if preset_choice == 0 or preset_choice == len(options) + 2:
-                continue
-            elif preset_choice == len(options) + 1:
-                setup_custom_path()
-                input("\nPress Enter to continue...")
-            elif 1 <= preset_choice <= len(options):
-                key, path = options[preset_choice - 1]
-                if set_preset_path(key):
-                    importlib.reload(config)
-                    print(f"\n✅ Storage location updated successfully!")
-                    print(f"📁 New path: {path}")
-                else:
-                    print(f"\n❌ Failed to set storage location")
-                input("\nPress Enter to continue...")
-                
+            configure_files_path()
+            input("\nPress Enter to continue...")
         elif choice == 2:
-            # Custom path
-            if setup_custom_path():
-                print(f"\n✅ Custom storage path set successfully!")
+            configure_db_path()
             input("\nPress Enter to continue...")
-            
         elif choice == 3:
-            # Keep current
-            print("✅ Keeping current configuration")
-            print(f"📁 Storage path: {config.config.ROOT_DIR}")
-            break
-            
-        elif choice == 4:
-            # Refresh/test
-            try:
-                from config import setup_storage_directory
-                new_path = setup_storage_directory()
-                print(f"🔄 Configuration refreshed")
-                print(f"📁 Path: {new_path}")
-            except Exception as e:
-                print(f"❌ Error refreshing configuration: {e}")
+            configure_cache_path()
             input("\nPress Enter to continue...")
+        elif choice == 4:
+            pass  # loop re-prints print_current_config
+
 
 def main():
-    """Main entry point"""
     try:
-        print("🚀 Cloudflare FTP Storage Setup")
-        print("This tool will help you configure where files are stored.\n")
-        
-        # Check if running from correct directory
+        print("🚀 CloudinatorFTP Storage Setup")
+        print("Configure where files, the database, and the cache are stored.\n")
+
         if not os.path.exists('config.py'):
             print("❌ Error: config.py not found!")
-            print("Make sure you're running this script from the project directory.")
+            print("Run this script from the project directory.")
             return 1
-        
+
         main_menu()
-        
         print("\n🎯 Setup Complete!")
-        
         return 0
-        
+
     except KeyboardInterrupt:
-        print("\n\n👋 Setup cancelled by user")
+        print("\n\n👋 Setup cancelled")
         return 1
     except Exception as e:
         print(f"\n❌ Unexpected error: {e}")
+        import traceback; traceback.print_exc()
         return 1
+
 
 if __name__ == '__main__':
     sys.exit(main())

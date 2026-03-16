@@ -25,8 +25,9 @@ from watchdog.events import FileSystemEventHandler
 from config import ROOT_DIR
 from file_index import file_index_manager
 
-# Cache location — anchored to where this file lives (add cache/ to .gitignore)
-CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
+# Cache dir resolved via paths.py — created by ensure_dirs() at server startup.
+from paths import get_cache_dir
+CACHE_DIR  = get_cache_dir(create=False)
 CACHE_FILE = os.path.join(CACHE_DIR, 'storage_index.json')
 
 # Reconciliation interval

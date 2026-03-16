@@ -8,12 +8,15 @@ import time
 PORT = 5000
 CHUNK_SIZE = 10 * 1024 * 1024  # 10 MB adjustable chunk size
 ENABLE_CHUNKED_UPLOADS = True
-from database import get_session_secret
-SESSION_SECRET = get_session_secret()
 HOST = '0.0.0.0'  # Listen on all interfaces
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024 * 1024  # 16GB max file size
 ALLOWED_EXTENSIONS = None  # None = allow all file types
 PERMANENT_SESSION_LIFETIME = 3600  # 1 hour session timeout
+
+# Path exports — create=False so importing config never creates directories.
+from paths import get_db_dir, get_cache_dir, set_db_dir, set_cache_dir
+DB_DIR    = get_db_dir(create=False)
+CACHE_DIR = get_cache_dir(create=False)
 
 def detect_platform():
     """Detect the current platform and return appropriate info"""
@@ -113,7 +116,6 @@ def get_accessible_storage_path():
 
 def setup_storage_directory():
     """Create and verify the storage directory"""
-    # Check for custom path from environment or config file
     custom_path = None
     
     # 1. Check environment variable
@@ -121,16 +123,14 @@ def setup_storage_directory():
         custom_path = os.environ['CLOUDFLARE_FTP_ROOT']
         print(f"🔧 Using environment variable path: {custom_path}")
     
-    # 2. Check for storage config file
-    elif os.path.exists('storage_config.json'):
-        try:
-            import json
-            with open('storage_config.json', 'r') as f:
-                config = json.load(f)
-                custom_path = config.get('storage_path')
-                print(f"📋 Using saved configuration: {custom_path}")
-        except Exception as e:
-            print(f"⚠️  Error reading storage config: {e}")
+    # 2. Read from storage_config.json via paths._load() — same file/path
+    #    that set_db_dir/set_cache_dir write to, so they're always in sync.
+    else:
+        from paths import _load as _paths_load
+        cfg = _paths_load()
+        custom_path = cfg.get('storage_path')
+        if custom_path:
+            print(f"📋 Using saved configuration: {custom_path}")
     
     # 3. Use custom path if provided, otherwise auto-detect
     storage_path = custom_path if custom_path else get_accessible_storage_path()
@@ -268,17 +268,15 @@ def set_custom_storage_path(custom_path, use_subfolder=True):
             f.write('test')
         os.remove(test_file)
         
-        # Save configuration
-        config_data = {
-            'storage_path': expanded_path,
-            'platform': detect_platform(),
-            'set_at': str(os.path.getctime(expanded_path)) if os.path.exists(expanded_path) else None
-        }
-        
+        # Save via paths._save() — merge-write so db_path/cache_path
+        # already in storage_config.json are never overwritten.
         try:
-            import json
-            with open('storage_config.json', 'w') as f:
-                json.dump(config_data, f, indent=2)
+            from paths import _save
+            _save({
+                'storage_path': expanded_path,
+                'platform':     detect_platform(),
+                'set_at':       str(os.path.getctime(expanded_path)) if os.path.exists(expanded_path) else None,
+            })
             print("📋 Saved storage configuration")
         except Exception as e:
             print(f"⚠️  Could not save config: {e}")
@@ -654,7 +652,7 @@ def save_server_config():
 
 def load_server_config():
     """Load server configuration from file"""
-    global PORT, CHUNK_SIZE, ENABLE_CHUNKED_UPLOADS, SESSION_SECRET
+    global PORT, CHUNK_SIZE, ENABLE_CHUNKED_UPLOADS
     global HOST, MAX_CONTENT_LENGTH, PERMANENT_SESSION_LIFETIME
     
     try:
@@ -675,6 +673,25 @@ def load_server_config():
         print(f"⚠️ Could not load server config: {e}")
     
     return False
+
+def _confirm_path(final_path: str, label: str) -> bool:
+    """Show the resolved final path and ask user to confirm before saving."""
+    print()
+    print(f"  📁 {label} will be set to:")
+    print(f"     {final_path}")
+    print()
+    while True:
+        try:
+            ans = input("  Confirm? (y/n): ").strip().lower()
+            if ans in ('y', 'yes'):
+                return True
+            if ans in ('n', 'no'):
+                print("  ↩️  Cancelled.")
+                return False
+        except KeyboardInterrupt:
+            print("\n👋 Cancelled")
+            return False
+
 
 def configure_storage_path():
     """Storage path configuration (original function)"""
@@ -701,14 +718,20 @@ def configure_storage_path():
             }
             
             if choice in path_map:
-                if set_preset_path(path_map[choice]):
+                preset_key  = path_map[choice]
+                preset_path = PRESET_PATHS.get(platform_type, {}).get(preset_key, '')
+                if preset_path and not _confirm_path(preset_path, "Files storage"):
+                    pass
+                elif set_preset_path(preset_key):
                     print("\n✅ Storage path updated successfully!")
                 else:
                     print("\n❌ Failed to set storage path")
             elif choice == '5':
                 custom = input("Enter custom path: ").strip()
-                if custom and set_custom_storage_path(custom):
-                    print("\n✅ Custom storage path set successfully!")
+                if custom:
+                    expanded = os.path.abspath(os.path.expanduser(custom))
+                    if _confirm_path(expanded, "Files storage") and set_custom_storage_path(expanded):
+                        print("\n✅ Custom storage path set successfully!")
             elif choice == '6':
                 print("✅ Configuration cancelled")
             else:

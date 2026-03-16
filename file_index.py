@@ -64,8 +64,9 @@ import time
 import threading
 import tempfile
 
-# Anchor CACHE_DIR to the directory that contains this file (project root).
-CACHE_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
+# Cache dir resolved via paths.py — created by ensure_dirs() at server startup.
+from paths import get_cache_dir
+CACHE_DIR       = get_cache_dir(create=False)
 FILE_INDEX_PATH = os.path.join(CACHE_DIR, 'file_index.json')
 
 # A folder must have MORE THAN this many direct entries to be recorded.
