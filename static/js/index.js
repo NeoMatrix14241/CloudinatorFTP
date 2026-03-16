@@ -2910,10 +2910,10 @@ const VIEWABLE_EXTENSIONS = {
     image: new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'ico', 'avif']),
     video: new Set(['mp4', 'webm', 'ogv', 'mov', 'm4v']),
     audio: new Set(['mp3', 'wav', 'ogg', 'oga', 'aac', 'flac', 'm4a', 'opus']),
-    pdf: new Set(['pdf']),
+    pdf: new Set(['pdf']), // PDFs + Office docs (viewed via embedded Google Docs Viewer)
     text: new Set([
         'txt', 'md', 'json', 'jsonc', 'jsonl', 'xml', 'csv', 'tsv', 'log', 'ini', 'cfg',
-        'yaml', 'yml', 'toml', 'env', 'sh', 'bash', 'bat', 'cmd', 'ps1',
+        'yaml', 'yml', 'toml', 'env', 'sh', 'bash', 'bat', 'cmd', 'ps1', 'reg', 'md',
         'py', 'js', 'jsx', 'ts', 'tsx', 'html', 'htm', 'css', 'java', 'c', 'cpp', 'h', 'hpp',
         'cs', 'go', 'rb', 'pl', 'lua', 'rs', 'kt', 'swift', 'php', 'sql', 'r', 'scala',
         'vb', 'asm', 's', 'makefile', 'dockerfile', 'gitignore', 'editorconfig', 'htaccess'
