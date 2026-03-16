@@ -8,3 +8,7 @@ __pycache__/
 .hindtrc
 cache/
 db/
+
+# experimental only - temporarily ignored as no functionality is currently implemented
+static/js/video.js
+static/css/video.css
