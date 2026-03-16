@@ -23,10 +23,10 @@ def login_user(username: str):
     """Stamp the session with the current server token."""
     session.clear()
     session.permanent = True
-    session['username'] = username
-    session['role'] = db.get_role(username)
-    session['logged_in'] = True
-    session['server_token'] = db.get_server_token()   # token from DB
+    session["username"] = username
+    session["role"] = db.get_role(username)
+    session["logged_in"] = True
+    session["server_token"] = db.get_server_token()  # token from DB
     db.update_last_login(username)
 
 
@@ -35,7 +35,7 @@ def logout_user():
 
 
 def current_user() -> str | None:
-    return session.get('username')
+    return session.get("username")
 
 
 def is_logged_in() -> bool:
@@ -47,15 +47,15 @@ def is_logged_in() -> bool:
       3. The user still exists in the DB
          (deleting a user immediately invalidates their session)
     """
-    username = session.get('username')
-    if not username or not session.get('logged_in'):
+    username = session.get("username")
+    if not username or not session.get("logged_in"):
         return False
 
-    if session.get('server_token') != db.get_server_token():
+    if session.get("server_token") != db.get_server_token():
         session.clear()
         return False
 
-    if db.get_role(username) is None:   # user was deleted
+    if db.get_role(username) is None:  # user was deleted
         session.clear()
         return False
 

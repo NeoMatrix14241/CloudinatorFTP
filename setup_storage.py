@@ -18,19 +18,29 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     import importlib
     import config
+
     importlib.reload(config)
     from config import (
-        detect_platform, PRESET_PATHS, format_bytes,
-        set_preset_path, set_custom_storage_path,
+        detect_platform,
+        PRESET_PATHS,
+        format_bytes,
+        set_preset_path,
+        set_custom_storage_path,
     )
     from paths import (
-        get_db_dir, get_cache_dir, set_db_dir, set_cache_dir,
-        reset_db_dir, reset_cache_dir, get_all_paths,
+        get_db_dir,
+        get_cache_dir,
+        set_db_dir,
+        set_cache_dir,
+        reset_db_dir,
+        reset_cache_dir,
+        get_all_paths,
     )
+
     # DB_DIR and CACHE_DIR come from paths directly — not from config —
     # so setup_storage.py works even on an older config.py that doesn't
     # export them yet.
-    DB_DIR    = get_db_dir()
+    DB_DIR = get_db_dir()
     CACHE_DIR = get_cache_dir()
 except ImportError as e:
     print(f"❌ Import error: {e}")
@@ -39,7 +49,7 @@ except ImportError as e:
 
 
 def clear_screen():
-    os.system('cls' if os.name == 'nt' else 'clear')
+    os.system("cls" if os.name == "nt" else "clear")
 
 
 def print_banner():
@@ -53,7 +63,7 @@ def _get_choice(max_choice):
     while True:
         try:
             raw = input(f"Select option (1-{max_choice}, 0 to cancel): ").strip()
-            if raw == '0':
+            if raw == "0":
                 return 0
             n = int(raw)
             if 1 <= n <= max_choice:
@@ -75,9 +85,9 @@ def _confirm_path(final_path: str, label: str) -> bool:
     while True:
         try:
             ans = input("  Confirm? (y/n): ").strip().lower()
-            if ans in ('y', 'yes'):
+            if ans in ("y", "yes"):
                 return True
-            if ans in ('n', 'no'):
+            if ans in ("n", "no"):
                 print("  ↩️  Cancelled.")
                 return False
         except KeyboardInterrupt:
@@ -89,9 +99,9 @@ def _check_path(path):
     if not os.path.exists(path):
         return False, False
     try:
-        test = os.path.join(path, '.write_test')
-        with open(test, 'w') as f:
-            f.write('test')
+        test = os.path.join(path, ".write_test")
+        with open(test, "w") as f:
+            f.write("test")
         os.remove(test)
         return True, True
     except Exception:
@@ -100,15 +110,16 @@ def _check_path(path):
 
 def _free_space(path):
     try:
-        if os.name == 'nt':
+        if os.name == "nt":
             import shutil
+
             _, _, free = shutil.disk_usage(path)
         else:
             st = os.statvfs(path)
             free = st.f_bavail * st.f_frsize
         return format_bytes(free)
     except Exception:
-        return 'Unknown'
+        return "Unknown"
 
 
 def print_current_config():
@@ -120,15 +131,19 @@ def print_current_config():
     print()
 
     rows = [
-        ("Files   (ROOT_DIR) ", config.ROOT_DIR,   "🗂️ "),
-        ("Database (DB_DIR)  ", paths['db_dir'],    "🔐"),
-        ("Cache   (CACHE_DIR)", paths['cache_dir'], "⚡"),
+        ("Files   (ROOT_DIR) ", config.ROOT_DIR, "🗂️ "),
+        ("Database (DB_DIR)  ", paths["db_dir"], "🔐"),
+        ("Cache   (CACHE_DIR)", paths["cache_dir"], "⚡"),
     ]
 
     for label, path, icon in rows:
         exists, writable = _check_path(path)
         status = "✅" if writable else ("⚠️ " if exists else "❌ missing")
-        inside = " ⚠️  inside server root" if os.path.abspath(path).startswith(os.path.abspath(server_root)) else " ✅ outside server root"
+        inside = (
+            " ⚠️  inside server root"
+            if os.path.abspath(path).startswith(os.path.abspath(server_root))
+            else " ✅ outside server root"
+        )
         print(f"  {icon}  {label}")
         print(f"      {status} {path}")
         print(f"         {inside}")
@@ -140,6 +155,7 @@ def print_current_config():
 # ---------------------------------------------------------------------------
 # Files (ROOT_DIR) configuration
 # ---------------------------------------------------------------------------
+
 
 def show_preset_options():
     platform_type = detect_platform()
@@ -155,8 +171,11 @@ def show_preset_options():
     for i, (key, path) in enumerate(presets.items(), 1):
         try:
             parent = os.path.dirname(path)
-            status = "✅" if os.path.exists(parent) and os.access(parent, os.W_OK) else (
-                     "⚠️ " if os.path.exists(parent) else "❌")
+            status = (
+                "✅"
+                if os.path.exists(parent) and os.access(parent, os.W_OK)
+                else ("⚠️ " if os.path.exists(parent) else "❌")
+            )
         except Exception:
             status = "❌"
 
@@ -165,12 +184,12 @@ def show_preset_options():
         options.append((key, path))
 
         descs = {
-            'downloads': 'Recommended for easy access',
-            'documents': 'Good for document storage',
-            'desktop':   'Quick access from desktop',
-            'internal':  'Android internal storage root',
-            'dcim':      'Camera/media folder',
-            'termux_home': 'Termux app directory only',
+            "downloads": "Recommended for easy access",
+            "documents": "Good for document storage",
+            "desktop": "Quick access from desktop",
+            "internal": "Android internal storage root",
+            "dcim": "Camera/media folder",
+            "termux_home": "Termux app directory only",
         }
         if key in descs:
             print(f"      💡 {descs[key]}")
@@ -228,27 +247,28 @@ def _configure_custom_files_path():
 # DB directory configuration
 # ---------------------------------------------------------------------------
 
-def _db_cache_examples(kind):
-    home = os.path.expanduser('~')
-    platform_type = detect_platform()
-    subfolder = 'cloudinator_db' if kind == 'db' else 'cloudinator_cache'
 
-    if platform_type == 'windows':
-        appdata = os.environ.get('APPDATA', os.path.join(home, 'AppData', 'Roaming'))
+def _db_cache_examples(kind):
+    home = os.path.expanduser("~")
+    platform_type = detect_platform()
+    subfolder = "cloudinator_db" if kind == "db" else "cloudinator_cache"
+
+    if platform_type == "windows":
+        appdata = os.environ.get("APPDATA", os.path.join(home, "AppData", "Roaming"))
         return [
-            os.path.join(appdata, 'CloudinatorFTP', subfolder),
-            os.path.join(home, '.cloudinator', subfolder),
+            os.path.join(appdata, "CloudinatorFTP", subfolder),
+            os.path.join(home, ".cloudinator", subfolder),
         ]
-    elif platform_type == 'termux':
+    elif platform_type == "termux":
         return [
-            os.path.join(home, '.cloudinator', subfolder),
-            f'/data/data/com.termux/files/home/.cloudinator/{subfolder}',
+            os.path.join(home, ".cloudinator", subfolder),
+            f"/data/data/com.termux/files/home/.cloudinator/{subfolder}",
         ]
     else:
         return [
-            os.path.join(home, '.cloudinator', subfolder),
-            f'/etc/cloudinator/{subfolder}',
-            f'/var/lib/cloudinator/{subfolder}',
+            os.path.join(home, ".cloudinator", subfolder),
+            f"/etc/cloudinator/{subfolder}",
+            f"/var/lib/cloudinator/{subfolder}",
         ]
 
 
@@ -269,18 +289,18 @@ def _pick_suggested_path(kind, examples):
     if choice == 0 or choice == len(examples) + 1:
         return
     path = examples[choice - 1]
-    label = "Database" if kind == 'db' else "Cache"
+    label = "Database" if kind == "db" else "Cache"
     if not _confirm_path(path, label):
         return
-    if kind == 'db':
+    if kind == "db":
         set_db_dir(path)
     else:
         set_cache_dir(path)
 
 
 def _configure_custom_dir(kind):
-    label     = 'Database' if kind == 'db' else 'Cache'
-    subfolder = 'db'       if kind == 'db' else 'cache'
+    label = "Database" if kind == "db" else "Cache"
+    subfolder = "db" if kind == "db" else "cache"
     print(f"\n🎯 Custom {label} Directory")
     print(f"   Enter a parent folder — '{subfolder}' will be appended automatically.")
     print(f"   Example: C:\\Server  →  C:\\Server\\{subfolder}")
@@ -296,7 +316,7 @@ def _configure_custom_dir(kind):
             final = expanded
         if not _confirm_path(final, label):
             return
-        if kind == 'db':
+        if kind == "db":
             set_db_dir(expanded)
         else:
             set_cache_dir(expanded)
@@ -322,7 +342,7 @@ def configure_db_path():
     print("   location BEFORE restarting, or you will lose all accounts.")
     print()
 
-    examples = _db_cache_examples('db')
+    examples = _db_cache_examples("db")
     print("Suggested secure locations:")
     for ex in examples:
         print(f"  • {ex}")
@@ -338,9 +358,9 @@ def configure_db_path():
     if choice == 0 or choice == 4:
         return
     elif choice == 1:
-        _pick_suggested_path('db', examples)
+        _pick_suggested_path("db", examples)
     elif choice == 2:
-        _configure_custom_dir('db')
+        _configure_custom_dir("db")
     elif choice == 3:
         reset_db_dir()
 
@@ -348,6 +368,7 @@ def configure_db_path():
 # ---------------------------------------------------------------------------
 # Cache directory configuration
 # ---------------------------------------------------------------------------
+
 
 def configure_cache_path():
     print("\n⚡ Cache Directory Configuration")
@@ -363,7 +384,7 @@ def configure_cache_path():
     print("metadata from leaking via a misconfigured web server.")
     print()
 
-    examples = _db_cache_examples('cache')
+    examples = _db_cache_examples("cache")
     print("Suggested locations:")
     for ex in examples:
         print(f"  • {ex}")
@@ -379,17 +400,17 @@ def configure_cache_path():
     if choice == 0 or choice == 4:
         return
     elif choice == 1:
-        _pick_suggested_path('cache', examples)
+        _pick_suggested_path("cache", examples)
     elif choice == 2:
-        _configure_custom_dir('cache')
+        _configure_custom_dir("cache")
     elif choice == 3:
         reset_cache_dir()
-
 
 
 # ---------------------------------------------------------------------------
 # Main menu
 # ---------------------------------------------------------------------------
+
 
 def main_menu():
     while True:
@@ -428,7 +449,7 @@ def main():
         print("🚀 CloudinatorFTP Storage Setup")
         print("Configure where files, the database, and the cache are stored.\n")
 
-        if not os.path.exists('config.py'):
+        if not os.path.exists("config.py"):
             print("❌ Error: config.py not found!")
             print("Run this script from the project directory.")
             return 1
@@ -442,9 +463,11 @@ def main():
         return 1
     except Exception as e:
         print(f"\n❌ Unexpected error: {e}")
-        import traceback; traceback.print_exc()
+        import traceback
+
+        traceback.print_exc()
         return 1
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

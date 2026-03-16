@@ -314,7 +314,8 @@ body {
     min-height: 150px;
     overflow-y: auto;
     overflow-x: auto;
-    -webkit-overflow-scrolling: touch; /* smooth scroll on iOS */
+    -webkit-overflow-scrolling: touch;
+    /* smooth scroll on iOS */
 }
 
 /* Sticky header inside scroll wrapper */
@@ -329,14 +330,17 @@ body {
     width: 8px;
     height: 8px;
 }
+
 .table-scroll-wrapper::-webkit-scrollbar-track {
     background: rgba(255, 255, 255, 0.05);
     border-radius: 4px;
 }
+
 .table-scroll-wrapper::-webkit-scrollbar-thumb {
     background: rgba(52, 152, 219, 0.5);
     border-radius: 4px;
 }
+
 .table-scroll-wrapper::-webkit-scrollbar-thumb:hover {
     background: rgba(52, 152, 219, 0.8);
 }
@@ -346,10 +350,11 @@ body {
     height: 1px;
     width: 100%;
 }
+
 .vt-loading-row td {
     text-align: center;
     padding: 12px;
-    color: rgba(255,255,255,0.6);
+    color: rgba(255, 255, 255, 0.6);
     font-size: 13px;
 }
 
@@ -365,14 +370,17 @@ body {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
     border-bottom: 1px solid rgba(52, 152, 219, 0.3) !important;
 }
+
 #filesTable tbody tr.parent-dir-sticky:hover {
     background: rgba(32, 65, 118, 0.97) !important;
     cursor: pointer;
 }
+
 #filesTable tbody tr.parent-dir-sticky .folder-link {
     color: #5dade2 !important;
     font-weight: 600;
 }
+
 #filesTable tbody tr.parent-dir-sticky .file-icon {
     color: #5dade2 !important;
 }
@@ -1237,7 +1245,8 @@ i.fa-file {
 
 .modal-body {
     flex: 1;
-    min-height: 0;          /* required for flex child to shrink below content size */
+    min-height: 0;
+    /* required for flex child to shrink below content size */
     overflow-y: auto;
     margin-bottom: 0;
     padding-bottom: 16px;
@@ -1389,7 +1398,8 @@ i.fa-file {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    display: inline;  /* must stay inline so it sits next to the folder icon */
+    display: inline;
+    /* must stay inline so it sits next to the folder icon */
 }
 
 .current-destination {
@@ -2322,7 +2332,8 @@ td .fa-file {
     }
 
     .modal-header {
-        flex-direction: row;  /* keep title + × on the same line */
+        flex-direction: row;
+        /* keep title + × on the same line */
         align-items: center;
         gap: 8px;
         margin-bottom: 14px;
@@ -3944,6 +3955,7 @@ td .fa-file {
         word-break: break-word !important;
     }
 }
+
 /* ── File Viewer / Preview ───────────────────────────────────────────────── */
 
 /* Eye button inline with file name */
@@ -3966,6 +3978,7 @@ td .fa-file {
     line-height: 1;
     padding: 0;
 }
+
 .btn-eye-view:hover {
     background: rgba(52, 152, 219, 0.35);
     border-color: rgba(52, 152, 219, 0.7);
@@ -3990,13 +4003,16 @@ td .fa-file {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(0,0,0,0.25);
+    background: rgba(0, 0, 0, 0.25);
     border-radius: 8px;
     padding: 0;
 }
 
 /* Image viewer */
-.file-viewer-body.viewer-image { background: rgba(0,0,0,0.5); }
+.file-viewer-body.viewer-image {
+    background: rgba(0, 0, 0, 0.5);
+}
+
 .viewer-img {
     max-width: 100%;
     max-height: 70vh;
@@ -4006,7 +4022,10 @@ td .fa-file {
 }
 
 /* Video viewer */
-.file-viewer-body.viewer-video { background: #000; }
+.file-viewer-body.viewer-video {
+    background: #000;
+}
+
 .viewer-video-el {
     max-width: 100%;
     max-height: 70vh;
@@ -4018,9 +4037,10 @@ td .fa-file {
 .file-viewer-body.viewer-audio {
     flex-direction: column;
     padding: 30px;
-    background: rgba(255,255,255,0.05);
+    background: rgba(255, 255, 255, 0.05);
     min-height: 180px;
 }
+
 .viewer-audio-wrap {
     display: flex;
     flex-direction: column;
@@ -4028,24 +4048,31 @@ td .fa-file {
     gap: 16px;
     width: 100%;
 }
+
 .viewer-audio-icon {
     font-size: 48px;
     color: #f39c12;
     opacity: 0.8;
 }
+
 .viewer-audio-name {
-    color: rgba(255,255,255,0.8);
+    color: rgba(255, 255, 255, 0.8);
     font-size: 15px;
     text-align: center;
     word-break: break-all;
 }
+
 .viewer-audio-el {
     width: 100%;
     max-width: 480px;
 }
 
 /* PDF iframe */
-.file-viewer-body.viewer-pdf { padding: 0; background: #525659; }
+.file-viewer-body.viewer-pdf {
+    padding: 0;
+    background: #525659;
+}
+
 .viewer-iframe {
     width: 100%;
     height: 72vh;
@@ -4060,6 +4087,7 @@ td .fa-file {
     overflow: auto;
     padding: 0;
 }
+
 .viewer-pre {
     margin: 0;
     padding: 16px 20px;
@@ -4073,10 +4101,12 @@ td .fa-file {
     min-height: 100%;
     box-sizing: border-box;
 }
+
 .viewer-text-loading {
-    color: rgba(255,255,255,0.6);
+    color: rgba(255, 255, 255, 0.6);
     font-size: 14px;
 }
+
 .viewer-error {
     color: #e74c3c;
     font-size: 14px;
@@ -4085,8 +4115,17 @@ td .fa-file {
 
 /* Mobile: smaller iframe height */
 @media (max-width: 768px) {
-    .viewer-iframe { height: 55vh; }
-    .viewer-img    { max-height: 55vh; }
-    .viewer-video-el { max-height: 50vh; }
+    .viewer-iframe {
+        height: 55vh;
+    }
+
+    .viewer-img {
+        max-height: 55vh;
+    }
+
+    .viewer-video-el {
+        max-height: 50vh;
+    }
 }
+
 /* ─────────────────────────────────────────────────────────────────────────── */

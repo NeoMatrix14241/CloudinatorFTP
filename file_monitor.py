@@ -27,8 +27,9 @@ from file_index import file_index_manager
 
 # Cache dir resolved via paths.py — created by ensure_dirs() at server startup.
 from paths import get_cache_dir
-CACHE_DIR  = get_cache_dir(create=False)
-CACHE_FILE = os.path.join(CACHE_DIR, 'storage_index.json')
+
+CACHE_DIR = get_cache_dir(create=False)
+CACHE_FILE = os.path.join(CACHE_DIR, "storage_index.json")
 
 # Reconciliation interval
 RECONCILE_INTERVAL = 900  # 15 minutes
@@ -40,13 +41,13 @@ SETTLE_DELAY = 0.5  # seconds  (was 2.0)
 # the handler auto-arms the settle (same as an explicit bulk_copy reconcile does).
 # Raised so small copies (< 200 files) still get individual watchdog increments
 # rather than immediately jumping to a full walk.
-BURST_THRESHOLD = 200   # events  (was 50)
-BURST_WINDOW    = 5.0   # seconds (was 3.0)
+BURST_THRESHOLD = 200  # events  (was 50)
+BURST_WINDOW = 5.0  # seconds (was 3.0)
 
 # Walk progress: log a line every N files during a reconcile walk (no SSE emitted).
 # SSE during the walk caused the UI to oscillate between partial counts.
-WALK_PROGRESS_INTERVAL     = 1000   # print a log line every N files
-WALK_PROGRESS_MIN_INTERVAL = 1.0    # (unused — kept for reference only)
+WALK_PROGRESS_INTERVAL = 1000  # print a log line every N files
+WALK_PROGRESS_MIN_INTERVAL = 1.0  # (unused — kept for reference only)
 
 # After a reconcile walk finishes, the OS watchdog event queue may still hold
 # thousands of on_created events for files the walk already counted.  Once those
@@ -54,12 +55,13 @@ WALK_PROGRESS_MIN_INTERVAL = 1.0    # (unused — kept for reference only)
 # _file_count for files the walk already tallied → "infinite drift".
 # Re-arming suppression for POST_WALK_DRAIN seconds flushes the OS queue without
 # triggering another full walk.
-POST_WALK_DRAIN = 6.0   # seconds — enough for OS to drain ~100k queued events
+POST_WALK_DRAIN = 6.0  # seconds — enough for OS to drain ~100k queued events
 
 
 @dataclass
 class StorageSnapshot:
     """Lightweight snapshot — kept identical to original for app.py compatibility"""
+
     file_count: int
     dir_count: int
     total_size: int
@@ -71,9 +73,9 @@ class StorageSnapshot:
 def _rel(abs_path: str, root: str) -> str:
     """Convert absolute path to relative path key (forward slashes, no leading slash)"""
     rel = os.path.relpath(abs_path, root)
-    if rel == '.':
-        return ''
-    return rel.replace('\\', '/')
+    if rel == ".":
+        return ""
+    return rel.replace("\\", "/")
 
 
 def _parents(rel_path: str):
@@ -81,10 +83,10 @@ def _parents(rel_path: str):
     Yield all parent relative paths from closest to root.
     e.g. 'a/b/c' → ['a/b', 'a', '']
     """
-    parts = rel_path.split('/')
+    parts = rel_path.split("/")
     for i in range(len(parts) - 1, 0, -1):
-        yield '/'.join(parts[:i])
-    yield ''  # root always gets updated
+        yield "/".join(parts[:i])
+    yield ""  # root always gets updated
 
 
 class InstantFileEventHandler(FileSystemEventHandler):
@@ -96,14 +98,14 @@ class InstantFileEventHandler(FileSystemEventHandler):
     def __init__(self, monitor):
         self.monitor = monitor
         self.debounce_timer = None
-        self.debounce_delay = 0.5   # Fire SSE 0.5s after last change (was 2.0s)
+        self.debounce_delay = 0.5  # Fire SSE 0.5s after last change (was 2.0s)
         self.debounce_lock = threading.Lock()
         self._first_change_time = None  # For max_wait enforcement
         # Burst detection: if more than BURST_THRESHOLD on_created events arrive
         # within BURST_WINDOW seconds, treat it as a bulk op and arm the settle.
         self._burst_count = 0
         self._burst_window_start = 0.0
-        self._burst_armed = False    # True once settle has been armed for this burst
+        self._burst_armed = False  # True once settle has been armed for this burst
 
     def _check_burst(self):
         """
@@ -124,8 +126,10 @@ class InstantFileEventHandler(FileSystemEventHandler):
 
         if self._burst_count >= BURST_THRESHOLD and not self._burst_armed:
             self._burst_armed = True
-            print(f"⚡ Burst detected ({self._burst_count} events in "
-                  f"{now - self._burst_window_start:.1f}s) — arming settle reconcile")
+            print(
+                f"⚡ Burst detected ({self._burst_count} events in "
+                f"{now - self._burst_window_start:.1f}s) — arming settle reconcile"
+            )
             self.monitor.set_pending_reconcile()
 
     def _schedule_notify(self):
@@ -147,15 +151,14 @@ class InstantFileEventHandler(FileSystemEventHandler):
                 self.debounce_timer = threading.Timer(0, self.monitor._notify_and_save)
             else:
                 self.debounce_timer = threading.Timer(
-                    self.debounce_delay,
-                    self.monitor._notify_and_save
+                    self.debounce_delay, self.monitor._notify_and_save
                 )
             self.debounce_timer.start()
 
     def on_created(self, event):
         # Skip hidden files/dirs (matches _full_walk) and anything inside .chunks
         _name = os.path.basename(event.src_path)
-        if _name.startswith('.') or '.chunks' in event.src_path:
+        if _name.startswith(".") or ".chunks" in event.src_path:
             return
 
         # Snapshot epoch BEFORE any path work (outside the lock).
@@ -182,12 +185,14 @@ class InstantFileEventHandler(FileSystemEventHandler):
                 self.monitor._dir_count += 1
                 if src_rel not in self.monitor._dir_info:
                     self.monitor._dir_info[src_rel] = {
-                        'file_count': 0, 'dir_count': 0, 'total_size': 0
+                        "file_count": 0,
+                        "dir_count": 0,
+                        "total_size": 0,
                     }
                 # Update parent dir_count
                 for parent in _parents(src_rel):
                     if parent in self.monitor._dir_info:
-                        self.monitor._dir_info[parent]['dir_count'] += 1
+                        self.monitor._dir_info[parent]["dir_count"] += 1
             else:
                 # New file — update global file count + size in all parents
                 self.monitor._file_count += 1
@@ -199,14 +204,16 @@ class InstantFileEventHandler(FileSystemEventHandler):
                     pass
 
                 # Update dir_info for immediate parent AND all ancestors
-                parent_rel = _rel(os.path.dirname(event.src_path), str(self.monitor.root_path))
+                parent_rel = _rel(
+                    os.path.dirname(event.src_path), str(self.monitor.root_path)
+                )
                 if parent_rel in self.monitor._dir_info:
-                    self.monitor._dir_info[parent_rel]['file_count'] += 1
-                    self.monitor._dir_info[parent_rel]['total_size'] += file_size
+                    self.monitor._dir_info[parent_rel]["file_count"] += 1
+                    self.monitor._dir_info[parent_rel]["total_size"] += file_size
                 for ancestor in _parents(parent_rel):
                     if ancestor in self.monitor._dir_info:
-                        self.monitor._dir_info[ancestor]['file_count'] += 1
-                        self.monitor._dir_info[ancestor]['total_size'] += file_size
+                        self.monitor._dir_info[ancestor]["file_count"] += 1
+                        self.monitor._dir_info[ancestor]["total_size"] += file_size
 
         # --- file index: re-scan the parent folder (outside monitor lock) ---
         _parent_abs = os.path.dirname(event.src_path)
@@ -226,7 +233,7 @@ class InstantFileEventHandler(FileSystemEventHandler):
     def on_deleted(self, event):
         # Skip hidden files/dirs (matches _full_walk) and anything inside .chunks
         _name = os.path.basename(event.src_path)
-        if _name.startswith('.') or '.chunks' in event.src_path:
+        if _name.startswith(".") or ".chunks" in event.src_path:
             return
 
         epoch = self.monitor._reconcile_epoch
@@ -246,45 +253,56 @@ class InstantFileEventHandler(FileSystemEventHandler):
                 removed_dirs = 0
                 removed_files = 0
                 keys_to_remove = [
-                    k for k in self.monitor._dir_info
-                    if k == src_rel or k.startswith(src_rel + '/')
+                    k
+                    for k in self.monitor._dir_info
+                    if k == src_rel or k.startswith(src_rel + "/")
                 ]
                 for k in keys_to_remove:
                     entry = self.monitor._dir_info.pop(k, {})
                     if k == src_rel:
-                        removed_size = entry.get('total_size', 0)
-                        removed_dirs = 1 + entry.get('dir_count', 0)
-                        removed_files = entry.get('file_count', 0)
+                        removed_size = entry.get("total_size", 0)
+                        removed_dirs = 1 + entry.get("dir_count", 0)
+                        removed_files = entry.get("file_count", 0)
 
                 self.monitor._dir_count = max(0, self.monitor._dir_count - removed_dirs)
-                self.monitor._file_count = max(0, self.monitor._file_count - removed_files)
-                self.monitor._total_size = max(0, self.monitor._total_size - removed_size)
+                self.monitor._file_count = max(
+                    0, self.monitor._file_count - removed_files
+                )
+                self.monitor._total_size = max(
+                    0, self.monitor._total_size - removed_size
+                )
 
                 # Bubble all three counts up to all ancestors
                 for parent in _parents(src_rel):
                     if parent in self.monitor._dir_info:
-                        self.monitor._dir_info[parent]['dir_count'] = max(
-                            0, self.monitor._dir_info[parent]['dir_count'] - removed_dirs
+                        self.monitor._dir_info[parent]["dir_count"] = max(
+                            0,
+                            self.monitor._dir_info[parent]["dir_count"] - removed_dirs,
                         )
-                        self.monitor._dir_info[parent]['file_count'] = max(
-                            0, self.monitor._dir_info[parent]['file_count'] - removed_files
+                        self.monitor._dir_info[parent]["file_count"] = max(
+                            0,
+                            self.monitor._dir_info[parent]["file_count"]
+                            - removed_files,
                         )
-                        self.monitor._dir_info[parent]['total_size'] = max(
-                            0, self.monitor._dir_info[parent]['total_size'] - removed_size
+                        self.monitor._dir_info[parent]["total_size"] = max(
+                            0,
+                            self.monitor._dir_info[parent]["total_size"] - removed_size,
                         )
             else:
                 # Deleted file — bubble file_count down from all ancestors
                 self.monitor._file_count = max(0, self.monitor._file_count - 1)
 
-                parent_rel = _rel(os.path.dirname(event.src_path), str(self.monitor.root_path))
+                parent_rel = _rel(
+                    os.path.dirname(event.src_path), str(self.monitor.root_path)
+                )
                 if parent_rel in self.monitor._dir_info:
-                    self.monitor._dir_info[parent_rel]['file_count'] = max(
-                        0, self.monitor._dir_info[parent_rel]['file_count'] - 1
+                    self.monitor._dir_info[parent_rel]["file_count"] = max(
+                        0, self.monitor._dir_info[parent_rel]["file_count"] - 1
                     )
                 for ancestor in _parents(parent_rel):
                     if ancestor in self.monitor._dir_info:
-                        self.monitor._dir_info[ancestor]['file_count'] = max(
-                            0, self.monitor._dir_info[ancestor]['file_count'] - 1
+                        self.monitor._dir_info[ancestor]["file_count"] = max(
+                            0, self.monitor._dir_info[ancestor]["file_count"] - 1
                         )
                 # Size drift corrected by 15min reconcile
 
@@ -306,8 +324,9 @@ class InstantFileEventHandler(FileSystemEventHandler):
         # Skip hidden files/dirs (matches _full_walk) and pure .chunks-to-.chunks moves
         _src_name = os.path.basename(event.src_path)
         _dst_name = os.path.basename(event.dest_path)
-        if (_src_name.startswith('.') and _dst_name.startswith('.')) or \
-           ('.chunks' in event.src_path and '.chunks' in event.dest_path):
+        if (_src_name.startswith(".") and _dst_name.startswith(".")) or (
+            ".chunks" in event.src_path and ".chunks" in event.dest_path
+        ):
             return
 
         epoch = self.monitor._reconcile_epoch
@@ -325,26 +344,33 @@ class InstantFileEventHandler(FileSystemEventHandler):
             if event.is_directory:
                 # Rename/move folder — migrate all dir_info keys
                 keys_to_migrate = [
-                    k for k in list(self.monitor._dir_info.keys())
-                    if k == src_rel or k.startswith(src_rel + '/')
+                    k
+                    for k in list(self.monitor._dir_info.keys())
+                    if k == src_rel or k.startswith(src_rel + "/")
                 ]
                 for old_key in keys_to_migrate:
-                    new_key = dest_rel + old_key[len(src_rel):]
-                    self.monitor._dir_info[new_key] = self.monitor._dir_info.pop(old_key)
+                    new_key = dest_rel + old_key[len(src_rel) :]
+                    self.monitor._dir_info[new_key] = self.monitor._dir_info.pop(
+                        old_key
+                    )
 
                 # Update old parent dir_count down, new parent dir_count up
                 for parent in _parents(src_rel):
                     if parent in self.monitor._dir_info:
-                        self.monitor._dir_info[parent]['dir_count'] = max(
-                            0, self.monitor._dir_info[parent]['dir_count'] - 1
+                        self.monitor._dir_info[parent]["dir_count"] = max(
+                            0, self.monitor._dir_info[parent]["dir_count"] - 1
                         )
                 for parent in _parents(dest_rel):
                     if parent in self.monitor._dir_info:
-                        self.monitor._dir_info[parent]['dir_count'] += 1
+                        self.monitor._dir_info[parent]["dir_count"] += 1
             else:
                 # File renamed/moved
-                src_parent = _rel(os.path.dirname(event.src_path), str(self.monitor.root_path))
-                dest_parent = _rel(os.path.dirname(event.dest_path), str(self.monitor.root_path))
+                src_parent = _rel(
+                    os.path.dirname(event.src_path), str(self.monitor.root_path)
+                )
+                dest_parent = _rel(
+                    os.path.dirname(event.dest_path), str(self.monitor.root_path)
+                )
 
                 if src_parent != dest_parent:
                     # Moving to a different folder — transfer file count between parents
@@ -354,31 +380,33 @@ class InstantFileEventHandler(FileSystemEventHandler):
                         file_size = 0
 
                     if src_parent in self.monitor._dir_info:
-                        self.monitor._dir_info[src_parent]['file_count'] = max(
-                            0, self.monitor._dir_info[src_parent]['file_count'] - 1
+                        self.monitor._dir_info[src_parent]["file_count"] = max(
+                            0, self.monitor._dir_info[src_parent]["file_count"] - 1
                         )
-                        self.monitor._dir_info[src_parent]['total_size'] = max(
-                            0, self.monitor._dir_info[src_parent]['total_size'] - file_size
+                        self.monitor._dir_info[src_parent]["total_size"] = max(
+                            0,
+                            self.monitor._dir_info[src_parent]["total_size"]
+                            - file_size,
                         )
                     if dest_parent in self.monitor._dir_info:
-                        self.monitor._dir_info[dest_parent]['file_count'] += 1
-                        self.monitor._dir_info[dest_parent]['total_size'] += file_size
+                        self.monitor._dir_info[dest_parent]["file_count"] += 1
+                        self.monitor._dir_info[dest_parent]["total_size"] += file_size
 
         # --- file index: rename dir keys or update both parent folders ---
         if event.is_directory:
             file_index_manager.rename_folder(src_rel, dest_rel)
             # Both old and new parent folders changed their direct entry list
-            _src_parent_abs  = os.path.dirname(event.src_path)
+            _src_parent_abs = os.path.dirname(event.src_path)
             _dest_parent_abs = os.path.dirname(event.dest_path)
-            _src_parent_rel  = _rel(_src_parent_abs,  str(self.monitor.root_path))
+            _src_parent_rel = _rel(_src_parent_abs, str(self.monitor.root_path))
             _dest_parent_rel = _rel(_dest_parent_abs, str(self.monitor.root_path))
-            file_index_manager.update_folder(_src_parent_rel,  _src_parent_abs)
+            file_index_manager.update_folder(_src_parent_rel, _src_parent_abs)
             if _src_parent_rel != _dest_parent_rel:
                 file_index_manager.update_folder(_dest_parent_rel, _dest_parent_abs)
         else:
-            _src_parent_abs  = os.path.dirname(event.src_path)
+            _src_parent_abs = os.path.dirname(event.src_path)
             _dest_parent_abs = os.path.dirname(event.dest_path)
-            _src_parent_rel  = _rel(_src_parent_abs,  str(self.monitor.root_path))
+            _src_parent_rel = _rel(_src_parent_abs, str(self.monitor.root_path))
             _dest_parent_rel = _rel(_dest_parent_abs, str(self.monitor.root_path))
             file_index_manager.update_folder(_src_parent_rel, _src_parent_abs)
             if _src_parent_rel != _dest_parent_rel:
@@ -388,7 +416,7 @@ class InstantFileEventHandler(FileSystemEventHandler):
 
     def on_modified(self, event):
         # File content changed — size may have changed, let reconcile handle it
-        if '.chunks' in event.src_path or event.is_directory:
+        if ".chunks" in event.src_path or event.is_directory:
             return
         self._schedule_notify()
 
@@ -409,7 +437,7 @@ class FileSystemMonitor:
         self.reconcile_thread: Optional[threading.Thread] = None
         self.change_callbacks: Set[Callable] = set()
         self.lock = threading.Lock()
-        self._save_lock = threading.Lock()   # serialises writes to storage_index.json
+        self._save_lock = threading.Lock()  # serialises writes to storage_index.json
         # Bumped at the START of every _reconcile() run.  Watchdog handlers snapshot
         # this before doing path work; if it changed by the time they acquire the lock
         # the reconcile already counted those files — they skip the increment.
@@ -447,18 +475,24 @@ class FileSystemMonitor:
         with self.lock:
             self.change_callbacks.discard(callback)
 
-    def _notify_changes(self, old_snapshot: StorageSnapshot,
-                        new_snapshot: StorageSnapshot,
-                        reconcile_complete: bool = False,
-                        walk_progress: bool = False):
+    def _notify_changes(
+        self,
+        old_snapshot: StorageSnapshot,
+        new_snapshot: StorageSnapshot,
+        reconcile_complete: bool = False,
+        walk_progress: bool = False,
+    ):
         with self.lock:
             callbacks = list(self.change_callbacks)
         for cb in callbacks:
             try:
                 try:
-                    cb(old_snapshot, new_snapshot,
-                       reconcile_complete=reconcile_complete,
-                       walk_progress=walk_progress)
+                    cb(
+                        old_snapshot,
+                        new_snapshot,
+                        reconcile_complete=reconcile_complete,
+                        walk_progress=walk_progress,
+                    )
                 except TypeError:
                     cb(old_snapshot, new_snapshot)
             except Exception as e:
@@ -474,19 +508,21 @@ class FileSystemMonitor:
                 print(f"📂 No cache found at {CACHE_FILE} — will do initial walk")
                 return False
 
-            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+            with open(CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            self._file_count = int(data.get('file_count', 0))
-            self._dir_count = int(data.get('dir_count', 0))
-            self._total_size = int(data.get('total_size', 0))
-            self._last_modified = float(data.get('last_modified', 0))
-            self._dir_info = data.get('dir_info', {})
+            self._file_count = int(data.get("file_count", 0))
+            self._dir_count = int(data.get("dir_count", 0))
+            self._total_size = int(data.get("total_size", 0))
+            self._last_modified = float(data.get("last_modified", 0))
+            self._dir_info = data.get("dir_info", {})
 
-            print(f"✅ Loaded cache: {self._file_count:,} files, "
-                  f"{self._dir_count:,} dirs, "
-                  f"{self._total_size / (1024**3):.2f} GB, "
-                  f"{len(self._dir_info):,} folders indexed")
+            print(
+                f"✅ Loaded cache: {self._file_count:,} files, "
+                f"{self._dir_count:,} dirs, "
+                f"{self._total_size / (1024**3):.2f} GB, "
+                f"{len(self._dir_info):,} folders indexed"
+            )
 
             # Load the companion file index
             file_index_manager.load()
@@ -501,15 +537,15 @@ class FileSystemMonitor:
         try:
             os.makedirs(CACHE_DIR, exist_ok=True)
             data = {
-                'file_count': self._file_count,
-                'dir_count': self._dir_count,
-                'total_size': self._total_size,
-                'last_modified': self._last_modified,
-                'dir_info': self._dir_info,
-                'saved_at': time.time()
+                "file_count": self._file_count,
+                "dir_count": self._dir_count,
+                "total_size": self._total_size,
+                "last_modified": self._last_modified,
+                "dir_info": self._dir_info,
+                "saved_at": time.time(),
             }
-            tmp = CACHE_FILE + '.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
+            tmp = CACHE_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f)
             os.replace(tmp, CACHE_FILE)
         except Exception as e:
@@ -522,8 +558,9 @@ class FileSystemMonitor:
     # Full walk — first boot or reconcile
     # ------------------------------------------------------------------
 
-    def _full_walk(self, silent: bool = False,
-                   on_progress: Optional[Callable] = None) -> dict:
+    def _full_walk(
+        self, silent: bool = False, on_progress: Optional[Callable] = None
+    ) -> dict:
         """
         Walk entire filesystem in one pass.
         Builds global counters AND dir_info for every folder simultaneously.
@@ -551,51 +588,59 @@ class FileSystemMonitor:
         direct_entries: Dict[str, list] = {}
 
         # Pre-seed root
-        dir_info[''] = {'file_count': 0, 'dir_count': 0, 'total_size': 0}
-        direct_entries[''] = []
+        dir_info[""] = {"file_count": 0, "dir_count": 0, "total_size": 0}
+        direct_entries[""] = []
 
         try:
             for root, dirs, files in os.walk(str(self.root_path), topdown=True):
                 # Skip chunk temp directory
-                if '.chunks' in dirs:
-                    dirs.remove('.chunks')
+                if ".chunks" in dirs:
+                    dirs.remove(".chunks")
 
                 root_rel = _rel(root, str(self.root_path))
 
                 # Ensure this dir exists in index
                 if root_rel not in dir_info:
-                    dir_info[root_rel] = {'file_count': 0, 'dir_count': 0, 'total_size': 0}
+                    dir_info[root_rel] = {
+                        "file_count": 0,
+                        "dir_count": 0,
+                        "total_size": 0,
+                    }
                 if root_rel not in direct_entries:
                     direct_entries[root_rel] = []
 
                 # Register immediate subdirs and bubble dir_count up to all ancestors
                 for d in dirs:
-                    if d.startswith('.'):
+                    if d.startswith("."):
                         continue
-                    sub_rel = (root_rel + '/' + d) if root_rel else d
+                    sub_rel = (root_rel + "/" + d) if root_rel else d
                     if sub_rel not in dir_info:
-                        dir_info[sub_rel] = {'file_count': 0, 'dir_count': 0, 'total_size': 0}
+                        dir_info[sub_rel] = {
+                            "file_count": 0,
+                            "dir_count": 0,
+                            "total_size": 0,
+                        }
                     if sub_rel not in direct_entries:
                         direct_entries[sub_rel] = []
-                    dir_info[root_rel]['dir_count'] += 1
+                    dir_info[root_rel]["dir_count"] += 1
                     dir_count += 1
                     # Bubble dir count up to all ancestors
                     for ancestor in _parents(root_rel):
                         if ancestor in dir_info:
-                            dir_info[ancestor]['dir_count'] += 1
+                            dir_info[ancestor]["dir_count"] += 1
                     # Record subdir as a direct entry of root_rel (for file index)
                     d_path = os.path.join(root, d)
                     try:
                         d_mtime = os.stat(d_path).st_mtime
                     except OSError:
                         d_mtime = None
-                    direct_entries[root_rel].append({
-                        'name': d, 'is_dir': True, 'size': None, 'modified': d_mtime
-                    })
+                    direct_entries[root_rel].append(
+                        {"name": d, "is_dir": True, "size": None, "modified": d_mtime}
+                    )
 
                 # Count files in this directory
                 for fname in files:
-                    if fname.startswith('.'):
+                    if fname.startswith("."):
                         continue
                     fpath = os.path.join(root, fname)
                     try:
@@ -613,27 +658,31 @@ class FileSystemMonitor:
                             on_progress(file_count, dir_count, total_size)
 
                         # Add file to immediate parent
-                        dir_info[root_rel]['file_count'] += 1
-                        dir_info[root_rel]['total_size'] += fsize
+                        dir_info[root_rel]["file_count"] += 1
+                        dir_info[root_rel]["total_size"] += fsize
 
                         # Bubble file_count and size up to all ancestors
                         for ancestor in _parents(root_rel):
                             if ancestor in dir_info:
-                                dir_info[ancestor]['file_count'] += 1
-                                dir_info[ancestor]['total_size'] += fsize
+                                dir_info[ancestor]["file_count"] += 1
+                                dir_info[ancestor]["total_size"] += fsize
 
                         # Record as a direct entry of root_rel (for file index)
-                        direct_entries[root_rel].append({
-                            'name': fname, 'is_dir': False,
-                            'size': fsize, 'modified': fmtime,
-                        })
+                        direct_entries[root_rel].append(
+                            {
+                                "name": fname,
+                                "is_dir": False,
+                                "size": fsize,
+                                "modified": fmtime,
+                            }
+                        )
 
                     except (OSError, IOError):
                         continue
 
                 # Sort direct_entries for root_rel now that all children are known
                 direct_entries[root_rel].sort(
-                    key=lambda x: (not x['is_dir'], x['name'].lower())
+                    key=lambda x: (not x["is_dir"], x["name"].lower())
                 )
 
         except Exception as e:
@@ -641,20 +690,22 @@ class FileSystemMonitor:
 
         if not silent:
             elapsed = time.time() - walk_start
-            print(f"✅ Walk + index complete in {elapsed:.1f}s: "
-                  f"{file_count:,} files, {dir_count:,} dirs, "
-                  f"{total_size / (1024**3):.2f} GB, "
-                  f"{len(dir_info):,} folders indexed")
+            print(
+                f"✅ Walk + index complete in {elapsed:.1f}s: "
+                f"{file_count:,} files, {dir_count:,} dirs, "
+                f"{total_size / (1024**3):.2f} GB, "
+                f"{len(dir_info):,} folders indexed"
+            )
 
         # Build file_index.json for folders exceeding the direct-entry threshold
         file_index_manager.build_from_walk(direct_entries)
 
         return {
-            'file_count': file_count,
-            'dir_count': dir_count,
-            'total_size': total_size,
-            'last_modified': latest_mtime,
-            'dir_info': dir_info
+            "file_count": file_count,
+            "dir_count": dir_count,
+            "total_size": total_size,
+            "last_modified": latest_mtime,
+            "dir_info": dir_info,
         }
 
     # ------------------------------------------------------------------
@@ -683,7 +734,9 @@ class FileSystemMonitor:
             self._settle_timer = threading.Timer(SETTLE_DELAY, self._settle_reconcile)
             self._settle_timer.daemon = True
             self._settle_timer.start()
-        print(f"🔄 Settle reconcile armed — counter updates suppressed for {SETTLE_DELAY}s")
+        print(
+            f"🔄 Settle reconcile armed — counter updates suppressed for {SETTLE_DELAY}s"
+        )
 
     def _clear_pending_reconcile(self):
         """
@@ -699,7 +752,7 @@ class FileSystemMonitor:
         """Fired by the hard timer — ground-truth walk after suppression window."""
         print("🔄 Settle reconcile firing (hard timer expired)")
         try:
-            self._reconcile()   # internally force-pushes SSE with reconcile_complete=True
+            self._reconcile()  # internally force-pushes SSE with reconcile_complete=True
         except Exception as e:
             print(f"⚠️ Settle reconcile error: {e}")
         finally:
@@ -726,7 +779,7 @@ class FileSystemMonitor:
         #   seconds to flush any OS-queued events the burst suppression held back.
         #   _clear_pending_reconcile() then re-enables normal watchdog counting.
         with self.lock:
-            self._pending_reconcile = True   # keep suppression on for entire walk
+            self._pending_reconcile = True  # keep suppression on for entire walk
 
         _true_old_snapshot = self.last_snapshot
 
@@ -744,11 +797,11 @@ class FileSystemMonitor:
         result = self._full_walk(silent=True, on_progress=_on_progress)
 
         with self.lock:
-            self._file_count    = result['file_count']
-            self._dir_count     = result['dir_count']
-            self._total_size    = result['total_size']
-            self._last_modified = result['last_modified']
-            self._dir_info      = result['dir_info']
+            self._file_count = result["file_count"]
+            self._dir_count = result["dir_count"]
+            self._total_size = result["total_size"]
+            self._last_modified = result["last_modified"]
+            self._dir_info = result["dir_info"]
             # Bump epoch AFTER writing corrected counters.
             # Events that snapshotted the old epoch and are blocked on the lock
             # will see the mismatch and skip their increment.
@@ -770,15 +823,19 @@ class FileSystemMonitor:
         # Single authoritative SSE push — _dir_info is now complete.
         # reconcile_complete=True tells the frontend to refresh the file table
         # and re-fetch all dir-info cells now that _dir_info is authoritative.
-        self._notify_changes(_true_old_snapshot or new_snapshot, new_snapshot,
-                             reconcile_complete=True)
+        self._notify_changes(
+            _true_old_snapshot or new_snapshot, new_snapshot, reconcile_complete=True
+        )
 
-        if (_true_old_snapshot and (
-                _true_old_snapshot.file_count != new_snapshot.file_count or
-                _true_old_snapshot.total_size  != new_snapshot.total_size)):
-            print(f"🔄 Reconciliation corrected drift: "
-                  f"files {_true_old_snapshot.file_count}→{new_snapshot.file_count}, "
-                  f"dirs {_true_old_snapshot.dir_count}→{new_snapshot.dir_count}")
+        if _true_old_snapshot and (
+            _true_old_snapshot.file_count != new_snapshot.file_count
+            or _true_old_snapshot.total_size != new_snapshot.total_size
+        ):
+            print(
+                f"🔄 Reconciliation corrected drift: "
+                f"files {_true_old_snapshot.file_count}→{new_snapshot.file_count}, "
+                f"dirs {_true_old_snapshot.dir_count}→{new_snapshot.dir_count}"
+            )
         else:
             print("✅ Reconciliation complete — no drift detected")
 
@@ -796,7 +853,7 @@ class FileSystemMonitor:
             total_size=self._total_size,
             last_modified=self._last_modified,
             checksum=checksum,
-            timestamp=time.time()
+            timestamp=time.time(),
         )
 
     # ------------------------------------------------------------------
@@ -814,8 +871,10 @@ class FileSystemMonitor:
         self._save_cache()
         if old_snapshot:
             self._notify_changes(old_snapshot, new_snapshot)
-            print(f"📊 Notified: files={new_snapshot.file_count:,}, "
-                  f"dirs={new_snapshot.dir_count:,}")
+            print(
+                f"📊 Notified: files={new_snapshot.file_count:,}, "
+                f"dirs={new_snapshot.dir_count:,}"
+            )
 
     # ------------------------------------------------------------------
     # Background threads
@@ -847,23 +906,27 @@ class FileSystemMonitor:
         if not cache_loaded:
             result = self._full_walk()
             with self.lock:
-                self._file_count = result['file_count']
-                self._dir_count = result['dir_count']
-                self._total_size = result['total_size']
-                self._last_modified = result['last_modified']
-                self._dir_info = result['dir_info']
+                self._file_count = result["file_count"]
+                self._dir_count = result["dir_count"]
+                self._total_size = result["total_size"]
+                self._last_modified = result["last_modified"]
+                self._dir_info = result["dir_info"]
             self._save_cache()
 
         self.last_snapshot = self._build_snapshot()
-        print(f"📸 Snapshot ready: {self.last_snapshot.file_count:,} files, "
-              f"{self.last_snapshot.dir_count:,} dirs, "
-              f"{len(self._dir_info):,} folders indexed")
+        print(
+            f"📸 Snapshot ready: {self.last_snapshot.file_count:,} files, "
+            f"{self.last_snapshot.dir_count:,} dirs, "
+            f"{len(self._dir_info):,} folders indexed"
+        )
 
         # Start watchdog
         try:
             self.event_handler = InstantFileEventHandler(self)
             self.observer = Observer()
-            self.observer.schedule(self.event_handler, str(self.root_path), recursive=True)
+            self.observer.schedule(
+                self.event_handler, str(self.root_path), recursive=True
+            )
             self.observer.start()
             print("⚡ Watchdog started — instant change detection active")
         except Exception as e:
@@ -878,11 +941,15 @@ class FileSystemMonitor:
 
         # Post-startup reconcile to catch offline changes
         if cache_loaded:
+
             def delayed_reconcile():
                 time.sleep(30)
                 if self.monitoring:
-                    print("🔄 Post-startup reconciliation (catching offline changes)...")
+                    print(
+                        "🔄 Post-startup reconciliation (catching offline changes)..."
+                    )
                     self._reconcile()
+
             threading.Thread(target=delayed_reconcile, daemon=True).start()
 
     def stop_monitoring(self):
@@ -914,7 +981,7 @@ class FileSystemMonitor:
         rel_path: forward-slash relative path from ROOT_DIR, or '' for root.
         """
         # Normalize path separators
-        rel_path = rel_path.replace('\\', '/').strip('/')
+        rel_path = rel_path.replace("\\", "/").strip("/")
         with self.lock:
             return self._dir_info.get(rel_path, None)
 
@@ -933,9 +1000,7 @@ class FileSystemMonitor:
         label = f" ({reason})" if reason else ""
         print(f"🔄 Async reconcile queued{label}")
         threading.Thread(
-            target=self._reconcile,
-            daemon=True,
-            name="reconcile-on-demand"
+            target=self._reconcile, daemon=True, name="reconcile-on-demand"
         ).start()
 
 

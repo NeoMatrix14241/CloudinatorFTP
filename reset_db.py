@@ -18,13 +18,13 @@ import sys
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_DB_DIR = os.path.join(_HERE, 'db')
+_DB_DIR = os.path.join(_HERE, "db")
 
 
 def main():
     print("⚠️  This will DELETE all users and reset the database to defaults.")
     confirm = input("Type 'yes' to continue: ").strip().lower()
-    if confirm != 'yes':
+    if confirm != "yes":
         print("Cancelled.")
         return
 
@@ -37,6 +37,7 @@ def main():
     # We need to reload if database was already imported in this session
     import importlib
     import database
+
     importlib.reload(database)
 
     print("✅ Database recreated with default credentials:")
@@ -45,7 +46,7 @@ def main():
     print("⚠️  Change these passwords before exposing to network!")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:

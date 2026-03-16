@@ -14,7 +14,7 @@ from database import db
 
 def test_password(username, password):
     result = db.check_login(username, password)
-    status = '✅' if result else '❌'
+    status = "✅" if result else "❌"
     print(f"  {status} {username} / {password} → {'SUCCESS' if result else 'FAILED'}")
     return result
 
@@ -25,10 +25,19 @@ def test_all_users():
         print("❌ No users in database")
         return
 
-    common = ['admin', 'admin123', 'password', 'password123', 'guest', 'guest123', '123456', '']
+    common = [
+        "admin",
+        "admin123",
+        "password",
+        "password123",
+        "guest",
+        "guest123",
+        "123456",
+        "",
+    ]
 
     for u in users:
-        username = u['username']
+        username = u["username"]
         print(f"\n🔍 Testing '{username}' ({u['role']}):")
         for pwd in common:
             test_password(username, pwd)
@@ -48,18 +57,20 @@ def show_users():
     print(f"\n{'Username':<20} {'Role':<12} {'Last Login'}")
     print("-" * 50)
     for u in users:
-        last = f"{u['last_login']:.0f}" if u['last_login'] else "never"
+        last = f"{u['last_login']:.0f}" if u["last_login"] else "never"
         print(f"  {u['username']:<18} {u['role']:<12} {last}")
 
 
 def reset_defaults():
-    confirm = input("Reset admin/guest to default passwords? (yes/no): ").strip().lower()
-    if confirm not in ('yes', 'y'):
+    confirm = (
+        input("Reset admin/guest to default passwords? (yes/no): ").strip().lower()
+    )
+    if confirm not in ("yes", "y"):
         print("Cancelled")
         return
 
-    db.update_password('admin', 'admin123')
-    db.update_password('guest', 'guest123')
+    db.update_password("admin", "admin123")
+    db.update_password("guest", "guest123")
     print("✅ Passwords reset to defaults")
     print("⚠️  Change these before exposing to network!")
 
@@ -78,22 +89,22 @@ def main():
 
         choice = input("\nSelect option (1-5): ").strip()
 
-        if choice == '1':
+        if choice == "1":
             show_users()
-        elif choice == '2':
+        elif choice == "2":
             test_all_users()
-        elif choice == '3':
+        elif choice == "3":
             test_custom()
-        elif choice == '4':
+        elif choice == "4":
             reset_defaults()
-        elif choice == '5':
+        elif choice == "5":
             print("👋 Goodbye!")
             break
         else:
             print("❌ Invalid option")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:

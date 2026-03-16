@@ -18,10 +18,11 @@ from cryptography.fernet import Fernet
 # Paths — create=False: dirs NOT created on import
 # ------------------------------------------------------------------
 from paths import get_db_dir
-_DB_DIR      = get_db_dir(create=False)
-DB_PATH      = os.path.join(_DB_DIR, 'cloudinator.db')
-_KEY_PATH    = os.path.join(_DB_DIR, 'secret.key')
-_SECRET_PATH = os.path.join(_DB_DIR, 'session.secret')
+
+_DB_DIR = get_db_dir(create=False)
+DB_PATH = os.path.join(_DB_DIR, "cloudinator.db")
+_KEY_PATH = os.path.join(_DB_DIR, "secret.key")
+_SECRET_PATH = os.path.join(_DB_DIR, "session.secret")
 
 _write_lock = threading.Lock()
 
@@ -30,16 +31,19 @@ _write_lock = threading.Lock()
 # Fernet encryption — lazy
 # ------------------------------------------------------------------
 
+
 def _load_or_create_key() -> bytes:
     if os.path.exists(_KEY_PATH):
-        with open(_KEY_PATH, 'rb') as f:
+        with open(_KEY_PATH, "rb") as f:
             return f.read().strip()
     os.makedirs(_DB_DIR, exist_ok=True)
     key = Fernet.generate_key()
-    with open(_KEY_PATH, 'wb') as f:
+    with open(_KEY_PATH, "wb") as f:
         f.write(key)
     print(f"🔑 Generated new encryption key: {_KEY_PATH}")
-    print("⚠️  Back up this key file separately — losing it means losing access to all accounts!")
+    print(
+        "⚠️  Back up this key file separately — losing it means losing access to all accounts!"
+    )
     return key
 
 
@@ -65,15 +69,17 @@ def _decrypt(value: str) -> str:
 # Session secret — stored in db/session.secret
 # ------------------------------------------------------------------
 
+
 def get_session_secret() -> str:
     """Load the Flask session secret from disk, generating one on first run."""
     if os.path.exists(_SECRET_PATH):
-        with open(_SECRET_PATH, 'r') as f:
+        with open(_SECRET_PATH, "r") as f:
             return f.read().strip()
     os.makedirs(_DB_DIR, exist_ok=True)
     import secrets
+
     secret = secrets.token_hex(32)
-    with open(_SECRET_PATH, 'w') as f:
+    with open(_SECRET_PATH, "w") as f:
         f.write(secret)
     print(f"🔑 Generated new session secret: {_SECRET_PATH}")
     print("⚠️  Back up this file — losing it logs out all active users immediately!")
@@ -102,7 +108,8 @@ def _connect() -> sqlite3.Connection:
 
 def _do_bootstrap(conn):
     """Create schema and seed default users — runs once on first connection."""
-    conn.executescript("""
+    conn.executescript(
+        """
         CREATE TABLE IF NOT EXISTS users (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             username      TEXT    UNIQUE NOT NULL COLLATE NOCASE,
@@ -117,7 +124,8 @@ def _do_bootstrap(conn):
             token      TEXT    NOT NULL,
             updated_at REAL    NOT NULL DEFAULT (unixepoch())
         );
-    """)
+    """
+    )
     count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     if count == 0:
         for username, password, role in [
@@ -127,7 +135,7 @@ def _do_bootstrap(conn):
             bcrypt_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
             conn.execute(
                 "INSERT INTO users(username, password_hash, role) VALUES(?,?,?)",
-                (username, _encrypt(bcrypt_hash), role)
+                (username, _encrypt(bcrypt_hash), role),
             )
         print("👤 Seeded default users: admin (readwrite), guest (readonly)")
         print("⚠️  Remember to change default passwords before exposing to network!")
@@ -137,6 +145,7 @@ def _do_bootstrap(conn):
 # ------------------------------------------------------------------
 # Database manager
 # ------------------------------------------------------------------
+
 
 class _Database:
 
@@ -148,19 +157,22 @@ class _Database:
             token = str(uuid.uuid4())
             conn.execute(
                 "INSERT INTO server_token(id, token, updated_at) VALUES(1,?,unixepoch())",
-                (token,)
+                (token,),
             )
             return token
 
     def rotate_server_token(self) -> str:
         new_token = str(uuid.uuid4())
         with _write_lock, _connect() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO server_token(id, token, updated_at)
                 VALUES(1, ?, unixepoch())
                 ON CONFLICT(id) DO UPDATE SET token=excluded.token,
                                                updated_at=excluded.updated_at
-            """, (new_token,))
+            """,
+                (new_token,),
+            )
         print("🔑 Server token rotated — all sessions invalidated")
         return new_token
 
@@ -205,7 +217,7 @@ class _Database:
             with _write_lock, _connect() as conn:
                 conn.execute(
                     "INSERT INTO users(username, password_hash, role) VALUES(?,?,?)",
-                    (username, _encrypt(bcrypt_hash), role)
+                    (username, _encrypt(bcrypt_hash), role),
                 )
             print(f"👤 User added: {username} ({role})")
             return True
@@ -226,7 +238,7 @@ class _Database:
         with _write_lock, _connect() as conn:
             cur = conn.execute(
                 "UPDATE users SET password_hash=? WHERE username=?",
-                (_encrypt(bcrypt_hash), username)
+                (_encrypt(bcrypt_hash), username),
             )
         updated = cur.rowcount > 0
         if updated:

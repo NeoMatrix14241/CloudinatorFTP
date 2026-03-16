@@ -38,7 +38,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // Stop-folder delegation — survives any innerHTML rebuild on folder rows
     const _fqEl = document.getElementById('fileQueue');
     if (_fqEl) {
-        _fqEl.addEventListener('click', function(e) {
+        _fqEl.addEventListener('click', function (e) {
             const b = e.target.closest('.fg-stop-btn');
             if (b) { e.stopPropagation(); e.preventDefault(); _stopFolderGroup(b.dataset.gid); }
         });
@@ -658,13 +658,13 @@ function getSortValue(row, column) {
         case 'size':
             const sizeCell = row.querySelector('td:nth-child(3)');
             if (!sizeCell) return '';
-            
+
             // For folders with dir-info-cell, extract size from <small> tag
             const dirInfoCell = sizeCell.querySelector('.dir-info-cell small');
             if (dirInfoCell) {
                 return dirInfoCell.textContent.trim();
             }
-            
+
             // For regular files or folders without size info yet
             return sizeCell.textContent.trim();
         case 'type':
@@ -1074,7 +1074,7 @@ function _parseDisplaySize(str) {
         case 'gb': return n * 1e9;
         case 'mb': return n * 1e6;
         case 'kb': return n * 1024;
-        default:   return n;
+        default: return n;
     }
 }
 
@@ -1087,26 +1087,26 @@ function _parseDisplayDate(str) {
 
 const VT = (() => {
     const CHUNK = 80;     // rows to render per batch
-    let _allFiles   = []; // raw server data for current folder
-    let _curPath    = '';
-    let _filter     = ''; // active search term
-    let _sortCol    = null;
-    let _sortDir    = 'asc';
-    let _rendered   = 0;
-    let _observer   = null;
+    let _allFiles = []; // raw server data for current folder
+    let _curPath = '';
+    let _filter = ''; // active search term
+    let _sortCol = null;
+    let _sortDir = 'asc';
+    let _rendered = 0;
+    let _observer = null;
     let _searchResultsMode = false; // true when deep-search is active
 
     const _dirInfoCache = new Map();
     // ── public API ────────────────────────────────────────────
     function init(files, path) {
-        _allFiles  = Array.isArray(files) ? files : [];
-        _curPath   = path ? path.replace(/\\/g, '/').replace(/\/$/, '') : '';
-        _filter    = '';
-        _rendered  = 0;
+        _allFiles = Array.isArray(files) ? files : [];
+        _curPath = path ? path.replace(/\\/g, '/').replace(/\/$/, '') : '';
+        _filter = '';
+        _rendered = 0;
         _searchResultsMode = false;
         // preserve existing sort state
-        _sortCol   = currentSort.column;
-        _sortDir   = currentSort.direction;
+        _sortCol = currentSort.column;
+        _sortDir = currentSort.direction;
         // Re-apply cached folder sizes so they survive a refresh rebuild.
         _allFiles.forEach(f => {
             if (!f.is_dir) return;
@@ -1120,12 +1120,12 @@ const VT = (() => {
     function applySort(col, forceDir) {
         if (_searchResultsMode) return;
         if (forceDir) {
-            currentSort.column    = col;
+            currentSort.column = col;
             currentSort.direction = forceDir;
         } else if (currentSort.column === col) {
             currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
         } else {
-            currentSort.column    = col;
+            currentSort.column = col;
             currentSort.direction = 'asc';
         }
         _sortCol = currentSort.column;
@@ -1136,7 +1136,7 @@ const VT = (() => {
     }
 
     function applyFilter(term) {
-        _filter   = (term || '').toLowerCase().trim();
+        _filter = (term || '').toLowerCase().trim();
         _rendered = 0;
         _searchResultsMode = false;
         _renderAll();
@@ -1221,7 +1221,7 @@ const VT = (() => {
     }
 
     function _getTypeName(filename) {
-        try { return getFileType(filename); } catch(e) { return 'File'; }
+        try { return getFileType(filename); } catch (e) { return 'File'; }
     }
 
     function _getTbody() { return document.querySelector('#filesTable tbody'); }
@@ -1457,7 +1457,7 @@ function createFileTableRow(item, currentPath) {
         </td>
         <td class="date-cell">
             ${item.modified ?
-            `<span class="file-date" style="color: white; font-size: 13px; line-height:1.6">${(() => { const d = new Date(item.modified * 1000); return d.toLocaleDateString('en-US') + '<br>' + d.toLocaleTimeString('en-US', {hour:'2-digit',minute:'2-digit'}); })()}</span>` :
+            `<span class="file-date" style="color: white; font-size: 13px; line-height:1.6">${(() => { const d = new Date(item.modified * 1000); return d.toLocaleDateString('en-US') + '<br>' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }); })()}</span>` :
             '<span style="color: white; font-size: 13px;">--</span>'
         }
         </td>
@@ -1568,7 +1568,7 @@ function loadDirInfoCells() {
 // Update breadcrumb navigation
 function updateBreadcrumb(path) {
     console.log(`🍞 Updating breadcrumb for path: "${path}"`);
-    
+
     const breadcrumbContainer = document.querySelector('.breadcrumb');
     if (!breadcrumbContainer) {
         console.error('❌ Breadcrumb container not found!');
@@ -1577,12 +1577,12 @@ function updateBreadcrumb(path) {
 
     // Find or create the flex container (first div child with flex styling)
     let flexContainer = breadcrumbContainer.querySelector('div[style*="display: flex"]');
-    
+
     if (!flexContainer) {
         console.log('📦 Creating new flex container...');
         flexContainer = document.createElement('div');
         flexContainer.style.cssText = 'display: flex; align-items: center; justify-content: space-between;';
-        
+
         // Insert before controls div if it exists
         const controlsDiv = breadcrumbContainer.querySelector('.controls');
         if (controlsDiv) {
@@ -1918,7 +1918,7 @@ document.getElementById('fileInput')?.addEventListener('change', function (e) {
 function addFilesToQueue(files) {
     // Separate folder uploads (have relativePath / webkitRelativePath) from plain files
     const folderFiles = [];
-    const plainFiles  = [];
+    const plainFiles = [];
     files.forEach(file => {
         const fp = file.relativePath || file.webkitRelativePath || '';
         if (fp.includes('/')) folderFiles.push(file);
@@ -2161,7 +2161,7 @@ async function _uploadFolderGroupLazy(group, startFrom = 0) {
                 }
             } catch (err) {
                 const userCancelled = group.cancelled
-                                   || err.message === 'Upload cancelled by user';
+                    || err.message === 'Upload cancelled by user';
                 const unexpectedAbort = !userCancelled && err.name === 'AbortError';
 
                 const isNetworkError = unexpectedAbort || (!userCancelled && (
@@ -2269,12 +2269,12 @@ function _stopFolderGroup(groupId) {
     group.cancelled = true;
 
     if (group._activeControllers && group._activeControllers.size > 0) {
-        group._activeControllers.forEach(ac => { try { ac.abort(); } catch(e) {} });
+        group._activeControllers.forEach(ac => { try { ac.abort(); } catch (e) { } });
         group._activeControllers.clear();
     }
     // Legacy fallback for any older reference
     if (group._activeController) {
-        try { group._activeController.abort(); } catch(e) {}
+        try { group._activeController.abort(); } catch (e) { }
         group._activeController = null;
     }
 
@@ -2541,9 +2541,9 @@ function updateQueueDisplay() {
 
     queueContainer.classList.add('show');
 
-    const totalSize    = uploadQueue.reduce((sum, item) => sum + (item.size || 0), 0);
+    const totalSize = uploadQueue.reduce((sum, item) => sum + (item.size || 0), 0);
     const pendingCount = uploadQueue.filter(item => item.status === 'pending').length;
-    const scanning     = [...folderGroups.values()].some(g => g.status === 'scanning');
+    const scanning = [...folderGroups.values()].some(g => g.status === 'scanning');
 
     // Count files + size from ALL lazy folder groups (not yet in uploadQueue)
     let lazyFileCount = 0, lazySize = 0, hasPendingLazyGroups = false;
@@ -2566,8 +2566,8 @@ function updateQueueDisplay() {
     if (scanning) statsText += ' — scanning…';
 
     if (statsElement) statsElement.textContent = statsText;
-    if (countElement) countElement.textContent  = pendingCount + lazyFileCount;
-    if (uploadBtn)    uploadBtn.disabled = (pendingCount === 0 && !hasPendingLazyGroups && !scanning) || isUploading;
+    if (countElement) countElement.textContent = pendingCount + lazyFileCount;
+    if (uploadBtn) uploadBtn.disabled = (pendingCount === 0 && !hasPendingLazyGroups && !scanning) || isUploading;
 
     // Progress bar driven by setUploadingState() — not here
 
@@ -2586,15 +2586,17 @@ function _folderRowContent(group) {
     const sizeStr = group.status === 'scanning'
         ? 'computing…'
         : (group.totalSize > 0 ? formatFileSize(group.totalSize) : '0 bytes');
-    const icons = { scanning:'fas fa-circle-notch fa-spin', pending:'fas fa-clock',
-                    uploading:'fas fa-spinner fa-spin', done:'fas fa-check-circle',
-                    error:'fas fa-exclamation-circle' };
+    const icons = {
+        scanning: 'fas fa-circle-notch fa-spin', pending: 'fas fa-clock',
+        uploading: 'fas fa-spinner fa-spin', done: 'fas fa-check-circle',
+        error: 'fas fa-exclamation-circle'
+    };
     const labels = {
-        scanning:  `Scanning… ${group.scanned.toLocaleString()} files`,
-        pending:   `Queued — ${total.toLocaleString()} files`,
+        scanning: `Scanning… ${group.scanned.toLocaleString()} files`,
+        pending: `Queued — ${total.toLocaleString()} files`,
         uploading: `${group.completed.toLocaleString()} / ${total.toLocaleString()} (${pct}%)`,
-        done:      `Done — ${total.toLocaleString()} files`,
-        error:     `${group.errors} failed of ${total.toLocaleString()}`
+        done: `Done — ${total.toLocaleString()} files`,
+        error: `${group.errors} failed of ${total.toLocaleString()}`
     };
     const sc = group.status === 'done' ? 'completed' : group.status;
     return { total, pct, sizeStr, icons, labels, sc };
@@ -2618,11 +2620,11 @@ function _createFolderGroupRow(group) {
         </div>
         <div class="file-status">
             ${group.status === 'uploading'
-                ? `<div class="progress-bar-small"><div class="progress-fill-small fg-bar" style="width:${pct}%"></div></div>`
-                : ''}
+            ? `<div class="progress-bar-small"><div class="progress-fill-small fg-bar" style="width:${pct}%"></div></div>`
+            : ''}
             ${group.status === 'scanning'
-                ? `<div class="progress-bar-small"><div class="progress-fill-small" style="width:100%;background:#f39c12;animation:pulse 1s infinite;"></div></div>`
-                : ''}
+            ? `<div class="progress-bar-small"><div class="progress-fill-small" style="width:100%;background:#f39c12;animation:pulse 1s infinite;"></div></div>`
+            : ''}
             <span class="status-text status-${sc} fg-status">
                 <i class="${icons[group.status] || 'fas fa-folder'}"></i> ${labels[group.status] || group.status}
             </span>
@@ -2678,7 +2680,7 @@ function _updateGroupRowInPlace(group) {
     const existingStopBtn = el.querySelector('.fg-stop-btn');
     const existingRemoveBtn = el.querySelector('.remove-btn:not(.fg-stop-btn)');
 
-    const needsStopBtn   = group.status === 'uploading';
+    const needsStopBtn = group.status === 'uploading';
     const needsRemoveBtn = group.status === 'pending' || group.status === 'scanning';
 
     if (needsStopBtn && !existingStopBtn) {
@@ -2800,22 +2802,22 @@ function updateProgressSummary() {
     const overallProgressFill = document.getElementById('overallProgressFill');
 
     if (isUploading) {
-        const live = uploadQueue.reduce((s,i) => s + (i.size||0), 0)
+        const live = uploadQueue.reduce((s, i) => s + (i.size || 0), 0)
             + [...folderGroups.values()]
                 .filter(g => g.status === 'scanning' || g.status === 'pending' || g.status === 'uploading')
-                .reduce((s,g) => s + (g.totalSize||0), 0);
+                .reduce((s, g) => s + (g.totalSize || 0), 0);
         if (live > totalBytesToUpload) totalBytesToUpload = live;
     }
     if (totalBytesToUpload === 0) return;
 
-    const uploadSpeed    = _rollingSpeed();
+    const uploadSpeed = _rollingSpeed();
     const remainingBytes = Math.max(0, totalBytesToUpload - totalBytesUploaded);
-    const eta            = uploadSpeed > 0 ? remainingBytes / uploadSpeed : 0;
+    const eta = uploadSpeed > 0 ? remainingBytes / uploadSpeed : 0;
     const overallProgress = Math.min(100, (totalBytesUploaded / totalBytesToUpload) * 100);
 
-    if (totalSizeElement)    totalSizeElement.textContent    = formatFileSize(totalBytesToUpload);
+    if (totalSizeElement) totalSizeElement.textContent = formatFileSize(totalBytesToUpload);
     if (uploadedSizeElement) uploadedSizeElement.textContent = formatFileSize(totalBytesUploaded);
-    if (uploadSpeedElement)  uploadSpeedElement.textContent  = uploadSpeed > 0 ? formatFileSize(uploadSpeed) + '/s' : '...';
+    if (uploadSpeedElement) uploadSpeedElement.textContent = uploadSpeed > 0 ? formatFileSize(uploadSpeed) + '/s' : '...';
     if (etaElement) etaElement.textContent = formatTime(eta);
     if (overallPercentageElement) overallPercentageElement.textContent = Math.round(overallProgress) + '%';
     if (overallProgressFill) overallProgressFill.style.width = overallProgress + '%';
@@ -2905,16 +2907,16 @@ const EXTENSION_MAP = (function () {
 // ── File Viewer ───────────────────────────────────────────────────────────────
 // Extensions that can be previewed inline in the browser.
 const VIEWABLE_EXTENSIONS = {
-    image : new Set(['jpg','jpeg','png','gif','bmp','webp','svg','ico','avif']),
-    video : new Set(['mp4','webm','ogv','mov','m4v']),
-    audio : new Set(['mp3','wav','ogg','oga','aac','flac','m4a','opus']),
-    pdf   : new Set(['pdf']),
-    text  : new Set([
-        'txt','md','json','jsonc','jsonl','xml','csv','tsv','log','ini','cfg',
-        'yaml','yml','toml','env','sh','bash','bat','cmd','ps1',
-        'py','js','jsx','ts','tsx','html','htm','css','java','c','cpp','h','hpp',
-        'cs','go','rb','pl','lua','rs','kt','swift','php','sql','r','scala',
-        'vb','asm','s','makefile','dockerfile','gitignore','editorconfig','htaccess'
+    image: new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'ico', 'avif']),
+    video: new Set(['mp4', 'webm', 'ogv', 'mov', 'm4v']),
+    audio: new Set(['mp3', 'wav', 'ogg', 'oga', 'aac', 'flac', 'm4a', 'opus']),
+    pdf: new Set(['pdf']),
+    text: new Set([
+        'txt', 'md', 'json', 'jsonc', 'jsonl', 'xml', 'csv', 'tsv', 'log', 'ini', 'cfg',
+        'yaml', 'yml', 'toml', 'env', 'sh', 'bash', 'bat', 'cmd', 'ps1',
+        'py', 'js', 'jsx', 'ts', 'tsx', 'html', 'htm', 'css', 'java', 'c', 'cpp', 'h', 'hpp',
+        'cs', 'go', 'rb', 'pl', 'lua', 'rs', 'kt', 'swift', 'php', 'sql', 'r', 'scala',
+        'vb', 'asm', 's', 'makefile', 'dockerfile', 'gitignore', 'editorconfig', 'htaccess'
     ])
 };
 
@@ -2937,16 +2939,16 @@ function openFileViewer(itemPath, filename) {
     const viewType = getViewerType(filename);
     if (!viewType) return;
 
-    const modal    = document.getElementById('fileViewerModal');
-    const body     = document.getElementById('fileViewerBody');
-    const titleEl  = document.getElementById('viewerFileName');
-    const dlLink   = document.getElementById('viewerDownloadLink');
+    const modal = document.getElementById('fileViewerModal');
+    const body = document.getElementById('fileViewerBody');
+    const titleEl = document.getElementById('viewerFileName');
+    const dlLink = document.getElementById('viewerDownloadLink');
 
-    const viewUrl  = `/view/${itemPath}`;
-    const dlUrl    = `/download/${itemPath}`;
+    const viewUrl = `/view/${itemPath}`;
+    const dlUrl = `/download/${itemPath}`;
 
-    titleEl.textContent  = filename;
-    dlLink.href          = dlUrl;
+    titleEl.textContent = filename;
+    dlLink.href = dlUrl;
 
     // Clear previous content
     body.innerHTML = '';
@@ -3005,7 +3007,7 @@ function openFileViewer(itemPath, filename) {
 /** Close the file viewer and stop any media playback. */
 function closeFileViewer() {
     const modal = document.getElementById('fileViewerModal');
-    const body  = document.getElementById('fileViewerBody');
+    const body = document.getElementById('fileViewerBody');
     modal.classList.remove('show');
     // Stop video / audio playback
     body.querySelectorAll('video, audio').forEach(m => { m.pause(); m.src = ''; });
@@ -3013,13 +3015,13 @@ function closeFileViewer() {
 }
 
 // Close viewer on outside-click
-document.addEventListener('click', function(e) {
+document.addEventListener('click', function (e) {
     const modal = document.getElementById('fileViewerModal');
     if (modal && e.target === modal) closeFileViewer();
 });
 
 // Close viewer on Escape key (registers alongside other modal listeners)
-document.addEventListener('keydown', function(e) {
+document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {
         const modal = document.getElementById('fileViewerModal');
         if (modal && modal.classList.contains('show')) closeFileViewer();
@@ -3283,7 +3285,7 @@ function updateItemStatus(fileId, status, error = null) {
 
     const prevStatus = item.status;
     item.status = status;
-    item.error  = error;
+    item.error = error;
     if (status === 'completed' || status === 'error') item.completedTime = Date.now();
 
     // Keep folder group progress in sync
@@ -3292,7 +3294,7 @@ function updateItemStatus(fileId, status, error = null) {
         if (group) {
             if (status === 'uploading' && group.status === 'pending') group.status = 'uploading';
             if (status === 'completed' && prevStatus !== 'completed') group.completed++;
-            if (status === 'error'     && prevStatus !== 'error')     group.errors++;
+            if (status === 'error' && prevStatus !== 'error') group.errors++;
             const groupTotal = group.totalCount || group.scanned;
             if (group.completed + group.errors >= groupTotal && groupTotal > 0)
                 group.status = group.errors > 0 ? 'error' : 'done';
@@ -3924,7 +3926,7 @@ async function _promptFolderConflict(folderName) {
  */
 async function _findFreeName(destDir, name) {
     const dotIdx = name.lastIndexOf('.');
-    const ext  = dotIdx > 0 ? name.slice(dotIdx)  : '';
+    const ext = dotIdx > 0 ? name.slice(dotIdx) : '';
     const base = dotIdx > 0 ? name.slice(0, dotIdx) : name;
     for (let i = 1; i <= 999; i++) {
         const candidate = `${base} (${i})${ext}`;
@@ -3974,7 +3976,7 @@ async function _promptMoveOrCopyConflicts(paths, destination, action) {
         `<li style="padding:3px 0;display:flex;align-items:center;gap:7px">
             <i class="fas ${c.is_dir ? 'fa-folder' : 'fa-file-alt'}"
                style="color:${c.is_dir ? '#f39c12' : '#3498db'};font-size:0.9em;flex-shrink:0"></i>
-            <span style="font-family:monospace;word-break:break-all">${c.name.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span>
+            <span style="font-family:monospace;word-break:break-all">${c.name.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
          </li>`
     ).join('');
 
@@ -3985,7 +3987,7 @@ async function _promptMoveOrCopyConflicts(paths, destination, action) {
         icon: action === 'move' ? 'fa-arrows-alt' : 'fa-copy',
         title: `${conflicts.length} Conflict${conflicts.length > 1 ? 's' : ''} at Destination`,
         body: `<div style="margin-bottom:10px;color:#566573">
-                   ${verbNoun} to <strong style="color:#2c3e50">${destDisplay.replace(/</g,'&lt;')}</strong> —
+                   ${verbNoun} to <strong style="color:#2c3e50">${destDisplay.replace(/</g, '&lt;')}</strong> —
                    the following item${conflicts.length > 1 ? 's' : ''} already exist there:
                </div>
                <ul style="margin:0 0 12px 0;padding:0 0 0 4px;list-style:none;
@@ -4412,9 +4414,11 @@ function _startSessionKeepAlive() {
             return;
         }
         try {
-            await fetch('/admin/upload_status', { method: 'GET', cache: 'no-cache',
-                headers: { 'Cache-Control': 'no-cache' } });
-            
+            await fetch('/admin/upload_status', {
+                method: 'GET', cache: 'no-cache',
+                headers: { 'Cache-Control': 'no-cache' }
+            });
+
         } catch (e) {
             console.warn('⚠️ Session keepalive failed (non-fatal):', e.message);
         }
@@ -4427,7 +4431,7 @@ function _resumeStalledUploads() {
     const now = Date.now();
     const msSinceLastResume = now - _lastResumeTime;
     if (msSinceLastResume < 20000) {
-        console.log(`⏭️ Resume skipped (cooldown ${Math.round(msSinceLastResume/1000)}s < 20s)`);
+        console.log(`⏭️ Resume skipped (cooldown ${Math.round(msSinceLastResume / 1000)}s < 20s)`);
         return 0;
     }
     _lastResumeTime = now;
@@ -4439,7 +4443,7 @@ function _resumeStalledUploads() {
 
         if (group._running) {
             if (stalledMs > 10000) {
-                console.warn(`🔄 Force-resetting frozen group "${group.rootName}" (_running=true but stalled ${Math.round(stalledMs/1000)}s)`);
+                console.warn(`🔄 Force-resetting frozen group "${group.rootName}" (_running=true but stalled ${Math.round(stalledMs / 1000)}s)`);
                 group._running = false;
             } else {
                 continue;
@@ -4625,14 +4629,14 @@ async function uploadSingleFile(item) {
                     action = await _promptOverwrite(item.displayName || file.name);
                     if (item._groupId) {
                         if (action === 'overwrite-all') _overwriteDecisions.set(item._groupId, 'overwrite');
-                        if (action === 'skip-all')      _overwriteDecisions.set(item._groupId, 'skip');
-                        if (action === 'rename-all')    _overwriteDecisions.set(item._groupId, 'rename');
+                        if (action === 'skip-all') _overwriteDecisions.set(item._groupId, 'skip');
+                        if (action === 'rename-all') _overwriteDecisions.set(item._groupId, 'rename');
                     }
                 }
 
-                const shouldSkip     = action === 'skip-all'     || action === 'skip-one'  || groupDecision === 'skip';
+                const shouldSkip = action === 'skip-all' || action === 'skip-one' || groupDecision === 'skip';
                 const shouldOverwrite = action === 'overwrite-all' || action === 'overwrite-one' || groupDecision === 'overwrite';
-                const shouldRename   = action === 'rename-all'   || action === 'rename-one' || groupDecision === 'rename';
+                const shouldRename = action === 'rename-all' || action === 'rename-one' || groupDecision === 'rename';
 
                 if (shouldSkip) {
                     updateItemProgress(item.id, 100, file.size);
@@ -6601,86 +6605,86 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-async function _pickFolderLazy() {
-    let dirHandle;
-    try {
-        dirHandle = await window.showDirectoryPicker({ mode: 'read' });
-    } catch (e) {
-        if (e.name !== 'AbortError') console.error('showDirectoryPicker error', e);
-        return;
-    }
+    async function _pickFolderLazy() {
+        let dirHandle;
+        try {
+            dirHandle = await window.showDirectoryPicker({ mode: 'read' });
+        } catch (e) {
+            if (e.name !== 'AbortError') console.error('showDirectoryPicker error', e);
+            return;
+        }
 
-    const rootName = dirHandle.name;
-    if (folderGroups.has(rootName)) {
-        showUploadStatus(`📁 "${rootName}" is already in the queue`, 'info');
-        return;
-    }
+        const rootName = dirHandle.name;
+        if (folderGroups.has(rootName)) {
+            showUploadStatus(`📁 "${rootName}" is already in the queue`, 'info');
+            return;
+        }
 
-    const groupId = `fg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const group = {
-        id: groupId, rootName,
-        basePath: currentPath || '',   // frozen at queue time — never changes when user browses
-        scanned: 0, completed: 0, errors: 0,
-        totalSize: 0,
-        status: 'scanning',
-        scanComplete: false,   // set true when tree walk finishes; upload loop uses this, not status
-        cancelled: false,
-        createdTime: Date.now()
-    };
-    folderGroups.set(groupId, group);
-    updateQueueDisplay();
-    showUploadStatus(`📂 Scanning "${rootName}"…`, 'info');
+        const groupId = `fg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        const group = {
+            id: groupId, rootName,
+            basePath: currentPath || '',   // frozen at queue time — never changes when user browses
+            scanned: 0, completed: 0, errors: 0,
+            totalSize: 0,
+            status: 'scanning',
+            scanComplete: false,   // set true when tree walk finishes; upload loop uses this, not status
+            cancelled: false,
+            createdTime: Date.now()
+        };
+        folderGroups.set(groupId, group);
+        updateQueueDisplay();
+        showUploadStatus(`📂 Scanning "${rootName}"…`, 'info');
 
-    // Recursively walk directory entries, yielding File objects
-    async function* walkDir(handle, relPath) {
-        for await (const [name, entry] of handle.entries()) {
-            if (group.cancelled) return;
-            const entryPath = relPath ? `${relPath}/${name}` : name;
-            if (entry.kind === 'file') {
-                const file = await entry.getFile();
-                // Attach relative path so upload logic knows destination
-                Object.defineProperty(file, 'relativePath', { value: `${rootName}/${entryPath}`, writable: false });
-                yield file;
-            } else if (entry.kind === 'directory') {
-                yield* walkDir(entry, entryPath);
+        // Recursively walk directory entries, yielding File objects
+        async function* walkDir(handle, relPath) {
+            for await (const [name, entry] of handle.entries()) {
+                if (group.cancelled) return;
+                const entryPath = relPath ? `${relPath}/${name}` : name;
+                if (entry.kind === 'file') {
+                    const file = await entry.getFile();
+                    // Attach relative path so upload logic knows destination
+                    Object.defineProperty(file, 'relativePath', { value: `${rootName}/${entryPath}`, writable: false });
+                    yield file;
+                } else if (entry.kind === 'directory') {
+                    yield* walkDir(entry, entryPath);
+                }
             }
         }
-    }
 
-    group.pendingEntries = [];
+        group.pendingEntries = [];
 
-    let uiThrottle = 0;
-    for await (const file of walkDir(dirHandle, '')) {
-        if (group.cancelled) break;
-        const parts = (`${rootName}/${file.relativePath.slice(rootName.length + 1)}`).split('/');
-        parts.pop();
-        const relDir = parts.join('/');
-        const base = group.basePath || '';
-        const dest = base ? (relDir ? `${base}/${relDir}` : base) : relDir;
-        const key  = `${dest}::${file.name}::${file.size}`;
-        if (!_seenFileKeys.has(key)) {
-            _seenFileKeys.add(key);
-            if (!group._ownedKeys) group._ownedKeys = new Set();
-            group._ownedKeys.add(key);
-            group.pendingEntries.push({ file, dest, displayName: relDir ? `${relDir}/${file.name}` : file.name });
-            group.scanned++;
-            group.totalSize += file.size;
+        let uiThrottle = 0;
+        for await (const file of walkDir(dirHandle, '')) {
+            if (group.cancelled) break;
+            const parts = (`${rootName}/${file.relativePath.slice(rootName.length + 1)}`).split('/');
+            parts.pop();
+            const relDir = parts.join('/');
+            const base = group.basePath || '';
+            const dest = base ? (relDir ? `${base}/${relDir}` : base) : relDir;
+            const key = `${dest}::${file.name}::${file.size}`;
+            if (!_seenFileKeys.has(key)) {
+                _seenFileKeys.add(key);
+                if (!group._ownedKeys) group._ownedKeys = new Set();
+                group._ownedKeys.add(key);
+                group.pendingEntries.push({ file, dest, displayName: relDir ? `${relDir}/${file.name}` : file.name });
+                group.scanned++;
+                group.totalSize += file.size;
+            }
+            if (++uiThrottle % 200 === 0) updateQueueDisplay();
+            if (group.scanned === 1 || group.scanned % 1000 === 0) {
+                _spawnFolderWorkersIfNeeded();
+            }
         }
-        if (++uiThrottle % 200 === 0) updateQueueDisplay();
-        if (group.scanned === 1 || group.scanned % 1000 === 0) {
+
+        if (!group.cancelled) {
+            group.totalCount = group.scanned;
+            group.scanComplete = true;
+            if (group.status === 'scanning') group.status = 'pending';
+            updateQueueDisplay();
+            showUploadStatus(`✅ "${rootName}" ready — ${group.scanned.toLocaleString()} files, ${formatFileSize(group.totalSize)}`, 'success');
             _spawnFolderWorkersIfNeeded();
         }
     }
-
-    if (!group.cancelled) {
-        group.totalCount = group.scanned;
-        group.scanComplete = true;
-        if (group.status === 'scanning') group.status = 'pending';
-        updateQueueDisplay();
-        showUploadStatus(`✅ "${rootName}" ready — ${group.scanned.toLocaleString()} files, ${formatFileSize(group.totalSize)}`, 'success');
-        _spawnFolderWorkersIfNeeded();
-    }
-}
 
 
     function handleInputChange(e, type) {
@@ -7498,7 +7502,7 @@ console.log('✅ Cloudinator Enhanced Upload System Ready');
 
 // Auto-clear completed items from upload queue
 function autoCleanupCompletedItems() {
-    
+
 
     // Count completed items before clearing
     const completedItems = uploadQueue.filter(item =>
@@ -7508,7 +7512,7 @@ function autoCleanupCompletedItems() {
     );
 
     if (completedItems.length === 0) {
-        
+
         return;
     }
 
@@ -7854,7 +7858,7 @@ function connectToStorageStream() {
         };
 
         storageEventSource.onmessage = function (event) {
-            
+
 
             // If this is the first message and we're still connecting, treat it as successful connection
             if (document.title.startsWith('🟠')) {
@@ -7868,7 +7872,7 @@ function connectToStorageStream() {
 
             try {
                 const data = JSON.parse(event.data);
-                
+
                 handleStorageUpdate(data);
             } catch (error) {
                 console.warn('⚠️ Failed to parse SSE data:', error, event.data);
@@ -8010,7 +8014,7 @@ function stopPolling() {
 }
 
 function handleStorageUpdate(data) {
-    
+
 
     switch (data.type) {
         case 'connected':
@@ -8019,7 +8023,7 @@ function handleStorageUpdate(data) {
 
         case 'storage_stats_update':
             console.log('🔄 Processing storage_stats_update...', data.data,
-                        data.walk_progress ? '(walk progress)' : '(reconcile complete)');
+                data.walk_progress ? '(walk progress)' : '(reconcile complete)');
 
             // Brief flash to show SSE activity
             document.title = '⚡ ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
@@ -8054,11 +8058,11 @@ function handleStorageUpdate(data) {
                         if (data.data.file_count) msg += `${data.data.file_count.toLocaleString()} files`;
                         if (data.data.total_size) {
                             const s = data.data.total_size;
-                            const sStr = s >= 1e12 ? (s/1e12).toFixed(2)+' TB'
-                                       : s >= 1e9  ? (s/1e9).toFixed(2)+' GB'
-                                       : s >= 1e6  ? (s/1e6).toFixed(1)+' MB'
-                                       : s >= 1024 ? (s/1024).toFixed(1)+' KB'
-                                       : s+' bytes';
+                            const sStr = s >= 1e12 ? (s / 1e12).toFixed(2) + ' TB'
+                                : s >= 1e9 ? (s / 1e9).toFixed(2) + ' GB'
+                                    : s >= 1e6 ? (s / 1e6).toFixed(1) + ' MB'
+                                        : s >= 1024 ? (s / 1024).toFixed(1) + ' KB'
+                                            : s + ' bytes';
                             msg += ', ' + sStr;
                         }
                         showUploadStatus(`<i class="fas fa-circle-notch fa-spin"></i> ${msg}`, 'info');
@@ -8145,18 +8149,18 @@ function handleStorageUpdate(data) {
                                         let html = data.file_count + ' files, ' + data.dir_count + ' folders';
                                         if (data.total_size > 0) {
                                             const s = data.total_size;
-                                            const sStr = s >= 1e12 ? (s/1e12).toFixed(2)+' TB'
-                                                       : s >= 1e9  ? (s/1e9).toFixed(2)+' GB'
-                                                       : s >= 1e6  ? (s/1e6).toFixed(1)+' MB'
-                                                       : s >= 1024 ? (s/1024).toFixed(1)+' KB'
-                                                       : s+' bytes';
+                                            const sStr = s >= 1e12 ? (s / 1e12).toFixed(2) + ' TB'
+                                                : s >= 1e9 ? (s / 1e9).toFixed(2) + ' GB'
+                                                    : s >= 1e6 ? (s / 1e6).toFixed(1) + ' MB'
+                                                        : s >= 1024 ? (s / 1024).toFixed(1) + ' KB'
+                                                            : s + ' bytes';
                                             html += '<br><small style="color:white;">' + sStr + '</small>';
                                         }
                                         cell.innerHTML = html;
                                         cell.dataset.loaded = 'true';
                                         VT.cacheDirInfo(p, data);
                                     })
-                                    .catch(() => {});
+                                    .catch(() => { });
                             });
 
                             const now = Date.now();
@@ -8172,11 +8176,11 @@ function handleStorageUpdate(data) {
                                     _deletingPaths.forEach(p => {
                                         document.querySelectorAll(`.dir-info-cell[data-dir-path="${p}"]`).forEach(cell => {
                                             const s = freed;
-                                            const sStr = s >= 1e12 ? (s/1e12).toFixed(2)+' TB freed'
-                                                       : s >= 1e9  ? (s/1e9).toFixed(2)+' GB freed'
-                                                       : s >= 1e6  ? (s/1e6).toFixed(1)+' MB freed'
-                                                       : s >= 1024 ? (s/1024).toFixed(1)+' KB freed'
-                                                       : s+' bytes freed';
+                                            const sStr = s >= 1e12 ? (s / 1e12).toFixed(2) + ' TB freed'
+                                                : s >= 1e9 ? (s / 1e9).toFixed(2) + ' GB freed'
+                                                    : s >= 1e6 ? (s / 1e6).toFixed(1) + ' MB freed'
+                                                        : s >= 1024 ? (s / 1024).toFixed(1) + ' KB freed'
+                                                            : s + ' bytes freed';
                                             cell.innerHTML = `<i class="fas fa-spinner fa-spin" style="opacity:0.6;font-size:11px;"></i> Deleting… <small style="color:white;">${sStr}</small>`;
                                         });
                                     });
@@ -8203,7 +8207,7 @@ function handleStorageUpdate(data) {
 
         case 'ping':
             // Keep-alive ping, just log it
-            
+
             break;
 
         default:

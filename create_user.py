@@ -14,23 +14,25 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Ensure db/ directory exists at configured path before database.py writes to it
 from paths import ensure_dirs
+
 ensure_dirs()
 
 from database import db
 
-DEFAULT_CREDENTIALS = [('admin', 'admin123'), ('guest', 'guest123')]
+DEFAULT_CREDENTIALS = [("admin", "admin123"), ("guest", "guest123")]
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _warn_defaults():
     """Warn if any default credentials are still active."""
     active = [u for u, p in DEFAULT_CREDENTIALS if db.check_login(u, p)]
     if active:
         print()
-        print("⚠️  WARNING: Default credentials still active for:", ', '.join(active))
+        print("⚠️  WARNING: Default credentials still active for:", ", ".join(active))
         print("   Change or delete these before exposing the server to a network!")
 
 
@@ -38,6 +40,7 @@ def _input_password(prompt="Enter password: ") -> str:
     """Read password — hides input if possible."""
     try:
         import getpass
+
         return getpass.getpass(prompt)
     except Exception:
         return input(prompt).strip()
@@ -45,12 +48,13 @@ def _input_password(prompt="Enter password: ") -> str:
 
 def _confirm(prompt: str) -> bool:
     ans = input(f"{prompt} (yes/no): ").strip().lower()
-    return ans in ('yes', 'y')
+    return ans in ("yes", "y")
 
 
 # ---------------------------------------------------------------------------
 # Actions
 # ---------------------------------------------------------------------------
+
 
 def list_users():
     users = db.list_users()
@@ -62,12 +66,20 @@ def list_users():
     print("  " + "-" * 50)
     for u in users:
         import datetime
-        last = (datetime.datetime.fromtimestamp(u['last_login']).strftime('%Y-%m-%d %H:%M')
-                if u.get('last_login') else 'Never')
-        flag = ' ⚠️  default password!' if any(
-            u['username'] == un and db.check_login(un, pw)
-            for un, pw in DEFAULT_CREDENTIALS
-        ) else ''
+
+        last = (
+            datetime.datetime.fromtimestamp(u["last_login"]).strftime("%Y-%m-%d %H:%M")
+            if u.get("last_login")
+            else "Never"
+        )
+        flag = (
+            " ⚠️  default password!"
+            if any(
+                u["username"] == un and db.check_login(un, pw)
+                for un, pw in DEFAULT_CREDENTIALS
+            )
+            else ""
+        )
         print(f"  {u['username']:<20} {u['role']:<12} {last}{flag}")
     print()
 
@@ -94,7 +106,7 @@ def add_user():
     print("  Roles:  readwrite — upload, download, delete, create folders")
     print("          readonly  — download only")
     role = input("  Role (readwrite/readonly): ").strip().lower()
-    if role not in ('readwrite', 'readonly'):
+    if role not in ("readwrite", "readonly"):
         print("  ❌ Invalid role.")
         return
 
@@ -136,7 +148,7 @@ def change_role():
     current = db.get_role(username)
     print(f"  Current role: {current}")
     role = input("  New role (readwrite/readonly): ").strip().lower()
-    if role not in ('readwrite', 'readonly'):
+    if role not in ("readwrite", "readonly"):
         print("  ❌ Invalid role.")
         return
     if role == current:
@@ -178,7 +190,9 @@ def delete_default_users():
                 if db.delete_user(username):
                     removed.append(username)
             else:
-                print(f"  ℹ️  '{username}' exists but password was already changed — skipping.")
+                print(
+                    f"  ℹ️  '{username}' exists but password was already changed — skipping."
+                )
         else:
             print(f"  ℹ️  '{username}' does not exist — skipping.")
 
@@ -191,6 +205,7 @@ def delete_default_users():
 # ---------------------------------------------------------------------------
 # Main menu
 # ---------------------------------------------------------------------------
+
 
 def main():
     print("=" * 50)
@@ -211,13 +226,19 @@ def main():
 
         choice = input("\nSelect (1-7): ").strip()
 
-        if   choice == '1': list_users()
-        elif choice == '2': add_user()
-        elif choice == '3': change_password()
-        elif choice == '4': change_role()
-        elif choice == '5': delete_user()
-        elif choice == '6': delete_default_users()
-        elif choice == '7':
+        if choice == "1":
+            list_users()
+        elif choice == "2":
+            add_user()
+        elif choice == "3":
+            change_password()
+        elif choice == "4":
+            change_role()
+        elif choice == "5":
+            delete_user()
+        elif choice == "6":
+            delete_default_users()
+        elif choice == "7":
             print("👋 Goodbye!")
             break
         else:
@@ -226,7 +247,7 @@ def main():
         _warn_defaults()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:

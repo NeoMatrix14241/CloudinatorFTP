@@ -18,11 +18,13 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 from database import db
 
+
 def main():
     print("🔒 Revoking all active sessions...")
     new_token = db.rotate_server_token()
     print(f"✅ Done. New token: {new_token[:8]}...")
     print("   All connected clients will be redirected to /login within 5 seconds.")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

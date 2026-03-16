@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,20 +9,21 @@
     <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp">
     <link href="{{ url_for('static', filename='css/404.css') }}" rel="stylesheet">
 </head>
+
 <body>
     <div class="error-container">
         <div class="error-icon">
             <i class="fas fa-exclamation-triangle"></i>
         </div>
-        
+
         <h1 class="error-title">404</h1>
         <h2 class="error-subtitle">Page Not Found</h2>
-        
+
         <p class="error-message">
-            The page you're looking for doesn't exist or has been moved. 
+            The page you're looking for doesn't exist or has been moved.
             This might happen if you followed an old link or typed the URL incorrectly.
         </p>
-        
+
         <div class="error-actions">
             <a href="/" class="btn btn-primary">
                 <i class="fas fa-home"></i>
@@ -32,7 +34,7 @@
                 Go Back
             </button>
         </div>
-        
+
         <div class="error-details">
             <h4>What you can do:</h4>
             <ul>
@@ -58,4 +60,5 @@
 
     <script src="{{ url_for('static', filename='js/404.js') }}"></script>
 </body>
+
 </html>

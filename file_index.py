@@ -66,8 +66,9 @@ import tempfile
 
 # Cache dir resolved via paths.py — created by ensure_dirs() at server startup.
 from paths import get_cache_dir
-CACHE_DIR       = get_cache_dir(create=False)
-FILE_INDEX_PATH = os.path.join(CACHE_DIR, 'file_index.json')
+
+CACHE_DIR = get_cache_dir(create=False)
+FILE_INDEX_PATH = os.path.join(CACHE_DIR, "file_index.json")
 
 # A folder must have MORE THAN this many direct entries to be recorded.
 THRESHOLD = 80
@@ -76,6 +77,7 @@ THRESHOLD = 80
 # ---------------------------------------------------------------------------
 # Internal helper — scan one folder, return sorted entry list
 # ---------------------------------------------------------------------------
+
 
 def _scan_folder_entries(abs_path: str) -> list:
     """
@@ -88,35 +90,40 @@ def _scan_folder_entries(abs_path: str) -> list:
     try:
         with os.scandir(abs_path) as it:
             for entry in it:
-                if entry.name.startswith('.'):
+                if entry.name.startswith("."):
                     continue
                 try:
                     st = entry.stat()
-                    entries.append({
-                        'name':     entry.name,
-                        'is_dir':   entry.is_dir(),
-                        # Directories don't report size (matches list_dir behaviour)
-                        'size':     None if entry.is_dir() else st.st_size,
-                        'modified': st.st_mtime,
-                    })
+                    entries.append(
+                        {
+                            "name": entry.name,
+                            "is_dir": entry.is_dir(),
+                            # Directories don't report size (matches list_dir behaviour)
+                            "size": None if entry.is_dir() else st.st_size,
+                            "modified": st.st_mtime,
+                        }
+                    )
                 except (OSError, IOError):
-                    entries.append({
-                        'name':     entry.name,
-                        'is_dir':   entry.is_dir(),
-                        'size':     None,
-                        'modified': None,
-                    })
+                    entries.append(
+                        {
+                            "name": entry.name,
+                            "is_dir": entry.is_dir(),
+                            "size": None,
+                            "modified": None,
+                        }
+                    )
     except (OSError, PermissionError):
         return []
 
     # Directories first, then files — both groups sorted case-insensitively
-    entries.sort(key=lambda x: (not x['is_dir'], x['name'].lower()))
+    entries.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
     return entries
 
 
 # ---------------------------------------------------------------------------
 # FileIndexManager
 # ---------------------------------------------------------------------------
+
 
 class FileIndexManager:
     """
@@ -127,8 +134,8 @@ class FileIndexManager:
     """
 
     def __init__(self):
-        self.lock       = threading.Lock()
-        self._save_lock = threading.Lock()   # serialises writes to file_index.json
+        self.lock = threading.Lock()
+        self._save_lock = threading.Lock()  # serialises writes to file_index.json
         # rel_path → {entry_count: int, indexed_at: float, entries: list}
         self._dirs: dict = {}
 
@@ -143,18 +150,20 @@ class FileIndexManager:
         """
         try:
             if not os.path.exists(FILE_INDEX_PATH):
-                print(f"📂 No file index at {FILE_INDEX_PATH} — will rebuild during walk")
+                print(
+                    f"📂 No file index at {FILE_INDEX_PATH} — will rebuild during walk"
+                )
                 return False
 
-            with open(FILE_INDEX_PATH, 'r', encoding='utf-8') as f:
+            with open(FILE_INDEX_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            dirs = data.get('dirs', {})
+            dirs = data.get("dirs", {})
             with self.lock:
                 self._dirs = dirs
 
             count = len(dirs)
-            total_entries = sum(v.get('entry_count', 0) for v in dirs.values())
+            total_entries = sum(v.get("entry_count", 0) for v in dirs.values())
             print(
                 f"✅ Loaded file index: {count:,} large folder(s) indexed "
                 f"({total_entries:,} total entries, threshold={THRESHOLD})"
@@ -184,16 +193,18 @@ class FileIndexManager:
                     dirs_snapshot = dict(self._dirs)  # shallow copy under lock
 
                 data = {
-                    'version':   1,
-                    'threshold': THRESHOLD,
-                    'saved_at':  time.time(),
-                    'dir_count': len(dirs_snapshot),
-                    'dirs':      dirs_snapshot,
+                    "version": 1,
+                    "threshold": THRESHOLD,
+                    "saved_at": time.time(),
+                    "dir_count": len(dirs_snapshot),
+                    "dirs": dirs_snapshot,
                 }
 
                 with tempfile.NamedTemporaryFile(
-                    mode='w', encoding='utf-8',
-                    dir=CACHE_DIR, suffix='.tmp',
+                    mode="w",
+                    encoding="utf-8",
+                    dir=CACHE_DIR,
+                    suffix=".tmp",
                     delete=False,
                 ) as tf:
                     json.dump(data, tf)
@@ -229,9 +240,9 @@ class FileIndexManager:
         for rel_path, entries in direct_entries.items():
             if len(entries) > THRESHOLD:
                 new_dirs[rel_path] = {
-                    'entry_count': len(entries),
-                    'indexed_at':  now,
-                    'entries':     entries,
+                    "entry_count": len(entries),
+                    "indexed_at": now,
+                    "entries": entries,
                 }
 
         with self.lock:
@@ -244,7 +255,9 @@ class FileIndexManager:
                 f"threshold of {THRESHOLD} direct entries"
             )
         else:
-            print(f"📋 File index built: no folders exceed threshold of {THRESHOLD} entries")
+            print(
+                f"📋 File index built: no folders exceed threshold of {THRESHOLD} entries"
+            )
 
         self.save()
 
@@ -268,14 +281,14 @@ class FileIndexManager:
             return
 
         entries = _scan_folder_entries(abs_path)
-        count   = len(entries)
+        count = len(entries)
 
         with self.lock:
             if count > THRESHOLD:
                 self._dirs[rel_path] = {
-                    'entry_count': count,
-                    'indexed_at':  time.time(),
-                    'entries':     entries,
+                    "entry_count": count,
+                    "indexed_at": time.time(),
+                    "entries": entries,
                 }
             else:
                 # Dropped below threshold — evict from index
@@ -293,8 +306,7 @@ class FileIndexManager:
         """
         with self.lock:
             keys_to_remove = [
-                k for k in self._dirs
-                if k == rel_path or k.startswith(rel_path + '/')
+                k for k in self._dirs if k == rel_path or k.startswith(rel_path + "/")
             ]
             for k in keys_to_remove:
                 del self._dirs[k]
@@ -313,15 +325,16 @@ class FileIndexManager:
         """
         with self.lock:
             keys_to_migrate = [
-                k for k in list(self._dirs.keys())
-                if k == old_rel or k.startswith(old_rel + '/')
+                k
+                for k in list(self._dirs.keys())
+                if k == old_rel or k.startswith(old_rel + "/")
             ]
             now = time.time()
             for old_key in keys_to_migrate:
-                suffix  = old_key[len(old_rel):]      # '' or '/child/...'
+                suffix = old_key[len(old_rel) :]  # '' or '/child/...'
                 new_key = new_rel + suffix
-                entry   = self._dirs.pop(old_key)
-                entry['indexed_at'] = now
+                entry = self._dirs.pop(old_key)
+                entry["indexed_at"] = now
                 self._dirs[new_key] = entry
 
         if keys_to_migrate:
@@ -339,14 +352,14 @@ class FileIndexManager:
         Return the cached entry list for rel_path, or None if not indexed.
         rel_path uses forward slashes; root is '' or '/'.
         """
-        rel_path = rel_path.replace('\\', '/').strip('/')
+        rel_path = rel_path.replace("\\", "/").strip("/")
         with self.lock:
             record = self._dirs.get(rel_path)
-            return record['entries'] if record else None
+            return record["entries"] if record else None
 
     def is_indexed(self, rel_path: str) -> bool:
         """Return True if this folder has a cached entry list."""
-        rel_path = rel_path.replace('\\', '/').strip('/')
+        rel_path = rel_path.replace("\\", "/").strip("/")
         with self.lock:
             return rel_path in self._dirs
 
@@ -358,11 +371,11 @@ class FileIndexManager:
     def get_stats(self) -> dict:
         """Return summary statistics about the index."""
         with self.lock:
-            total_entries = sum(v['entry_count'] for v in self._dirs.values())
+            total_entries = sum(v["entry_count"] for v in self._dirs.values())
             return {
-                'indexed_folders': len(self._dirs),
-                'threshold':       THRESHOLD,
-                'total_entries':   total_entries,
+                "indexed_folders": len(self._dirs),
+                "threshold": THRESHOLD,
+                "total_entries": total_entries,
             }
 
     def clear(self):
