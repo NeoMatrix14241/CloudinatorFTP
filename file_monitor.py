@@ -31,12 +31,29 @@ CACHE_FILE = os.path.join(CACHE_DIR, 'storage_index.json')
 
 # Reconciliation interval
 RECONCILE_INTERVAL = 900  # 15 minutes
-# How long to suppress watchdog counter updates after a bulk-op reconcile
-SETTLE_DELAY = 2.0  # seconds
+# How long to suppress watchdog counter updates after a bulk-op reconcile.
+# Kept short so the walk starts almost immediately; the walk itself provides
+# live progress via SSE rather than waiting for a silent timer to expire.
+SETTLE_DELAY = 0.5  # seconds  (was 2.0)
 # Burst detection: if this many on_created events arrive within BURST_WINDOW seconds
 # the handler auto-arms the settle (same as an explicit bulk_copy reconcile does).
-BURST_THRESHOLD = 50   # events
-BURST_WINDOW    = 3.0  # seconds
+# Raised so small copies (< 200 files) still get individual watchdog increments
+# rather than immediately jumping to a full walk.
+BURST_THRESHOLD = 200   # events  (was 50)
+BURST_WINDOW    = 5.0   # seconds (was 3.0)
+
+# Walk progress: log a line every N files during a reconcile walk (no SSE emitted).
+# SSE during the walk caused the UI to oscillate between partial counts.
+WALK_PROGRESS_INTERVAL     = 1000   # print a log line every N files
+WALK_PROGRESS_MIN_INTERVAL = 1.0    # (unused — kept for reference only)
+
+# After a reconcile walk finishes, the OS watchdog event queue may still hold
+# thousands of on_created events for files the walk already counted.  Once those
+# events see _pending_reconcile=False and the new epoch they will all increment
+# _file_count for files the walk already tallied → "infinite drift".
+# Re-arming suppression for POST_WALK_DRAIN seconds flushes the OS queue without
+# triggering another full walk.
+POST_WALK_DRAIN = 6.0   # seconds — enough for OS to drain ~100k queued events
 
 
 @dataclass
@@ -429,12 +446,20 @@ class FileSystemMonitor:
         with self.lock:
             self.change_callbacks.discard(callback)
 
-    def _notify_changes(self, old_snapshot: StorageSnapshot, new_snapshot: StorageSnapshot):
+    def _notify_changes(self, old_snapshot: StorageSnapshot,
+                        new_snapshot: StorageSnapshot,
+                        reconcile_complete: bool = False,
+                        walk_progress: bool = False):
         with self.lock:
             callbacks = list(self.change_callbacks)
         for cb in callbacks:
             try:
-                cb(old_snapshot, new_snapshot)
+                try:
+                    cb(old_snapshot, new_snapshot,
+                       reconcile_complete=reconcile_complete,
+                       walk_progress=walk_progress)
+                except TypeError:
+                    cb(old_snapshot, new_snapshot)
             except Exception as e:
                 print(f"❌ Error in change callback: {e}")
 
@@ -496,11 +521,16 @@ class FileSystemMonitor:
     # Full walk — first boot or reconcile
     # ------------------------------------------------------------------
 
-    def _full_walk(self, silent: bool = False) -> dict:
+    def _full_walk(self, silent: bool = False,
+                   on_progress: Optional[Callable] = None) -> dict:
         """
         Walk entire filesystem in one pass.
         Builds global counters AND dir_info for every folder simultaneously.
         Only called on first boot (no cache) or every 15 minutes for reconciliation.
+
+        on_progress(file_count, dir_count, total_size) is called every
+        WALK_PROGRESS_INTERVAL files so callers can push live SSE updates
+        while the walk is still in progress.
         """
         if not silent:
             print(f"🚶 Starting full filesystem walk + index build: {self.root_path}")
@@ -577,6 +607,10 @@ class FileSystemMonitor:
                         if fmtime > latest_mtime:
                             latest_mtime = fmtime
 
+                        # Emit live progress every WALK_PROGRESS_INTERVAL files
+                        if on_progress and file_count % WALK_PROGRESS_INTERVAL == 0:
+                            on_progress(file_count, dir_count, total_size)
+
                         # Add file to immediate parent
                         dir_info[root_rel]['file_count'] += 1
                         dir_info[root_rel]['total_size'] += fsize
@@ -650,16 +684,21 @@ class FileSystemMonitor:
             self._settle_timer.start()
         print(f"🔄 Settle reconcile armed — counter updates suppressed for {SETTLE_DELAY}s")
 
+    def _clear_pending_reconcile(self):
+        """
+        Called by the post-walk drain timer to re-enable watchdog increments.
+        Does NOT trigger another walk — it only lifts the suppression flag so
+        genuine new events (created after the drain window ends) are counted.
+        """
+        with self.lock:
+            self._pending_reconcile = False
+        print("✅ Post-walk drain complete — watchdog increments resumed")
+
     def _settle_reconcile(self):
         """Fired by the hard timer — ground-truth walk after suppression window."""
         print("🔄 Settle reconcile firing (hard timer expired)")
         try:
-            from realtime_stats import trigger_storage_update
-            old_snap = self.last_snapshot
-            self._reconcile()           # clears _pending_reconcile, bumps epoch
-            new_snap = self.last_snapshot
-            # Force-push SSE regardless of drift so UI always reflects reality
-            trigger_storage_update(old_snap, new_snap)
+            self._reconcile()   # internally force-pushes SSE with reconcile_complete=True
         except Exception as e:
             print(f"⚠️ Settle reconcile error: {e}")
         finally:
@@ -668,36 +707,77 @@ class FileSystemMonitor:
 
     def _reconcile(self):
         print("🔄 Background reconciliation walk starting...")
-        # Clear the pending flag before the walk so new events arriving during
-        # the walk are counted normally (epoch guard handles in-flight ones).
+
+        # Keep _pending_reconcile = True for the ENTIRE walk.
+        #
+        # Why NOT clear it at the top like before:
+        #   Clearing it lets _notify_and_save fire during the walk with
+        #   partially-incremented watchdog values (e.g. 51000) → wrong SSE.
+        #
+        # Why keep it True:
+        #   on_created/on_deleted/on_moved all skip their counter increment when
+        #   _pending_reconcile is True — the walk produces the ground-truth count
+        #   so we don't need watchdog increments during the walk at all.
+        #   _notify_and_save also returns early, so no spurious SSE mid-walk.
+        #
+        # When it clears:
+        #   After the walk finishes + epoch bumps, we re-arm for POST_WALK_DRAIN
+        #   seconds to flush any OS-queued events the burst suppression held back.
+        #   _clear_pending_reconcile() then re-enables normal watchdog counting.
         with self.lock:
-            self._pending_reconcile = False
-        result = self._full_walk(silent=True)
-        old_snapshot = self._build_snapshot()
+            self._pending_reconcile = True   # keep suppression on for entire walk
+
+        _true_old_snapshot = self.last_snapshot
+
+        # ── Full walk ───────────────────────────────────────────────────────
+        # on_progress only prints — no SSE, no last_snapshot mutation.
+        # Walk-progress SSE caused "1000 → 51000 → 50580" oscillation because:
+        #   • Early progress tick at 1000 files set last_snapshot(file_count=1000)
+        #     → frontend displayed 1000
+        #   • _notify_and_save (pending=False, old code) pushed 51000 mid-walk
+        #     → frontend displayed 51000
+        # The single reconcile_complete push at the end is sufficient.
+        def _on_progress(fc: int, dc: int, ts: int):
+            print(f"📊 Walk progress: {fc:,} files, {ts / (1024**3):.2f} GB")
+
+        result = self._full_walk(silent=True, on_progress=_on_progress)
 
         with self.lock:
-            self._file_count = result['file_count']
-            self._dir_count = result['dir_count']
-            self._total_size = result['total_size']
+            self._file_count    = result['file_count']
+            self._dir_count     = result['dir_count']
+            self._total_size    = result['total_size']
             self._last_modified = result['last_modified']
-            self._dir_info = result['dir_info']
-            # Bump AFTER writing corrected counters, not before the walk.
-            # Events that snapshotted epoch before this lock acquisition will now
-            # see a mismatch and skip their increment — preventing post-reconcile
-            # overshoot from the watchdog backlog draining after the walk finishes.
+            self._dir_info      = result['dir_info']
+            # Bump epoch AFTER writing corrected counters.
+            # Events that snapshotted the old epoch and are blocked on the lock
+            # will see the mismatch and skip their increment.
             self._reconcile_epoch += 1
+            # Stay suppressed — OS queue may still hold thousands of events
+            # for files the walk already counted.  POST_WALK_DRAIN flushes them.
+            self._pending_reconcile = True
+
+        # Drain timer: lifts suppression after OS queue drains.  No walk.
+        drain_timer = threading.Timer(POST_WALK_DRAIN, self._clear_pending_reconcile)
+        drain_timer.daemon = True
+        drain_timer.start()
+        print(f"🔄 Post-walk drain armed for {POST_WALK_DRAIN}s")
 
         new_snapshot = self._build_snapshot()
         self.last_snapshot = new_snapshot
         self._save_cache()
 
-        if (old_snapshot.file_count != new_snapshot.file_count or
-                old_snapshot.dir_count != new_snapshot.dir_count or
-                old_snapshot.total_size != new_snapshot.total_size):
+        # Single authoritative SSE push — _dir_info is now complete.
+        # reconcile_complete=True tells the frontend to refresh the file table
+        # and re-fetch all dir-info cells now that _dir_info is authoritative.
+        self._notify_changes(_true_old_snapshot or new_snapshot, new_snapshot,
+                             reconcile_complete=True)
+
+        if (_true_old_snapshot and (
+                _true_old_snapshot.file_count != new_snapshot.file_count or
+                _true_old_snapshot.total_size  != new_snapshot.total_size)):
             print(f"🔄 Reconciliation corrected drift: "
-                  f"files {old_snapshot.file_count}→{new_snapshot.file_count}, "
-                  f"dirs {old_snapshot.dir_count}→{new_snapshot.dir_count}")
-            self._notify_changes(old_snapshot, new_snapshot)
+                  f"files {_true_old_snapshot.file_count}→{new_snapshot.file_count}, "
+                  f"dirs {_true_old_snapshot.dir_count}→{new_snapshot.dir_count}")
         else:
             print("✅ Reconciliation complete — no drift detected")
 

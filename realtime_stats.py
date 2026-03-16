@@ -32,8 +32,27 @@ class StorageStatsEventManager:
             self.clients.discard(client_queue)
             print(f"📡 Client disconnected. Total clients: {len(self.clients)}")
     
-    def broadcast_update(self, old_snapshot, new_snapshot):
-        """Broadcast storage stats update to all connected clients"""
+    def broadcast_update(self, old_snapshot, new_snapshot,
+                         reconcile_complete: bool = False,
+                         walk_progress: bool = False):
+        """Broadcast storage stats update to all connected clients.
+
+        Three distinct event kinds (mutually exclusive):
+          walk_progress=True,  reconcile_complete=False
+            → Fired every ~1s during a reconcile walk.
+              Frontend: update stats panel only. Table refresh suppressed
+              because _dir_info is still being built.
+
+          walk_progress=False, reconcile_complete=False  (default)
+            → Normal watchdog event (file added/deleted/moved/renamed).
+              Frontend: update stats panel AND refresh file table.
+              _dir_info is kept up-to-date by the watchdog incrementally.
+
+          walk_progress=False, reconcile_complete=True
+            → Reconcile walk finished; _dir_info is now fully authoritative.
+              Frontend: update stats panel, refresh file table, and re-fetch
+              every dir-info cell so folder sizes are correct.
+        """
         try:
             # Get fast disk usage stats (without expensive file counting)
             disk_stats = self._get_fast_disk_stats()
@@ -42,6 +61,8 @@ class StorageStatsEventManager:
             update_data = {
                 'type': 'storage_stats_update',
                 'timestamp': time.time(),
+                'walk_progress':      walk_progress,
+                'reconcile_complete': reconcile_complete,
                 'data': {
                     # File/directory counts from snapshot (instant)
                     'file_count': new_snapshot.file_count,
@@ -246,9 +267,13 @@ def storage_stats_sse():
 
     return response
 
-def trigger_storage_update(old_snapshot, new_snapshot):
+def trigger_storage_update(old_snapshot, new_snapshot,
+                           reconcile_complete: bool = False,
+                           walk_progress: bool = False):
     """Callback function to be registered with file monitor"""
-    event_manager.broadcast_update(old_snapshot, new_snapshot)
+    event_manager.broadcast_update(old_snapshot, new_snapshot,
+                                   reconcile_complete=reconcile_complete,
+                                   walk_progress=walk_progress)
 
 def get_event_manager():
     """Get the global event manager"""

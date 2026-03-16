@@ -234,8 +234,14 @@ def _trigger_reconcile(settle=False):
          set by reconcile) -> new = build_snapshot() (same) -> no push again.
       Result: zero SSE pushes, client stuck until manual refresh.
 
-    Fix: save the pre-reconcile snapshot and always call trigger_storage_update
-    after the walk, bypassing reconcile own change detection.
+    Fix: _reconcile() now always force-pushes a reconcile_complete=True SSE at the
+    end regardless of drift, so this explicit trigger_storage_update call below is
+    a belt-and-suspenders safety net only.
+
+    NOTE: settle=True used to arm set_pending_reconcile() AFTER the walk — that
+    caused an unnecessary 4th full walk per copy.  It is no longer needed because
+    _reconcile() already handles the epoch guard that prevents double-counting from
+    the watchdog backlog that drains after copytree finishes.
     """
     import threading
     from file_monitor import get_file_monitor
@@ -243,16 +249,15 @@ def _trigger_reconcile(settle=False):
     def _run():
         try:
             monitor = get_file_monitor()
-            old_snap = monitor.get_current_snapshot()
+            # _reconcile() will push incremental walk-progress SSE + a final
+            # reconcile_complete SSE internally.  The explicit push below is
+            # kept only as a safety net for the case where the walk saw no drift
+            # (old == new) but the race condition described above means last_snapshot
+            # was already updated before reconcile ran.
             monitor._reconcile()
             new_snap = monitor.get_current_snapshot()
-            # Arm settle: suppress watchdog backlog until event storm drains
-            if settle:
-                monitor.set_pending_reconcile()
-            # Always push even if reconcile saw no drift (race may have hidden the change)
-            trigger_storage_update(old_snap, new_snap)
-            print(f"\U0001f4e1 Force-pushed SSE after reconcile (settle={settle}): "
-                  f"{getattr(old_snap, 'file_count', '?')} -> {getattr(new_snap, 'file_count', '?')} files")
+            print(f"\U0001f4e1 Reconcile complete (settle={settle}): "
+                  f"{getattr(new_snap, 'file_count', '?')} files")
         except Exception as e:
             print(f'\u26a0\ufe0f Background reconcile error: {e}')
     threading.Thread(target=_run, daemon=True).start()

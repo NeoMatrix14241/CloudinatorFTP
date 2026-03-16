@@ -5571,12 +5571,26 @@ async function performBulkCopy(paths, destination, conflictResolutions = {}) {
 
         if (response.ok) {
             showNotification('Copy Successful', `Successfully copied ${result.copied_count} item(s)`, 'success');
-            // Clear selection first, then refresh file table
             clearSelection();
-            VT.clearDirCache(); // Flush stale folder counts so fresh data is fetched
+
+            // The server has started a background reconcile walk.
+            // Rebuild the file list immediately (new files are visible) but do NOT
+            // feed dir-info cells from the stale in-memory _dir_info — the walk
+            // hasn't finished yet so sizes would be wrong.
+            // Strategy: rebuild table, then invalidate every dir-info cell so they
+            // all show a spinner.  They will be re-fetched when the reconcile_complete
+            // SSE arrives and triggers another refreshFileTable().
+            VT.clearDirCache();
             await refreshFileTable();
-            // Refresh storage stats after copy (new files created, size increased)
-            refreshStorageStats('copy operation');
+
+            // Mark all freshly-rendered dir-info cells as pending so they show
+            // a spinner instead of fetching stale data right now.
+            document.querySelectorAll('.dir-info-cell').forEach(cell => {
+                cell.dataset.loaded = '';          // reset "loaded" flag
+                cell.innerHTML = '<i class="fas fa-circle-notch fa-spin" style="opacity:0.5;font-size:11px;"></i>';
+            });
+
+            showUploadStatus('<i class="fas fa-circle-notch fa-spin"></i> Scanning new files…', 'info');
         } else {
             showNotification('Copy Failed', result.error, 'error');
         }
@@ -7878,7 +7892,8 @@ function handleStorageUpdate(data) {
             break;
 
         case 'storage_stats_update':
-            console.log('🔄 Processing storage_stats_update...', data.data);
+            console.log('🔄 Processing storage_stats_update...', data.data,
+                        data.walk_progress ? '(walk progress)' : '(reconcile complete)');
 
             // Brief flash to show SSE activity
             document.title = '⚡ ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
@@ -7887,7 +7902,7 @@ function handleStorageUpdate(data) {
             }, 2000);
 
             if (data.data) {
-                // Update storage display with real-time data
+                // Always update the storage stats panel (header numbers, disk bar).
                 updateStorageDisplay(data.data);
                 // Seed free_space tracker for deletion delta calculation
                 if (data.data.free_space != null) _lastFreeSpace = data.data.free_space;
@@ -7899,6 +7914,35 @@ function handleStorageUpdate(data) {
                 if (data.data.dir_count !== undefined) {
                     lastKnownDirCount = data.data.dir_count;
                 }
+
+                // ── Walk-progress event ────────────────────────────────────────────
+                // The walk is still in progress; _dir_info is not yet up-to-date.
+                // Only update the stats panel — do NOT refresh the file table or
+                // dir-info cells, because they'd fetch stale per-folder sizes.
+                // Show a lightweight "scanning…" notification so the user can see
+                // the count climbing without the table flickering on every tick.
+                if (data.walk_progress && !data.initial) {
+                    const changes = data.data.changes || {};
+                    if (changes.files_changed > 0 || changes.size_changed !== 0) {
+                        let msg = '🔍 Scanning: ';
+                        if (data.data.file_count) msg += `${data.data.file_count.toLocaleString()} files`;
+                        if (data.data.total_size) {
+                            const s = data.data.total_size;
+                            const sStr = s >= 1e12 ? (s/1e12).toFixed(2)+' TB'
+                                       : s >= 1e9  ? (s/1e9).toFixed(2)+' GB'
+                                       : s >= 1e6  ? (s/1e6).toFixed(1)+' MB'
+                                       : s >= 1024 ? (s/1024).toFixed(1)+' KB'
+                                       : s+' bytes';
+                            msg += ', ' + sStr;
+                        }
+                        showUploadStatus(`<i class="fas fa-circle-notch fa-spin"></i> ${msg}`, 'info');
+                    }
+                    break; // Do NOT fall through to file-table refresh logic
+                }
+
+                // ── Reconcile-complete (or regular watchdog) event ─────────────────
+                // _dir_info is now authoritative — safe to refresh the file table
+                // and re-fetch all dir-info cells.
 
                 // Check for file/folder changes and refresh table if needed
                 // Skip change notifications for initial data (page load)
@@ -7914,6 +7958,7 @@ function handleStorageUpdate(data) {
 
                     // Check if we should refresh the file table (broader criteria)
                     const shouldRefresh = (
+                        data.reconcile_complete ||      // always refresh when walk is done
                         changes.files_changed !== 0 ||
                         changes.dirs_changed !== 0 ||
                         changes.size_changed !== 0 ||

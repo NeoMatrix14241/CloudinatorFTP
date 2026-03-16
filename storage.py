@@ -5,6 +5,15 @@ import threading
 import stat
 from config import ROOT_DIR, CHUNK_SIZE
 
+# Lazy import to avoid circular imports at module load time.
+# file_index_manager is used in list_dir() for large-folder cache hits.
+def _get_file_index_manager():
+    try:
+        from file_index import file_index_manager
+        return file_index_manager
+    except Exception:
+        return None
+
 def ensure_root():
     if not os.path.exists(ROOT_DIR):
         os.makedirs(ROOT_DIR)
@@ -53,6 +62,40 @@ def list_dir(path):
     full_path = os.path.join(ROOT_DIR, path)
     if not os.path.exists(full_path):
         return []
+
+    # ── Fast path: serve from file_index cache ─────────────────────────────
+    # file_index_manager caches the direct-entry listing for every folder
+    # that has more than THRESHOLD (80) entries.  For root folders with tens
+    # of thousands of files this avoids a slow os.scandir() + stat() loop and
+    # makes the response nearly instant (pure in-memory dict lookup).
+    #
+    # The cache is kept up-to-date by the watchdog: on_created/on_deleted/
+    # on_moved each call file_index_manager.update_folder() on the affected
+    # parent folder immediately after the filesystem change completes, so by
+    # the time the browser's refreshFileTable() request arrives the cache
+    # already reflects the post-operation state.
+    fim = _get_file_index_manager()
+    if fim is not None:
+        rel_path = path.replace('\\', '/').strip('/')
+        cached_entries = fim.get_entries(rel_path)
+        if cached_entries is not None:
+            # Convert file_index format → list_dir format (add item_count=None)
+            items = [
+                {
+                    'name':       e['name'],
+                    'is_dir':     e['is_dir'],
+                    'size':       e['size'],       # None for dirs (same as scandir path)
+                    'item_count': None,
+                    'modified':   e['modified'],
+                }
+                for e in cached_entries
+                # cached_entries are already sorted (dirs first, then files, both alpha)
+            ]
+            return items
+
+    # ── Slow path: live os.scandir() ───────────────────────────────────────
+    # Used when the folder is below the cache threshold (≤80 entries) or
+    # when the cache hasn't been populated yet (first boot before walk).
     items = []
     try:
         with os.scandir(full_path) as it:
