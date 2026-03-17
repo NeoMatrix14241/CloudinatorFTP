@@ -2918,7 +2918,8 @@ const VIEWABLE_EXTENSIONS = {
         'cs', 'go', 'rb', 'pl', 'lua', 'rs', 'kt', 'swift', 'php', 'sql', 'r', 'scala', 'crt', 'key',
         'vb', 'asm', 's', 'makefile', 'dockerfile', 'gitignore', 'editorconfig', 'htaccess'
     ]),
-    office: new Set(['docx', 'doc', 'xlsx', 'xls', 'csv', 'pptx', 'ppt'])
+    office: new Set(['docx', 'doc', 'xlsx', 'xls', 'csv', 'pptx', 'ppt']),
+    archive: new Set(['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'tgz', 'tbz2', 'txz']),
 };
 
 /**
@@ -3014,6 +3015,11 @@ function openFileViewer(itemPath, filename) {
                 .catch(err => {
                     body.innerHTML = `<p class="viewer-error"><i class="fas fa-exclamation-triangle"></i> Could not load preview: ${escapeHtml(err.message)}</p>`;
                 });
+            break;
+        case 'archive':
+            body.classList.add('viewer-archive');
+            inner = `<div class="viewer-archive-loading"><i class="fas fa-circle-notch fa-spin"></i> Reading archive…</div>`;
+            _loadArchivePreview(body, itemPath, null);
             break;
     }
 
@@ -8453,3 +8459,290 @@ document.addEventListener('visibilitychange', () => {
         connectToStorageStream();
     }
 });
+
+// ── Archive preview: load & retry ────────────────────────────────────────────
+ 
+/**
+ * Fetch archive listing from the server, handling password prompts & errors.
+ * Called initially with password=null; retried with the user-supplied password.
+ */
+function _loadArchivePreview(body, itemPath, password) {
+    const url = `/archive_preview/${itemPath}` +
+        (password != null ? `?password=${encodeURIComponent(password)}` : '');
+ 
+    fetch(url)
+        .then(r => r.json())
+        .then(data => {
+            if (data.error === 'password_required') {
+                _renderArchivePasswordPrompt(body, itemPath, false);
+                return;
+            }
+            if (data.error === 'wrong_password') {
+                _renderArchivePasswordPrompt(body, itemPath, true);
+                return;
+            }
+            if (data.error) {
+                body.innerHTML = `
+                    <p class="viewer-error">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        ${escapeHtml(data.error)}
+                    </p>`;
+                return;
+            }
+            _renderArchivePreview(body, data);
+        })
+        .catch(err => {
+            body.innerHTML = `
+                <p class="viewer-error">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    Could not load archive: ${escapeHtml(err.message)}
+                </p>`;
+        });
+}
+ 
+// ── Archive preview: password prompt ─────────────────────────────────────────
+ 
+function _renderArchivePasswordPrompt(body, itemPath, wrongPassword) {
+    body.innerHTML = '';
+    body.classList.add('viewer-archive');
+ 
+    const wrap = document.createElement('div');
+    wrap.className = 'archive-password-wrap';
+    wrap.innerHTML = `
+        <div class="archive-password-icon">
+            <i class="fas fa-lock"></i>
+        </div>
+        <div class="archive-password-title">Password Protected Archive</div>
+        <div class="archive-password-subtitle">
+            Enter the password to browse the archive contents.
+        </div>
+        ${wrongPassword ? `
+            <div class="archive-password-error">
+                <i class="fas fa-exclamation-circle"></i> Incorrect password — please try again.
+            </div>` : ''}
+        <div class="archive-password-form">
+            <div class="archive-password-input-wrap">
+                <i class="fas fa-key archive-password-input-icon"></i>
+                <input
+                    type="password"
+                    id="archivePasswordInput"
+                    class="archive-password-input"
+                    placeholder="Archive password"
+                    autocomplete="current-password"
+                >
+            </div>
+            <button class="btn btn-primary archive-password-btn" id="archivePasswordBtn">
+                <i class="fas fa-unlock-alt"></i> Unlock
+            </button>
+        </div>
+    `;
+    body.appendChild(wrap);
+ 
+    const input = wrap.querySelector('#archivePasswordInput');
+    const btn   = wrap.querySelector('#archivePasswordBtn');
+ 
+    const tryPassword = () => {
+        const pw = input.value.trim();
+        if (!pw) { input.focus(); input.classList.add('archive-input-shake'); setTimeout(() => input.classList.remove('archive-input-shake'), 500); return; }
+ 
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Unlocking…';
+        // Show inline spinner while re-fetching
+        body.innerHTML = `<div class="viewer-archive-loading">
+            <i class="fas fa-circle-notch fa-spin"></i> Unlocking…
+        </div>`;
+        _loadArchivePreview(body, itemPath, pw);
+    };
+ 
+    btn.addEventListener('click', tryPassword);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') tryPassword(); });
+ 
+    // Prevent viewer Escape handler from eating keystrokes inside the input
+    input.addEventListener('keydown', e => e.stopPropagation(), true);
+ 
+    input.focus();
+}
+ 
+// ── Archive preview: main renderer ───────────────────────────────────────────
+ 
+function _renderArchivePreview(body, data) {
+    body.innerHTML = '';
+    body.classList.add('viewer-archive');
+ 
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    const fmtSize = (bytes) => {
+        if (bytes == null || bytes < 0) return '—';
+        if (bytes === 0)  return '0 B';
+        if (bytes >= 1e12) return (bytes / 1e12).toFixed(2) + ' TB';
+        if (bytes >= 1e9)  return (bytes / 1e9).toFixed(2)  + ' GB';
+        if (bytes >= 1e6)  return (bytes / 1e6).toFixed(1)  + ' MB';
+        if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return bytes + ' B';
+    };
+ 
+    const fileIcon = (name) => {
+        const ext = (name.split('.').pop() || '').toLowerCase();
+        const map = {
+            // images
+            jpg:'fa-file-image',jpeg:'fa-file-image',png:'fa-file-image',gif:'fa-file-image',
+            bmp:'fa-file-image',webp:'fa-file-image',svg:'fa-file-image',avif:'fa-file-image',
+            // video
+            mp4:'fa-file-video',avi:'fa-file-video',mov:'fa-file-video',
+            mkv:'fa-file-video',webm:'fa-file-video',wmv:'fa-file-video',
+            // audio
+            mp3:'fa-file-audio',wav:'fa-file-audio',flac:'fa-file-audio',
+            aac:'fa-file-audio',ogg:'fa-file-audio',m4a:'fa-file-audio',
+            // docs
+            pdf:'fa-file-pdf',
+            doc:'fa-file-word',docx:'fa-file-word',
+            xls:'fa-file-excel',xlsx:'fa-file-excel',
+            ppt:'fa-file-powerpoint',pptx:'fa-file-powerpoint',
+            // code / text
+            js:'fa-file-code',ts:'fa-file-code',jsx:'fa-file-code',tsx:'fa-file-code',
+            py:'fa-file-code',java:'fa-file-code',cpp:'fa-file-code',c:'fa-file-code',
+            cs:'fa-file-code',go:'fa-file-code',rb:'fa-file-code',php:'fa-file-code',
+            html:'fa-file-code',css:'fa-file-code',json:'fa-file-code',xml:'fa-file-code',
+            sh:'fa-file-code',bat:'fa-file-code',
+            txt:'fa-file-alt',md:'fa-file-alt',csv:'fa-file-alt',log:'fa-file-alt',
+            // archives
+            zip:'fa-file-archive',rar:'fa-file-archive','7z':'fa-file-archive',
+            tar:'fa-file-archive',gz:'fa-file-archive',bz2:'fa-file-archive',
+        };
+        return map[ext] || 'fa-file';
+    };
+ 
+    // ── Build tree from flat entry list ──────────────────────────────────────
+    // Each node: { name, is_dir, size, compressed_size, modified, children: {} }
+    const root = { children: {} };
+ 
+    for (const entry of data.entries) {
+        // Normalise separators and strip leading slash
+        const parts = entry.name.replace(/\\/g, '/').split('/').filter(p => p.length > 0);
+        if (!parts.length) continue;
+ 
+        let node = root;
+        for (let i = 0; i < parts.length; i++) {
+            const part = parts[i];
+            const isLast = i === parts.length - 1;
+ 
+            if (!node.children[part]) {
+                node.children[part] = {
+                    name: part,
+                    is_dir: !isLast || entry.is_dir,
+                    size: 0, compressed_size: 0, modified: '',
+                    children: {},
+                };
+            }
+            if (isLast) {
+                const n = node.children[part];
+                n.is_dir = entry.is_dir;
+                n.size = entry.size || 0;
+                n.compressed_size = entry.compressed_size || 0;
+                n.modified = entry.modified || '';
+            }
+            node = node.children[part];
+        }
+    }
+ 
+    // ── Header bar ───────────────────────────────────────────────────────────
+    const fileCt  = data.entries.filter(e => !e.is_dir).length;
+    const dirCt   = data.entries.filter(e =>  e.is_dir).length;
+ 
+    const typeBadgeColour = { zip: '#e67e22', rar: '#8e44ad', '7z': '#2980b9', tar: '#27ae60' };
+    const badgeStyle = `background:${typeBadgeColour[data.type] || '#555'}`;
+ 
+    const header = document.createElement('div');
+    header.className = 'archive-header';
+    header.innerHTML = `
+        <span class="archive-type-badge" style="${badgeStyle}">${escapeHtml(data.type.toUpperCase())}</span>
+        <span class="archive-stat"><i class="fas fa-file"></i> ${fileCt.toLocaleString()} file${fileCt !== 1 ? 's' : ''}</span>
+        <span class="archive-stat"><i class="fas fa-folder"></i> ${dirCt.toLocaleString()} folder${dirCt !== 1 ? 's' : ''}</span>
+        <span class="archive-stat"><i class="fas fa-weight-hanging"></i> ${fmtSize(data.total_size)}</span>
+        ${data.encrypted ? `<span class="archive-stat archive-stat-lock"><i class="fas fa-lock"></i> Encrypted</span>` : ''}
+        ${data.truncated ? `<span class="archive-stat archive-stat-warn">
+            <i class="fas fa-exclamation-triangle"></i>
+            Showing first 10,000 of ${data.total_entries.toLocaleString()} entries
+        </span>` : ''}
+    `;
+    body.appendChild(header);
+ 
+    // ── Tree ─────────────────────────────────────────────────────────────────
+    const treeWrap = document.createElement('div');
+    treeWrap.className = 'archive-tree';
+    body.appendChild(treeWrap);
+ 
+    const renderNode = (node, container, depth) => {
+        const sorted = Object.values(node.children).sort((a, b) => {
+            if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+            return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+        });
+ 
+        for (const child of sorted) {
+            const hasChildren = Object.keys(child.children).length > 0;
+ 
+            const row = document.createElement('div');
+            row.className = 'archive-entry' + (child.is_dir ? ' archive-entry-dir' : '');
+            row.style.paddingLeft = (depth * 16 + 10) + 'px';
+ 
+            // Compression ratio label
+            let ratioHtml = '';
+            if (!child.is_dir && child.size > 0 && child.compressed_size > 0 && child.compressed_size < child.size) {
+                const pct = Math.round((1 - child.compressed_size / child.size) * 100);
+                if (pct > 0) ratioHtml = `<span class="archive-entry-ratio">${pct}% saved</span>`;
+            }
+ 
+            row.innerHTML = `
+                <span class="archive-entry-toggle">
+                    ${child.is_dir
+                        ? `<i class="fas ${hasChildren ? 'fa-chevron-right' : 'fa-minus'} archive-chevron${hasChildren ? '' : ' archive-chevron-empty'}"></i>`
+                        : ''}
+                </span>
+                <i class="fas ${child.is_dir ? 'fa-folder' : fileIcon(child.name)} archive-entry-icon ${child.is_dir ? 'archive-icon-dir' : 'archive-icon-file'}"></i>
+                <span class="archive-entry-name">${escapeHtml(child.name)}</span>
+                <span class="archive-entry-meta">
+                    ${child.modified ? `<span class="archive-entry-date">${escapeHtml(child.modified)}</span>` : ''}
+                    ${!child.is_dir && child.size >= 0 ? `<span class="archive-entry-size">${fmtSize(child.size)}</span>` : ''}
+                    ${ratioHtml}
+                </span>
+            `;
+ 
+            container.appendChild(row);
+ 
+            if (child.is_dir && hasChildren) {
+                const childContainer = document.createElement('div');
+                childContainer.className = 'archive-children';
+                childContainer.style.display = 'none';
+                renderNode(child, childContainer, depth + 1);
+                container.appendChild(childContainer);
+ 
+                // Toggle expand/collapse on click
+                row.style.cursor = 'pointer';
+                row.addEventListener('click', () => {
+                    const chevron = row.querySelector('.archive-chevron:not(.archive-chevron-empty)');
+                    const open = childContainer.style.display !== 'none';
+                    childContainer.style.display = open ? 'none' : '';
+                    if (chevron) {
+                        chevron.classList.toggle('fa-chevron-right', open);
+                        chevron.classList.toggle('fa-chevron-down', !open);
+                    }
+                    row.classList.toggle('archive-entry-open', !open);
+                    // Update folder icon
+                    const folderIcon = row.querySelector('.fa-folder, .fa-folder-open');
+                    if (folderIcon) {
+                        folderIcon.classList.toggle('fa-folder', open);
+                        folderIcon.classList.toggle('fa-folder-open', !open);
+                    }
+                });
+            }
+        }
+    };
+ 
+    renderNode(root, treeWrap, 0);
+ 
+    // Auto-expand if the archive has only one top-level folder
+    const topLevelKeys = Object.keys(root.children);
+    if (topLevelKeys.length === 1) {
+        const firstRow = treeWrap.querySelector('.archive-entry-dir');
+        if (firstRow) firstRow.click();
+    }
+}

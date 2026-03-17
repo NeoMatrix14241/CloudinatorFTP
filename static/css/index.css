@@ -4438,4 +4438,341 @@ td .fa-file {
     }
 }
 
-/* ─────────────────────────────────────────────────────────────────────────── */
+/* ── Archive viewer: modal body ─────────────────────────────────────────────── */
+
+.file-viewer-body.viewer-archive {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+    background: #1a1a2e;
+}
+
+.viewer-archive-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    height: 100%;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 15px;
+}
+
+/* ── Archive header bar ──────────────────────────────────────────────────────── */
+
+.archive-header {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    padding: 10px 14px;
+    background: rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
+}
+
+.archive-type-badge {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+}
+
+.archive-stat {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.65);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.archive-stat-lock {
+    color: #f39c12;
+}
+
+.archive-stat-warn {
+    color: #e74c3c;
+}
+
+/* ── File tree ───────────────────────────────────────────────────────────────── */
+
+.archive-tree {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 6px 0 12px;
+}
+
+.archive-tree::-webkit-scrollbar {
+    width: 6px;
+}
+
+.archive-tree::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.archive-tree::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+}
+
+/* ── Tree rows ───────────────────────────────────────────────────────────────── */
+
+.archive-entry {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-top: 3px;
+    padding-bottom: 3px;
+    padding-right: 12px;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.82);
+    transition: background 0.12s;
+    user-select: none;
+    min-height: 28px;
+}
+
+.archive-entry:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.archive-entry-open {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+/* Toggle arrow column (fixed width so names stay aligned) */
+.archive-entry-toggle {
+    flex-shrink: 0;
+    width: 14px;
+    text-align: center;
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.35);
+}
+
+/* Chevron icon */
+.archive-chevron {
+    transition: transform 0.15s;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.archive-chevron.fa-chevron-down {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.archive-chevron-empty {
+    color: rgba(255, 255, 255, 0.18) !important;
+}
+
+/* File / folder icon */
+.archive-entry-icon {
+    flex-shrink: 0;
+    width: 15px;
+    text-align: center;
+    font-size: 13px;
+}
+
+.archive-icon-dir {
+    color: #f0c040;
+}
+
+.archive-icon-file {
+    color: rgba(255, 255, 255, 0.45);
+}
+
+/* Entry name */
+.archive-entry-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, 'Cascadia Code', 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+}
+
+.archive-entry-dir .archive-entry-name {
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.92);
+}
+
+/* Meta section (date, size, ratio) */
+.archive-entry-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    margin-left: auto;
+}
+
+.archive-entry-date {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.3);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.archive-entry-size {
+    font-size: 11.5px;
+    color: rgba(255, 255, 255, 0.45);
+    font-variant-numeric: tabular-nums;
+    min-width: 52px;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.archive-entry-ratio {
+    font-size: 10.5px;
+    color: #2ecc71;
+    background: rgba(46, 204, 113, 0.12);
+    padding: 1px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
+}
+
+/* Nested children container */
+.archive-children {
+    transition: max-height 0.3s ease;
+}
+
+/* ── Password prompt ─────────────────────────────────────────────────────────── */
+
+.archive-password-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 24px;
+    gap: 12px;
+    flex: 1;
+    text-align: center;
+}
+
+.archive-password-icon {
+    font-size: 42px;
+    color: #f0c040;
+    opacity: 0.85;
+    margin-bottom: 4px;
+}
+
+.archive-password-title {
+    font-size: 17px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.archive-password-subtitle {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.45);
+    max-width: 340px;
+}
+
+.archive-password-error {
+    font-size: 13px;
+    color: #e74c3c;
+    background: rgba(231, 76, 60, 0.12);
+    border: 1px solid rgba(231, 76, 60, 0.3);
+    border-radius: 6px;
+    padding: 7px 14px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.archive-password-form {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+    width: 100%;
+    max-width: 380px;
+}
+
+.archive-password-input-wrap {
+    position: relative;
+    flex: 1;
+}
+
+.archive-password-input-icon {
+    position: absolute;
+    left: 11px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 13px;
+    pointer-events: none;
+}
+
+.archive-password-input {
+    width: 100%;
+    padding: 8px 12px 8px 32px;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 7px;
+    color: #fff;
+    font-size: 14px;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+}
+
+.archive-password-input:focus {
+    border-color: rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.archive-password-input::placeholder {
+    color: rgba(255, 255, 255, 0.3);
+}
+
+.archive-password-btn {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+/* Shake animation for empty password submit */
+@keyframes archive-shake {
+
+    0%,
+    100% {
+        transform: translateX(0);
+    }
+
+    20% {
+        transform: translateX(-6px);
+    }
+
+    40% {
+        transform: translateX(6px);
+    }
+
+    60% {
+        transform: translateX(-4px);
+    }
+
+    80% {
+        transform: translateX(4px);
+    }
+}
+
+.archive-input-shake {
+    animation: archive-shake 0.4s ease;
+    border-color: #e74c3c !important;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────────── */
+
+@media (max-width: 600px) {
+    .archive-entry-date {
+        display: none;
+    }
+
+    .archive-entry-ratio {
+        display: none;
+    }
+
+    .archive-header {
+        gap: 8px 10px;
+    }
+}
