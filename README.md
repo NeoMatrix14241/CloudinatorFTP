@@ -34,6 +34,8 @@ termux-setup-storage
 ```
 *Grant storage permissions when prompted - this allows files to be accessible from Android file managers*
 
+Note: If trying to deploy to other OS, FFMPEG is optional for adaptive bitrate video preview with video.js
+
 #### 2. 📥 Clone the Project
 
 ```bash
