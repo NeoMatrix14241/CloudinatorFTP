@@ -4776,3 +4776,97 @@ td .fa-file {
         gap: 8px 10px;
     }
 }
+/* ── @videojs/html web-component adaptive player ────────────────────────────── */
+
+/* Make the video body transparent so the player fills it cleanly */
+.file-viewer-body.viewer-video {
+    background: #000;
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+    overflow: hidden;
+}
+
+/* Outer wrapper — fills the modal body */
+.hls-player-outer {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+}
+
+/* Status / loading bar shown while transcoding */
+.hls-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 20px;
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 14px;
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: 8px;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10;
+    white-space: nowrap;
+}
+
+/* Animated spinner */
+.hls-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: hls-spin 0.8s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes hls-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Fallback notice banner */
+.hls-fallback-notice {
+    width: 100%;
+    padding: 8px 14px;
+    background: rgba(52, 152, 219, 0.2);
+    border-bottom: 1px solid rgba(52, 152, 219, 0.35);
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 12px;
+    text-align: center;
+}
+
+/* <video-player> web-component fills the wrapper */
+.hls-player-outer video-player,
+.vjs-cloudinator-player {
+    width: 100%;
+    max-height: 70vh;
+    display: block;
+    background: #000;
+}
+
+/* Accent Cloudinator's blue onto the web-component skin */
+.hls-player-outer video-skin {
+    --media-primary-color: #3498db;
+    --media-secondary-color: rgba(52, 152, 219, 0.35);
+}
+
+/* Mobile tweak */
+@media (max-width: 600px) {
+    .hls-player-outer video-player,
+    .vjs-cloudinator-player {
+        max-height: 55vw;
+    }
+    .hls-status-bar {
+        font-size: 12px;
+        padding: 10px 14px;
+    }
+}
+/* ── End @videojs/html styles ──────────────────────────────────────────────── */

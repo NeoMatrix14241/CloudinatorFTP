@@ -42,8 +42,7 @@ if __name__ == "__main__":
         EXPLAIN_TEMPLATE_LOADING=False,
     )
 
-    print("🧪 Starting CloudinatorFTP Development Server...")
-    print("⚠️  WARNING: This is for DEVELOPMENT/TESTING only!")
+    print("🧪 Starting CloudinatorFTP Production Server...")
     print("🌐 Server running on http://localhost:5000")
     print("🔧 Configuration matching ASGI setup:")
     print("   • Debug mode: ON - Auto-reload enabled")
@@ -71,7 +70,9 @@ if __name__ == "__main__":
         from waitress import serve
 
         print("🚀 Starting Waitress server...")
-        print("✅ HTTP keep-alive enabled — TCP connections reused (fixes 16k crash)")
+        print(
+            "✅ HTTP keep-alive enabled — TCP connections reused for multiple requests"
+        )
         print("✅ SSE streaming enabled — real-time updates work")
         serve(
             app,

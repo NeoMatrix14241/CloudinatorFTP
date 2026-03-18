@@ -2908,7 +2908,12 @@ const EXTENSION_MAP = (function () {
 // Extensions that can be previewed inline in the browser.
 const VIEWABLE_EXTENSIONS = {
     image: new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'ico', 'avif', 'jfif']),
-    video: new Set(['mp4', 'webm', 'ogv', 'mov', 'm4v']),
+    // All video formats supported by ffmpeg HLS transcoding
+    video: new Set([
+        'mp4', 'webm', 'ogv', 'mov', 'm4v',
+        'mkv', 'avi', 'wmv', 'flv', 'mpg', 'mpeg',
+        'm2ts', 'mts', 'ts', '3gp',
+    ]),
     audio: new Set(['mp3', 'wav', 'ogg', 'oga', 'aac', 'flac', 'm4a', 'opus']),
     pdf: new Set(['pdf']), // PDFs + Office docs (viewed via embedded Google Docs Viewer)
     text: new Set([
@@ -2962,13 +2967,19 @@ function openFileViewer(itemPath, filename) {
             body.classList.add('viewer-image');
             inner = `<img src="${viewUrl}" alt="${escapeHtml(filename)}" class="viewer-img" onerror="this.outerHTML='<p class=viewer-error>Could not load image.</p>'">`;
             break;
-        case 'video':
+        case 'video': {
             body.classList.add('viewer-video');
-            inner = `<video controls autoplay class="viewer-video-el">
-                        <source src="${viewUrl}">
-                        Your browser does not support HTML5 video.
-                     </video>`;
+            const hlsWrapperId = 'hls-wrap-' + Date.now();
+            body.innerHTML = `
+              <div class="hls-player-outer" id="${hlsWrapperId}">
+                <div class="hls-status-bar" id="hls-status-bar">
+                  <span class="hls-spinner"></span>
+                  <span id="hls-status-msg">Preparing adaptive stream…</span>
+                </div>
+              </div>`;
+            _hlsStartStream(itemPath, hlsWrapperId);
             break;
+        }
         case 'audio':
             body.classList.add('viewer-audio');
             inner = `<div class="viewer-audio-wrap">
@@ -3023,17 +3034,37 @@ function openFileViewer(itemPath, filename) {
             break;
     }
 
-    body.innerHTML = inner;
+    // video case sets body.innerHTML itself — skip the overwrite
+    if (viewType !== 'video') body.innerHTML = inner;
     modal.classList.add('show');
 }
 
 /** Close the file viewer and stop any media playback. */
 function closeFileViewer() {
     const modal = document.getElementById('fileViewerModal');
-    const body = document.getElementById('fileViewerBody');
+    const body  = document.getElementById('fileViewerBody');
     modal.classList.remove('show');
-    // Stop video / audio playback
-    body.querySelectorAll('video, audio').forEach(m => { m.pause(); m.src = ''; });
+
+    // Cancel any in-progress HLS polling
+    window._hlsPollCancel = true;
+
+    // Dispose the @videojs/html player properly.
+    // The web-component exposes the underlying vjs instance via .player,
+    // which has a .dispose() method that tears down VHS and all event listeners.
+    if (window._vjsCurrentPlayer) {
+        try {
+            const vjsInstance = window._vjsCurrentPlayer.player;
+            if (vjsInstance && typeof vjsInstance.dispose === 'function') {
+                vjsInstance.dispose();
+            } else {
+                const vid = window._vjsCurrentPlayer.querySelector('video');
+                if (vid) { vid.pause(); vid.src = ''; }
+            }
+        } catch (_) {}
+        window._vjsCurrentPlayer = null;
+    }
+    // Stop any lingering native video/audio
+    body.querySelectorAll('video, audio').forEach(m => { try { m.pause(); m.src = ''; } catch (_) {} });
     body.innerHTML = '';
 }
 
@@ -8746,3 +8777,117 @@ function _renderArchivePreview(body, data) {
         if (firstRow) firstRow.click();
     }
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// HLS Adaptive Streaming helpers  (@videojs/html web-component + ffmpeg backend)
+// Served locally from static/js/videojs-html.{js,css} — no CDN at runtime.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Kick off server-side HLS transcoding, poll until ready, then mount a
+ * <video-player> web-component pointing at the master playlist.
+ *
+ * @param {string} itemPath  - server-relative file path, e.g. "folder/video.mkv"
+ * @param {string} wrapperId - id of the .hls-player-outer div to render into
+ */
+async function _hlsStartStream(itemPath, wrapperId) {
+    window._hlsPollCancel     = false;
+    window._vjsCurrentPlayer  = null;
+
+    const wrapper = () => document.getElementById(wrapperId);
+
+    function _statusMsg(txt) {
+        const el = document.getElementById('hls-status-msg');
+        if (el) el.textContent = txt;
+    }
+    function _statusBarHide() {
+        const bar = document.getElementById('hls-status-bar');
+        if (bar) bar.style.display = 'none';
+    }
+    function _showFallback(errMsg) {
+        const w = wrapper();
+        if (!w) return;
+        const viewUrl = `/view/${itemPath}`;
+        // Always use the web-component — just point it at the original file directly
+        w.innerHTML = `
+          ${errMsg ? `<div class="hls-fallback-notice"><i class="fas fa-info-circle"></i> ${escapeHtml(errMsg)}</div>` : ''}
+          <video-player class="vjs-cloudinator-player">
+            <video-skin>
+              <video slot="media" src="${viewUrl}" playsinline autoplay></video>
+            </video-skin>
+          </video-player>`;
+        window._vjsCurrentPlayer = w.querySelector('video-player');
+    }
+
+    // ── 1. Ask the server to start transcoding ────────────────────────────
+    let startData;
+    try {
+        _statusMsg('Requesting adaptive stream…');
+        const r = await fetch(`/hls_start/${itemPath}`, { cache: 'no-store' });
+        startData = await r.json();
+    } catch (err) {
+        _showFallback('Could not contact server');
+        return;
+    }
+
+    if (startData.fallback || startData.error) {
+        _showFallback(startData.error || 'Streaming not available');
+        return;
+    }
+
+    const cacheKey = startData.cache_key;
+
+    // ── 2. Poll until status == 'ready' or 'error' ────────────────────────
+    const MAX_POLLS = 180;
+    let polls = 0;
+    while (!window._hlsPollCancel) {
+        if (++polls > MAX_POLLS) { _showFallback('Transcoding is taking too long'); return; }
+
+        let st;
+        try {
+            const r = await fetch(`/hls_status/${cacheKey}`, { cache: 'no-store' });
+            st = await r.json();
+        } catch (_) { await _hlsSleep(2000); continue; }
+
+        if (st.status === 'ready') break;
+        if (st.status === 'error') { _showFallback('Transcoding failed: ' + (st.message || 'unknown')); return; }
+
+        const dots = '.'.repeat((polls % 3) + 1);
+        _statusMsg(`Transcoding${dots} (this may take a moment for large files)`);
+        await _hlsSleep(1500);
+    }
+
+    if (window._hlsPollCancel) return;
+
+    // ── 3. Mount <video-player> web-component ─────────────────────────────
+    _statusBarHide();
+    const w = wrapper();
+    if (!w) return;
+
+    const masterUrl = `/hls_files/${cacheKey}/master.m3u8`;
+
+    // Use type="application/x-mpegURL" so VHS (bundled inside @videojs/html)
+    // intercepts the source before the browser ever tries to decode it natively.
+    // Do NOT attach an error listener to the inner <video> — the custom element
+    // upgrades asynchronously, and Chrome/Firefox would fire 'error' on the raw
+    // .m3u8 src before VHS takes over, triggering a false fallback.
+    w.innerHTML = `
+      <video-player class="vjs-cloudinator-player">
+        <video-skin>
+          <video slot="media"
+                 src="${masterUrl}"
+                 type="application/x-mpegURL"
+                 playsinline
+                 autoplay>
+          </video>
+        </video-skin>
+      </video-player>`;
+
+    window._vjsCurrentPlayer = w.querySelector('video-player');
+}
+
+function _hlsSleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// End HLS helpers
+// ─────────────────────────────────────────────────────────────────────────────

@@ -34,15 +34,21 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import ClientDisconnected
 import os
+import sys
 import shutil
 import json
 import threading
 import time
 import logging
 import uuid
+
+# Ensure ffmpeg and thread prints appear immediately in terminal
+sys.stdout.reconfigure(line_buffering=True)
 import zipfile
 import io
 import re
+import subprocess
+import hashlib
 import zipstream
 from datetime import datetime
 from config import PORT, ROOT_DIR, CHUNK_SIZE, ENABLE_CHUNKED_UPLOADS
@@ -3517,6 +3523,426 @@ def detect_ready_assemblies():
         print(f"⚠️ Error detecting ready assemblies: {e}")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# HLS Adaptive Streaming  (ffmpeg backend → Video.js frontend)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_VIDEO_EXTS_HLS = frozenset(
+    [
+        "mp4",
+        "webm",
+        "mov",
+        "m4v",
+        "mkv",
+        "avi",
+        "wmv",
+        "flv",
+        "mpg",
+        "mpeg",
+        "m2ts",
+        "mts",
+        "3gp",
+        "ogv",
+        "ts",
+    ]
+)
+
+# (quality_name, target_height, video_bitrate, maxrate, bufsize, audio_bitrate)
+_HLS_PROFILES = [
+    ("1080p", 1080, "3000k", "3500k", "6000k", "128k"),
+    ("720p", 720, "1500k", "1800k", "3000k", "128k"),
+    ("360p", 360, "500k", "600k", "1000k", "96k"),
+]
+_HLS_SEG_DURATION = 6  # seconds per HLS segment
+
+
+def _hls_cache_root():
+    d = os.path.join(ROOT_DIR, ".hls_cache")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _hls_cache_key(full_path: str) -> str:
+    try:
+        mtime = os.path.getmtime(full_path)
+    except OSError:
+        mtime = 0
+    return hashlib.md5(f"{full_path}:{mtime}".encode()).hexdigest()
+
+
+def _hls_output_dir(cache_key: str) -> str:
+    return os.path.join(_hls_cache_root(), cache_key)
+
+
+def _hls_read_status(cache_key: str) -> dict:
+    f = os.path.join(_hls_output_dir(cache_key), ".status.json")
+    if not os.path.exists(f):
+        return {"status": "not_started"}
+    try:
+        with open(f) as fh:
+            return json.load(fh)
+    except Exception:
+        return {"status": "unknown"}
+
+
+def _hls_write_status(cache_key: str, data: dict):
+    d = _hls_output_dir(cache_key)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, ".status.json"), "w") as fh:
+        json.dump(data, fh)
+
+
+def _probe_video(file_path: str):
+    """Return (width, height, has_audio) via ffprobe; falls back to (0, 0, False)."""
+    try:
+        _ffmpeg_bin = _resolve_ffmpeg()
+        _ffprobe_name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+        ffprobe_bin = os.path.join(os.path.dirname(_ffmpeg_bin), _ffprobe_name)
+        r = subprocess.run(
+            [
+                ffprobe_bin,
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_streams",
+                file_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if r.returncode != 0:
+            return 0, 0, False
+        streams = json.loads(r.stdout).get("streams", [])
+        w = h = 0
+        has_audio = False
+        for s in streams:
+            if s.get("codec_type") == "video":
+                w = int(s.get("width") or 0)
+                h = int(s.get("height") or 0)
+            elif s.get("codec_type") == "audio":
+                has_audio = True
+        return w, h, has_audio
+    except Exception:
+        return 0, 0, False
+
+
+def _resolve_ffmpeg() -> str:
+    """Return the ffmpeg executable path, searching PATH then common Windows install dirs."""
+    import shutil as _shutil
+
+    found = _shutil.which("ffmpeg")
+    if found:
+        return found
+    candidates = [
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages"),
+        os.path.expandvars(r"%ProgramFiles%\ffmpeg\bin"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\ffmpeg\bin"),
+        r"C:\ProgramData\chocolatey\bin",
+        os.path.expandvars(r"%USERPROFILE%\scoop\shims"),
+        r"C:\ffmpeg\bin",
+        r"C:\tools\ffmpeg\bin",
+    ]
+    for base in candidates:
+        if not os.path.isdir(base):
+            continue
+        for root, dirs, files in os.walk(base):
+            for fname in files:
+                if fname.lower() in ("ffmpeg.exe", "ffmpeg"):
+                    return os.path.join(root, fname)
+            if root.count(os.sep) - base.count(os.sep) >= 5:
+                dirs.clear()
+    return "ffmpeg"  # last resort — let subprocess raise FileNotFoundError
+
+
+def _run_hls_transcode(file_path: str, cache_key: str):
+    """Background thread: transcode video → multi-quality HLS via a single ffmpeg pass."""
+    output_dir = _hls_output_dir(cache_key)
+    os.makedirs(output_dir, exist_ok=True)
+    _hls_write_status(cache_key, {"status": "processing", "progress": 0})
+
+    try:
+        _, src_height, has_audio = _probe_video(file_path)
+
+        # Only include profiles at or below the source resolution
+        profiles = [p for p in _HLS_PROFILES if src_height == 0 or p[1] <= src_height]
+        # Always keep at least the lowest-quality profile
+        if not profiles:
+            profiles = [_HLS_PROFILES[-1]]
+
+        n = len(profiles)
+
+        # Create per-stream subdirectories (named by quality label)
+        for name, *_ in profiles:
+            os.makedirs(os.path.join(output_dir, name), exist_ok=True)
+
+        # ── filter_complex: split video → scale to each target height ──────────
+        splits = "".join(f"[vsp{i}]" for i in range(n))
+        filter_parts = [f"[0:v]split={n}{splits}"]
+        for i, (name, h, *_) in enumerate(profiles):
+            filter_parts.append(f"[vsp{i}]scale=-2:{h}[vout{i}]")
+        filter_complex = "; ".join(filter_parts)
+
+        cmd = [
+            _resolve_ffmpeg(),
+            "-y",
+            "-i",
+            file_path,
+            "-filter_complex",
+            filter_complex,
+        ]
+
+        # Map video outputs first, then audio (one copy per stream if present)
+        for i in range(n):
+            cmd += ["-map", f"[vout{i}]"]
+        if has_audio:
+            for _ in range(n):
+                cmd += ["-map", "0:a:0"]
+
+        # Per-stream video codec settings
+        for i, (name, h, vbr, maxr, bufs, abr) in enumerate(profiles):
+            cmd += [
+                f"-c:v:{i}",
+                "libx264",
+                f"-b:v:{i}",
+                vbr,
+                f"-maxrate:v:{i}",
+                maxr,
+                f"-bufsize:v:{i}",
+                bufs,
+                f"-preset",
+                "fast",
+                f"-g",
+                "48",
+                f"-sc_threshold",
+                "0",
+                f"-keyint_min",
+                "48",
+            ]
+
+        # Per-stream audio codec settings
+        if has_audio:
+            for i, (name, h, vbr, maxr, bufs, abr) in enumerate(profiles):
+                cmd += [
+                    f"-c:a:{i}",
+                    "aac",
+                    f"-b:a:{i}",
+                    abr,
+                    "-ar",
+                    "44100",
+                ]
+
+        # HLS muxer: use `name:` in var_stream_map so %v → quality label
+        if has_audio:
+            vsm = " ".join(
+                f"v:{i},a:{i},name:{name}" for i, (name, *_) in enumerate(profiles)
+            )
+        else:
+            vsm = " ".join(
+                f"v:{i},name:{name}" for i, (name, *_) in enumerate(profiles)
+            )
+
+        seg_tpl = os.path.join(output_dir, "%v", "seg%03d.ts")
+        list_tpl = os.path.join(output_dir, "%v", "index.m3u8")
+
+        # -progress pipe:1  → newline-delimited key=value progress on stdout
+        # -nostats           → suppress the \r-based stderr stats that never flush through PIPE
+        cmd += [
+            "-progress",
+            "pipe:1",
+            "-nostats",
+        ]
+
+        cmd += [
+            "-f",
+            "hls",
+            "-hls_time",
+            str(_HLS_SEG_DURATION),
+            "-hls_playlist_type",
+            "vod",
+            "-hls_flags",
+            "independent_segments",
+            "-var_stream_map",
+            vsm,
+            "-master_pl_name",
+            "master.m3u8",
+            "-hls_segment_filename",
+            seg_tpl,
+            list_tpl,
+        ]
+
+        print(
+            f"🎬 HLS transcode start: {os.path.basename(file_path)}  "
+            f"profiles={[p[0] for p in profiles]}"
+        )
+
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # merge stderr into stdout for live logging
+            text=True,
+            bufsize=1,  # line-buffered
+        )
+
+        # Stream ffmpeg output live to terminal.
+        # -progress pipe:1 emits newline-terminated key=value pairs so the
+        # for-loop yields immediately — no more waiting for \r-flushed stats.
+        stderr_tail_lines = []
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            if "=" in line:
+                # -progress structured output: frame=48, fps=24.00, speed=1.2x …
+                print(f"[ffmpeg progress] {line}", flush=True)
+            else:
+                print(f"[ffmpeg] {line}", flush=True)
+            stderr_tail_lines.append(line)
+            if len(stderr_tail_lines) > 50:
+                stderr_tail_lines.pop(0)
+
+        proc.wait()
+
+        if proc.returncode == 0:
+            _hls_write_status(
+                cache_key,
+                {
+                    "status": "ready",
+                    "profiles": [p[0] for p in profiles],
+                },
+            )
+            print(f"✅ HLS transcode done: {cache_key[:8]}…", flush=True)
+        else:
+            err_tail = "".join(stderr_tail_lines)[-800:]
+            _hls_write_status(cache_key, {"status": "error", "message": err_tail})
+            print(f"❌ HLS transcode failed:\n{err_tail}", flush=True)
+
+    except subprocess.TimeoutExpired:
+        _hls_write_status(
+            cache_key, {"status": "error", "message": "Transcoding timed out"}
+        )
+        print(f"❌ HLS transcode timed out: {cache_key[:8]}…")
+    except Exception as exc:
+        _hls_write_status(cache_key, {"status": "error", "message": str(exc)})
+        print(f"❌ HLS transcode error: {exc}")
+
+
+@app.route("/hls_start/<path:video_path>")
+@login_required
+def hls_start(video_path):
+    """Kick off HLS transcoding (idempotent) and return the cache key + current status."""
+    if not storage.is_safe_path(video_path):
+        return jsonify({"error": "Invalid path"}), 400
+
+    full_path = os.path.join(ROOT_DIR, video_path)
+    if not os.path.exists(full_path) or os.path.isdir(full_path):
+        return jsonify({"error": "File not found"}), 404
+
+    ext = video_path.rsplit(".", 1)[-1].lower() if "." in video_path else ""
+    if ext not in _VIDEO_EXTS_HLS:
+        return jsonify({"error": "Unsupported video format", "fallback": True}), 400
+
+    # Gate on ffmpeg availability.
+    # shutil.which searches the process PATH *and* common winget/chocolatey/scoop
+    # install locations so it works even when Flask's inherited PATH differs from
+    # the shell that launched it (common on Windows).
+    # Re-use the module-level resolver so there is a single source of truth
+    # for ffmpeg discovery across the whole application.
+    import shutil as _shutil
+
+    ffmpeg_bin = _resolve_ffmpeg()
+    # _resolve_ffmpeg() returns the bare string "ffmpeg" as a last resort when
+    # nothing was found on disk — treat that the same as not found.
+    if ffmpeg_bin == "ffmpeg" and not _shutil.which("ffmpeg"):
+        print("⚠️  ffmpeg not found in PATH or known install locations")
+        return (
+            jsonify(
+                {
+                    "error": "ffmpeg not found — ensure it is installed and on PATH",
+                    "fallback": True,
+                }
+            ),
+            503,
+        )
+    try:
+        subprocess.run(
+            [ffmpeg_bin, "-version"], capture_output=True, timeout=5, check=True
+        )
+    except Exception as _e:
+        print(f"⚠️  ffmpeg found at {ffmpeg_bin} but failed to run: {_e}")
+        return jsonify({"error": "ffmpeg not executable", "fallback": True}), 503
+
+    cache_key = _hls_cache_key(full_path)
+    status = _hls_read_status(cache_key)
+
+    # Guard against stale cache: if status says "ready" but master.m3u8 is
+    # actually missing (e.g. .hls_cache was wiped), invalidate and re-transcode.
+    if status.get("status") == "ready":
+        master_path = os.path.join(_hls_output_dir(cache_key), "master.m3u8")
+        if os.path.exists(master_path):
+            print(f"♻️  HLS cache hit (ready): {cache_key[:8]}…", flush=True)
+            return jsonify({"cache_key": cache_key, **status})
+        else:
+            print(f"⚠️  HLS cache stale (master.m3u8 missing), re-transcoding: {cache_key[:8]}…", flush=True)
+            # fall through to spawn a fresh transcode
+
+    if status.get("status") == "processing":
+        return jsonify({"cache_key": cache_key, **status})
+
+    # Start background transcode
+    threading.Thread(
+        target=_run_hls_transcode, args=(full_path, cache_key), daemon=True
+    ).start()
+
+    _hls_write_status(cache_key, {"status": "processing", "progress": 0})
+    return jsonify({"cache_key": cache_key, "status": "processing"})
+
+
+@app.route("/hls_status/<cache_key>")
+@login_required
+def hls_status_route(cache_key):
+    """Poll transcoding status for a given cache key."""
+    if not re.fullmatch(r"[a-f0-9]{32}", cache_key):
+        return jsonify({"error": "Invalid key"}), 400
+    return jsonify(_hls_read_status(cache_key))
+
+
+@app.route("/hls_files/<cache_key>/<path:hls_path>")
+@login_required
+def hls_files(cache_key, hls_path):
+    """Serve HLS master/sub-playlists (.m3u8) and TS segments (.ts)."""
+    if not re.fullmatch(r"[a-f0-9]{32}", cache_key):
+        return "Invalid key", 400
+    if ".." in hls_path or hls_path.startswith("/"):
+        return "Forbidden", 403
+
+    _, ext = os.path.splitext(hls_path)
+    if ext.lower() not in (".m3u8", ".ts"):
+        return "Forbidden", 403
+
+    output_dir = _hls_output_dir(cache_key)
+    file_path = os.path.normpath(os.path.join(output_dir, hls_path))
+    if not file_path.startswith(os.path.abspath(output_dir)):
+        return "Path traversal", 403
+    if not os.path.exists(file_path):
+        return "Not found", 404
+
+    if ext.lower() == ".m3u8":
+        return send_file(
+            file_path,
+            mimetype="application/vnd.apple.mpegurl",
+            max_age=0,
+            conditional=False,
+        )
+    return send_file(file_path, mimetype="video/mp2t", max_age=3600)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# End HLS Adaptive Streaming
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 # Initialize cleanup on startup
 def initialize_cleanup():
     """Initialize all cleanup processes"""
@@ -3551,6 +3977,7 @@ def initialize_cleanup():
 
 # Initialize cleanup when app starts
 initialize_cleanup()
+
 
 if __name__ == "__main__":
     print(f"🚀 Starting Enhanced Cloudinator FTP Server on port {PORT}")
