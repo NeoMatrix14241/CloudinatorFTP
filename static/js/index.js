@@ -40,35 +40,213 @@ document.addEventListener('DOMContentLoaded', function () {
             if (b) { e.stopPropagation(); e.preventDefault(); _stopFolderGroup(b.dataset.gid); }
         });
     }
+
+    // Mobile tap-tooltip — shows label on touchstart, hides after 1.2s or on touchend
+    initTapTooltips();
 });
 
-let _lockedColWidths = []; // kept for compatibility, no longer used
+function initTapTooltips() {
+    // Single tooltip element reused for both hover (desktop) and tap (mobile)
+    const tip = document.createElement('div');
+    tip.id = 'btn-action-tooltip';
+    document.body.appendChild(tip);
+
+    let hideTimer = null;
+
+    function showTip(btn) {
+        const label = btn.dataset.label;
+        if (!label) return;
+        clearTimeout(hideTimer);
+        tip.textContent = label;
+        tip.classList.add('visible');
+
+        const rect = btn.getBoundingClientRect();
+        // Measure after setting text so width is accurate
+        const tw = tip.offsetWidth;
+        const th = tip.offsetHeight;
+        let left = rect.left + rect.width / 2 - tw / 2;
+        let top = rect.top - th - 7;
+        // Clamp inside viewport
+        left = Math.max(6, Math.min(left, window.innerWidth - tw - 6));
+        if (top < 6) top = rect.bottom + 7; // flip below if no room above
+        tip.style.left = left + 'px';
+        tip.style.top = top + 'px';
+    }
+
+    function hideTip(delay) {
+        clearTimeout(hideTimer);
+        if (delay) {
+            hideTimer = setTimeout(() => tip.classList.remove('visible'), delay);
+        } else {
+            tip.classList.remove('visible');
+        }
+    }
+
+    const SEL = '.actions-cell .btn-sm[data-label], #filesTable .actions .btn-sm[data-label]';
+
+    // ── Desktop: mouseenter / mouseleave ─────────────────────────────────────
+    document.addEventListener('mouseenter', e => {
+        const btn = e.target.closest(SEL);
+        if (btn) showTip(btn);
+    }, true);
+
+    document.addEventListener('mouseleave', e => {
+        if (e.target.closest(SEL)) hideTip(80);
+    }, true);
+
+    // ── Mobile: touchstart shows label, hides after 1.3s or on move ──────────
+    document.addEventListener('touchstart', e => {
+        const btn = e.target.closest(SEL);
+        if (btn) {
+            showTip(btn);
+            hideTip(1300);
+        } else {
+            hideTip(0);
+        }
+    }, { passive: true });
+
+    document.addEventListener('touchmove', () => hideTip(0), { passive: true });
+}
+
+let _smartColumnizerRO = null; // ResizeObserver reference
 
 function lockTableColumnWidths() {
+    // Delegate to smart columnizer — keeps backward-compat for callers
+    smartTableColumnizer();
+}
+
+/**
+ * Smart real-time column width adjuster.
+ * Uses setProperty(...,'important') so inline styles beat any CSS !important rule.
+ * Mobile (<600px):  cb | name | size | actions          (type + modified hidden)
+ * Tablet (600-899): cb | name | size | type | actions   (modified hidden)
+ * Desktop (≥900px): all 6 columns
+ */
+function smartTableColumnizer() {
+    const wrapper = document.getElementById('tableScrollWrapper');
     const table = document.getElementById('filesTable');
-    if (!table) return;
+    if (!wrapper || !table) return;
 
-    table.style.tableLayout = 'fixed';
-    table.style.width = '100%';
+    if (_smartColumnizerRO) { _smartColumnizerRO.disconnect(); _smartColumnizerRO = null; }
 
-    const thWidths = [
-        '50px',  // checkbox
-        null,    // name — fills remaining space
-        '10%',   // size
-        '12%',   // type
-        '13%',   // modified
-        '18%',   // actions (3+2 wrapped rows)
-    ];
-    const headers = Array.from(table.querySelectorAll('thead th'));
-    headers.forEach((th, i) => {
-        if (thWidths[i]) th.style.width = thWidths[i];
-        th.style.whiteSpace = 'nowrap';
-        th.style.overflow = 'hidden';
-    });
+    function _set(el, prop, val) {
+        el.style.setProperty(prop, val, 'important');
+    }
+
+    function applyWidths() {
+        const W = wrapper.clientWidth || wrapper.offsetWidth;
+        if (!W) return;
+
+        const isMobile = W < 600;
+        const isTablet = W >= 600 && W < 900;
+
+        // Same column widths everywhere — mobile scrolls horizontally, no need to shrink
+        const cbW = 36;
+        const sizeW = 150;
+        const typeW = 125;
+        const modW = 140;
+        const actW = 160;
+
+        const fixedTotal = cbW + sizeW + typeW + modW + actW;
+
+        // Name fills all remaining space; min 200px so word-wrap has room to breathe
+        const nameW = Math.max(200, W - fixedTotal - 4);
+        const totalW = fixedTotal + nameW;
+        _set(table, 'table-layout', 'fixed');
+        _set(table, 'width', totalW + 'px');
+        _set(table, 'min-width', totalW + 'px');
+
+        const colDefs = [cbW, nameW, sizeW, typeW, modW, actW];
+
+        // ── Apply to <thead th> ───────────────────────────────────────────────────
+        table.querySelectorAll('thead th').forEach((th, i) => {
+            const w = colDefs[i];
+            _set(th, 'display', '');
+            _set(th, 'width', w + 'px');
+            _set(th, 'max-width', w + 'px');
+            _set(th, 'overflow', 'hidden');
+            _set(th, 'white-space', 'nowrap');
+            _set(th, 'padding', isMobile ? '8px 6px' : '10px 12px');
+        });
+
+        // ── Apply to <tbody td> ───────────────────────────────────────────────────
+        _styleRows(table.querySelectorAll('tbody tr'), colDefs, isMobile);
+    }
+
+    function _styleRows(rows, colDefs, isMobile) {
+        const pad = isMobile ? '5px 6px' : '7px 10px';
+        rows.forEach(row => {
+            Array.from(row.cells).forEach((td, i) => {
+                const w = colDefs[i];
+                _set(td, 'display', '');
+                _set(td, 'width', w + 'px');
+                _set(td, 'max-width', w + 'px');
+                _set(td, 'overflow', 'hidden');
+                _set(td, 'padding', pad);
+                _set(td, 'vertical-align', 'top');
+                _set(td, 'line-height', '1.3');
+
+                if (i === 1) {
+                    // Name: word-wrap on all breakpoints — mobile scrolls sideways anyway
+                    _set(td, 'white-space', 'normal');
+                    _set(td, 'text-overflow', 'unset');
+                    _set(td, 'vertical-align', 'top');
+                    const fn = td.querySelector('.file-name');
+                    if (fn) {
+                        _set(fn, 'display', 'flex');
+                        _set(fn, 'align-items', 'flex-start');
+                        _set(fn, 'gap', '6px');
+                        _set(fn, 'overflow', 'hidden');
+                        _set(fn, 'white-space', 'normal');
+                        _set(fn, 'max-width', '100%');
+                        fn.querySelectorAll('a, span').forEach(el => {
+                            _set(el, 'white-space', 'normal');
+                            _set(el, 'word-break', 'break-word');
+                            _set(el, 'overflow-wrap', 'anywhere');
+                            _set(el, 'overflow', 'hidden');
+                            _set(el, 'text-overflow', 'unset');
+                            _set(el, 'display', 'block');
+                            _set(el, 'max-width', '100%');
+                        });
+                    }
+                } else if (i === 2) {
+                    // Size: allow wrapping so "5000 files, 5000 folders\n204 MB" shows fully
+                    _set(td, 'white-space', 'normal');
+                    _set(td, 'word-break', 'break-word');
+                    _set(td, 'text-overflow', 'unset');
+                } else {
+                    // All other cells: single line, ellipsis
+                    _set(td, 'white-space', 'nowrap');
+                    _set(td, 'text-overflow', 'ellipsis');
+                }
+            });
+        });
+    }
+
+    // Expose helpers so applyColumnWidths can style new VT rows consistently
+    smartTableColumnizer._styleRows = _styleRows;
+    smartTableColumnizer._getColDefs = function () {
+        const W = wrapper.clientWidth || wrapper.offsetWidth || 800;
+        const isMobile = W < 600;
+        const cbW = 36, sizeW = 150, typeW = 125, modW = 140, actW = 160;
+        const fixedTotal = cbW + sizeW + typeW + modW + actW;
+        const nameW = Math.max(200, W - fixedTotal - 4);
+        return { colDefs: [cbW, nameW, sizeW, typeW, modW, actW], isMobile };
+    };
+
+    applyWidths();
+
+    _smartColumnizerRO = new ResizeObserver(() => applyWidths());
+    _smartColumnizerRO.observe(wrapper);
+    window.addEventListener('resize', applyWidths, { passive: true });
 }
 
 function applyColumnWidths(row) {
-    // No-op — column sizing handled by table-layout:fixed + <thead> widths.
+    if (!row) return;
+    if (smartTableColumnizer._styleRows && smartTableColumnizer._getColDefs) {
+        const { colDefs, isMobile } = smartTableColumnizer._getColDefs();
+        smartTableColumnizer._styleRows([row], colDefs, isMobile);
+    }
 }
 
 // Function to protect all modal inputs from event delegation
@@ -1462,24 +1640,26 @@ function createFileTableRow(item, currentPath) {
         </td>
         <td class="date-cell">
             ${item.modified ?
-            `<span class="file-date" style="color: white; font-size: 13px; line-height:1.6">${(() => { const d = new Date(item.modified * 1000); return d.toLocaleDateString('en-US') + '<br>' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }); })()}</span>` :
-            '<span style="color: white; font-size: 13px;">--</span>'
+            `<span class="file-date" style="color: white; font-size: 12px; white-space: nowrap;">${(() => { const d = new Date(item.modified * 1000); return d.toLocaleDateString('en-US') + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }); })()}</span>` :
+            '<span style="color: white; font-size: 12px;">--</span>'
         }
         </td>
-        <td class="actions-cell" style="width:18%;min-width:170px;">
-            <div class="actions" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
+        <td class="actions-cell">
+            <div class="actions" style="display:flex;flex-wrap:nowrap;gap:3px;align-items:center;">
                 ${!item.is_dir ?
             `<button type="button" class="btn btn-outline btn-sm download-btn" 
                              data-item-path="${itemPath}"
+                             data-label="Download"
                              onclick="downloadItem('${itemPath}')"
                              title="Download file">
-                         <i class="fas fa-download"></i> Download
+                         <i class="fas fa-download"></i>
                      </button>` :
             `<button type="button" class="btn btn-outline btn-sm download-btn" 
                              data-item-path="${itemPath}"
+                             data-label="Download ZIP"
                              onclick="downloadFolderAsZip('${itemPath}', '${item.name}')"
                              title="Download folder as ZIP">
-                         <i class="fas fa-download"></i> Download
+                         <i class="fas fa-download"></i>
                      </button>`
         }
                 
@@ -1487,35 +1667,37 @@ function createFileTableRow(item, currentPath) {
                 <button type="button" class="btn btn-warning btn-sm move-btn" 
                         data-item-name="${item.name}"
                         data-item-path="${itemPath}"
+                        data-label="Move"
                         onclick="showSingleMoveModal('${itemPath}', '${item.name}')"
-                        title="Move item">
-                    <i class="fas fa-cut"></i> Move
+                        title="Move">
+                    <i class="fas fa-cut"></i>
                 </button>
                 
                 <button type="button" class="btn btn-success btn-sm copy-btn" 
                         data-item-name="${item.name}"
                         data-item-path="${itemPath}"
+                        data-label="Copy"
                         onclick="showSingleCopyModal('${itemPath}', '${item.name}')"
-                        title="Copy item">
-                    <i class="fas fa-copy"></i> Copy
+                        title="Copy">
+                    <i class="fas fa-copy"></i>
                 </button>
-
-                <div style="flex-basis:100%;height:0;"></div>
                 
                 <button type="button" class="btn btn-primary btn-sm rename-btn" 
                         data-item-name="${item.name}"
                         data-item-path="${itemPath}"
+                        data-label="Rename"
                         onclick="showSingleRenameModal('${itemPath}', '${item.name}')"
-                        title="Rename item">
-                    <i class="fas fa-edit"></i> Rename
+                        title="Rename">
+                    <i class="fas fa-edit"></i>
                 </button>
                 
                 <button type="button" class="btn btn-danger btn-sm delete-btn" 
                         data-item-name="${item.name}"
                         data-item-path="${itemPath}"
+                        data-label="Delete"
                         onclick="showSingleDeleteModal('${itemPath}', '${item.name}')"
-                        title="Delete item">
-                    <i class="fas fa-trash"></i> Delete
+                        title="Delete">
+                    <i class="fas fa-trash"></i>
                 </button>
                 ` : ''}
             </div>
@@ -3060,24 +3242,36 @@ function openFileViewer(itemPath, filename) {
 /** Close the file viewer and stop any media playback. */
 function closeFileViewer() {
     const modal = document.getElementById('fileViewerModal');
-    const body  = document.getElementById('fileViewerBody');
+    const body = document.getElementById('fileViewerBody');
+    if (!modal) return;
     modal.classList.remove('show');
 
     window._hlsPollCancel = true;
+    window._vjsCurrentPlayer = null;
 
-    if (window._vjsCurrentPlayer) {
-        try {
-            const vjsInstance = window._vjsCurrentPlayer.player;
-            if (vjsInstance && typeof vjsInstance.dispose === 'function') {
-                vjsInstance.dispose();
-            } else {
-                const vid = window._vjsCurrentPlayer.querySelector('video');
-                if (vid) { vid.pause(); vid.src = ''; }
-            }
-        } catch (_) {}
-        window._vjsCurrentPlayer = null;
-    }
-    body.querySelectorAll('video, audio').forEach(m => { try { m.pause(); m.src = ''; } catch (_) {} });
+    // 1. Stop every media element first — pause + blank src + load resets decoder
+    body.querySelectorAll('video, audio').forEach(m => {
+        try { m.pause(); } catch (_) { }
+        try { m.removeAttribute('src'); } catch (_) { }
+        try { while (m.firstChild) m.removeChild(m.firstChild); } catch (_) { }
+        try { m.load(); } catch (_) { }
+    });
+
+    // 2. Call the Lit web component's own destroy() — this is what actually
+    //    releases the internal MediaSource / HLS stream held by the component.
+    //    The props dump showed: destroy, destroyCallback on the element prototype.
+    body.querySelectorAll('video-player, video-skin').forEach(el => {
+        try { if (typeof el.destroy === 'function') el.destroy(); } catch (_) { }
+        try { if (typeof el.destroyCallback === 'function') el.destroyCallback(); } catch (_) { }
+    });
+
+    // 3. Physically remove video elements from DOM before clearing innerHTML —
+    //    this forces the browser to release the MediaSource reference immediately
+    body.querySelectorAll('video, audio').forEach(m => {
+        try { m.parentNode && m.parentNode.removeChild(m); } catch (_) { }
+    });
+
+    // 4. Clear the body
     body.innerHTML = '';
 }
 
@@ -3754,8 +3948,9 @@ function updateFileTableContent(files) {
                         data-action="download-folder"
                         data-item-path="${itemPath}"
                         data-item-name="${file.name}"
+                        data-label="Download ZIP"
                         title="Download folder as ZIP">
-                    <i class="fas fa-download"></i> Download
+                    <i class="fas fa-download"></i>
                 </button>
                 
                 ${USER_ROLE === 'readwrite' ? `
@@ -3763,32 +3958,36 @@ function updateFileTableContent(files) {
                         data-action="move"
                         data-item-name="${file.name}"
                         data-item-path="${itemPath}"
-                        title="Move item">
-                    <i class="fas fa-cut"></i> Move
+                        data-label="Move"
+                        title="Move">
+                    <i class="fas fa-cut"></i>
                 </button>
                 
                 <button type="button" class="btn btn-success btn-sm" 
                         data-action="copy"
                         data-item-name="${file.name}"
                         data-item-path="${itemPath}"
-                        title="Copy item">
-                    <i class="fas fa-copy"></i> Copy
+                        data-label="Copy"
+                        title="Copy">
+                    <i class="fas fa-copy"></i>
                 </button>
                 
                 <button type="button" class="btn btn-primary btn-sm" 
                         data-action="rename"
                         data-item-name="${file.name}"
                         data-item-path="${itemPath}"
-                        title="Rename item">
-                    <i class="fas fa-edit"></i> Rename
+                        data-label="Rename"
+                        title="Rename">
+                    <i class="fas fa-edit"></i>
                 </button>
                 
                 <button type="button" class="btn btn-danger btn-sm" 
                         data-action="delete"
                         data-item-name="${file.name}"
                         data-item-path="${itemPath}"
-                        title="Delete item">
-                    <i class="fas fa-trash"></i> Delete
+                        data-label="Delete"
+                        title="Delete">
+                    <i class="fas fa-trash"></i>
                 </button>
                 ` : ''}
             `;
@@ -3809,40 +4008,45 @@ function updateFileTableContent(files) {
                 <button type="button" class="btn btn-outline btn-sm" 
                         data-action="download"
                         data-item-path="${itemPath}"
+                        data-label="Download"
                         title="Download file">
-                    <i class="fas fa-download"></i> Download
+                    <i class="fas fa-download"></i>
                 </button>
                 ${USER_ROLE === 'readwrite' ? `
                     <button type="button" class="btn btn-warning btn-sm" 
                             data-action="move"
                             data-item-name="${file.name}"
                             data-item-path="${itemPath}"
-                            title="Move item">
-                        <i class="fas fa-cut"></i> Move
+                            data-label="Move"
+                            title="Move">
+                        <i class="fas fa-cut"></i>
                     </button>
                     
                     <button type="button" class="btn btn-success btn-sm" 
                             data-action="copy"
                             data-item-name="${file.name}"
                             data-item-path="${itemPath}"
-                            title="Copy item">
-                        <i class="fas fa-copy"></i> Copy
+                            data-label="Copy"
+                            title="Copy">
+                        <i class="fas fa-copy"></i>
                     </button>
                     
                     <button type="button" class="btn btn-primary btn-sm" 
                             data-action="rename"
                             data-item-name="${file.name}"
                             data-item-path="${itemPath}"
-                            title="Rename item">
-                        <i class="fas fa-edit"></i> Rename
+                            data-label="Rename"
+                            title="Rename">
+                        <i class="fas fa-edit"></i>
                     </button>
                     
                     <button type="button" class="btn btn-danger btn-sm" 
                             data-action="delete"
                             data-item-name="${file.name}"
                             data-item-path="${itemPath}"
-                            title="Delete item">
-                        <i class="fas fa-trash"></i> Delete
+                            data-label="Delete"
+                            title="Delete">
+                        <i class="fas fa-trash"></i>
                     </button>
                 ` : ''}
             `;
@@ -3871,8 +4075,8 @@ function updateFileTableContent(files) {
                 `<span style="color: white; font-size: 13px;">--</span>`
             }
             </td>
-            <td class="actions-cell" style="min-width:320px;width:20%">
-                <div class="actions">
+            <td class="actions-cell">
+                <div class="actions" style="display:flex;flex-wrap:nowrap;gap:3px;align-items:center;">
                     ${actionsHtml}
                 </div>
             </td>
@@ -3984,7 +4188,7 @@ function formatTimestamp(timestamp) {
         const date = new Date(timestamp * 1000);
         const time = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
         const day = date.toLocaleDateString('en-US');
-        return `<span style="line-height:1.6">${day}<br>${time}</span>`;
+        return `<span style="color:white;font-size:12px;white-space:nowrap;">${day} ${time}</span>`;
     } catch (e) {
         return '--';
     }
@@ -8505,7 +8709,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ── Archive preview: load & retry ────────────────────────────────────────────
- 
+
 /**
  * Fetch archive listing from the server, handling password prompts & errors.
  * Called initially with password=null; retried with the user-supplied password.
@@ -8513,7 +8717,7 @@ document.addEventListener('visibilitychange', () => {
 function _loadArchivePreview(body, itemPath, password) {
     const url = `/archive_preview/${itemPath}` +
         (password != null ? `?password=${encodeURIComponent(password)}` : '');
- 
+
     fetch(url)
         .then(r => r.json())
         .then(data => {
@@ -8543,13 +8747,13 @@ function _loadArchivePreview(body, itemPath, password) {
                 </p>`;
         });
 }
- 
+
 // ── Archive preview: password prompt ─────────────────────────────────────────
- 
+
 function _renderArchivePasswordPrompt(body, itemPath, wrongPassword) {
     body.innerHTML = '';
     body.classList.add('viewer-archive');
- 
+
     const wrap = document.createElement('div');
     wrap.className = 'archive-password-wrap';
     wrap.innerHTML = `
@@ -8581,14 +8785,14 @@ function _renderArchivePasswordPrompt(body, itemPath, wrongPassword) {
         </div>
     `;
     body.appendChild(wrap);
- 
+
     const input = wrap.querySelector('#archivePasswordInput');
-    const btn   = wrap.querySelector('#archivePasswordBtn');
- 
+    const btn = wrap.querySelector('#archivePasswordBtn');
+
     const tryPassword = () => {
         const pw = input.value.trim();
         if (!pw) { input.focus(); input.classList.add('archive-input-shake'); setTimeout(() => input.classList.remove('archive-input-shake'), 500); return; }
- 
+
         btn.disabled = true;
         btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Unlocking…';
         // Show inline spinner while re-fetching
@@ -8597,78 +8801,78 @@ function _renderArchivePasswordPrompt(body, itemPath, wrongPassword) {
         </div>`;
         _loadArchivePreview(body, itemPath, pw);
     };
- 
+
     btn.addEventListener('click', tryPassword);
     input.addEventListener('keydown', e => { if (e.key === 'Enter') tryPassword(); });
- 
+
     // Prevent viewer Escape handler from eating keystrokes inside the input
     input.addEventListener('keydown', e => e.stopPropagation(), true);
- 
+
     input.focus();
 }
- 
+
 // ── Archive preview: main renderer ───────────────────────────────────────────
- 
+
 function _renderArchivePreview(body, data) {
     body.innerHTML = '';
     body.classList.add('viewer-archive');
- 
+
     // ── Helpers ──────────────────────────────────────────────────────────────
     const fmtSize = (bytes) => {
         if (bytes == null || bytes < 0) return '—';
-        if (bytes === 0)  return '0 B';
+        if (bytes === 0) return '0 B';
         if (bytes >= 1e12) return (bytes / 1e12).toFixed(2) + ' TB';
-        if (bytes >= 1e9)  return (bytes / 1e9).toFixed(2)  + ' GB';
-        if (bytes >= 1e6)  return (bytes / 1e6).toFixed(1)  + ' MB';
+        if (bytes >= 1e9) return (bytes / 1e9).toFixed(2) + ' GB';
+        if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + ' MB';
         if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
         return bytes + ' B';
     };
- 
+
     const fileIcon = (name) => {
         const ext = (name.split('.').pop() || '').toLowerCase();
         const map = {
             // images
-            jpg:'fa-file-image',jpeg:'fa-file-image',png:'fa-file-image',gif:'fa-file-image',
-            bmp:'fa-file-image',webp:'fa-file-image',svg:'fa-file-image',avif:'fa-file-image',
+            jpg: 'fa-file-image', jpeg: 'fa-file-image', png: 'fa-file-image', gif: 'fa-file-image',
+            bmp: 'fa-file-image', webp: 'fa-file-image', svg: 'fa-file-image', avif: 'fa-file-image',
             // video
-            mp4:'fa-file-video',avi:'fa-file-video',mov:'fa-file-video',
-            mkv:'fa-file-video',webm:'fa-file-video',wmv:'fa-file-video',
+            mp4: 'fa-file-video', avi: 'fa-file-video', mov: 'fa-file-video',
+            mkv: 'fa-file-video', webm: 'fa-file-video', wmv: 'fa-file-video',
             // audio
-            mp3:'fa-file-audio',wav:'fa-file-audio',flac:'fa-file-audio',
-            aac:'fa-file-audio',ogg:'fa-file-audio',m4a:'fa-file-audio',
+            mp3: 'fa-file-audio', wav: 'fa-file-audio', flac: 'fa-file-audio',
+            aac: 'fa-file-audio', ogg: 'fa-file-audio', m4a: 'fa-file-audio',
             // docs
-            pdf:'fa-file-pdf',
-            doc:'fa-file-word',docx:'fa-file-word',
-            xls:'fa-file-excel',xlsx:'fa-file-excel',
-            ppt:'fa-file-powerpoint',pptx:'fa-file-powerpoint',
+            pdf: 'fa-file-pdf',
+            doc: 'fa-file-word', docx: 'fa-file-word',
+            xls: 'fa-file-excel', xlsx: 'fa-file-excel',
+            ppt: 'fa-file-powerpoint', pptx: 'fa-file-powerpoint',
             // code / text
-            js:'fa-file-code',ts:'fa-file-code',jsx:'fa-file-code',tsx:'fa-file-code',
-            py:'fa-file-code',java:'fa-file-code',cpp:'fa-file-code',c:'fa-file-code',
-            cs:'fa-file-code',go:'fa-file-code',rb:'fa-file-code',php:'fa-file-code',
-            html:'fa-file-code',css:'fa-file-code',json:'fa-file-code',xml:'fa-file-code',
-            sh:'fa-file-code',bat:'fa-file-code',
-            txt:'fa-file-alt',md:'fa-file-alt',csv:'fa-file-alt',log:'fa-file-alt',
+            js: 'fa-file-code', ts: 'fa-file-code', jsx: 'fa-file-code', tsx: 'fa-file-code',
+            py: 'fa-file-code', java: 'fa-file-code', cpp: 'fa-file-code', c: 'fa-file-code',
+            cs: 'fa-file-code', go: 'fa-file-code', rb: 'fa-file-code', php: 'fa-file-code',
+            html: 'fa-file-code', css: 'fa-file-code', json: 'fa-file-code', xml: 'fa-file-code',
+            sh: 'fa-file-code', bat: 'fa-file-code',
+            txt: 'fa-file-alt', md: 'fa-file-alt', csv: 'fa-file-alt', log: 'fa-file-alt',
             // archives
-            zip:'fa-file-archive',rar:'fa-file-archive','7z':'fa-file-archive',
-            tar:'fa-file-archive',gz:'fa-file-archive',bz2:'fa-file-archive',
+            zip: 'fa-file-archive', rar: 'fa-file-archive', '7z': 'fa-file-archive',
+            tar: 'fa-file-archive', gz: 'fa-file-archive', bz2: 'fa-file-archive',
         };
         return map[ext] || 'fa-file';
     };
- 
+
     // ── Build tree from flat entry list ──────────────────────────────────────
     // Each node: { name, is_dir, size, compressed_size, modified, children: {} }
     const root = { children: {} };
- 
+
     for (const entry of data.entries) {
         // Normalise separators and strip leading slash
         const parts = entry.name.replace(/\\/g, '/').split('/').filter(p => p.length > 0);
         if (!parts.length) continue;
- 
+
         let node = root;
         for (let i = 0; i < parts.length; i++) {
             const part = parts[i];
             const isLast = i === parts.length - 1;
- 
+
             if (!node.children[part]) {
                 node.children[part] = {
                     name: part,
@@ -8687,14 +8891,14 @@ function _renderArchivePreview(body, data) {
             node = node.children[part];
         }
     }
- 
+
     // ── Header bar ───────────────────────────────────────────────────────────
-    const fileCt  = data.entries.filter(e => !e.is_dir).length;
-    const dirCt   = data.entries.filter(e =>  e.is_dir).length;
- 
+    const fileCt = data.entries.filter(e => !e.is_dir).length;
+    const dirCt = data.entries.filter(e => e.is_dir).length;
+
     const typeBadgeColour = { zip: '#e67e22', rar: '#8e44ad', '7z': '#2980b9', tar: '#27ae60' };
     const badgeStyle = `background:${typeBadgeColour[data.type] || '#555'}`;
- 
+
     const header = document.createElement('div');
     header.className = 'archive-header';
     header.innerHTML = `
@@ -8709,37 +8913,37 @@ function _renderArchivePreview(body, data) {
         </span>` : ''}
     `;
     body.appendChild(header);
- 
+
     // ── Tree ─────────────────────────────────────────────────────────────────
     const treeWrap = document.createElement('div');
     treeWrap.className = 'archive-tree';
     body.appendChild(treeWrap);
- 
+
     const renderNode = (node, container, depth) => {
         const sorted = Object.values(node.children).sort((a, b) => {
             if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
             return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
         });
- 
+
         for (const child of sorted) {
             const hasChildren = Object.keys(child.children).length > 0;
- 
+
             const row = document.createElement('div');
             row.className = 'archive-entry' + (child.is_dir ? ' archive-entry-dir' : '');
             row.style.paddingLeft = (depth * 16 + 10) + 'px';
- 
+
             // Compression ratio label
             let ratioHtml = '';
             if (!child.is_dir && child.size > 0 && child.compressed_size > 0 && child.compressed_size < child.size) {
                 const pct = Math.round((1 - child.compressed_size / child.size) * 100);
                 if (pct > 0) ratioHtml = `<span class="archive-entry-ratio">${pct}% saved</span>`;
             }
- 
+
             row.innerHTML = `
                 <span class="archive-entry-toggle">
                     ${child.is_dir
-                        ? `<i class="fas ${hasChildren ? 'fa-chevron-right' : 'fa-minus'} archive-chevron${hasChildren ? '' : ' archive-chevron-empty'}"></i>`
-                        : ''}
+                    ? `<i class="fas ${hasChildren ? 'fa-chevron-right' : 'fa-minus'} archive-chevron${hasChildren ? '' : ' archive-chevron-empty'}"></i>`
+                    : ''}
                 </span>
                 <i class="fas ${child.is_dir ? 'fa-folder' : fileIcon(child.name)} archive-entry-icon ${child.is_dir ? 'archive-icon-dir' : 'archive-icon-file'}"></i>
                 <span class="archive-entry-name">${escapeHtml(child.name)}</span>
@@ -8749,16 +8953,16 @@ function _renderArchivePreview(body, data) {
                     ${ratioHtml}
                 </span>
             `;
- 
+
             container.appendChild(row);
- 
+
             if (child.is_dir && hasChildren) {
                 const childContainer = document.createElement('div');
                 childContainer.className = 'archive-children';
                 childContainer.style.display = 'none';
                 renderNode(child, childContainer, depth + 1);
                 container.appendChild(childContainer);
- 
+
                 // Toggle expand/collapse on click
                 row.style.cursor = 'pointer';
                 row.addEventListener('click', () => {
@@ -8780,9 +8984,9 @@ function _renderArchivePreview(body, data) {
             }
         }
     };
- 
+
     renderNode(root, treeWrap, 0);
- 
+
     // Auto-expand if the archive has only one top-level folder
     const topLevelKeys = Object.keys(root.children);
     if (topLevelKeys.length === 1) {
@@ -8796,38 +9000,52 @@ function _renderArchivePreview(body, data) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function _hlsStartStream(itemPath, wrapperId) {
-    window._hlsPollCancel    = false;
+    window._hlsPollCancel = false;
     window._vjsCurrentPlayer = null;
 
     const $id = id => document.getElementById(id);
 
-    function _setStatus(txt)   { const e = $id('hls-status-msg');  if (e) e.textContent  = txt; }
+    function _setStatus(txt) { const e = $id('hls-status-msg'); if (e) e.textContent = txt; }
     function _setProgress(pct) {
         const pw = $id('hls-progress-wrap'); if (pw) pw.style.display = 'block';
-        const pb = $id('hls-progress-bar');  if (pb) pb.style.width   = pct + '%';
-        const bl = $id('hls-btn-label');     if (bl) bl.textContent   = `Processing\u2026 ${pct}%`;
+        const pb = $id('hls-progress-bar'); if (pb) pb.style.width = pct + '%';
+        const bl = $id('hls-btn-label'); if (bl) bl.textContent = `Processing\u2026 ${pct}%`;
     }
     function _setStreamReady() {
         const bs = $id('hls-btn-spinner'); if (bs) bs.style.display = 'none';
-        const bl = $id('hls-btn-label');   if (bl) bl.textContent   = '\u26a1 Stream HLS';
-        const bt = $id('hls-btn-stream');  if (bt) { bt.disabled = false; bt.title = 'Play adaptive bitrate stream'; }
+        const bl = $id('hls-btn-label'); if (bl) bl.textContent = '\u26a1 Stream HLS';
+        const bt = $id('hls-btn-stream'); if (bt) { bt.disabled = false; bt.title = 'Play adaptive bitrate stream'; }
         const pw = $id('hls-progress-wrap'); if (pw) pw.style.display = 'none';
         _setStatus('');
     }
     function _hideStreamBtn() {
-        const bt = $id('hls-btn-stream');    if (bt) bt.style.display   = 'none';
-        const pw = $id('hls-progress-wrap'); if (pw) pw.style.display   = 'none';
+        const bt = $id('hls-btn-stream'); if (bt) bt.style.display = 'none';
+        const pw = $id('hls-progress-wrap'); if (pw) pw.style.display = 'none';
     }
     function _hideQualityRow() {
-        const qr = $id('hls-quality-row');   if (qr) qr.style.display   = 'none';
+        const qr = $id('hls-quality-row'); if (qr) qr.style.display = 'none';
+    }
+
+    // Tear down whatever is currently in hls-player-area before mounting
+    // a new player. Calling destroy() on the Lit web component is what
+    // actually releases the MediaSource — just setting innerHTML doesn't.
+    function _destroyCurrentPlayer() {
+        const area = $id('hls-player-area');
+        if (!area) return;
+        area.querySelectorAll('video, audio').forEach(m => {
+            try { m.pause(); m.removeAttribute('src'); m.load(); } catch (_) { }
+        });
+        area.querySelectorAll('video-player, video-skin').forEach(el => {
+            try { if (typeof el.destroy === 'function') el.destroy(); } catch (_) { }
+        });
+        area.innerHTML = '';
     }
 
     function _mountRawPlayer(src, autoplay) {
         const area = $id('hls-player-area');
         if (!area) return;
+        _destroyCurrentPlayer();
         area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;';
-        // autoplay muted is required by browsers for programmatic play;
-        // we unmute immediately after the player is ready
         const ap = autoplay ? 'autoplay muted' : '';
         area.innerHTML = `
           <video-player class="vjs-cloudinator-player" style="width:100%;height:100%;display:block;">
@@ -8844,6 +9062,7 @@ async function _hlsStartStream(itemPath, wrapperId) {
     function _mountHlsPlayer(masterUrl, autoplay) {
         const area = $id('hls-player-area');
         if (!area) return;
+        _destroyCurrentPlayer();
         area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;';
         const ap = autoplay ? 'autoplay muted' : '';
         area.innerHTML = `
@@ -8868,6 +9087,7 @@ async function _hlsStartStream(itemPath, wrapperId) {
     if (rawBtn) {
         rawBtn.addEventListener('click', () => {
             _setStatus('');
+            _destroyCurrentPlayer();
             _mountRawPlayer(`/view/${itemPath}`, false);
             rawBtn.classList.add('hls-btn-active');
             const sb = $id('hls-btn-stream'); if (sb) sb.classList.remove('hls-btn-active');
@@ -8901,8 +9121,8 @@ async function _hlsStartStream(itemPath, wrapperId) {
         _wireStreamButton(cacheKey, startData.profiles);
         _setStatus('');
         _mountHlsPlayer(`/hls_files/${cacheKey}/master.m3u8`, true);
-        const rb2 = $id('hls-btn-raw');    if (rb2) rb2.classList.remove('hls-btn-active');
-        const sb  = $id('hls-btn-stream'); if (sb)  sb.classList.add('hls-btn-active');
+        const rb2 = $id('hls-btn-raw'); if (rb2) rb2.classList.remove('hls-btn-active');
+        const sb = $id('hls-btn-stream'); if (sb) sb.classList.add('hls-btn-active');
         _buildQualityBar(startData.profiles, cacheKey);
         return;
     }
@@ -8943,6 +9163,15 @@ function _wireStreamButton(cacheKey, profiles) {
         const masterUrl = `/hls_files/${cacheKey}/master.m3u8`;
         const area = document.getElementById('hls-player-area');
         if (!area) return;
+
+        // Destroy existing player before mounting HLS — prevents double audio
+        area.querySelectorAll('video, audio').forEach(m => {
+            try { m.pause(); m.removeAttribute('src'); m.load(); } catch (_) { }
+        });
+        area.querySelectorAll('video-player, video-skin').forEach(el => {
+            try { if (typeof el.destroy === 'function') el.destroy(); } catch (_) { }
+        });
+
         area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;';
         area.innerHTML = `
           <video-player class="vjs-cloudinator-player" style="width:100%;height:100%;display:block;">
@@ -8989,7 +9218,7 @@ function _unmuteWhenReady(playerEl) {
             video.play().catch(() => {
                 // Browser blocked unmuted autoplay — play muted as fallback
                 video.muted = true;
-                video.play().catch(() => {});
+                video.play().catch(() => { });
             });
         }
 
@@ -9031,8 +9260,8 @@ function _buildQualityBar(profiles, cacheKey) {
             video.src = src;
             video.load();
             video.addEventListener('loadedmetadata', () => {
-                if (currentTime > 0) { try { video.currentTime = currentTime; } catch(_) {} }
-                if (!wasPaused) video.play().catch(() => {});
+                if (currentTime > 0) { try { video.currentTime = currentTime; } catch (_) { } }
+                if (!wasPaused) video.play().catch(() => { });
                 video.muted = false;
                 video.volume = 1;
             }, { once: true });
@@ -9054,4 +9283,4 @@ function _attachQualitySelector(playerEl) {
 function _hlsSleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 // ─────────────────────────────────────────────────────────────────────────────
 // End HLS helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────── 

@@ -396,18 +396,20 @@ body {
 }
 
 .table th {
-    padding: 18px 20px;
+    padding: 8px 10px;
     text-align: left;
     font-weight: 600;
-    font-size: 14px;
+    font-size: 13px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    line-height: 1.2;
 }
 
 .table tbody tr {
     border-bottom: 1px solid rgba(48, 84, 140, 255);
     transition: background-color 0.3s ease;
-    white-space: nowrap;
 }
 
 .table tbody tr:hover {
@@ -420,12 +422,11 @@ body {
 }
 
 .table td {
-    padding: 18px 20px;
+    padding: 7px 10px;
     vertical-align: middle;
     color: white;
-    white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    line-height: 1.2;
 }
 
 .file-checkbox {
@@ -495,25 +496,21 @@ i.fa-file {
 /* Desktop-specific table styling for better file name handling */
 @media (min-width: 769px) {
 
+    /* Column widths deferred to smartTableColumnizer() — only set text behaviour here */
     .table th:nth-child(2),
     .table td:nth-child(2),
     .table td.name-cell {
-        width: 25%;
-        max-width: 400px;
-        min-width: 220px;
-        white-space: nowrap !important;
         overflow: hidden !important;
-        text-overflow: ellipsis !important;
+        white-space: normal !important;
+        word-break: break-word !important;
+        overflow-wrap: anywhere !important;
     }
 
-    /* Size column for desktop - ensure proper formatting */
+    /* Size column for desktop */
     .table th:nth-child(3),
     .table td:nth-child(3),
     .table td.size-cell {
-        width: 220px;
-        /* Increased width for proper display */
-        min-width: 220px;
-        white-space: normal;
+        white-space: nowrap;
         line-height: 1.3;
     }
 
@@ -522,29 +519,16 @@ i.fa-file {
         white-space: nowrap;
     }
 
-    /* Actions column for desktop - accommodate text buttons */
-    .table th:last-child,
-    .table td:last-child {
-        width: 20% !important;
-        /* More space for actions and SIZE */
-        min-width: 130px !important;
-    }
-
     /* Date column */
     .table td.date-cell {
         white-space: nowrap;
     }
 
     .table tbody tr {
-        max-height: 250px;
-        /* Even larger for 5 lines */
         overflow: hidden;
     }
 
-    /* Ensure file names don't make rows too tall */
     .file-name {
-        max-height: 200px;
-        /* Much larger for 5 lines */
         overflow: hidden;
     }
 }
@@ -569,55 +553,43 @@ i.fa-file {
         /* Smaller table width to fit better on mobile */
     }
 
-    /* Override all previous name column rules */
+    /* Name column width is controlled by JS smartTableColumnizer() */
     .file-table .table th:nth-child(2),
     .file-table .table td:nth-child(2) {
-        width: 220px !important;
-        /* Good balance - not too small, not too wide */
-        min-width: 220px !important;
-        max-width: 220px !important;
+        overflow: hidden !important;
+        box-sizing: border-box !important;
     }
 
-    /* Override file-name container */
+    /* file-name container */
     .file-table .table .file-name {
-        max-width: 220px !important;
-        max-height: unset !important;
-        overflow: visible !important;
         display: flex !important;
-        /* Keep icon and name side by side */
         align-items: flex-start !important;
         gap: 8px !important;
+        overflow: hidden !important;
+        white-space: normal !important;
     }
 
-    /* Override previous name styling on mobile: allow unlimited wrapping and full visibility */
+    /* Name link/span — word-wrap to cell width */
     .file-table .table td:nth-child(2) .file-name a,
     .file-table .table td:nth-child(2) .file-name span,
     .file-table .table .file-name a,
     .file-table .table .file-name span {
-        display: inline-block !important;
+        display: block !important;
         white-space: normal !important;
-        /* allow breaks */
-        overflow: visible !important;
-        /* show wrapped content */
-        text-overflow: clip !important;
-        line-height: 1.3 !important;
         word-break: break-word !important;
         overflow-wrap: anywhere !important;
-        -webkit-line-clamp: unset !important;
-        line-clamp: unset !important;
-        -webkit-box-orient: unset !important;
-        max-height: none !important;
+        overflow: hidden !important;
         width: 100% !important;
-        max-width: none !important;
-        flex: 1 !important;
+        max-width: 100% !important;
     }
 }
 
 .actions {
     display: flex;
-    gap: 6px;
+    flex-direction: row;
+    gap: 3px;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     justify-content: flex-start;
 }
 
@@ -631,16 +603,24 @@ i.fa-file {
     white-space: nowrap;
 }
 
-/* Individual action button styling */
+/* Individual action button styling — icon-only, square */
 .actions .btn-sm {
-    padding: 4px 8px;
-    margin: 1px;
-    font-size: 10px;
+    padding: 5px 7px;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1;
+    min-width: 28px;
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
 }
 
 .actions .btn-sm i {
-    font-size: 10px;
-    margin-right: 3px;
+    font-size: 12px;
+    margin: 0;
 }
 
 .btn-outline {
@@ -1795,19 +1775,22 @@ td .fa-file {
         color: white !important;
     }
 
-    /* Smaller checkboxes for mobile */
+    /* Mobile checkboxes — touch-friendly, not shrunken */
     input[type="checkbox"].file-checkbox,
     input[type="checkbox"].item-checkbox,
     input[type="checkbox"]#selectAll,
     .file-checkbox,
     .item-checkbox,
     #selectAll {
-        width: 0.25rem !important;
-        height: 0.25rem !important;
+        width: 20px !important;
+        height: 20px !important;
+        min-width: 20px !important;
+        min-height: 20px !important;
         margin: 0 auto !important;
         cursor: pointer !important;
-        transform: scale(0.5) !important;
-        /* Remove all custom appearance overrides - use browser defaults */
+        transform: none !important;
+        flex-shrink: 0 !important;
+        accent-color: #3498db;
     }
 
     /* Allow name column to expand naturally for full file names */
@@ -1825,12 +1808,12 @@ td .fa-file {
     .table th:nth-child(1),
     /* Checkbox */
     .table td:nth-child(1) {
-        width: 35px;
+        width: 42px !important;
+        min-width: 42px !important;
         text-align: center;
         vertical-align: middle;
         padding: 10px 4px;
         white-space: nowrap;
-        /* Remove specific background - let it inherit from general td styling */
     }
 
     .table th:nth-child(3),
@@ -1965,24 +1948,19 @@ td .fa-file {
         flex-shrink: 0;
     }
 
-    /* Checkbox styling for mobile - reasonable size like desktop */
-    .file-checkbox {
-        width: 16px !important;
-        height: 16px !important;
-        margin: 0 auto !important;
-        cursor: pointer;
-        display: block;
-        /* Use reasonable size - not too big, not too small */
-    }
-
-    /* Also apply to the select all checkbox in header */
+    /* Checkbox styling for mobile - consistent touch-friendly size */
+    .file-checkbox,
     #selectAll {
-        width: 16px !important;
-        height: 16px !important;
+        width: 20px !important;
+        height: 20px !important;
+        min-width: 20px !important;
+        min-height: 20px !important;
         margin: 0 auto !important;
-        display: block;
-        /* Use reasonable size - not too big, not too small */
-        /* Make it even smaller */
+        cursor: pointer !important;
+        display: block !important;
+        transform: none !important;
+        accent-color: #3498db;
+        flex-shrink: 0 !important;
     }
 
     /* Add horizontal scroll indicator */
@@ -2077,48 +2055,29 @@ td .fa-file {
         background: rgba(255, 255, 255, 0.98);
         z-index: 2;
         box-shadow: 2px 0 4px rgba(0, 0, 0, 0.1);
-        width: 8% !important;
+        width: 15% !important;
         /* Fixed width for checkbox column */
     }
 
-    /* Set fixed widths for all columns for horizontal scrolling */
-    .file-table .table th:nth-child(2),
-    .file-table .table td:nth-child(2) {
-        width: 220px !important;
-        min-width: 220px !important;
-        max-width: 220px !important;
-    }
+    /* All column widths are managed by smartTableColumnizer() in JS — no overrides here */
 
     /* Name - balanced size */
     .file-table .table th:nth-child(3),
     .file-table .table td:nth-child(3) {
-        width: 120px !important;
         white-space: nowrap !important;
-        min-width: 120px !important;
     }
 
     /* Size - compact */
     .file-table .table th:nth-child(4),
     .file-table .table td:nth-child(4) {
-        width: 80px !important;
-        min-width: 80px !important;
+        white-space: nowrap !important;
     }
 
     /* Type - smaller */
     .file-table .table th:nth-child(5),
     .file-table .table td:nth-child(5) {
-        width: 100px !important;
-        min-width: 100px !important;
+        white-space: nowrap !important;
     }
-
-    /* Modified - smaller */
-    .file-table .table th:nth-child(6),
-    .file-table .table td:nth-child(6) {
-        width: 160px !important;
-        min-width: 160px !important;
-    }
-
-    /* Actions - smaller */
 
     .table thead th:first-child {
         background: linear-gradient(135deg, #34495e, #2c3e50);
@@ -2357,18 +2316,20 @@ td .fa-file {
 /* Large mobile devices (iPhone 14 Pro Max, etc.) */
 @media (max-width: 900px) and (orientation: portrait) {
 
-    /* Ensure small checkboxes for large mobile devices */
+    /* Touch-friendly checkboxes for large mobile devices */
     input[type="checkbox"].file-checkbox,
     input[type="checkbox"].item-checkbox,
     input[type="checkbox"]#selectAll,
     .file-checkbox,
     .item-checkbox,
     #selectAll {
-        width: 0.25rem !important;
-        height: 0.25rem !important;
+        width: 20px !important;
+        height: 20px !important;
+        min-width: 20px !important;
         margin: 0 auto !important;
         cursor: pointer !important;
-        transform: scale(0.5) !important;
+        transform: none !important;
+        accent-color: #3498db;
     }
 }
 
@@ -2473,19 +2434,20 @@ td .fa-file {
         color: white !important;
     }
 
-    /* Smaller checkboxes for medium mobile */
+    /* Touch-friendly checkboxes for medium mobile */
     input[type="checkbox"].file-checkbox,
     input[type="checkbox"].item-checkbox,
     input[type="checkbox"]#selectAll,
     .file-checkbox,
     .item-checkbox,
     #selectAll {
-        width: 0.25rem !important;
-        height: 0.25rem !important;
+        width: 20px !important;
+        height: 20px !important;
+        min-width: 20px !important;
         margin: 0 auto !important;
         cursor: pointer !important;
-        transform: scale(0.5) !important;
-        /* Remove all custom appearance overrides - use browser defaults */
+        transform: none !important;
+        accent-color: #3498db;
     }
 
     .table th:nth-child(6),
@@ -2548,19 +2510,20 @@ td .fa-file {
         color: white !important;
     }
 
-    /* Much smaller checkboxes for very small screens like iPhone SE */
+    /* Touch-friendly checkboxes for very small screens */
     input[type="checkbox"].file-checkbox,
     input[type="checkbox"].item-checkbox,
     input[type="checkbox"]#selectAll,
     .file-checkbox,
     .item-checkbox,
     #selectAll {
-        width: 0.25rem !important;
-        height: 0.25rem !important;
+        width: 18px !important;
+        height: 18px !important;
+        min-width: 18px !important;
         margin: 0 auto !important;
         cursor: pointer !important;
-        transform: scale(0.5) !important;
-        /* Remove all custom appearance overrides - use browser defaults */
+        transform: none !important;
+        accent-color: #3498db;
     }
 
     .container {
@@ -2929,10 +2892,6 @@ td .fa-file {
     .file-checkbox {
         width: 20px;
         height: 20px;
-    }
-
-    .table tbody tr {
-        min-height: 50px;
     }
 
     .queue-item {
@@ -3792,27 +3751,22 @@ td .fa-file {
 /* Strong mobile override: ensure Name column wraps and Actions can wrap on narrow screens */
 @media (max-width: 768px) {
 
-    /* Target both the generic and file-table scoped selectors */
+    /* Name-column text wrapping — width is controlled by JS smartTableColumnizer */
     .file-table .table th:nth-child(2),
     .file-table .table td:nth-child(2),
     .table th:nth-child(2),
     .table td:nth-child(2) {
-        /* Make the Name column wider on mobile so filenames wrap less and rows stay compact */
         white-space: normal !important;
         overflow: hidden !important;
-        /* prevent visual overlap into other columns */
-        text-overflow: ellipsis !important;
-        /* Prefer a percentage width but provide a sensible minimum to avoid extreme wrapping */
-        width: 55% !important;
-        min-width: 220px !important;
-        max-width: none !important;
+        word-break: break-word !important;
+        overflow-wrap: anywhere !important;
         box-sizing: border-box !important;
+        /* width/min-width/max-width intentionally omitted — set by JS */
     }
 
     /* Make file-name elements allow wrapping and occupy full width */
     .file-name,
     .file-table .file-name {
-        /* Use flex so the icon and name sit on the same line; keep name constrained to cell width */
         display: flex !important;
         flex-direction: row !important;
         align-items: flex-start !important;
@@ -3828,31 +3782,24 @@ td .fa-file {
     .file-name span,
     .file-table .file-name a,
     .file-table .file-name span {
-        /* Force block-level content and strong wrapping inside the Name cell */
         display: block !important;
         width: 100% !important;
         box-sizing: border-box !important;
         white-space: normal !important;
-        overflow-wrap: anywhere !important;
         word-break: break-word !important;
-        /* fallback to strong break-all if necessary to avoid any horizontal overflow */
-        word-break: break-all !important;
-        hyphens: auto !important;
-        overflow: visible !important;
-        text-overflow: clip !important;
+        overflow-wrap: anywhere !important;
+        overflow: hidden !important;
         max-width: 100% !important;
         min-width: 0 !important;
     }
 
-    /* As an extra safety, ensure table cells hide horizontal overflow so wrapped text cannot escape */
+    /* Ensure table cells hide horizontal overflow */
     .table td {
         overflow-x: hidden !important;
         word-break: break-word !important;
     }
 
-    /* Allow actions to wrap onto multiple lines so buttons remain visible */
-    /* Lay out action buttons in a single horizontal row to save vertical space.
-       If buttons don't fit, the container becomes horizontally scrollable. */
+    /* Actions scrollable row */
     .actions {
         display: flex !important;
         flex-wrap: nowrap !important;
@@ -3862,19 +3809,15 @@ td .fa-file {
         overflow-x: auto !important;
         -webkit-overflow-scrolling: touch !important;
         padding-bottom: 4px !important;
-        /* small padding so scroll area is tappable */
     }
 
-    /* Ensure each button keeps its content but doesn't force wrapping; allow horizontal scroll */
     .actions .btn-sm {
         white-space: nowrap !important;
         flex: 0 0 auto !important;
-        /* don't grow or shrink — stay inline */
         min-width: 34px !important;
         padding: 4px 8px !important;
     }
 
-    /* Small visual tweak: hide overflowing scrollbar on most platforms but keep functionality */
     .actions::-webkit-scrollbar {
         height: 6px;
     }
@@ -3884,13 +3827,11 @@ td .fa-file {
         border-radius: 3px;
     }
 
-    /* Avoid forcing fixed column widths that could reintroduce truncation */
+    /* Adjacent columns — widths set by JS, just ensure no forced overrides */
     .file-table .table th:nth-child(2),
     .file-table .table td:nth-child(2) {
-        /* Prevent the name column from collapsing to an extremely narrow width */
         width: auto !important;
-        min-width: 120px !important;
-        /* sensible minimum so text can wrap naturally */
+        min-width: 0 !important;
         max-width: none !important;
     }
 }
@@ -3914,32 +3855,9 @@ td .fa-file {
     max-width: 100% !important;
 }
 
-/* Force the name column to be wider on small screens, reduce vertical wrapping */
+/* Column widths on mobile are controlled exclusively by smartTableColumnizer() in JS.
+   Do not add width/min-width/max-width overrides here — they will fight the JS. */
 @media (max-width: 768px) {
-
-    .file-table .table th:nth-child(2),
-    .file-table .table td:nth-child(2),
-    .table th:nth-child(2),
-    .table td:nth-child(2) {
-        width: 60% !important;
-        min-width: 240px !important;
-        max-width: none !important;
-        box-sizing: border-box !important;
-    }
-
-    /* Ensure adjacent columns don't take excessive width */
-    .file-table .table th:nth-child(3),
-    .file-table .table td:nth-child(3) {
-        width: 18% !important;
-        min-width: 90px !important;
-    }
-
-    .file-table .table th:nth-child(4),
-    .file-table .table td:nth-child(4) {
-        width: 12% !important;
-        min-width: 70px !important;
-    }
-
     .table td {
         overflow-x: hidden !important;
     }
@@ -4004,7 +3922,7 @@ td .fa-file {
     align-items: center;
     justify-content: center;
     background: rgba(0, 0, 0, 0.25);
-    border-radius: 8px;
+    border-radius: 0 0 14px 14px;
     padding: 0;
 }
 
@@ -4023,7 +3941,7 @@ td .fa-file {
 
 /* Video viewer */
 .file-viewer-body.viewer-video {
-    background: #000;
+    background: #0d1e3d;
 }
 
 .viewer-video-el {
@@ -4779,149 +4697,57 @@ td .fa-file {
 
 /* ── @videojs/html web-component adaptive player ────────────────────────────── */
 
-/* Modal body goes edge-to-edge and black behind the player */
+/* Video viewer — site-themed dark navy instead of pure black */
 .file-viewer-body.viewer-video {
-    background: #000;
+    background: #0d1e3d;
     padding: 0;
     align-items: stretch;
     justify-content: stretch;
     overflow: hidden;
+    border-radius: 0 0 14px 14px;
 }
 
-/* Outer wrapper — flex column so buttons sit above the player */
+/* Outer wrapper — fills the modal body */
 .hls-player-outer {
     position: relative;
     width: 100%;
     height: 100%;
-    min-height: 420px;
     display: flex;
     flex-direction: column;
-    background: #0d1b3e;
+    align-items: stretch;
+    background: #0d1e3d;
+    overflow: hidden;
+    border-radius: 0 0 14px 14px;
 }
 
-/* ── Button row ─────────────────────────────────────────────────────────────── */
-.hls-btn-row {
+/* Status / loading bar shown while transcoding */
+.hls-status-bar {
     display: flex;
-    gap: 10px;
-    padding: 12px 14px 10px;
-    background: rgba(255, 255, 255, 0.05);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    flex-shrink: 0;
-}
-
-.hls-btn {
-    display: inline-flex;
     align-items: center;
-    gap: 7px;
-    padding: 8px 18px;
-    border: 1px solid rgba(255, 255, 255, 0.18);
+    gap: 10px;
+    padding: 14px 20px;
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 14px;
+    background: rgba(13, 30, 61, 0.88);
+    /* site-themed navy instead of black */
+    border: 1px solid rgba(52, 152, 219, 0.25);
     border-radius: 8px;
-    font-size: 13px;
-    font-weight: 600;
-    font-family: inherit;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    background: rgba(255, 255, 255, 0.07);
-    color: rgba(255, 255, 255, 0.75);
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10;
     white-space: nowrap;
 }
 
-.hls-btn:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.13);
-    border-color: rgba(255, 255, 255, 0.3);
-    color: #fff;
-    transform: translateY(-1px);
-}
-
-.hls-btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-}
-
-/* Play Raw — accent with a subtle green tint */
-.hls-btn-raw {
-    background: rgba(39, 174, 96, 0.15);
-    border-color: rgba(39, 174, 96, 0.35);
-    color: #5dde9a;
-}
-
-.hls-btn-raw:hover:not(:disabled) {
-    background: rgba(39, 174, 96, 0.28);
-    border-color: rgba(39, 174, 96, 0.6);
-    color: #7fffb4;
-    box-shadow: 0 4px 16px rgba(39, 174, 96, 0.2);
-    transform: translateY(-1px);
-}
-
-/* Stream HLS — accent with the theme blue */
-.hls-btn-stream {
-    background: rgba(52, 152, 219, 0.15);
-    border-color: rgba(52, 152, 219, 0.35);
-    color: #74c6f5;
-}
-
-.hls-btn-stream:hover:not(:disabled) {
-    background: rgba(52, 152, 219, 0.28);
-    border-color: rgba(52, 152, 219, 0.6);
-    color: #a8dcff;
-    box-shadow: 0 4px 16px rgba(52, 152, 219, 0.2);
-    transform: translateY(-1px);
-}
-
-/* Active / selected state for whichever button is currently playing */
-.hls-btn-active {
-    background: linear-gradient(135deg, #3498db, #2980b9) !important;
-    border-color: #2980b9 !important;
-    color: #fff !important;
-    box-shadow: 0 4px 16px rgba(52, 152, 219, 0.4);
-}
-
-.hls-btn-active.hls-btn-raw {
-    background: linear-gradient(135deg, #27ae60, #1e9651) !important;
-    border-color: #1e9651 !important;
-    box-shadow: 0 4px 16px rgba(39, 174, 96, 0.4);
-}
-
-/* ── Progress bar ───────────────────────────────────────────────────────────── */
-.hls-progress-wrap {
-    width: 100%;
-    height: 3px;
-    background: rgba(255, 255, 255, 0.08);
-    flex-shrink: 0;
-    overflow: hidden;
-}
-
-.hls-progress-bar {
-    height: 100%;
-    background: linear-gradient(90deg, #3498db, #5dade2);
-    transition: width 0.6s ease;
-    border-radius: 0 2px 2px 0;
-    box-shadow: 0 0 8px rgba(52, 152, 219, 0.6);
-}
-
-/* ── Status message ─────────────────────────────────────────────────────────── */
-.hls-status-msg {
-    padding: 6px 14px;
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.45);
-    flex-shrink: 0;
-    min-height: 24px;
-    background: transparent;
-    font-style: italic;
-}
-
-.hls-status-msg:empty {
-    display: none;
-}
-
-/* ── Spinner (inside the Stream HLS button while processing) ────────────────── */
+/* Animated spinner */
 .hls-spinner {
-    width: 13px;
-    height: 13px;
-    border: 2px solid rgba(255, 255, 255, 0.2);
-    border-top-color: #74c6f5;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    border-top-color: #fff;
     border-radius: 50%;
-    animation: hls-spin 0.75s linear infinite;
+    animation: hls-spin 0.8s linear infinite;
     flex-shrink: 0;
 }
 
@@ -4931,80 +4757,276 @@ td .fa-file {
     }
 }
 
-/* ── Player area — grows to fill remaining space ────────────────────────────── */
-.hls-player-area {
-    flex: 1 1 auto;
+/* Fallback notice banner */
+.hls-fallback-notice {
     width: 100%;
-    min-height: 300px;
-    background: #000;
-    display: flex;
-    align-items: stretch;
+    padding: 8px 14px;
+    background: rgba(52, 152, 219, 0.2);
+    border-bottom: 1px solid rgba(52, 152, 219, 0.35);
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 12px;
+    text-align: center;
 }
 
-/* <video-player> fills the area */
-.hls-player-area video-player,
+/* <video-player> web-component fills the player area — no border-radius,
+   no max-height cap: let the flex layout control sizing instead */
+.hls-player-outer video-player,
 .vjs-cloudinator-player {
     width: 100%;
     height: 100%;
     display: block;
     background: #000;
+    /* video canvas stays black */
+    border-radius: 0;
+    /* Mobile: ensure touch events reach the player controls */
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
-/* Theme the video.js skin with Cloudinator blue */
-.hls-player-area video-skin,
+/* video element inside the web component — also no radius */
+.hls-player-outer video-player video,
+.hls-player-outer video[slot="media"] {
+    border-radius: 0 !important;
+}
+
+/* Accent Cloudinator's blue onto the web-component skin */
 .hls-player-outer video-skin {
     --media-primary-color: #3498db;
     --media-secondary-color: rgba(52, 152, 219, 0.35);
-}
-
-/* Fallback notice banner */
-.hls-fallback-notice {
     width: 100%;
-    padding: 7px 14px;
-    background: rgba(52, 152, 219, 0.15);
-    border-bottom: 1px solid rgba(52, 152, 219, 0.3);
-    color: rgba(255, 255, 255, 0.7);
-    font-size: 12px;
-    text-align: center;
-    flex-shrink: 0;
+    height: 100%;
+    display: block;
 }
 
-/* ── Mobile ─────────────────────────────────────────────────────────────────── */
-@media (max-width: 600px) {
-    .hls-btn-row {
-        gap: 7px;
-        padding: 9px 10px 8px;
+/* Player area flex fill */
+.hls-player-area {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #0a1628;
+}
+
+/* Mobile tweak */
+@media (max-width: 768px) {
+
+    .hls-player-outer video-player,
+    .vjs-cloudinator-player {
+        max-height: none;
+    }
+
+    .hls-status-bar {
+        font-size: 12px;
+        padding: 10px 14px;
+    }
+
+    .hls-player-outer video-player video,
+    .hls-player-outer video[slot="media"] {
+        border-radius: 0 !important;
+        -webkit-border-radius: 0 !important;
     }
 
     .hls-btn {
-        padding: 7px 13px;
         font-size: 12px;
+        padding: 5px 10px;
     }
 
-    .hls-player-area {
-        min-height: 200px;
+    .hls-quality-btn {
+        font-size: 11px;
+        padding: 2px 7px;
     }
+}
 
-    .hls-player-area video-player,
-    .vjs-cloudinator-player {
-        max-height: 55vw;
-    }
+/* ── Play Raw / Stream HLS button row ───────────────────────────────────────── */
+.hls-btn-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: rgba(13, 30, 61, 0.92);
+    /* site-themed navy instead of black */
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+
+.hls-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.85);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.hls-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.45);
+    color: #fff;
+}
+
+.hls-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+    pointer-events: none;
+}
+
+.hls-btn.hls-btn-active {
+    background: rgba(52, 152, 219, 0.35);
+    border-color: rgba(52, 152, 219, 0.8);
+    color: #fff;
+}
+
+/* ── Quality selector row ────────────────────────────────────────────────────── */
+.hls-quality-row {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    background: rgba(22, 48, 95, 0.75);
+    /* site-themed navy instead of black */
+    flex-shrink: 0;
+    flex-wrap: wrap;
 }
 
 .hls-quality-btn {
-    padding: 2px 8px;
+    padding: 2px 9px;
     font-size: 12px;
+    font-weight: 500;
     border-radius: 4px;
-    border: 1px solid rgba(255, 255, 255, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.25);
     background: transparent;
-    color: rgba(255, 255, 255, 0.7);
+    color: rgba(255, 255, 255, 0.65);
     cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.hls-quality-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.5);
 }
 
 .hls-quality-btn.hls-quality-active {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(52, 152, 219, 0.3);
     color: #fff;
-    border-color: rgba(255, 255, 255, 0.6);
+    border-color: rgba(52, 152, 219, 0.75);
+}
+
+/* ── Progress bar ─────────────────────────────────────────────────────────────── */
+.hls-progress-wrap {
+    width: 100%;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.1);
+    flex-shrink: 0;
+}
+
+.hls-progress-bar {
+    height: 100%;
+    background: #3498db;
+    transition: width 0.4s ease;
+}
+
+/* ── Status message ──────────────────────────────────────────────────────────── */
+.hls-status-msg {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.55);
+    padding: 3px 10px;
+    flex-shrink: 0;
+    min-height: 18px;
 }
 
 /* ── End @videojs/html styles ──────────────────────────────────────────────── */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   AUTHORITATIVE TABLE ROW / ACTION BUTTON OVERRIDES
+   These are last in the file so they win over every earlier rule.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Single-line compact rows — no wrapping, no min-height */
+.file-table .table tbody tr,
+#filesTable tbody tr {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+}
+
+/* Action container: always one horizontal line */
+.file-table .actions,
+#filesTable .actions,
+.actions-cell .actions {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: 3px !important;
+    min-width: 0 !important;
+    overflow: visible !important;
+    padding: 0 !important;
+}
+
+/* Icon-only square buttons — fixed 28×28, never grow/shrink */
+.file-table .actions .btn-sm,
+#filesTable .actions .btn-sm,
+.actions-cell .actions .btn-sm {
+    width: 28px !important;
+    height: 28px !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    font-size: 0 !important;
+    /* hide any leftover text */
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    flex-shrink: 0 !important;
+    border-radius: 4px !important;
+    line-height: 1 !important;
+}
+
+/* Icon inside button — visible, centred */
+.file-table .actions .btn-sm i,
+#filesTable .actions .btn-sm i,
+.actions-cell .actions .btn-sm i {
+    font-size: 12px !important;
+    margin: 0 !important;
+    width: auto !important;
+    display: block !important;
+}
+
+
+/* ── Action button tooltip — JS-driven, position:fixed so nothing clips it ── */
+#btn-action-tooltip {
+    position: fixed;
+    background: rgba(15, 25, 50, 0.96);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 9px;
+    border-radius: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    pointer-events: none;
+    z-index: 999999;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+    line-height: 1.4;
+}
+
+#btn-action-tooltip.visible {
+    opacity: 1;
+}
