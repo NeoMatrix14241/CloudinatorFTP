@@ -5,5 +5,20 @@
   "HOST": "0.0.0.0",
   "MAX_CONTENT_LENGTH": 17179869184,
   "PERMANENT_SESSION_LIFETIME": 3600,
-  "configured_at": "2026-03-05 16:11:45"
+  "HLS_MIN_SIZE": 26214400,
+  "HLS_FORCE_FORMATS": [
+    "3gp",
+    "avi",
+    "flv",
+    "m2ts",
+    "mkv",
+    "mov",
+    "mpeg",
+    "mpg",
+    "mts",
+    "ogv",
+    "ts",
+    "wmv"
+  ],
+  "configured_at": "2026-03-18 10:25:08"
 }

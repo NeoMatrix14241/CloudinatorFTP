@@ -32,9 +32,6 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // Lock column widths from initial render so AJAX navigation never changes them
-    lockTableColumnWidths();
-
     // Stop-folder delegation — survives any innerHTML rebuild on folder rows
     const _fqEl = document.getElementById('fileQueue');
     if (_fqEl) {
@@ -45,28 +42,33 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 });
 
-let _lockedColWidths = [];
+let _lockedColWidths = []; // kept for compatibility, no longer used
 
 function lockTableColumnWidths() {
     const table = document.getElementById('filesTable');
     if (!table) return;
+
+    table.style.tableLayout = 'fixed';
+    table.style.width = '100%';
+
+    const thWidths = [
+        '50px',  // checkbox
+        null,    // name — fills remaining space
+        '10%',   // size
+        '12%',   // type
+        '13%',   // modified
+        '18%',   // actions (3+2 wrapped rows)
+    ];
     const headers = Array.from(table.querySelectorAll('thead th'));
-    if (!headers.length) return;
-    _lockedColWidths = headers.map(th => th.getBoundingClientRect().width);
-    console.log('📐 Locked column widths:', _lockedColWidths);
+    headers.forEach((th, i) => {
+        if (thWidths[i]) th.style.width = thWidths[i];
+        th.style.whiteSpace = 'nowrap';
+        th.style.overflow = 'hidden';
+    });
 }
 
 function applyColumnWidths(row) {
-    if (!_lockedColWidths.length) return;
-    const cells = row.querySelectorAll('td');
-    cells.forEach((td, i) => {
-        if (i === 0) return;
-        if (_lockedColWidths[i]) {
-            td.style.width = _lockedColWidths[i] + 'px';
-            td.style.minWidth = _lockedColWidths[i] + 'px';
-            td.style.maxWidth = _lockedColWidths[i] + 'px';
-        }
-    });
+    // No-op — column sizing handled by table-layout:fixed + <thead> widths.
 }
 
 // Function to protect all modal inputs from event delegation
@@ -850,6 +852,9 @@ function reinitializeTableControls(itemCount) {
             }
         });
     });
+
+    // Re-apply table-layout:fixed after cloneNode replaces <th> elements
+    lockTableColumnWidths();
 }
 
 // Upload queue management
@@ -1461,8 +1466,8 @@ function createFileTableRow(item, currentPath) {
             '<span style="color: white; font-size: 13px;">--</span>'
         }
         </td>
-        <td class="actions-cell" style="min-width:320px;width:20%">
-            <div class="actions">
+        <td class="actions-cell" style="width:18%;min-width:170px;">
+            <div class="actions" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
                 ${!item.is_dir ?
             `<button type="button" class="btn btn-outline btn-sm download-btn" 
                              data-item-path="${itemPath}"
@@ -1494,6 +1499,8 @@ function createFileTableRow(item, currentPath) {
                         title="Copy item">
                     <i class="fas fa-copy"></i> Copy
                 </button>
+
+                <div style="flex-basis:100%;height:0;"></div>
                 
                 <button type="button" class="btn btn-primary btn-sm rename-btn" 
                         data-item-name="${item.name}"
@@ -2971,11 +2978,21 @@ function openFileViewer(itemPath, filename) {
             body.classList.add('viewer-video');
             const hlsWrapperId = 'hls-wrap-' + Date.now();
             body.innerHTML = `
-              <div class="hls-player-outer" id="${hlsWrapperId}">
-                <div class="hls-status-bar" id="hls-status-bar">
-                  <span class="hls-spinner"></span>
-                  <span id="hls-status-msg">Preparing adaptive stream…</span>
+              <div class="hls-player-outer" id="${hlsWrapperId}" style="display:flex;flex-direction:column;width:100%;height:100%;min-height:420px;">
+                <div class="hls-btn-row" id="hls-btn-row">
+                  <button class="hls-btn hls-btn-raw" id="hls-btn-raw" title="Play without transcoding">
+                    <i class="fas fa-play"></i> Play Raw
+                  </button>
+                  <button class="hls-btn hls-btn-stream" id="hls-btn-stream" disabled title="Adaptive bitrate stream">
+                    <span class="hls-spinner" id="hls-btn-spinner"></span>
+                    <span id="hls-btn-label">Preparing stream…</span>
+                  </button>
                 </div>
+                <div class="hls-progress-wrap" id="hls-progress-wrap" style="display:none">
+                  <div class="hls-progress-bar" id="hls-progress-bar" style="width:0%"></div>
+                </div>
+                <div class="hls-status-msg" id="hls-status-msg"></div>
+                <div class="hls-player-area" id="hls-player-area" style="flex:1 1 auto;width:100%;min-height:300px;"></div>
               </div>`;
             _hlsStartStream(itemPath, hlsWrapperId);
             break;
@@ -3045,12 +3062,8 @@ function closeFileViewer() {
     const body  = document.getElementById('fileViewerBody');
     modal.classList.remove('show');
 
-    // Cancel any in-progress HLS polling
     window._hlsPollCancel = true;
 
-    // Dispose the @videojs/html player properly.
-    // The web-component exposes the underlying vjs instance via .player,
-    // which has a .dispose() method that tears down VHS and all event listeners.
     if (window._vjsCurrentPlayer) {
         try {
             const vjsInstance = window._vjsCurrentPlayer.player;
@@ -3063,7 +3076,6 @@ function closeFileViewer() {
         } catch (_) {}
         window._vjsCurrentPlayer = null;
     }
-    // Stop any lingering native video/audio
     body.querySelectorAll('video, audio').forEach(m => { try { m.pause(); m.src = ''; } catch (_) {} });
     body.innerHTML = '';
 }
@@ -8779,115 +8791,178 @@ function _renderArchivePreview(body, data) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // HLS Adaptive Streaming helpers  (@videojs/html web-component + ffmpeg backend)
-// Served locally from static/js/videojs-html.{js,css} — no CDN at runtime.
+// Served locally from static/js/video.js + static/css/video.css — no CDN.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Kick off server-side HLS transcoding, poll until ready, then mount a
- * <video-player> web-component pointing at the master playlist.
+ * Two-button video modal:
+ *   [ ▶ Play Raw ]   [ ⚡ Stream HLS  ████░░  42% ]
  *
- * @param {string} itemPath  - server-relative file path, e.g. "folder/video.mkv"
- * @param {string} wrapperId - id of the .hls-player-outer div to render into
+ * • Play Raw    — always works, mounts video.js on /view/<path> instantly
+ * • Stream HLS  — shown only when ffmpeg available; progress bar while
+ *                 transcoding; activates when status == "ready"
+ * • No autoplay on <video slot="media"> — user clicks play = audio works
+ * • Backend thread is daemon — survives frontend refresh uninterrupted
  */
 async function _hlsStartStream(itemPath, wrapperId) {
-    window._hlsPollCancel     = false;
-    window._vjsCurrentPlayer  = null;
+    window._hlsPollCancel    = false;
+    window._vjsCurrentPlayer = null;
 
-    const wrapper = () => document.getElementById(wrapperId);
+    const $id = id => document.getElementById(id);
 
-    function _statusMsg(txt) {
-        const el = document.getElementById('hls-status-msg');
-        if (el) el.textContent = txt;
+    function _setStatus(txt)   { const e = $id('hls-status-msg');  if (e) e.textContent  = txt; }
+    function _setProgress(pct) {
+        const pw = $id('hls-progress-wrap'); if (pw) pw.style.display = 'block';
+        const pb = $id('hls-progress-bar');  if (pb) pb.style.width   = pct + '%';
+        const bl = $id('hls-btn-label');     if (bl) bl.textContent   = `Processing\u2026 ${pct}%`;
     }
-    function _statusBarHide() {
-        const bar = document.getElementById('hls-status-bar');
-        if (bar) bar.style.display = 'none';
+    function _setStreamReady() {
+        const bs = $id('hls-btn-spinner'); if (bs) bs.style.display = 'none';
+        const bl = $id('hls-btn-label');   if (bl) bl.textContent   = '\u26a1 Stream HLS';
+        const bt = $id('hls-btn-stream');  if (bt) { bt.disabled = false; bt.title = 'Play adaptive bitrate stream'; }
+        const pw = $id('hls-progress-wrap'); if (pw) pw.style.display = 'none';
+        _setStatus('');
     }
-    function _showFallback(errMsg) {
-        const w = wrapper();
-        if (!w) return;
-        const viewUrl = `/view/${itemPath}`;
-        // Always use the web-component — just point it at the original file directly
-        w.innerHTML = `
-          ${errMsg ? `<div class="hls-fallback-notice"><i class="fas fa-info-circle"></i> ${escapeHtml(errMsg)}</div>` : ''}
-          <video-player class="vjs-cloudinator-player">
+    function _hideStreamBtn() {
+        const bt = $id('hls-btn-stream');    if (bt) bt.style.display   = 'none';
+        const pw = $id('hls-progress-wrap'); if (pw) pw.style.display   = 'none';
+    }
+
+    // Mount a video.js <video-player> into the player area.
+    // autoplay=true  → used for automatic playback on modal open (raw or HLS)
+    // autoplay=false → used when user manually clicks a button (gesture = audio)
+    function _mountPlayer(src, type, autoplay) {
+        const area = $id('hls-player-area');
+        if (!area) return;
+        area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;';
+        const typeAttr     = type     ? `type="${type}"`   : '';
+        const autoplayAttr = autoplay ? 'autoplay muted'   : '';
+        area.innerHTML = `
+          <video-player class="vjs-cloudinator-player" style="width:100%;height:100%;display:block;">
             <video-skin>
-              <video slot="media" src="${viewUrl}" playsinline autoplay></video>
+              <video slot="media" src="${escapeHtml(src)}" ${typeAttr} ${autoplayAttr} playsinline style="width:100%;height:100%;"></video>
             </video-skin>
           </video-player>`;
-        window._vjsCurrentPlayer = w.querySelector('video-player');
+        window._vjsCurrentPlayer = area.querySelector('video-player');
     }
 
-    // ── 1. Ask the server to start transcoding ────────────────────────────
+    // ── Play Raw button ───────────────────────────────────────────────────
+    const rawBtn = $id('hls-btn-raw');
+    if (rawBtn) {
+        rawBtn.addEventListener('click', () => {
+            _setStatus('');
+            _mountPlayer(`/view/${itemPath}`, '', false);
+            rawBtn.classList.add('hls-btn-active');
+            const bs = $id('hls-btn-stream'); if (bs) bs.classList.remove('hls-btn-active');
+        });
+    }
+
+    // ── Autoplay raw immediately — user sees video right away ─────────────
+    _mountPlayer(`/view/${itemPath}`, '', true);
+    const rb = $id('hls-btn-raw'); if (rb) rb.classList.add('hls-btn-active');
+
+    // ── 1. Ask server about HLS in the background ─────────────────────────
     let startData;
     try {
-        _statusMsg('Requesting adaptive stream…');
+        _setStatus('Checking adaptive stream\u2026');
         const r = await fetch(`/hls_start/${itemPath}`, { cache: 'no-store' });
         startData = await r.json();
     } catch (err) {
-        _showFallback('Could not contact server');
+        _setStatus('');
+        _hideStreamBtn();
         return;
     }
 
-    if (startData.fallback || startData.error) {
-        _showFallback(startData.error || 'Streaming not available');
+    // ffmpeg unavailable — hide HLS button, raw is already playing
+    if (!startData.hls_available) {
+        _hideStreamBtn();
+        _setStatus('');
         return;
     }
 
     const cacheKey = startData.cache_key;
 
-    // ── 2. Poll until status == 'ready' or 'error' ────────────────────────
-    const MAX_POLLS = 180;
+    // HLS already cached and ready — switch to it automatically
+    if (startData.status === 'ready') {
+        _setStreamReady();
+        _wireStreamButton(cacheKey);
+        _setStatus('');
+        // Auto-switch to HLS: unmount raw, mount HLS with autoplay
+        _mountPlayer(`/hls_files/${cacheKey}/master.m3u8`, 'application/x-mpegURL', true);
+        const rb2 = $id('hls-btn-raw');     if (rb2) rb2.classList.remove('hls-btn-active');
+        const sb  = $id('hls-btn-stream');  if (sb)  sb.classList.add('hls-btn-active');
+        return;
+    }
+
+    // HLS processing — raw is playing, show progress in background
+    // ── 2. Poll until ready or error ─────────────────────────────────────
+    const MAX_POLLS = 300;
     let polls = 0;
     while (!window._hlsPollCancel) {
-        if (++polls > MAX_POLLS) { _showFallback('Transcoding is taking too long'); return; }
-
+        if (++polls > MAX_POLLS) {
+            _hideStreamBtn();
+            _setStatus('');
+            return;
+        }
         let st;
         try {
             const r = await fetch(`/hls_status/${cacheKey}`, { cache: 'no-store' });
             st = await r.json();
         } catch (_) { await _hlsSleep(2000); continue; }
 
-        if (st.status === 'ready') break;
-        if (st.status === 'error') { _showFallback('Transcoding failed: ' + (st.message || 'unknown')); return; }
-
-        const dots = '.'.repeat((polls % 3) + 1);
-        _statusMsg(`Transcoding${dots} (this may take a moment for large files)`);
-        await _hlsSleep(1500);
+        if (st.status === 'ready') {
+            _setStreamReady();
+            _wireStreamButton(cacheKey);
+            _setStatus('HLS ready \u2014 click \u26a1 Stream HLS to switch');
+            return;
+        }
+        if (st.status === 'error') {
+            _hideStreamBtn();
+            _setStatus('');
+            return;
+        }
+        const pct = typeof st.progress === 'number' ? st.progress : 0;
+        _setProgress(pct);
+        _setStatus('Pre-processing adaptive bitrate stream\u2026');
+        await _hlsSleep(2000);
     }
-
-    if (window._hlsPollCancel) return;
-
-    // ── 3. Mount <video-player> web-component ─────────────────────────────
-    _statusBarHide();
-    const w = wrapper();
-    if (!w) return;
-
-    const masterUrl = `/hls_files/${cacheKey}/master.m3u8`;
-
-    // Use type="application/x-mpegURL" so VHS (bundled inside @videojs/html)
-    // intercepts the source before the browser ever tries to decode it natively.
-    // Do NOT attach an error listener to the inner <video> — the custom element
-    // upgrades asynchronously, and Chrome/Firefox would fire 'error' on the raw
-    // .m3u8 src before VHS takes over, triggering a false fallback.
-    w.innerHTML = `
-      <video-player class="vjs-cloudinator-player">
-        <video-skin>
-          <video slot="media"
-                 src="${masterUrl}"
-                 type="application/x-mpegURL"
-                 playsinline
-                 autoplay>
-          </video>
-        </video-skin>
-      </video-player>`;
-
-    window._vjsCurrentPlayer = w.querySelector('video-player');
 }
 
-function _hlsSleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+/**
+ * Wire the Stream HLS button. Clones node to clear any previous listener
+ * so toggling Play Raw ↔ Stream HLS any number of times always works.
+ */
+function _wireStreamButton(cacheKey) {
+    const btn = document.getElementById('hls-btn-stream');
+    if (!btn) return;
+    const fresh = btn.cloneNode(true);
+    btn.parentNode.replaceChild(fresh, btn);
+
+    fresh.addEventListener('click', () => {
+        const masterUrl = `/hls_files/${cacheKey}/master.m3u8`;
+        const area = document.getElementById('hls-player-area');
+        if (!area) return;
+        area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;';
+        // No autoplay — clicking the button is the user gesture, audio works
+        area.innerHTML = `
+          <video-player class="vjs-cloudinator-player" style="width:100%;height:100%;display:block;">
+            <video-skin>
+              <video slot="media"
+                     src="${masterUrl}"
+                     type="application/x-mpegURL"
+                     playsinline>
+              </video>
+            </video-skin>
+          </video-player>`;
+        window._vjsCurrentPlayer = area.querySelector('video-player');
+        fresh.classList.add('hls-btn-active');
+        const rawBtn = document.getElementById('hls-btn-raw');
+        if (rawBtn) rawBtn.classList.remove('hls-btn-active');
+        document.getElementById('hls-status-msg') && (document.getElementById('hls-status-msg').textContent = '');
+    });
 }
+
+function _hlsSleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 // ─────────────────────────────────────────────────────────────────────────────
 // End HLS helpers
 // ─────────────────────────────────────────────────────────────────────────────

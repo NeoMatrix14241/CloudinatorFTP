@@ -30,10 +30,13 @@ try:
     from paths import (
         get_db_dir,
         get_cache_dir,
+        get_hls_cache_dir,
         set_db_dir,
         set_cache_dir,
+        set_hls_cache_dir,
         reset_db_dir,
         reset_cache_dir,
+        reset_hls_cache_dir,
         get_all_paths,
     )
 
@@ -134,6 +137,7 @@ def print_current_config():
         ("Files   (ROOT_DIR) ", config.ROOT_DIR, "🗂️ "),
         ("Database (DB_DIR)  ", paths["db_dir"], "🔐"),
         ("Cache   (CACHE_DIR)", paths["cache_dir"], "⚡"),
+        ("HLS Cache          ", paths["hls_cache_dir"], "🎬"),
     ]
 
     for label, path, icon in rows:
@@ -251,7 +255,12 @@ def _configure_custom_files_path():
 def _db_cache_examples(kind):
     home = os.path.expanduser("~")
     platform_type = detect_platform()
-    subfolder = "cloudinator_db" if kind == "db" else "cloudinator_cache"
+    if kind == "db":
+        subfolder = "cloudinator_db"
+    elif kind == "cache":
+        subfolder = "cloudinator_cache"
+    else:  # hls
+        subfolder = "cloudinator_hls"
 
     if platform_type == "windows":
         appdata = os.environ.get("APPDATA", os.path.join(home, "AppData", "Roaming"))
@@ -289,18 +298,20 @@ def _pick_suggested_path(kind, examples):
     if choice == 0 or choice == len(examples) + 1:
         return
     path = examples[choice - 1]
-    label = "Database" if kind == "db" else "Cache"
+    label = {"db": "Database", "cache": "Cache", "hls": "HLS Cache"}.get(kind, kind)
     if not _confirm_path(path, label):
         return
     if kind == "db":
         set_db_dir(path)
-    else:
+    elif kind == "cache":
         set_cache_dir(path)
+    else:
+        set_hls_cache_dir(path)
 
 
 def _configure_custom_dir(kind):
-    label = "Database" if kind == "db" else "Cache"
-    subfolder = "db" if kind == "db" else "cache"
+    label = {"db": "Database", "cache": "Cache", "hls": "HLS Cache"}.get(kind, kind)
+    subfolder = {"db": "db", "cache": "cache", "hls": "hls"}.get(kind, kind)
     print(f"\n🎯 Custom {label} Directory")
     print(f"   Enter a parent folder — '{subfolder}' will be appended automatically.")
     print(f"   Example: C:\\Server  →  C:\\Server\\{subfolder}")
@@ -309,7 +320,6 @@ def _configure_custom_dir(kind):
         if not custom:
             return
         expanded = os.path.abspath(os.path.expanduser(custom))
-        # Preview the final path (mirrors paths.set_db_dir / set_cache_dir logic)
         if os.path.basename(expanded).lower() != subfolder:
             final = os.path.join(expanded, subfolder)
         else:
@@ -318,8 +328,10 @@ def _configure_custom_dir(kind):
             return
         if kind == "db":
             set_db_dir(expanded)
-        else:
+        elif kind == "cache":
             set_cache_dir(expanded)
+        else:
+            set_hls_cache_dir(expanded)
     except KeyboardInterrupt:
         print("\n👋 Cancelled")
 
@@ -412,6 +424,44 @@ def configure_cache_path():
 # ---------------------------------------------------------------------------
 
 
+def configure_hls_cache_path():
+    print("\n🎬 HLS Cache Directory Configuration")
+    print("=" * 50)
+    print(f"Current: {get_hls_cache_dir()}")
+    print()
+    print("This directory holds ffmpeg-transcoded HLS segments:")
+    print("  • <cache_key>/master.m3u8  — adaptive bitrate playlist")
+    print("  • <cache_key>/<quality>/   — .ts segment files")
+    print("  • <cache_key>/.status.json — transcode progress/state")
+    print()
+    print("It can grow large for long videos. Point it at a drive")
+    print("with plenty of free space. Safe to delete at any time —")
+    print("videos will simply be re-transcoded on next play.")
+    print()
+
+    examples = _db_cache_examples("hls")
+    print("Suggested locations:")
+    for ex in examples:
+        print(f"  • {ex}")
+    print()
+
+    print("1. 📁 Use a suggested location")
+    print("2. 🎯 Enter custom path")
+    print("3. 🔄 Reset to default  (inside cache dir)")
+    print("4. ↩️  Back")
+    print()
+
+    choice = _get_choice(4)
+    if choice == 0 or choice == 4:
+        return
+    elif choice == 1:
+        _pick_suggested_path("hls", examples)
+    elif choice == 2:
+        _configure_custom_dir("hls")
+    elif choice == 3:
+        reset_hls_cache_dir()
+
+
 def main_menu():
     while True:
         clear_screen()
@@ -422,13 +472,14 @@ def main_menu():
         print("1. 🗂️  Configure Files storage path   (ROOT_DIR)")
         print("2. 🔐 Configure Database directory    (DB_DIR)  ← keys & secrets")
         print("3. ⚡ Configure Cache directory       (CACHE_DIR)")
-        print("4. 📋 Refresh current settings")
-        print("5. ❌ Exit")
+        print("4. 🎬 Configure HLS Cache directory   (HLS_CACHE_DIR)")
+        print("5. 📋 Refresh current settings")
+        print("6. ❌ Exit")
         print()
 
-        choice = _get_choice(5)
+        choice = _get_choice(6)
 
-        if choice == 0 or choice == 5:
+        if choice == 0 or choice == 6:
             print("👋 Goodbye!")
             break
         elif choice == 1:
@@ -441,6 +492,9 @@ def main_menu():
             configure_cache_path()
             input("\nPress Enter to continue...")
         elif choice == 4:
+            configure_hls_cache_path()
+            input("\nPress Enter to continue...")
+        elif choice == 5:
             pass  # loop re-prints print_current_config
 
 

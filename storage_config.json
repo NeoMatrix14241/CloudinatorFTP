@@ -3,5 +3,6 @@
   "platform": "windows",
   "set_at": "1762334124.8254042",
   "db_path": "C:\\Server\\config\\db",
-  "cache_path": "C:\\Server\\config\\cache"
+  "cache_path": "C:\\Server\\config\\cache",
+  "hls_cache_path": "C:\\Server\\config\\cache\\hls"
 }

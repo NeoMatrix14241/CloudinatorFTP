@@ -13,6 +13,12 @@ MAX_CONTENT_LENGTH = 16 * 1024 * 1024 * 1024  # 16GB max file size
 ALLOWED_EXTENSIONS = None  # None = allow all file types
 PERMANENT_SESSION_LIFETIME = 3600  # 1 hour session timeout
 
+# HLS streaming configuration
+# Files smaller than HLS_MIN_SIZE skip HLS for web-native formats (play raw instead)
+HLS_MIN_SIZE = 50 * 1024 * 1024  # 50 MB default
+# These formats always get HLS regardless of size — browser can't play them raw
+HLS_FORCE_FORMATS = {"mkv", "avi", "wmv", "flv", "mpg", "mpeg", "m2ts", "mts", "3gp", "ogv"}
+
 # Path exports — create=False so importing config never creates directories.
 from paths import get_db_dir, get_cache_dir, set_db_dir, set_cache_dir
 
@@ -429,10 +435,11 @@ def configure_server_settings():
         print(f"5. Session Timeout: {PERMANENT_SESSION_LIFETIME//60} minutes")
         print(f"6. Host Binding: {HOST}")
         print("7. Generate New Session Secret")
-        print("8. Save & Exit")
-        print("9. Exit Without Saving")
+        print(f"8. HLS Settings  (min size: {format_bytes(HLS_MIN_SIZE) if HLS_MIN_SIZE else 'always'})")
+        print("9. Save & Exit")
+        print("0. Exit Without Saving")
 
-        choice = input("\nSelect option to configure (1-9): ").strip()
+        choice = input("\nSelect option to configure (0-9): ").strip()
 
         if choice == "1":
             configure_port()
@@ -449,14 +456,16 @@ def configure_server_settings():
         elif choice == "7":
             generate_session_secret()
         elif choice == "8":
+            configure_hls_settings()
+        elif choice == "9":
             save_server_config()
             print("✅ Server configuration saved!")
             break
-        elif choice == "9":
+        elif choice == "0":
             print("❌ Configuration cancelled")
             break
         else:
-            print("❌ Invalid option. Please choose 1-9.")
+            print("❌ Invalid option. Please choose 0-9.")
 
 
 def configure_port():
@@ -715,6 +724,8 @@ def save_server_config():
         "HOST": HOST,
         "MAX_CONTENT_LENGTH": MAX_CONTENT_LENGTH,
         "PERMANENT_SESSION_LIFETIME": PERMANENT_SESSION_LIFETIME,
+        "HLS_MIN_SIZE": HLS_MIN_SIZE,
+        "HLS_FORCE_FORMATS": sorted(HLS_FORCE_FORMATS),  # set → sorted list for JSON
         "configured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -730,6 +741,7 @@ def load_server_config():
     """Load server configuration from file"""
     global PORT, CHUNK_SIZE, ENABLE_CHUNKED_UPLOADS
     global HOST, MAX_CONTENT_LENGTH, PERMANENT_SESSION_LIFETIME
+    global HLS_MIN_SIZE, HLS_FORCE_FORMATS
 
     try:
         if os.path.exists("server_config.json"):
@@ -746,6 +758,10 @@ def load_server_config():
             PERMANENT_SESSION_LIFETIME = config.get(
                 "PERMANENT_SESSION_LIFETIME", PERMANENT_SESSION_LIFETIME
             )
+            HLS_MIN_SIZE = config.get("HLS_MIN_SIZE", HLS_MIN_SIZE)
+            # Stored as a list in JSON, convert back to set
+            if "HLS_FORCE_FORMATS" in config:
+                HLS_FORCE_FORMATS = set(config["HLS_FORCE_FORMATS"])
 
             print("✅ Server configuration loaded from server_config.json")
             return True
@@ -856,6 +872,129 @@ def main_configuration_menu():
             print("❌ Invalid option. Please choose 1-4.")
 
 
+def configure_hls_settings():
+    """Configure HLS streaming thresholds"""
+    global HLS_MIN_SIZE, HLS_FORCE_FORMATS
+
+    print("\n🎬 HLS Streaming Configuration")
+    print("=" * 50)
+
+    while True:
+        print(f"\nCurrent Settings:")
+        print(f"1. Min size for HLS:    {format_bytes(HLS_MIN_SIZE)}")
+        print(f"   (web-native files smaller than this play raw instead)")
+        print(f"2. Always-HLS formats:  {', '.join(sorted(HLS_FORCE_FORMATS))}")
+        print(f"   (these always get HLS regardless of size)")
+        print("3. Save & Exit")
+        print("4. Exit Without Saving")
+        print()
+
+        choice = input("Select option (1-4): ").strip()
+
+        if choice == "1":
+            _configure_hls_min_size()
+        elif choice == "2":
+            _configure_hls_force_formats()
+        elif choice == "3":
+            save_server_config()
+            print("✅ HLS configuration saved!")
+            break
+        elif choice == "4":
+            print("↩️  Cancelled")
+            break
+        else:
+            print("❌ Invalid option")
+
+
+def _configure_hls_min_size():
+    """Configure minimum file size to trigger HLS for web-native formats"""
+    global HLS_MIN_SIZE
+
+    size_options = {
+        "1": (0,                    "Always use HLS for all videos"),
+        "2": (10  * 1024 * 1024,   "10 MB"),
+        "3": (25  * 1024 * 1024,   "25 MB"),
+        "4": (50  * 1024 * 1024,   "50 MB  (default)"),
+        "5": (100 * 1024 * 1024,   "100 MB"),
+        "6": (250 * 1024 * 1024,   "250 MB"),
+        "7": (500 * 1024 * 1024,   "500 MB"),
+    }
+
+    print(f"\nCurrent: {format_bytes(HLS_MIN_SIZE)}")
+    print("Files below this threshold play raw (for mp4/webm/mov/m4v).")
+    print("Non-web-native formats (mkv, avi, etc.) always use HLS regardless.\n")
+    for key, (val, label) in size_options.items():
+        marker = " ◀ current" if val == HLS_MIN_SIZE else ""
+        print(f"{key}. {label}{marker}")
+    print("8. Custom size")
+    print("9. Keep current")
+
+    choice = input("\nSelect option (1-9): ").strip()
+
+    if choice in size_options:
+        HLS_MIN_SIZE = size_options[choice][0]
+        print(f"✅ HLS min size set to {format_bytes(HLS_MIN_SIZE) if HLS_MIN_SIZE else 'always HLS'}")
+    elif choice == "8":
+        while True:
+            try:
+                raw = input("Enter size in MB (e.g. 75): ").strip()
+                if not raw:
+                    break
+                mb = float(raw)
+                if 0 <= mb <= 10240:
+                    HLS_MIN_SIZE = int(mb * 1024 * 1024)
+                    print(f"✅ HLS min size set to {format_bytes(HLS_MIN_SIZE)}")
+                    break
+                else:
+                    print("❌ Enter a value between 0 and 10240 MB")
+            except ValueError:
+                print("❌ Please enter a valid number")
+    elif choice == "9":
+        print("✅ Keeping current setting")
+    else:
+        print("❌ Invalid option")
+
+
+def _configure_hls_force_formats():
+    """Configure which formats always get HLS regardless of file size"""
+    global HLS_FORCE_FORMATS
+
+    all_formats = sorted({"mkv", "avi", "wmv", "flv", "mpg", "mpeg",
+                           "m2ts", "mts", "3gp", "ogv", "mov", "ts"})
+
+    print(f"\nCurrent always-HLS formats: {', '.join(sorted(HLS_FORCE_FORMATS))}")
+    print("These formats can't be played raw in most browsers, so they")
+    print("always get transcoded to HLS regardless of file size.\n")
+    print("Available formats:")
+    for i, fmt in enumerate(all_formats, 1):
+        marker = "✅" if fmt in HLS_FORCE_FORMATS else "  "
+        print(f"  {marker} {i:2d}. {fmt}")
+
+    print("\nEnter format numbers to toggle (comma-separated), or press Enter to cancel:")
+    raw = input("> ").strip()
+    if not raw:
+        print("↩️  Cancelled")
+        return
+
+    try:
+        indices = [int(x.strip()) - 1 for x in raw.split(",")]
+        toggled = []
+        for idx in indices:
+            if 0 <= idx < len(all_formats):
+                fmt = all_formats[idx]
+                if fmt in HLS_FORCE_FORMATS:
+                    HLS_FORCE_FORMATS.discard(fmt)
+                    toggled.append(f"removed {fmt}")
+                else:
+                    HLS_FORCE_FORMATS.add(fmt)
+                    toggled.append(f"added {fmt}")
+        if toggled:
+            print("✅ " + ", ".join(toggled))
+            print(f"   Always-HLS formats now: {', '.join(sorted(HLS_FORCE_FORMATS))}")
+    except ValueError:
+        print("❌ Please enter valid numbers")
+
+
 def view_current_settings():
     """Display current configuration"""
     print("\n📋 Current Configuration")
@@ -872,6 +1011,10 @@ def view_current_settings():
     print(f"   Max File Size: {format_bytes(MAX_CONTENT_LENGTH)}")
     print(f"   Session Timeout: {PERMANENT_SESSION_LIFETIME//60} minutes")
     print(f"   Session Secret: Managed in db/session.secret")
+
+    print(f"\n🎬 HLS Settings:")
+    print(f"   Min size for HLS: {format_bytes(HLS_MIN_SIZE) if HLS_MIN_SIZE else 'Always HLS'}")
+    print(f"   Always-HLS formats: {', '.join(sorted(HLS_FORCE_FORMATS))}")
 
 
 # Load configuration on import

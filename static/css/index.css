@@ -4778,7 +4778,7 @@ td .fa-file {
 }
 /* ── @videojs/html web-component adaptive player ────────────────────────────── */
 
-/* Make the video body transparent so the player fills it cleanly */
+/* Modal body goes edge-to-edge and black behind the player */
 .file-viewer-body.viewer-video {
     background: #000;
     padding: 0;
@@ -4787,44 +4787,140 @@ td .fa-file {
     overflow: hidden;
 }
 
-/* Outer wrapper — fills the modal body */
+/* Outer wrapper — flex column so buttons sit above the player */
 .hls-player-outer {
     position: relative;
     width: 100%;
     height: 100%;
+    min-height: 420px;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    background: #000;
+    background: #0d1b3e;
 }
 
-/* Status / loading bar shown while transcoding */
-.hls-status-bar {
+/* ── Button row ─────────────────────────────────────────────────────────────── */
+.hls-btn-row {
     display: flex;
-    align-items: center;
     gap: 10px;
-    padding: 14px 20px;
-    color: rgba(255, 255, 255, 0.85);
-    font-size: 14px;
-    background: rgba(0, 0, 0, 0.6);
+    padding: 12px 14px 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
+}
+
+.hls-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 18px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
     border-radius: 8px;
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    z-index: 10;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    background: rgba(255, 255, 255, 0.07);
+    color: rgba(255, 255, 255, 0.75);
     white-space: nowrap;
 }
 
-/* Animated spinner */
+.hls-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.13);
+    border-color: rgba(255, 255, 255, 0.3);
+    color: #fff;
+    transform: translateY(-1px);
+}
+
+.hls-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+/* Play Raw — accent with a subtle green tint */
+.hls-btn-raw {
+    background: rgba(39, 174, 96, 0.15);
+    border-color: rgba(39, 174, 96, 0.35);
+    color: #5dde9a;
+}
+
+.hls-btn-raw:hover:not(:disabled) {
+    background: rgba(39, 174, 96, 0.28);
+    border-color: rgba(39, 174, 96, 0.6);
+    color: #7fffb4;
+    box-shadow: 0 4px 16px rgba(39, 174, 96, 0.2);
+    transform: translateY(-1px);
+}
+
+/* Stream HLS — accent with the theme blue */
+.hls-btn-stream {
+    background: rgba(52, 152, 219, 0.15);
+    border-color: rgba(52, 152, 219, 0.35);
+    color: #74c6f5;
+}
+
+.hls-btn-stream:hover:not(:disabled) {
+    background: rgba(52, 152, 219, 0.28);
+    border-color: rgba(52, 152, 219, 0.6);
+    color: #a8dcff;
+    box-shadow: 0 4px 16px rgba(52, 152, 219, 0.2);
+    transform: translateY(-1px);
+}
+
+/* Active / selected state for whichever button is currently playing */
+.hls-btn-active {
+    background: linear-gradient(135deg, #3498db, #2980b9) !important;
+    border-color: #2980b9 !important;
+    color: #fff !important;
+    box-shadow: 0 4px 16px rgba(52, 152, 219, 0.4);
+}
+
+.hls-btn-active.hls-btn-raw {
+    background: linear-gradient(135deg, #27ae60, #1e9651) !important;
+    border-color: #1e9651 !important;
+    box-shadow: 0 4px 16px rgba(39, 174, 96, 0.4);
+}
+
+/* ── Progress bar ───────────────────────────────────────────────────────────── */
+.hls-progress-wrap {
+    width: 100%;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
+    overflow: hidden;
+}
+
+.hls-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #3498db, #5dade2);
+    transition: width 0.6s ease;
+    border-radius: 0 2px 2px 0;
+    box-shadow: 0 0 8px rgba(52, 152, 219, 0.6);
+}
+
+/* ── Status message ─────────────────────────────────────────────────────────── */
+.hls-status-msg {
+    padding: 6px 14px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.45);
+    flex-shrink: 0;
+    min-height: 24px;
+    background: transparent;
+    font-style: italic;
+}
+
+.hls-status-msg:empty {
+    display: none;
+}
+
+/* ── Spinner (inside the Stream HLS button while processing) ────────────────── */
 .hls-spinner {
-    width: 16px;
-    height: 16px;
-    border: 2px solid rgba(255, 255, 255, 0.25);
-    border-top-color: #fff;
+    width: 13px;
+    height: 13px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-top-color: #74c6f5;
     border-radius: 50%;
-    animation: hls-spin 0.8s linear infinite;
+    animation: hls-spin 0.75s linear infinite;
     flex-shrink: 0;
 }
 
@@ -4832,41 +4928,63 @@ td .fa-file {
     to { transform: rotate(360deg); }
 }
 
-/* Fallback notice banner */
-.hls-fallback-notice {
+/* ── Player area — grows to fill remaining space ────────────────────────────── */
+.hls-player-area {
+    flex: 1 1 auto;
     width: 100%;
-    padding: 8px 14px;
-    background: rgba(52, 152, 219, 0.2);
-    border-bottom: 1px solid rgba(52, 152, 219, 0.35);
-    color: rgba(255, 255, 255, 0.8);
-    font-size: 12px;
-    text-align: center;
+    min-height: 300px;
+    background: #000;
+    display: flex;
+    align-items: stretch;
 }
 
-/* <video-player> web-component fills the wrapper */
-.hls-player-outer video-player,
+/* <video-player> fills the area */
+.hls-player-area video-player,
 .vjs-cloudinator-player {
     width: 100%;
-    max-height: 70vh;
+    height: 100%;
     display: block;
     background: #000;
 }
 
-/* Accent Cloudinator's blue onto the web-component skin */
+/* Theme the video.js skin with Cloudinator blue */
+.hls-player-area video-skin,
 .hls-player-outer video-skin {
     --media-primary-color: #3498db;
     --media-secondary-color: rgba(52, 152, 219, 0.35);
 }
 
-/* Mobile tweak */
+/* Fallback notice banner */
+.hls-fallback-notice {
+    width: 100%;
+    padding: 7px 14px;
+    background: rgba(52, 152, 219, 0.15);
+    border-bottom: 1px solid rgba(52, 152, 219, 0.3);
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 12px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+/* ── Mobile ─────────────────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
-    .hls-player-outer video-player,
+    .hls-btn-row {
+        gap: 7px;
+        padding: 9px 10px 8px;
+    }
+
+    .hls-btn {
+        padding: 7px 13px;
+        font-size: 12px;
+    }
+
+    .hls-player-area {
+        min-height: 200px;
+    }
+
+    .hls-player-area video-player,
     .vjs-cloudinator-player {
         max-height: 55vw;
-    }
-    .hls-status-bar {
-        font-size: 12px;
-        padding: 10px 14px;
     }
 }
 /* ── End @videojs/html styles ──────────────────────────────────────────────── */

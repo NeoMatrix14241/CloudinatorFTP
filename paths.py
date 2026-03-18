@@ -157,9 +157,58 @@ def reset_cache_dir():
     print("⚠️  Restart the server for the change to take effect.")
 
 
+def get_hls_cache_dir(create: bool = True) -> str:
+    """
+    Return the configured HLS transcode cache directory (absolute path).
+    Defaults to <cache_dir>/hls if not set in storage_config.json.
+    This is where ffmpeg writes .ts segments and .m3u8 playlists.
+    Pass create=False to read the path without creating the directory.
+    """
+    configured = _load().get("hls_cache_path")
+    if configured:
+        path = os.path.abspath(configured)
+    else:
+        # Default: a 'hls' subfolder inside the configured cache dir
+        path = os.path.join(get_cache_dir(create=False), "hls")
+    if create:
+        os.makedirs(path, exist_ok=True)
+    return path
+
+
+def set_hls_cache_dir(path: str) -> bool:
+    """
+    Validate, create, and persist a new HLS cache directory.
+    Automatically appends an 'hls' subfolder so the user can point at a
+    parent like C:\\Server\\cache and get C:\\Server\\cache\\hls.
+    Returns True on success, False if the path is not writable.
+    """
+    path = os.path.abspath(os.path.expanduser(path))
+    if os.path.basename(path).lower() != "hls":
+        path = os.path.join(path, "hls")
+    try:
+        os.makedirs(path, exist_ok=True)
+        _test_writable(path)
+        _save({"hls_cache_path": path})
+        print(f"✅ HLS cache directory set to: {path}")
+        print("⚠️  Restart the server for the change to take effect.")
+        print("   Existing HLS transcodes in the old location will NOT be migrated.")
+        return True
+    except Exception as e:
+        print(f"❌ Cannot use HLS cache path '{path}': {e}")
+        return False
+
+
+def reset_hls_cache_dir():
+    """Reset HLS cache directory to the default (<cache_dir>/hls)."""
+    _save({"hls_cache_path": ""})
+    default = os.path.join(get_cache_dir(create=False), "hls")
+    print(f"✅ HLS cache directory reset to default: {default}")
+    print("⚠️  Restart the server for the change to take effect.")
+
+
 def ensure_dirs():
     """
-    Create db/ and cache/ directories at their configured locations.
+    Create db/, cache/, and HLS cache directories at their configured locations.
     Call this ONCE at server startup (app.py / prod_server.py / dev_server.py)
     BEFORE importing database, file_index, or file_monitor.
 
@@ -168,8 +217,10 @@ def ensure_dirs():
     """
     db_path = get_db_dir(create=True)
     cache_path = get_cache_dir(create=True)
+    hls_path = get_hls_cache_dir(create=True)
     print(f"📂 DB dir ready:    {db_path}")
     print(f"📂 Cache dir ready: {cache_path}")
+    print(f"📂 HLS cache ready: {hls_path}")
 
 
 def get_all_paths() -> dict:
@@ -178,8 +229,10 @@ def get_all_paths() -> dict:
     return {
         "db_dir": get_db_dir(create=False),
         "cache_dir": get_cache_dir(create=False),
+        "hls_cache_dir": get_hls_cache_dir(create=False),
         "default_db_dir": os.path.join(_HERE, "db"),
         "default_cache_dir": os.path.join(_HERE, "cache"),
+        "default_hls_cache_dir": os.path.join(get_cache_dir(create=False), "hls"),
     }
 
 
