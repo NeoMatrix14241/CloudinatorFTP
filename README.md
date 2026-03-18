@@ -34,7 +34,7 @@ termux-setup-storage
 ```
 *Grant storage permissions when prompted - this allows files to be accessible from Android file managers*
 
-Note: If trying to deploy to other OS, FFMPEG is optional for adaptive bitrate video preview with video.js
+Note: If trying to deploy to other OS, [FFmpeg](https://www.gyan.dev/ffmpeg/builds/) is optional for adaptive bitrate video preview with [Video.js](https://videojs.org/).
 
 #### 2. 📥 Clone the Project
 
