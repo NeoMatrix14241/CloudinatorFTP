@@ -142,7 +142,7 @@ function smartTableColumnizer() {
 
         // Same column widths everywhere — mobile scrolls horizontally, no need to shrink
         const cbW   = 36;
-        const sizeW = 150;
+        const sizeW = 200;
         const typeW = 125;
         const modW  = 140;
         const actW  = 172; // extra 12px clears the scrollbar
@@ -150,7 +150,7 @@ function smartTableColumnizer() {
         const fixedTotal = cbW + sizeW + typeW + modW + actW;
 
         // Name fills all remaining space; min 200px so word-wrap has room to breathe
-        const nameW  = Math.max(200, W - fixedTotal - 4);
+        const nameW  = Math.max(160, W - fixedTotal - 4);
         const totalW = fixedTotal + nameW;
         _set(table, 'table-layout', 'fixed');
         _set(table, 'width',        '100%');
@@ -228,9 +228,9 @@ function smartTableColumnizer() {
     smartTableColumnizer._getColDefs = function() {
         const W = wrapper.clientWidth || wrapper.offsetWidth || 800;
         const isMobile = W < 600;
-        const cbW=36, sizeW=150, typeW=125, modW=140, actW=172;
+        const cbW=36, sizeW=200, typeW=125, modW=140, actW=172;
         const fixedTotal=cbW+sizeW+typeW+modW+actW;
-        const nameW=Math.max(200,W-fixedTotal-4);
+        const nameW=Math.max(160,W-fixedTotal-4);
         return { colDefs:[cbW,nameW,sizeW,typeW,modW,actW], isMobile };
     };
 
