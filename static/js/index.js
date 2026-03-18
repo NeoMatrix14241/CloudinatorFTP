@@ -2988,6 +2988,7 @@ function openFileViewer(itemPath, filename) {
                     <span id="hls-btn-label">Preparing stream…</span>
                   </button>
                 </div>
+                <div class="hls-quality-row" id="hls-quality-row" style="display:none;"></div>
                 <div class="hls-progress-wrap" id="hls-progress-wrap" style="display:none">
                   <div class="hls-progress-bar" id="hls-progress-bar" style="width:0%"></div>
                 </div>
@@ -8794,16 +8795,6 @@ function _renderArchivePreview(body, data) {
 // Served locally from static/js/video.js + static/css/video.css — no CDN.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Two-button video modal:
- *   [ ▶ Play Raw ]   [ ⚡ Stream HLS  ████░░  42% ]
- *
- * • Play Raw    — always works, mounts video.js on /view/<path> instantly
- * • Stream HLS  — shown only when ffmpeg available; progress bar while
- *                 transcoding; activates when status == "ready"
- * • No autoplay on <video slot="media"> — user clicks play = audio works
- * • Backend thread is daemon — survives frontend refresh uninterrupted
- */
 async function _hlsStartStream(itemPath, wrapperId) {
     window._hlsPollCancel    = false;
     window._vjsCurrentPlayer = null;
@@ -8827,41 +8818,65 @@ async function _hlsStartStream(itemPath, wrapperId) {
         const bt = $id('hls-btn-stream');    if (bt) bt.style.display   = 'none';
         const pw = $id('hls-progress-wrap'); if (pw) pw.style.display   = 'none';
     }
+    function _hideQualityRow() {
+        const qr = $id('hls-quality-row');   if (qr) qr.style.display   = 'none';
+    }
 
-    // Mount a video.js <video-player> into the player area.
-    // autoplay=true  → used for automatic playback on modal open (raw or HLS)
-    // autoplay=false → used when user manually clicks a button (gesture = audio)
-    function _mountPlayer(src, type, autoplay) {
+    function _mountRawPlayer(src, autoplay) {
         const area = $id('hls-player-area');
         if (!area) return;
         area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;';
-        const typeAttr     = type     ? `type="${type}"`   : '';
-        const autoplayAttr = autoplay ? 'autoplay muted'   : '';
+        // autoplay muted is required by browsers for programmatic play;
+        // we unmute immediately after the player is ready
+        const ap = autoplay ? 'autoplay muted' : '';
         area.innerHTML = `
           <video-player class="vjs-cloudinator-player" style="width:100%;height:100%;display:block;">
             <video-skin>
-              <video slot="media" src="${escapeHtml(src)}" ${typeAttr} ${autoplayAttr} playsinline style="width:100%;height:100%;"></video>
+              <video slot="media" src="${escapeHtml(src)}" ${ap} playsinline style="width:100%;height:100%;"></video>
             </video-skin>
           </video-player>`;
-        window._vjsCurrentPlayer = area.querySelector('video-player');
+        const playerEl = area.querySelector('video-player');
+        window._vjsCurrentPlayer = playerEl;
+        if (autoplay) _unmuteWhenReady(playerEl);
+        _hideQualityRow();
     }
 
-    // ── Play Raw button ───────────────────────────────────────────────────
+    function _mountHlsPlayer(masterUrl, autoplay) {
+        const area = $id('hls-player-area');
+        if (!area) return;
+        area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;';
+        const ap = autoplay ? 'autoplay muted' : '';
+        area.innerHTML = `
+          <video-player class="vjs-cloudinator-player" style="width:100%;height:100%;display:block;">
+            <video-skin>
+              <video slot="media"
+                     src="${escapeHtml(masterUrl)}"
+                     type="application/x-mpegURL"
+                     ${ap}
+                     playsinline
+                     style="width:100%;height:100%;">
+              </video>
+            </video-skin>
+          </video-player>`;
+        const playerEl = area.querySelector('video-player');
+        window._vjsCurrentPlayer = playerEl;
+        if (autoplay) _unmuteWhenReady(playerEl);
+        _attachQualitySelector(playerEl);
+    }
+
     const rawBtn = $id('hls-btn-raw');
     if (rawBtn) {
         rawBtn.addEventListener('click', () => {
             _setStatus('');
-            _mountPlayer(`/view/${itemPath}`, '', false);
+            _mountRawPlayer(`/view/${itemPath}`, false);
             rawBtn.classList.add('hls-btn-active');
-            const bs = $id('hls-btn-stream'); if (bs) bs.classList.remove('hls-btn-active');
+            const sb = $id('hls-btn-stream'); if (sb) sb.classList.remove('hls-btn-active');
         });
     }
 
-    // ── Autoplay raw immediately — user sees video right away ─────────────
-    _mountPlayer(`/view/${itemPath}`, '', true);
+    _mountRawPlayer(`/view/${itemPath}`, true);
     const rb = $id('hls-btn-raw'); if (rb) rb.classList.add('hls-btn-active');
 
-    // ── 1. Ask server about HLS in the background ─────────────────────────
     let startData;
     try {
         _setStatus('Checking adaptive stream\u2026');
@@ -8873,7 +8888,6 @@ async function _hlsStartStream(itemPath, wrapperId) {
         return;
     }
 
-    // ffmpeg unavailable — hide HLS button, raw is already playing
     if (!startData.hls_available) {
         _hideStreamBtn();
         _setStatus('');
@@ -8882,28 +8896,21 @@ async function _hlsStartStream(itemPath, wrapperId) {
 
     const cacheKey = startData.cache_key;
 
-    // HLS already cached and ready — switch to it automatically
     if (startData.status === 'ready') {
         _setStreamReady();
-        _wireStreamButton(cacheKey);
+        _wireStreamButton(cacheKey, startData.profiles);
         _setStatus('');
-        // Auto-switch to HLS: unmount raw, mount HLS with autoplay
-        _mountPlayer(`/hls_files/${cacheKey}/master.m3u8`, 'application/x-mpegURL', true);
-        const rb2 = $id('hls-btn-raw');     if (rb2) rb2.classList.remove('hls-btn-active');
-        const sb  = $id('hls-btn-stream');  if (sb)  sb.classList.add('hls-btn-active');
+        _mountHlsPlayer(`/hls_files/${cacheKey}/master.m3u8`, true);
+        const rb2 = $id('hls-btn-raw');    if (rb2) rb2.classList.remove('hls-btn-active');
+        const sb  = $id('hls-btn-stream'); if (sb)  sb.classList.add('hls-btn-active');
+        _buildQualityBar(startData.profiles, cacheKey);
         return;
     }
 
-    // HLS processing — raw is playing, show progress in background
-    // ── 2. Poll until ready or error ─────────────────────────────────────
     const MAX_POLLS = 300;
     let polls = 0;
     while (!window._hlsPollCancel) {
-        if (++polls > MAX_POLLS) {
-            _hideStreamBtn();
-            _setStatus('');
-            return;
-        }
+        if (++polls > MAX_POLLS) { _hideStreamBtn(); _setStatus(''); return; }
         let st;
         try {
             const r = await fetch(`/hls_status/${cacheKey}`, { cache: 'no-store' });
@@ -8912,15 +8919,13 @@ async function _hlsStartStream(itemPath, wrapperId) {
 
         if (st.status === 'ready') {
             _setStreamReady();
-            _wireStreamButton(cacheKey);
+            _wireStreamButton(cacheKey, st.profiles);
             _setStatus('HLS ready \u2014 click \u26a1 Stream HLS to switch');
+            _buildQualityBar(st.profiles, cacheKey);
             return;
         }
-        if (st.status === 'error') {
-            _hideStreamBtn();
-            _setStatus('');
-            return;
-        }
+        if (st.status === 'error') { _hideStreamBtn(); _setStatus(''); return; }
+
         const pct = typeof st.progress === 'number' ? st.progress : 0;
         _setProgress(pct);
         _setStatus('Pre-processing adaptive bitrate stream\u2026');
@@ -8928,11 +8933,7 @@ async function _hlsStartStream(itemPath, wrapperId) {
     }
 }
 
-/**
- * Wire the Stream HLS button. Clones node to clear any previous listener
- * so toggling Play Raw ↔ Stream HLS any number of times always works.
- */
-function _wireStreamButton(cacheKey) {
+function _wireStreamButton(cacheKey, profiles) {
     const btn = document.getElementById('hls-btn-stream');
     if (!btn) return;
     const fresh = btn.cloneNode(true);
@@ -8943,23 +8944,111 @@ function _wireStreamButton(cacheKey) {
         const area = document.getElementById('hls-player-area');
         if (!area) return;
         area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;';
-        // No autoplay — clicking the button is the user gesture, audio works
         area.innerHTML = `
           <video-player class="vjs-cloudinator-player" style="width:100%;height:100%;display:block;">
             <video-skin>
               <video slot="media"
                      src="${masterUrl}"
                      type="application/x-mpegURL"
-                     playsinline>
+                     playsinline
+                     style="width:100%;height:100%;">
               </video>
             </video-skin>
           </video-player>`;
-        window._vjsCurrentPlayer = area.querySelector('video-player');
+        const playerEl = area.querySelector('video-player');
+        window._vjsCurrentPlayer = playerEl;
+        _unmuteWhenReady(playerEl);
+        _buildQualityBar(profiles, cacheKey);
         fresh.classList.add('hls-btn-active');
         const rawBtn = document.getElementById('hls-btn-raw');
         if (rawBtn) rawBtn.classList.remove('hls-btn-active');
-        document.getElementById('hls-status-msg') && (document.getElementById('hls-status-msg').textContent = '');
+        const sm = document.getElementById('hls-status-msg');
+        if (sm) sm.textContent = '';
     });
+}
+
+
+/**
+ * Unmute the <video> element inside <video-player> after autoplay starts.
+ * Browsers require muted for programmatic autoplay.
+ */
+function _unmuteWhenReady(playerEl) {
+    if (!playerEl) return;
+    let attempts = 0;
+    const poll = setInterval(() => {
+        if (++attempts > 100) { clearInterval(poll); return; }
+        const video = playerEl.querySelector('video[slot="media"]');
+        if (!video) return;
+        clearInterval(poll);
+
+        function doPlayUnmuted() {
+            // Unmute first, then play — if play() is blocked by autoplay policy
+            // we fall back to muted play so at least the video starts
+            video.muted = false;
+            video.volume = 1;
+            video.play().catch(() => {
+                // Browser blocked unmuted autoplay — play muted as fallback
+                video.muted = true;
+                video.play().catch(() => {});
+            });
+        }
+
+        if (video.readyState >= 1) {
+            doPlayUnmuted();
+        } else {
+            video.addEventListener('loadedmetadata', doPlayUnmuted, { once: true });
+        }
+    }, 50);
+}
+
+/**
+ * Build Auto/1080p/720p/360p quality bar using direct <video> src swaps.
+ * No VJS API needed — the <video> element is in the light DOM.
+ */
+function _buildQualityBar(profiles, cacheKey) {
+    const row = document.getElementById('hls-quality-row');
+    if (!row || !profiles || profiles.length < 2) return;
+
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 8px;flex-wrap:wrap;';
+    row.innerHTML = '';
+
+    const label = document.createElement('span');
+    label.textContent = 'Quality:';
+    label.style.cssText = 'color:rgba(255,255,255,0.55);font-size:12px;user-select:none;margin-right:2px;';
+    row.appendChild(label);
+
+    function makeBtn(text, src) {
+        const btn = document.createElement('button');
+        btn.className = 'hls-quality-btn' + (text === 'Auto' ? ' hls-quality-active' : '');
+        btn.textContent = text;
+        btn.addEventListener('click', () => {
+            const playerEl = document.querySelector('#hls-player-area video-player');
+            if (!playerEl) return;
+            const video = playerEl.querySelector('video[slot="media"]');
+            if (!video) return;
+            const wasPaused = video.paused;
+            const currentTime = video.currentTime;
+            video.src = src;
+            video.load();
+            video.addEventListener('loadedmetadata', () => {
+                if (currentTime > 0) { try { video.currentTime = currentTime; } catch(_) {} }
+                if (!wasPaused) video.play().catch(() => {});
+                video.muted = false;
+                video.volume = 1;
+            }, { once: true });
+            row.querySelectorAll('.hls-quality-btn').forEach(b => b.classList.remove('hls-quality-active'));
+            btn.classList.add('hls-quality-active');
+        });
+        return btn;
+    }
+
+    row.appendChild(makeBtn('Auto', `/hls_files/${cacheKey}/master.m3u8`));
+    const sorted = [...profiles].sort((a, b) => (parseInt(b) || 0) - (parseInt(a) || 0));
+    sorted.forEach(p => row.appendChild(makeBtn(p, `/hls_files/${cacheKey}/${p}/index.m3u8`)));
+}
+
+function _attachQualitySelector(playerEl) {
+    // no-op stub — quality bar is built via _buildQualityBar(profiles, cacheKey)
 }
 
 function _hlsSleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
