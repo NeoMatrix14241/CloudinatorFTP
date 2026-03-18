@@ -315,7 +315,6 @@ body {
     overflow-y: auto;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
-    /* smooth scroll on iOS */
 }
 
 /* Sticky header inside scroll wrapper */
@@ -396,11 +395,7 @@ body {
 }
 
 .table th {
-    padding: 8px 10px;
-    text-align: left;
-    font-weight: 600;
-    font-size: 13px;
-    text-transform: uppercase;
+    padding: 18px 13px;
     letter-spacing: 0.5px;
     white-space: nowrap;
     overflow: hidden;
@@ -422,7 +417,7 @@ body {
 }
 
 .table td {
-    padding: 7px 10px;
+    padding: 11px 13px;
     vertical-align: middle;
     color: white;
     overflow: hidden;
@@ -2894,6 +2889,8 @@ td .fa-file {
         height: 20px;
     }
 
+    /* table rows size to content — no min-height override needed */
+
     .queue-item {
         min-height: 60px;
     }
@@ -4694,7 +4691,6 @@ td .fa-file {
         gap: 8px 10px;
     }
 }
-
 /* ── @videojs/html web-component adaptive player ────────────────────────────── */
 
 /* Video viewer — site-themed dark navy instead of pure black */
@@ -4728,8 +4724,7 @@ td .fa-file {
     padding: 14px 20px;
     color: rgba(255, 255, 255, 0.85);
     font-size: 14px;
-    background: rgba(13, 30, 61, 0.88);
-    /* site-themed navy instead of black */
+    background: rgba(13, 30, 61, 0.88);   /* site-themed navy instead of black */
     border: 1px solid rgba(52, 152, 219, 0.25);
     border-radius: 8px;
     position: absolute;
@@ -4752,9 +4747,7 @@ td .fa-file {
 }
 
 @keyframes hls-spin {
-    to {
-        transform: rotate(360deg);
-    }
+    to { transform: rotate(360deg); }
 }
 
 /* Fallback notice banner */
@@ -4775,8 +4768,7 @@ td .fa-file {
     width: 100%;
     height: 100%;
     display: block;
-    background: #000;
-    /* video canvas stays black */
+    background: #000;        /* video canvas stays black */
     border-radius: 0;
     /* Mobile: ensure touch events reach the player controls */
     touch-action: manipulation;
@@ -4813,28 +4805,23 @@ td .fa-file {
 
 /* Mobile tweak */
 @media (max-width: 768px) {
-
     .hls-player-outer video-player,
     .vjs-cloudinator-player {
         max-height: none;
     }
-
     .hls-status-bar {
         font-size: 12px;
         padding: 10px 14px;
     }
-
     .hls-player-outer video-player video,
     .hls-player-outer video[slot="media"] {
         border-radius: 0 !important;
         -webkit-border-radius: 0 !important;
     }
-
     .hls-btn {
         font-size: 12px;
         padding: 5px 10px;
     }
-
     .hls-quality-btn {
         font-size: 11px;
         padding: 2px 7px;
@@ -4847,8 +4834,7 @@ td .fa-file {
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
-    background: rgba(13, 30, 61, 0.92);
-    /* site-themed navy instead of black */
+    background: rgba(13, 30, 61, 0.92);   /* site-themed navy instead of black */
     flex-shrink: 0;
     flex-wrap: wrap;
 }
@@ -4894,8 +4880,7 @@ td .fa-file {
     align-items: center;
     gap: 5px;
     padding: 4px 10px;
-    background: rgba(22, 48, 95, 0.75);
-    /* site-themed navy instead of black */
+    background: rgba(22, 48, 95, 0.75);   /* site-themed navy instead of black */
     flex-shrink: 0;
     flex-wrap: wrap;
 }
@@ -4947,7 +4932,6 @@ td .fa-file {
     flex-shrink: 0;
     min-height: 18px;
 }
-
 /* ── End @videojs/html styles ──────────────────────────────────────────────── */
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -4988,8 +4972,7 @@ td .fa-file {
     max-width: 28px !important;
     padding: 0 !important;
     margin: 0 !important;
-    font-size: 0 !important;
-    /* hide any leftover text */
+    font-size: 0 !important;          /* hide any leftover text */
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -5018,7 +5001,7 @@ td .fa-file {
     font-weight: 500;
     padding: 4px 9px;
     border-radius: 5px;
-    border: 1px solid rgba(255, 255, 255, 0.18);
+    border: 1px solid rgba(255,255,255,0.18);
     pointer-events: none;
     z-index: 999999;
     white-space: nowrap;
@@ -5026,7 +5009,6 @@ td .fa-file {
     transition: opacity 0.12s ease;
     line-height: 1.4;
 }
-
 #btn-action-tooltip.visible {
     opacity: 1;
 }
