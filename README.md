@@ -23,6 +23,11 @@ A lightweight FTP-like file transfer server that runs on Termux and exposes itse
 #### 1. 🔧 Initial Termux Setup
 
 ```bash
+
+# Install termux packages
+# Note: This includes two patches for PyPPMd (a py7zr dependency) to build on Android:
+#   1. pthread_cancel() → pthread_kill(SIGTERM) workaround (Android's bionic libc lacks pthread_cancel)
+#   2. pyproject.toml version patched to 1.3.1 (setuptools_scm can't detect version from tarball, defaults to 0.0.0)
 pkg --check-mirror update && pkg update && pkg upgrade -y && pkg install -y python git cloudflared python-bcrypt build-essential libffi openssl rust llvm binutils-is-llvm python-cryptography ffmpeg libxml2 libxslt python-psutil clang make && pip cache purge && pip uninstall pyppmd -y ; pip download pyppmd==1.3.1 --no-binary pyppmd -d $TMPDIR/ppmd && cd $TMPDIR/ppmd && rm -rf pyppmd-1.3.1 && tar -xzf pyppmd-1.3.1.tar.gz && cd pyppmd-1.3.1 && sed -i 's/pthread_cancel(tc->handle);/pthread_kill(tc->handle, SIGTERM);/g' src/lib/buffer/ThreadDecoder.c && python3 -c "
 import re
 c = open('pyproject.toml').read()
