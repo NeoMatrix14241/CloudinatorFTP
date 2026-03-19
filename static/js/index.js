@@ -143,42 +143,64 @@ function smartTableColumnizer() {
         const isMobile = W < 600;
         const isTablet = W >= 600 && W < 900;
 
-        // Mobile (<600px):  cb | name | size | actions          (type + modified hidden)
-        // Tablet (600-899): cb | name | size | type | actions   (modified hidden)
+        // Mobile (<600px):  cb | name | size | actions               (type + modified hidden)
+        // Tablet (600-899): cb | name | size | type | actions        (modified hidden, slimmer cols)
         // Desktop (≥900px): all 6 columns
         const cbW   = 36;
-        const sizeW = isTablet ? 160 : 200; // slim size col on tablet to reclaim space
-        const typeW = 125;
+        const sizeW = isTablet ? 110 : 200;
+        const typeW = isTablet ? 110 : 125;
         const modW  = 140;
-        const actW  = 172; // extra 12px clears the scrollbar
+        const actW  = isTablet ? 155 : 172;
 
         // Modified column is hidden on tablet and mobile
         const showMod = !isTablet && !isMobile;
         const fixedTotal = cbW + sizeW + typeW + (showMod ? modW : 0) + actW;
 
-        // Name fills all remaining space; min 250px on mobile so names don't wrap excessively
-        const nameW  = Math.max(isMobile ? 250 : 160, W - fixedTotal - 4);
+        // Name fills remaining space.
+        const nameFloor = isMobile ? 250 : isTablet ? 100 : 160;
+        const nameW  = Math.max(nameFloor, W - fixedTotal - 4);
         const totalW = fixedTotal + nameW;
         _set(table, 'table-layout', 'fixed');
         _set(table, 'width',        '100%');
         _set(table, 'min-width',    totalW + 'px');
 
-        // colDefs: use 0 as sentinel for hidden columns (display:none applied below)
+        // colDefs: 0 = hidden column sentinel (display:none applied below)
         const colDefs = [cbW, nameW, sizeW, typeW, showMod ? modW : 0, actW];
+
+        // Top padding used by name/data cells — checkbox uses the same value so they align
+        const cellPadTop = isMobile ? '8px' : '11px';
+
+        // ── Shared helper: lock a checkbox input to exactly 16×16px ──────────────
+        function _fixCheckbox(el) {
+            if (!el) return;
+            _set(el, 'width',      '16px');
+            _set(el, 'height',     '16px');
+            _set(el, 'min-width',  '16px');
+            _set(el, 'min-height', '16px');
+            _set(el, 'max-width',  '16px');
+            _set(el, 'max-height', '16px');
+            _set(el, 'display',    'block');
+            _set(el, 'margin',     '0 auto');
+        }
 
         // ── Apply to <thead th> ───────────────────────────────────────────────────
         table.querySelectorAll('thead th').forEach((th, i) => {
             const w = colDefs[i];
-            if (w === 0) {
-                _set(th, 'display', 'none');
-                return;
-            }
+            if (w === 0) { _set(th, 'display', 'none'); return; }
             _set(th, 'display',     '');
             _set(th, 'width',       w + 'px');
             _set(th, 'max-width',   w + 'px');
-            _set(th, 'overflow',    'hidden');
             _set(th, 'white-space', 'nowrap');
-            _set(th, 'padding',     i === 0 ? '10px 4px' : (isMobile ? '14px 6px' : '18px 13px'));
+            if (i === 0) {
+                _set(th, 'overflow',       'visible');
+                _set(th, 'padding',        '0');
+                _set(th, 'text-align',     'center');
+                _set(th, 'vertical-align', 'middle');
+                _fixCheckbox(th.querySelector('input[type="checkbox"]'));
+            } else {
+                _set(th, 'overflow', 'hidden');
+                _set(th, 'padding',  isMobile ? '14px 6px' : '18px 13px');
+            }
         });
 
         // ── Apply to <tbody td> ───────────────────────────────────────────────────
@@ -186,19 +208,40 @@ function smartTableColumnizer() {
     }
 
     function _styleRows(rows, colDefs, isMobile) {
-        const pad = isMobile ? '8px 8px' : '11px 13px';
+        const pad        = isMobile ? '8px 8px' : '11px 13px';
+        const padTop     = isMobile ? '8px' : '11px';
         rows.forEach(row => {
             Array.from(row.cells).forEach((td, i) => {
                 const w = colDefs[i];
-                if (w === 0) {
-                    _set(td, 'display', 'none');
+                if (w === 0) { _set(td, 'display', 'none'); return; }
+
+                _set(td, 'display',   '');
+                _set(td, 'width',     w + 'px');
+                _set(td, 'max-width', w + 'px');
+
+                if (i === 0) {
+                    // Checkbox cell: top-aligned with same top padding as name cell so they sit level
+                    _set(td, 'overflow',       'visible');
+                    _set(td, 'padding',        padTop + ' 0 0 0');
+                    _set(td, 'text-align',     'center');
+                    _set(td, 'vertical-align', 'top');
+                    _set(td, 'line-height',    'normal');
+                    const cb = td.querySelector('input[type="checkbox"]');
+                    if (cb) {
+                        _set(cb, 'width',      '16px');
+                        _set(cb, 'height',     '16px');
+                        _set(cb, 'min-width',  '16px');
+                        _set(cb, 'min-height', '16px');
+                        _set(cb, 'max-width',  '16px');
+                        _set(cb, 'max-height', '16px');
+                        _set(cb, 'display',    'block');
+                        _set(cb, 'margin',     '0 auto');
+                    }
                     return;
                 }
-                _set(td, 'display',        '');
-                _set(td, 'width',          w + 'px');
-                _set(td, 'max-width',      w + 'px');
+
                 _set(td, 'overflow',       'hidden');
-                _set(td, 'padding',        i === 0 ? '10px 4px' : pad); // cb cell: tight padding so checkbox isn't clipped
+                _set(td, 'padding',        pad);
                 _set(td, 'vertical-align', 'top');
                 _set(td, 'line-height',    '1.3');
 
@@ -245,10 +288,11 @@ function smartTableColumnizer() {
         const W = wrapper.clientWidth || wrapper.offsetWidth || 800;
         const isMobile = W < 600;
         const isTablet = W >= 600 && W < 900;
-        const cbW=36, sizeW=isTablet?160:200, typeW=125, modW=140, actW=172;
+        const cbW=36, sizeW=isTablet?110:200, typeW=isTablet?110:125, modW=140, actW=isTablet?155:172;
         const showMod = !isTablet && !isMobile;
         const fixedTotal=cbW+sizeW+typeW+(showMod?modW:0)+actW;
-        const nameW=Math.max(isMobile?250:160,W-fixedTotal-4);
+        const nameFloor = isMobile ? 250 : isTablet ? 100 : 160;
+        const nameW=Math.max(nameFloor, W-fixedTotal-4);
         return { colDefs:[cbW,nameW,sizeW,typeW,showMod?modW:0,actW], isMobile };
     };
 
