@@ -27,7 +27,7 @@ A lightweight FTP-like file transfer server that runs on Termux and exposes itse
 pkg --check-mirror update && pkg update && pkg upgrade -y
 
 # Install required packages
-pkg install python git cloudflared python-bcrypt build-essential libffi openssl rust llvm binutils-is-llvm python-cryptography ffmpeg
+pkg install python git cloudflared python-bcrypt build-essential libffi openssl rust llvm binutils-is-llvm python-cryptography ffmpeg libxml2 libxslt python-psutil
 
 # ⚠️ IMPORTANT: Setup storage access for Android file managers
 termux-setup-storage
