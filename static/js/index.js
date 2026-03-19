@@ -152,11 +152,9 @@ function smartTableColumnizer() {
         const modW  = 140;
         const actW  = isTablet ? 155 : 172;
 
-        // Modified column is hidden on tablet and mobile
         const showMod = !isTablet && !isMobile;
         const fixedTotal = cbW + sizeW + typeW + (showMod ? modW : 0) + actW;
 
-        // Name fills remaining space.
         const nameFloor = isMobile ? 250 : isTablet ? 100 : 160;
         const nameW  = Math.max(nameFloor, W - fixedTotal - 4);
         const totalW = fixedTotal + nameW;
@@ -164,13 +162,10 @@ function smartTableColumnizer() {
         _set(table, 'width',        '100%');
         _set(table, 'min-width',    totalW + 'px');
 
-        // colDefs: 0 = hidden column sentinel (display:none applied below)
         const colDefs = [cbW, nameW, sizeW, typeW, showMod ? modW : 0, actW];
 
-        // Top padding used by name/data cells — checkbox uses the same value so they align
-        const cellPadTop = isMobile ? '8px' : '11px';
+        const padTop = isMobile ? '8px' : '11px';
 
-        // ── Shared helper: lock a checkbox input to exactly 16×16px ──────────────
         function _fixCheckbox(el) {
             if (!el) return;
             _set(el, 'width',      '16px');
@@ -208,9 +203,12 @@ function smartTableColumnizer() {
     }
 
     function _styleRows(rows, colDefs, isMobile) {
-        const pad        = isMobile ? '8px 8px' : '11px 13px';
-        const padTop     = isMobile ? '8px' : '11px';
+        const pad    = isMobile ? '8px 8px' : '11px 13px';
+        const padTop = isMobile ? '8px' : '11px';
         rows.forEach(row => {
+            if (row.classList.contains('empty-folder-row')) return;
+            if (row.cells.length && row.cells[0].colSpan > 1) return;
+
             Array.from(row.cells).forEach((td, i) => {
                 const w = colDefs[i];
                 if (w === 0) { _set(td, 'display', 'none'); return; }
@@ -220,7 +218,6 @@ function smartTableColumnizer() {
                 _set(td, 'max-width', w + 'px');
 
                 if (i === 0) {
-                    // Checkbox cell: top-aligned with same top padding as name cell so they sit level
                     _set(td, 'overflow',       'visible');
                     _set(td, 'padding',        padTop + ' 0 0 0');
                     _set(td, 'text-align',     'center');
@@ -1651,8 +1648,8 @@ function createEmptyFolderRow() {
     row.className = 'empty-folder-row';
     row.innerHTML = `
         <td colspan="6" style="text-align: center; padding: 40px 20px; color: white;">
-            <div style="opacity: 0.6;">
-                <i class="fas fa-folder-open" style="font-size: 48px; margin-bottom: 15px; display: block;"></i>
+            <div style="opacity: 0.6; display: flex; flex-direction: column; align-items: center;">
+                <i class="fas fa-folder-open" style="font-size: 48px; margin-bottom: 15px;"></i>
                 <div style="font-size: 16px; font-weight: 500; margin-bottom: 5px;">This folder is empty</div>
                 <div style="font-size: 13px;">No files or folders to display</div>
             </div>
