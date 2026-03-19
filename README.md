@@ -1,6 +1,10 @@
 # 📁 Cloudinator - Cloudflare and Termux FTP
 
-A lightweight FTP-like file transfer server that runs on Termux and exposes itself to the internet via Cloudflare tunnels. Access your Android device's storage from anywhere!
+A lightweight FTP-like file transfer server that runs on **Termux (Android), Linux, and Windows** and exposes itself to the internet via Cloudflare tunnels. Access your device's storage from anywhere!
+
+![Android](https://img.shields.io/badge/Android-Termux-3DDC84?logo=android)
+![Linux](https://img.shields.io/badge/Linux-supported-FCC624?logo=linux)
+![Windows](https://img.shields.io/badge/Windows-supported-0078D6?logo=windows)
 
 ## 📷 Login
 <img width="1794" height="892" alt="image" src="https://github.com/user-attachments/assets/6437db54-1e73-4459-ba45-f3552e7bbad6" />
@@ -15,7 +19,9 @@ A lightweight FTP-like file transfer server that runs on Termux and exposes itse
 
 ### Prerequisites
 
-- Android device with Termux installed (Not the playstore one, download in github or f-droid)
+- **Android**: Termux installed (Not the Play Store version — download from [GitHub](https://github.com/termux/termux-app) or [F-Droid](https://f-droid.org/packages/com.termux/))
+- **Linux**: Python 3.10+, pip, git, ffmpeg (optional)
+- **Windows**: Python 3.10+, pip, git, [FFmpeg](https://www.gyan.dev/ffmpeg/builds/) (optional)
 - Internet connection
 
 ### Installation & Setup
