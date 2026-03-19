@@ -3180,6 +3180,12 @@ function openFileViewer(itemPath, filename) {
                     <span class="hls-spinner" id="hls-btn-spinner"></span>
                     <span id="hls-btn-label">Preparing stream…</span>
                   </button>
+                  <button class="hls-btn hls-btn-skip" id="hls-btn-skip-back" title="Skip back 10s" onclick="_hlsSkip(-10)">
+                    <i class="fas fa-rotate-left"></i> -10s
+                  </button>
+                  <button class="hls-btn hls-btn-skip" id="hls-btn-skip-fwd" title="Skip forward 10s" onclick="_hlsSkip(10)">
+                    <i class="fas fa-rotate-right"></i> +10s
+                  </button>
                 </div>
                 <div class="hls-quality-row" id="hls-quality-row" style="display:none;"></div>
                 <div class="hls-progress-wrap" id="hls-progress-wrap" style="display:none">
@@ -3493,7 +3499,28 @@ document.addEventListener('keydown', function (e) {
         const modal = document.getElementById('fileViewerModal');
         if (modal && modal.classList.contains('show')) closeFileViewer();
     }
+    // Arrow keys: skip ±10s when video viewer is open
+    const modal = document.getElementById('fileViewerModal');
+    if (modal && modal.classList.contains('show')) {
+        if (e.key === 'ArrowRight') { e.preventDefault(); _hlsSkip(10); }
+        if (e.key === 'ArrowLeft')  { e.preventDefault(); _hlsSkip(-10); }
+    }
 });
+
+/** Skip the active HLS/raw video by +/- seconds */
+function _hlsSkip(seconds) {
+    // Try video-player web component first, then plain <video>
+    const area = document.getElementById('hls-player-area');
+    if (!area) return;
+    let vid = area.querySelector('video');
+    if (!vid) {
+        const vp = area.querySelector('video-player');
+        if (vp) vid = vp.querySelector('video') || vp.shadowRoot?.querySelector('video');
+    }
+    if (vid && isFinite(vid.duration)) {
+        vid.currentTime = Math.max(0, Math.min(vid.duration, vid.currentTime + seconds));
+    }
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -9010,6 +9037,52 @@ function _renderArchivePreview(body, data) {
 // Served locally from static/js/video.js + static/css/video.css — no CDN.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Inject a responsive @media CSS rule into video-skin's shadow root
+ * to hide the playback rate button on mobile. Uses @media so it
+ * responds to resize without re-injecting.
+ */
+function _injectMobileSpeedHide(playerEl) {
+    if (!playerEl) return;
+    const css = `
+        @media (max-width: 600px) {
+            .media-button--playback-rate,
+            media-playback-rate-button {
+                display: none !important;
+            }
+        }
+    `;
+    let attempts = 0;
+    const iv = setInterval(() => {
+        attempts++;
+        // video-skin is a direct child of video-player
+        const skin = playerEl.querySelector('video-skin');
+        if (skin && skin.shadowRoot) {
+            if (!skin.shadowRoot.querySelector('style[data-speed-hide]')) {
+                const s = document.createElement('style');
+                s.setAttribute('data-speed-hide', '1');
+                s.textContent = css;
+                skin.shadowRoot.appendChild(s);
+            }
+            clearInterval(iv);
+            return;
+        }
+        // Also try playerEl's own shadow root
+        if (playerEl.shadowRoot) {
+            const skin2 = playerEl.shadowRoot.querySelector('video-skin');
+            if (skin2 && skin2.shadowRoot && !skin2.shadowRoot.querySelector('style[data-speed-hide]')) {
+                const s = document.createElement('style');
+                s.setAttribute('data-speed-hide', '1');
+                s.textContent = css;
+                skin2.shadowRoot.appendChild(s);
+                clearInterval(iv);
+                return;
+            }
+        }
+        if (attempts >= 40) clearInterval(iv);
+    }, 100);
+}
+
 async function _hlsStartStream(itemPath, wrapperId) {
     window._hlsPollCancel    = false;
     window._vjsCurrentPlayer = null;
@@ -9068,6 +9141,7 @@ async function _hlsStartStream(itemPath, wrapperId) {
         window._vjsCurrentPlayer = playerEl;
         if (autoplay) _unmuteWhenReady(playerEl);
         _hideQualityRow();
+        _injectMobileSpeedHide(playerEl);
     }
 
     function _mountHlsPlayer(masterUrl, autoplay) {
@@ -9092,6 +9166,7 @@ async function _hlsStartStream(itemPath, wrapperId) {
         window._vjsCurrentPlayer = playerEl;
         if (autoplay) _unmuteWhenReady(playerEl);
         _attachQualitySelector(playerEl);
+        _injectMobileSpeedHide(playerEl);
     }
 
     const rawBtn = $id('hls-btn-raw');

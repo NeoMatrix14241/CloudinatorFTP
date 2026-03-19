@@ -4696,7 +4696,6 @@ td .fa-file {
         gap: 8px 10px;
     }
 }
-
 /* ── @videojs/html web-component adaptive player ────────────────────────────── */
 
 /* Video viewer — site-themed dark navy instead of pure black */
@@ -4730,8 +4729,7 @@ td .fa-file {
     padding: 14px 20px;
     color: rgba(255, 255, 255, 0.85);
     font-size: 14px;
-    background: rgba(13, 30, 61, 0.88);
-    /* site-themed navy instead of black */
+    background: rgba(13, 30, 61, 0.88);   /* site-themed navy instead of black */
     border: 1px solid rgba(52, 152, 219, 0.25);
     border-radius: 8px;
     position: absolute;
@@ -4754,9 +4752,7 @@ td .fa-file {
 }
 
 @keyframes hls-spin {
-    to {
-        transform: rotate(360deg);
-    }
+    to { transform: rotate(360deg); }
 }
 
 /* Fallback notice banner */
@@ -4810,22 +4806,18 @@ td .fa-file {
 
 /* Mobile tweak */
 @media (max-width: 768px) {
-
     .hls-player-outer video-player,
     .vjs-cloudinator-player {
         max-height: none;
     }
-
     .hls-status-bar {
         font-size: 12px;
         padding: 10px 14px;
     }
-
     .hls-btn {
         font-size: 12px;
         padding: 5px 10px;
     }
-
     .hls-quality-btn {
         font-size: 11px;
         padding: 2px 7px;
@@ -4838,8 +4830,7 @@ td .fa-file {
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
-    background: rgba(13, 30, 61, 0.92);
-    /* site-themed navy instead of black */
+    background: rgba(13, 30, 61, 0.92);   /* site-themed navy instead of black */
     flex-shrink: 0;
     flex-wrap: wrap;
 }
@@ -4885,8 +4876,7 @@ td .fa-file {
     align-items: center;
     gap: 5px;
     padding: 4px 10px;
-    background: rgba(22, 48, 95, 0.75);
-    /* site-themed navy instead of black */
+    background: rgba(22, 48, 95, 0.75);   /* site-themed navy instead of black */
     flex-shrink: 0;
     flex-wrap: wrap;
 }
@@ -4938,7 +4928,6 @@ td .fa-file {
     flex-shrink: 0;
     min-height: 18px;
 }
-
 /* ── End @videojs/html styles ──────────────────────────────────────────────── */
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -4979,8 +4968,7 @@ td .fa-file {
     max-width: 28px !important;
     padding: 0 !important;
     margin: 0 !important;
-    font-size: 0 !important;
-    /* hide any leftover text */
+    font-size: 0 !important;          /* hide any leftover text */
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -5009,7 +4997,7 @@ td .fa-file {
     font-weight: 500;
     padding: 4px 9px;
     border-radius: 5px;
-    border: 1px solid rgba(255, 255, 255, 0.18);
+    border: 1px solid rgba(255,255,255,0.18);
     pointer-events: none;
     z-index: 999999;
     white-space: nowrap;
@@ -5017,7 +5005,6 @@ td .fa-file {
     transition: opacity 0.12s ease;
     line-height: 1.4;
 }
-
 #btn-action-tooltip.visible {
     opacity: 1;
 }
@@ -5041,8 +5028,7 @@ td .fa-file {
 }
 
 /* On small screens: use full dvh, shrink modal header padding */
-@media (max-height: 740px),
-(max-width: 414px) {
+@media (max-height: 740px), (max-width: 414px) {
     #fileViewerModal .file-viewer-modal-content {
         max-height: calc(100dvh - 12px);
         width: 98vw;
@@ -5054,17 +5040,46 @@ td .fa-file {
     }
 
     .hls-btn-row {
-        padding: 4px 8px;
-        gap: 6px;
+        padding: 4px 6px;
+        gap: 4px;
+        flex-wrap: wrap;
+    }
+
+    /* Make our skip buttons smaller on mobile so they don't crowd the row */
+    .hls-btn-skip {
+        font-size: 11px !important;
+        padding: 3px 7px !important;
     }
 
     .hls-quality-row {
         padding: 2px 8px;
     }
+
+    /* Give the player area extra room by reducing outer padding */
+    .hls-player-outer {
+        padding: 3px;
+    }
+
+    /* Force Video.js control bar to not overflow — targets web component parts */
+    .hls-player-area video-player,
+    .hls-player-area .vjs-cloudinator-player {
+        --media-control-bar-display: flex;
+        --media-control-overflow: hidden;
+    }
+
+    /* Hide playback speed on mobile — arrow keys + our buttons replace it */
+    .hls-player-area media-playback-rate-button,
+    .hls-player-area .vjs-playback-rate,
+    .hls-player-area [part~="playback-rate"] {
+        display: none !important;
+    }
 }
 
 
-/* ── File viewer modal: match Video.js v10 rounded corners ────────────────── */
+/* ── File viewer modal: match Video.js v10 rounded corners ──────────────────
+   Video.js v10 uses ~0.3em border-radius on its player. We match the modal
+   to that so everything looks intentional and consistent.
+   ─────────────────────────────────────────────────────────────────────────── */
 #fileViewerModal .file-viewer-modal-content,
 #fileViewerModal .modal-content {
     border-radius: 12px !important;
@@ -5086,4 +5101,46 @@ td .fa-file {
 .hls-player-outer video[slot="media"] {
     background: #0d1e3d !important;
     background-color: #0d1e3d !important;
+}
+
+
+/* ── Skip ±10s buttons ───────────────────────────────────────────────────── */
+.hls-btn-skip {
+    background: rgba(52, 152, 219, 0.15);
+    border-color: rgba(52, 152, 219, 0.4);
+    color: #5dade2;
+}
+.hls-btn-skip:hover {
+    background: rgba(52, 152, 219, 0.3);
+    border-color: rgba(52, 152, 219, 0.7);
+    color: #fff;
+}
+
+
+/* ── Video.js control bar: prevent clipping on narrow mobile screens ──────── */
+@media (max-width: 600px) {
+    /* Shrink the entire control bar */
+    .hls-player-area media-control-bar,
+    .hls-player-area .vjs-control-bar {
+        font-size: 11px !important;
+    }
+
+    /* Hide playback rate / speed on small screens — use arrow keys instead */
+    .hls-player-area media-playback-rate-button,
+    .hls-player-area .vjs-playback-rate,
+    .hls-player-area media-playback-rate,
+    .hls-player-area [part~="playback-rate"],
+    .hls-player-area [slot="playback-rate"],
+    .hls-player-area [mediaplaybackrate] {
+        display: none !important;
+    }
+}
+
+
+/* ── Hide playback rate button on mobile — it's a direct child, CSS works ── */
+@media (max-width: 600px) {
+    .vjs-cloudinator-player media-playback-rate-button,
+    video-player media-playback-rate-button {
+        display: none !important;
+    }
 }
