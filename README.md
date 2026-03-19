@@ -23,11 +23,14 @@ A lightweight FTP-like file transfer server that runs on Termux and exposes itse
 #### 1. 🔧 Initial Termux Setup
 
 ```bash
-# Setup storage permissions and update packages
-pkg --check-mirror update && pkg update && pkg upgrade -y
-
-# Install required packages
-pkg install python git cloudflared python-bcrypt build-essential libffi openssl rust llvm binutils-is-llvm python-cryptography ffmpeg libxml2 libxslt python-psutil
+pkg --check-mirror update && pkg update && pkg upgrade -y && pkg install -y python git cloudflared python-bcrypt build-essential libffi openssl rust llvm binutils-is-llvm python-cryptography ffmpeg libxml2 libxslt python-psutil clang make && pip cache purge && pip uninstall pyppmd -y ; pip download pyppmd==1.3.1 --no-binary pyppmd -d $TMPDIR/ppmd && cd $TMPDIR/ppmd && rm -rf pyppmd-1.3.1 && tar -xzf pyppmd-1.3.1.tar.gz && cd pyppmd-1.3.1 && sed -i 's/pthread_cancel(tc->handle);/pthread_kill(tc->handle, SIGTERM);/g' src/lib/buffer/ThreadDecoder.c && python3 -c "
+import re
+c = open('pyproject.toml').read()
+c = c.replace('dynamic = [\"version\"]', 'version = \"1.3.1\"')
+c = re.sub(r'\[tool\.setuptools_scm\].*?(?=\[|\Z)', '', c, flags=re.DOTALL)
+c = re.sub(r',?\s*\"setuptools.scm[^\"]*\"', '', c)
+open('pyproject.toml','w').write(c)
+" && pip install . --no-build-isolation --no-cache-dir && pip install py7zr --no-deps && pip install PyCryptodomex pybcj texttable multivolumefile brotli backports.zstd inflate64
 
 # ⚠️ IMPORTANT: Setup storage access for Android file managers
 termux-setup-storage
