@@ -86,16 +86,19 @@ function initTapTooltips() {
 
     // ── Desktop: mouseenter / mouseleave ─────────────────────────────────────
     document.addEventListener('mouseenter', e => {
+        if (!e.target || e.target.nodeType !== 1) return;
         const btn = e.target.closest(SEL);
         if (btn) showTip(btn);
     }, true);
 
     document.addEventListener('mouseleave', e => {
+        if (!e.target || e.target.nodeType !== 1) return;
         if (e.target.closest(SEL)) hideTip(80);
     }, true);
 
     // ── Mobile: touchstart shows label, hides after 1.3s or on move ──────────
     document.addEventListener('touchstart', e => {
+        if (!e.target || e.target.nodeType !== 1) return;
         const btn = e.target.closest(SEL);
         if (btn) {
             showTip(btn);

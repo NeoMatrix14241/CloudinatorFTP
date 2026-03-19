@@ -3908,6 +3908,9 @@ td .fa-file {
     max-height: calc(100dvh - 40px);
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+    border-radius: 0 !important;
+    -webkit-border-radius: 0 !important;
 }
 
 /* Viewer body fills the available space */
@@ -3919,7 +3922,7 @@ td .fa-file {
     align-items: center;
     justify-content: center;
     background: rgba(0, 0, 0, 0.25);
-    border-radius: 0 0 14px 14px;
+    border-radius: 0 0 12px 12px;
     padding: 0;
 }
 
@@ -3939,6 +3942,8 @@ td .fa-file {
 /* Video viewer */
 .file-viewer-body.viewer-video {
     background: #0d1e3d;
+    border-radius: 0;
+    overflow: hidden;
 }
 
 .viewer-video-el {
@@ -4691,6 +4696,7 @@ td .fa-file {
         gap: 8px 10px;
     }
 }
+
 /* ── @videojs/html web-component adaptive player ────────────────────────────── */
 
 /* Video viewer — site-themed dark navy instead of pure black */
@@ -4700,7 +4706,6 @@ td .fa-file {
     align-items: stretch;
     justify-content: stretch;
     overflow: hidden;
-    border-radius: 0 0 14px 14px;
 }
 
 /* Outer wrapper — fills the modal body */
@@ -4713,7 +4718,8 @@ td .fa-file {
     align-items: stretch;
     background: #0d1e3d;
     overflow: hidden;
-    border-radius: 0 0 14px 14px;
+    box-sizing: border-box;
+    padding: 5px;
 }
 
 /* Status / loading bar shown while transcoding */
@@ -4724,7 +4730,8 @@ td .fa-file {
     padding: 14px 20px;
     color: rgba(255, 255, 255, 0.85);
     font-size: 14px;
-    background: rgba(13, 30, 61, 0.88);   /* site-themed navy instead of black */
+    background: rgba(13, 30, 61, 0.88);
+    /* site-themed navy instead of black */
     border: 1px solid rgba(52, 152, 219, 0.25);
     border-radius: 8px;
     position: absolute;
@@ -4747,7 +4754,9 @@ td .fa-file {
 }
 
 @keyframes hls-spin {
-    to { transform: rotate(360deg); }
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 /* Fallback notice banner */
@@ -4761,26 +4770,23 @@ td .fa-file {
     text-align: center;
 }
 
-/* <video-player> web-component fills the player area — no border-radius,
-   no max-height cap: let the flex layout control sizing instead */
+/* <video-player> web-component fills the player area */
 .hls-player-outer video-player,
 .vjs-cloudinator-player {
     width: 100%;
     height: 100%;
     display: block;
-    background: #000;        /* video canvas stays black */
-    border-radius: 0;
-    /* Mobile: ensure touch events reach the player controls */
+    background: #0d1e3d;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
     user-select: none;
     -webkit-user-select: none;
 }
 
-/* video element inside the web component — also no radius */
+/* video element — let Video.js control its own styling */
 .hls-player-outer video-player video,
 .hls-player-outer video[slot="media"] {
-    border-radius: 0 !important;
+    display: block;
 }
 
 /* Accent Cloudinator's blue onto the web-component skin */
@@ -4795,33 +4801,31 @@ td .fa-file {
 /* Player area flex fill */
 .hls-player-area {
     flex: 1 1 auto;
-    width: 100%;
     min-height: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    background: #0a1628;
+    background: #0d1e3d;
 }
 
 /* Mobile tweak */
 @media (max-width: 768px) {
+
     .hls-player-outer video-player,
     .vjs-cloudinator-player {
         max-height: none;
     }
+
     .hls-status-bar {
         font-size: 12px;
         padding: 10px 14px;
     }
-    .hls-player-outer video-player video,
-    .hls-player-outer video[slot="media"] {
-        border-radius: 0 !important;
-        -webkit-border-radius: 0 !important;
-    }
+
     .hls-btn {
         font-size: 12px;
         padding: 5px 10px;
     }
+
     .hls-quality-btn {
         font-size: 11px;
         padding: 2px 7px;
@@ -4834,7 +4838,8 @@ td .fa-file {
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
-    background: rgba(13, 30, 61, 0.92);   /* site-themed navy instead of black */
+    background: rgba(13, 30, 61, 0.92);
+    /* site-themed navy instead of black */
     flex-shrink: 0;
     flex-wrap: wrap;
 }
@@ -4880,7 +4885,8 @@ td .fa-file {
     align-items: center;
     gap: 5px;
     padding: 4px 10px;
-    background: rgba(22, 48, 95, 0.75);   /* site-themed navy instead of black */
+    background: rgba(22, 48, 95, 0.75);
+    /* site-themed navy instead of black */
     flex-shrink: 0;
     flex-wrap: wrap;
 }
@@ -4932,6 +4938,7 @@ td .fa-file {
     flex-shrink: 0;
     min-height: 18px;
 }
+
 /* ── End @videojs/html styles ──────────────────────────────────────────────── */
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -4972,7 +4979,8 @@ td .fa-file {
     max-width: 28px !important;
     padding: 0 !important;
     margin: 0 !important;
-    font-size: 0 !important;          /* hide any leftover text */
+    font-size: 0 !important;
+    /* hide any leftover text */
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -5001,7 +5009,7 @@ td .fa-file {
     font-weight: 500;
     padding: 4px 9px;
     border-radius: 5px;
-    border: 1px solid rgba(255,255,255,0.18);
+    border: 1px solid rgba(255, 255, 255, 0.18);
     pointer-events: none;
     z-index: 999999;
     white-space: nowrap;
@@ -5009,6 +5017,73 @@ td .fa-file {
     transition: opacity 0.12s ease;
     line-height: 1.4;
 }
+
 #btn-action-tooltip.visible {
     opacity: 1;
+}
+
+
+/* ── Video modal: prevent controls clipping on small screens ────────────────
+   Galaxy S8+ and similar narrow viewports (≤414px wide or ≤740px tall)
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* Allow the video player controls to overflow the clip boundary */
+.hls-player-outer {
+    overflow: hidden;
+}
+
+/* Controls sit outside the video area — exempt from clip */
+.hls-btn-row,
+.hls-quality-row,
+.hls-status-bar {
+    position: relative;
+    z-index: 5;
+}
+
+/* On small screens: use full dvh, shrink modal header padding */
+@media (max-height: 740px),
+(max-width: 414px) {
+    #fileViewerModal .file-viewer-modal-content {
+        max-height: calc(100dvh - 12px);
+        width: 98vw;
+    }
+
+    #fileViewerModal .modal-header {
+        padding: 8px 12px;
+        margin-bottom: 6px;
+    }
+
+    .hls-btn-row {
+        padding: 4px 8px;
+        gap: 6px;
+    }
+
+    .hls-quality-row {
+        padding: 2px 8px;
+    }
+}
+
+
+/* ── File viewer modal: match Video.js v10 rounded corners ────────────────── */
+#fileViewerModal .file-viewer-modal-content,
+#fileViewerModal .modal-content {
+    border-radius: 12px !important;
+}
+
+#fileViewerModal .file-viewer-body {
+    border-radius: 0 0 12px 12px !important;
+}
+
+
+/* ── Match Video.js internal element backgrounds to site theme ──────────── */
+.hls-player-outer video-skin,
+.hls-player-outer media-controller,
+.hls-player-outer media-container,
+.hls-player-outer video-player,
+.hls-player-outer video-player::part(container),
+.hls-player-outer video-player::part(media),
+.hls-player-outer video,
+.hls-player-outer video[slot="media"] {
+    background: #0d1e3d !important;
+    background-color: #0d1e3d !important;
 }
