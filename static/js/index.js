@@ -1189,6 +1189,14 @@ async function navigateToFolder(newPath) {
         console.log(`🍞 Updating breadcrumb...`);
         updateBreadcrumb(cleanPath);
 
+        // Scroll table rows to top, then bring table into view on the page
+        requestAnimationFrame(() => {
+            const wrapper = document.getElementById('tableScrollWrapper');
+            if (wrapper) wrapper.scrollTop = 0;
+            const fileTable = document.querySelector('.file-table');
+            if (fileTable) fileTable.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+
         // Clear selection when navigating
         clearSelection();
 
