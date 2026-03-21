@@ -34,7 +34,7 @@ A lightweight FTP-like file transfer server that runs on **Termux (Android), Lin
 
 #### 1. 🔧 Initial Termux Setup
 
-1.) Install termux packages
+1. Install termux packages
 ```bash
 # Note: This includes two patches for PyPPMd (a py7zr dependency) to build on Android:
 #   1. pthread_cancel() → pthread_kill(SIGTERM) workaround (Android's bionic libc lacks pthread_cancel)
@@ -49,7 +49,7 @@ open('pyproject.toml','w').write(c)
 " && pip install . --no-build-isolation --no-cache-dir && pip install py7zr --no-deps && pip install PyCryptodomex pybcj texttable multivolumefile brotli backports.zstd inflate64
 ```
 
-2.) Grant termux storage permission when prompted to allow files to be accessible from android file managers
+2. Grant termux storage permission when prompted to allow files to be accessible from android file managers
 ```bash
 # Note: Required if serving files with Internal Storage - else will use the termux data path which is inaccessible when not rooted
 termux-setup-storage
