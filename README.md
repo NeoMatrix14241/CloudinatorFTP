@@ -7,13 +7,13 @@ A lightweight FTP-like file transfer server that runs on **Termux (Android), Lin
 ![Windows](https://img.shields.io/badge/Windows-supported-0078D6?logo=windows)
 
 ## 📷 Login
-<img width="1794" height="892" alt="image" src="https://github.com/user-attachments/assets/6437db54-1e73-4459-ba45-f3552e7bbad6" />
+<img width="1794" height="893" alt="image" src="https://github.com/user-attachments/assets/083a1054-b1bd-446b-946c-a3dda29b459b" />
 
 ## 📷 Guest (READONLY)
-<img width="1794" height="1318" alt="image" src="https://github.com/user-attachments/assets/39172a69-7c74-46c6-ba8b-f3e786bc8f43" />
+<img width="1794" height="1201" alt="image" src="https://github.com/user-attachments/assets/b619e8a8-40b7-424d-9628-0c4648e33ed6" />
 
 ## 📷 Admin (READWRITE)
-<img width="1794" height="1648" alt="image" src="https://github.com/user-attachments/assets/93578d61-f486-4463-89c1-1102ca27d456" />
+<img width="1794" height="1531" alt="image" src="https://github.com/user-attachments/assets/b7167c30-0590-4c23-a391-2022f630e6bb" />
 
 ## 🚀 Quick Start
 
