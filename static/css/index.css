@@ -3904,6 +3904,14 @@ td .fa-file {
     overflow: hidden;
     border-radius: 0 !important;
     -webkit-border-radius: 0 !important;
+    padding: 0;
+}
+
+#fileViewerModal .modal-header {
+    padding: 10px 16px;
+    margin-bottom: 0;
+    flex-shrink: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 /* Viewer body fills the available space */
@@ -3984,13 +3992,130 @@ td .fa-file {
 .file-viewer-body.viewer-pdf {
     padding: 0;
     background: #525659;
+    align-items: stretch;
+    overflow: hidden;
 }
 
-.viewer-iframe {
+/* ── PDF.js viewer ───────────────────────────────────────────────────────── */
+
+.viewer-pdfjs-wrap {
+    display: flex;
+    flex-direction: column;
     width: 100%;
-    height: 72vh;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    background: #525659;
+}
+
+.viewer-pdfjs-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    padding: 6px 12px;
+    background: #2b2d30;
+    font-size: 13px;
+    color: #cdd6f4;
+    gap: 8px;
+}
+
+.viewer-pdfjs-zoom {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+#pdf-zoom-level {
+    min-width: 40px;
+    text-align: center;
+    font-size: 13px;
+    color: #cdd6f4;
+}
+
+.viewer-pdfjs-btn {
+    background: #3c3f41;
     border: none;
+    border-radius: 5px;
+    color: #cdd6f4;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.15s;
+    line-height: 1;
+}
+
+.viewer-pdfjs-btn:hover  { background: #89b4fa; color: #1e1e2e; }
+.viewer-pdfjs-btn:active { background: #6a9fd8; color: #1e1e2e; }
+
+.viewer-pdfjs-pages {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    box-sizing: border-box;
+    touch-action: pan-x pan-y;
+}
+
+.viewer-pdfjs-loading {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 14px;
+    padding: 24px;
+}
+
+.viewer-pdfjs-canvas {
     display: block;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+    border-radius: 2px;
+    background: #fff;
+}
+
+/* Page wrapper — positions canvas and text layer on top of each other */
+.viewer-pdfjs-page {
+    position: relative;
+    flex-shrink: 0;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+    border-radius: 2px;
+    background: #fff;
+}
+
+.viewer-pdfjs-page .viewer-pdfjs-canvas {
+    box-shadow: none;
+    border-radius: 0;
+    display: block;
+    pointer-events: none;
+}
+
+/* Text layer — PDF.js requires the .textLayer class and these exact styles */
+.viewer-pdfjs-text.textLayer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    overflow: hidden;
+    line-height: 1;
+    pointer-events: auto;
+    -webkit-text-size-adjust: none;
+    forced-color-adjust: none;
+    transform-origin: 0 0;
+    z-index: 2;
+}
+
+.viewer-pdfjs-text.textLayer span,
+.viewer-pdfjs-text.textLayer br {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+}
+
+.viewer-pdfjs-text.textLayer ::selection {
+    background: rgba(0, 120, 255, 0.3);
+    color: transparent;
 }
 
 /* Text / code viewer */

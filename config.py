@@ -20,10 +20,21 @@ HLS_MIN_SIZE = 50 * 1024 * 1024  # 50 MB default
 HLS_FORCE_FORMATS = {"mkv", "avi", "wmv", "flv", "mpg", "mpeg", "m2ts", "mts", "3gp", "ogv"}
 
 # Path exports — create=False so importing config never creates directories.
-from paths import get_db_dir, get_cache_dir, set_db_dir, set_cache_dir
+from paths import (
+    get_db_dir,
+    get_cache_dir,
+    get_hls_cache_dir,
+    set_db_dir,
+    set_cache_dir,
+    set_hls_cache_dir,
+    reset_db_dir,
+    reset_cache_dir,
+    reset_hls_cache_dir,
+)
 
 DB_DIR = get_db_dir(create=False)
 CACHE_DIR = get_cache_dir(create=False)
+HLS_CACHE_DIR = get_hls_cache_dir(create=False)
 
 
 def detect_platform():
@@ -103,11 +114,11 @@ def get_accessible_storage_path():
 
         # Try to find the best accessible location
         if os.path.exists(downloads) and os.access(downloads, os.W_OK):
-            return os.path.join(downloads, "CloudflareFTP")
+            return os.path.join(downloads, "CloudinatorFTP")
         elif os.path.exists(documents) and os.access(documents, os.W_OK):
-            return os.path.join(documents, "CloudflareFTP")
+            return os.path.join(documents, "CloudinatorFTP")
         elif os.path.exists(shared_storage) and os.access(shared_storage, os.W_OK):
-            return os.path.join(shared_storage, "CloudflareFTP")
+            return os.path.join(shared_storage, "CloudinatorFTP")
         else:
             # Fallback to termux home if shared storage not accessible
             print(
@@ -121,17 +132,17 @@ def get_accessible_storage_path():
     elif platform_type == "linux":
         # Linux: try user's home directory
         home = os.path.expanduser("~")
-        return os.path.join(home, "CloudflareFTP")
+        return os.path.join(home, "CloudinatorFTP")
 
     elif platform_type == "windows":
         # Windows: use improved Documents folder detection
         documents_path = get_windows_documents_path()
-        return os.path.join(documents_path, "CloudflareFTP")
+        return os.path.join(documents_path, "CloudinatorFTP")
 
     elif platform_type == "macos":
         # macOS: use user's home directory
         home = os.path.expanduser("~")
-        return os.path.join(home, "CloudflareFTP")
+        return os.path.join(home, "CloudinatorFTP")
 
     else:
         # Unknown platform: use current directory
@@ -143,8 +154,8 @@ def setup_storage_directory():
     custom_path = None
 
     # 1. Check environment variable
-    if "CLOUDFLARE_FTP_ROOT" in os.environ:
-        custom_path = os.environ["CLOUDFLARE_FTP_ROOT"]
+    if "CLOUDINATOR_FTP_ROOT" in os.environ:
+        custom_path = os.environ["CLOUDINATOR_FTP_ROOT"]
         print(f"🔧 Using environment variable path: {custom_path}")
 
     # 2. Read from storage_config.json via paths._load() — same file/path
@@ -177,12 +188,12 @@ def setup_storage_directory():
             if "/storage/emulated/0" in storage_path:
                 print("✅ Files will be accessible from Android file managers")
                 if "Download" in storage_path:
-                    print("📁 Android location: Files app → Downloads → CloudflareFTP")
+                    print("📁 Android location: Files app → Downloads → CloudinatorFTP")
                 elif "Documents" in storage_path:
-                    print("📁 Android location: Files app → Documents → CloudflareFTP")
+                    print("📁 Android location: Files app → Documents → CloudinatorFTP")
                 else:
                     print(
-                        "📁 Android location: Files app → Internal Storage → CloudflareFTP"
+                        "📁 Android location: Files app → Internal Storage → CloudinatorFTP"
                     )
             else:
                 print("⚠️  Files will only be accessible within Termux")
@@ -332,37 +343,37 @@ def set_custom_storage_path(custom_path, use_subfolder=True):
 # Custom storage paths for quick setup
 PRESET_PATHS = {
     "termux": {
-        "downloads": "/storage/emulated/0/Download/CloudflareFTP",
-        "documents": "/storage/emulated/0/Documents/CloudflareFTP",
-        "internal": "/storage/emulated/0/CloudflareFTP",
-        "dcim": "/storage/emulated/0/DCIM/CloudflareFTP",
+        "downloads": "/storage/emulated/0/Download/CloudinatorFTP",
+        "documents": "/storage/emulated/0/Documents/CloudinatorFTP",
+        "internal": "/storage/emulated/0/CloudinatorFTP",
+        "dcim": "/storage/emulated/0/DCIM/CloudinatorFTP",
         "termux_home": os.path.join(os.path.expanduser("~"), "uploads"),
     },
     "linux": {
-        "home": os.path.join(os.path.expanduser("~"), "CloudflareFTP"),
-        "desktop": os.path.join(os.path.expanduser("~"), "Desktop", "CloudflareFTP"),
+        "home": os.path.join(os.path.expanduser("~"), "CloudinatorFTP"),
+        "desktop": os.path.join(os.path.expanduser("~"), "Desktop", "CloudinatorFTP"),
         "documents": os.path.join(
-            os.path.expanduser("~"), "Documents", "CloudflareFTP"
+            os.path.expanduser("~"), "Documents", "CloudinatorFTP"
         ),
         "downloads": os.path.join(
-            os.path.expanduser("~"), "Downloads", "CloudflareFTP"
+            os.path.expanduser("~"), "Downloads", "CloudinatorFTP"
         ),
     },
     "windows": {
-        "documents": os.path.join(get_windows_documents_path(), "CloudflareFTP"),
-        "desktop": os.path.join(os.path.expanduser("~"), "Desktop", "CloudflareFTP"),
+        "documents": os.path.join(get_windows_documents_path(), "CloudinatorFTP"),
+        "desktop": os.path.join(os.path.expanduser("~"), "Desktop", "CloudinatorFTP"),
         "downloads": os.path.join(
-            os.path.expanduser("~"), "Downloads", "CloudflareFTP"
+            os.path.expanduser("~"), "Downloads", "CloudinatorFTP"
         ),
-        "userprofile": os.path.join(os.path.expanduser("~"), "CloudflareFTP"),
+        "userprofile": os.path.join(os.path.expanduser("~"), "CloudinatorFTP"),
     },
     "macos": {
         "documents": os.path.join(
-            os.path.expanduser("~"), "Documents", "CloudflareFTP"
+            os.path.expanduser("~"), "Documents", "CloudinatorFTP"
         ),
-        "desktop": os.path.join(os.path.expanduser("~"), "Desktop", "CloudflareFTP"),
+        "desktop": os.path.join(os.path.expanduser("~"), "Desktop", "CloudinatorFTP"),
         "downloads": os.path.join(
-            os.path.expanduser("~"), "Downloads", "CloudflareFTP"
+            os.path.expanduser("~"), "Downloads", "CloudinatorFTP"
         ),
     },
 }
@@ -410,7 +421,7 @@ def list_available_presets():
     print(
         f"   Python: from config import set_preset_path; set_preset_path('documents')"
     )
-    print(f"   Env Var: set CLOUDFLARE_FTP_ROOT=C:\\path\\to\\your\\folder")
+    print(f"   Env Var: set CLOUDINATOR_FTP_ROOT=C:\\path\\to\\your\\folder")
     print(
         f"   Direct: from config import set_custom_storage_path; set_custom_storage_path('C:\\path\\to\\folder')"
     )
@@ -790,60 +801,345 @@ def _confirm_path(final_path: str, label: str) -> bool:
             return False
 
 
-def configure_storage_path():
-    """Storage path configuration (original function)"""
-    platform_type = detect_platform()
+def _check_path(path):
+    """Check if a path exists and is writable."""
+    if not os.path.exists(path):
+        return False, False
+    try:
+        test = os.path.join(path, ".write_test")
+        with open(test, "w") as f:
+            f.write("test")
+        os.remove(test)
+        return True, True
+    except Exception:
+        return True, False
 
-    print(f"\n🏠 Storage Path Configuration for {platform_type.title()}")
+
+def _db_cache_examples(subfolder):
+    """Return suggested out-of-server-root paths for db / cache / hls."""
+    home = os.path.expanduser("~")
+    if os.name == "nt":
+        return [
+            os.path.join(os.environ.get("APPDATA", home), "cloudinator", subfolder),
+            os.path.join(os.environ.get("LOCALAPPDATA", home), "cloudinator", subfolder),
+            os.path.join(home, ".cloudinator", subfolder),
+        ]
+    else:
+        return [
+            os.path.join(home, ".cloudinator", subfolder),
+            f"/etc/cloudinator/{subfolder}",
+            f"/var/lib/cloudinator/{subfolder}",
+        ]
+
+
+def _pick_suggested_path(kind, examples):
+    """Present a numbered list of suggested paths and let the user pick one."""
+    print()
+    for i, ex in enumerate(examples, 1):
+        exists, writable = _check_path(ex)
+        if writable:
+            note = "✅ exists & writable"
+        elif not exists:
+            note = "📁 will be created"
+        else:
+            note = "❌ not writable"
+        print(f"{i}. {ex}  [{note}]")
+    print(f"{len(examples) + 1}. ↩️  Back")
+    print()
+    try:
+        raw = input(f"Select option (1-{len(examples) + 1}): ").strip()
+        choice = int(raw)
+    except (ValueError, KeyboardInterrupt):
+        return
+    if choice < 1 or choice > len(examples):
+        return
+    path = examples[choice - 1]
+    label = {"db": "Database", "cache": "Cache", "hls": "HLS Cache"}.get(kind, kind)
+    if not _confirm_path(path, label):
+        return
+    if kind == "db":
+        set_db_dir(path)
+    elif kind == "cache":
+        set_cache_dir(path)
+    else:
+        set_hls_cache_dir(path)
+
+
+def _configure_custom_dir(kind):
+    """Prompt user for a custom directory path for db / cache / hls."""
+    label = {"db": "Database", "cache": "Cache", "hls": "HLS Cache"}.get(kind, kind)
+    subfolder = {"db": "db", "cache": "cache", "hls": "hls"}.get(kind, kind)
+    print(f"\n🎯 Custom {label} Directory")
+    print(f"   Enter a parent folder — '{subfolder}' will be appended automatically.")
+    print(f"   Example: /srv/cloudinator  →  /srv/cloudinator/{subfolder}")
+    try:
+        custom = input("Path: ").strip()
+        if not custom:
+            return
+        expanded = os.path.abspath(os.path.expanduser(custom))
+        if os.path.basename(expanded).lower() != subfolder:
+            final = os.path.join(expanded, subfolder)
+        else:
+            final = expanded
+        if not _confirm_path(final, label):
+            return
+        if kind == "db":
+            set_db_dir(expanded)
+        elif kind == "cache":
+            set_cache_dir(expanded)
+        else:
+            set_hls_cache_dir(expanded)
+    except KeyboardInterrupt:
+        print("\n👋 Cancelled")
+
+
+def configure_files_path():
+    """Configure Files storage path (ROOT_DIR)."""
+    print("\n🗂️  Files Storage Path Configuration")
     print("=" * 50)
+    print(f"Current: {ROOT_DIR}\n")
 
-    if platform_type == "windows":
-        print("1. Documents folder (Recommended)")
-        print("2. Desktop folder")
-        print("3. Downloads folder")
-        print("4. User profile folder")
-        print("5. Custom path")
-        print("6. Exit")
+    platform_type = detect_platform()
+    if platform_type not in PRESET_PATHS:
+        # Unknown platform — fall back to custom path entry
+        _configure_custom_files_path()
+        return
+
+    presets = PRESET_PATHS[platform_type]
+    print(f"📍 Available File Storage Locations for {platform_type.title()}:")
+    print("-" * 50)
+
+    options = []
+    for i, (key, path) in enumerate(presets.items(), 1):
+        try:
+            parent = os.path.dirname(path)
+            status = (
+                "✅"
+                if os.path.exists(parent) and os.access(parent, os.W_OK)
+                else ("⚠️ " if os.path.exists(parent) else "❌")
+            )
+        except Exception:
+            status = "❌"
+        print(f"{i:2d}. {status} {key.replace('_', ' ').title()}")
+        print(f"      {path}")
+        descs = {
+            "downloads": "Recommended for easy access",
+            "documents": "Good for document storage",
+            "desktop": "Quick access from desktop",
+            "internal": "Android internal storage root",
+            "dcim": "Camera/media folder",
+            "termux_home": "Termux app directory only",
+        }
+        if key in descs:
+            print(f"      💡 {descs[key]}")
+        print()
+        options.append((key, path))
+
+    print(f"{len(options) + 1}. 🎯 Enter custom path")
+    print(f"{len(options) + 2}. ↩️  Back")
+    print()
+
+    try:
+        raw = input(f"Select option (1-{len(options) + 2}): ").strip()
+        choice = int(raw)
+    except (ValueError, KeyboardInterrupt):
+        return
+
+    if choice == len(options) + 2 or choice < 1:
+        return
+    elif choice == len(options) + 1:
+        _configure_custom_files_path()
+    elif 1 <= choice <= len(options):
+        key, path = options[choice - 1]
+        if not _confirm_path(path, "Files storage"):
+            return
+        if set_preset_path(key):
+            print(f"✅ Files storage set to: {path}")
+
+
+def _configure_custom_files_path():
+    """Prompt for a fully custom Files storage path."""
+    print("\n🎯 Custom Files Path")
+    print("Enter the exact path where uploaded files should be stored.")
+    try:
+        custom = input("Path: ").strip()
+        if not custom:
+            return
+        expanded = os.path.abspath(os.path.expanduser(custom))
+        if not _confirm_path(expanded, "Files storage"):
+            return
+        if set_custom_storage_path(expanded, use_subfolder=False):
+            print(f"✅ Files storage set to: {expanded}")
+    except KeyboardInterrupt:
+        print("\n👋 Cancelled")
+
+
+def configure_db_path():
+    """Configure Database directory (DB_DIR)."""
+    print("\n🔐 Database Directory Configuration")
+    print("=" * 50)
+    print(f"Current: {get_db_dir()}")
+    print()
+    print("This directory holds three sensitive files:")
+    print("  • cloudinator.db  — SQLite user accounts database")
+    print("  • secret.key      — Fernet AES-128 encryption key")
+    print("  • session.secret  — Flask session cookie signing key")
+    print()
+    print("⚠️  SECURITY: Move this OUTSIDE the server root so that")
+    print("   a path traversal or misconfigured web server cannot")
+    print("   serve these files to an attacker.")
+    print()
+    print("⚠️  After moving: copy your existing db/ files to the new")
+    print("   location BEFORE restarting, or you will lose all accounts.")
+    print()
+
+    examples = _db_cache_examples("db")
+    print("Suggested secure locations:")
+    for ex in examples:
+        print(f"  • {ex}")
+    print()
+
+    print("1. 📁 Use a suggested location")
+    print("2. 🎯 Enter custom path")
+    print("3. 🔄 Reset to default  (inside server root — less secure)")
+    print("4. ↩️  Back")
+    print()
+
+    try:
+        choice = input("Select option (1-4): ").strip()
+    except KeyboardInterrupt:
+        return
+
+    if choice == "1":
+        _pick_suggested_path("db", examples)
+    elif choice == "2":
+        _configure_custom_dir("db")
+    elif choice == "3":
+        reset_db_dir()
+        print("🔄 Database directory reset to default.")
+
+
+def configure_cache_path():
+    """Configure Cache directory (CACHE_DIR)."""
+    print("\n⚡ Cache Directory Configuration")
+    print("=" * 50)
+    print(f"Current: {get_cache_dir()}")
+    print()
+    print("This directory holds two auto-generated index files:")
+    print("  • storage_index.json — recursive file/dir counts per folder")
+    print("  • file_index.json    — cached directory listings (speeds up browsing)")
+    print()
+    print("These files are fully rebuilt on next server start if missing.")
+    print("Moving cache outside the server root prevents directory-structure")
+    print("metadata from leaking via a misconfigured web server.")
+    print()
+
+    examples = _db_cache_examples("cache")
+    print("Suggested locations:")
+    for ex in examples:
+        print(f"  • {ex}")
+    print()
+
+    print("1. 📁 Use a suggested location")
+    print("2. 🎯 Enter custom path")
+    print("3. 🔄 Reset to default  (inside server root)")
+    print("4. ↩️  Back")
+    print()
+
+    try:
+        choice = input("Select option (1-4): ").strip()
+    except KeyboardInterrupt:
+        return
+
+    if choice == "1":
+        _pick_suggested_path("cache", examples)
+    elif choice == "2":
+        _configure_custom_dir("cache")
+    elif choice == "3":
+        reset_cache_dir()
+        print("🔄 Cache directory reset to default.")
+
+
+def configure_hls_cache_path():
+    """Configure HLS Cache directory (HLS_CACHE_DIR)."""
+    print("\n🎬 HLS Cache Directory Configuration")
+    print("=" * 50)
+    print(f"Current: {get_hls_cache_dir()}")
+    print()
+    print("This directory holds ffmpeg-transcoded HLS segments:")
+    print("  • <cache_key>/master.m3u8  — adaptive bitrate playlist")
+    print("  • <cache_key>/<quality>/   — .ts segment files")
+    print("  • <cache_key>/.status.json — transcode progress/state")
+    print()
+    print("It can grow large for long videos. Point it at a drive")
+    print("with plenty of free space. Safe to delete at any time —")
+    print("videos will simply be re-transcoded on next play.")
+    print()
+
+    examples = _db_cache_examples("hls")
+    print("Suggested locations:")
+    for ex in examples:
+        print(f"  • {ex}")
+    print()
+
+    print("1. 📁 Use a suggested location")
+    print("2. 🎯 Enter custom path")
+    print("3. 🔄 Reset to default  (inside cache dir)")
+    print("4. ↩️  Back")
+    print()
+
+    try:
+        choice = input("Select option (1-4): ").strip()
+    except KeyboardInterrupt:
+        return
+
+    if choice == "1":
+        _pick_suggested_path("hls", examples)
+    elif choice == "2":
+        _configure_custom_dir("hls")
+    elif choice == "3":
+        reset_hls_cache_dir()
+        print("🔄 HLS Cache directory reset to default.")
+
+
+def configure_storage_path():
+    """Storage path submenu — covers all four storage directories."""
+    while True:
+        print("\n🗄️  Storage Configuration")
+        print("=" * 50)
+        print(f"  🗂️  Files   (ROOT_DIR)    : {ROOT_DIR}")
+        print(f"  🔐 Database (DB_DIR)     : {get_db_dir()}")
+        print(f"  ⚡ Cache    (CACHE_DIR)  : {get_cache_dir()}")
+        print(f"  🎬 HLS Cache             : {get_hls_cache_dir()}")
+        print()
+        print("1. 🗂️  Configure Files storage path   (ROOT_DIR)")
+        print("2. 🔐 Configure Database directory    (DB_DIR)  ← keys & secrets")
+        print("3. ⚡ Configure Cache directory       (CACHE_DIR)")
+        print("4. 🎬 Configure HLS Cache directory   (HLS_CACHE_DIR)")
+        print("5. ↩️  Back")
+        print()
 
         try:
-            choice = input("\nSelect option (1-6): ").strip()
-            path_map = {
-                "1": "documents",
-                "2": "desktop",
-                "3": "downloads",
-                "4": "userprofile",
-            }
-
-            if choice in path_map:
-                preset_key = path_map[choice]
-                preset_path = PRESET_PATHS.get(platform_type, {}).get(preset_key, "")
-                if preset_path and not _confirm_path(preset_path, "Files storage"):
-                    pass
-                elif set_preset_path(preset_key):
-                    print("\n✅ Storage path updated successfully!")
-                else:
-                    print("\n❌ Failed to set storage path")
-            elif choice == "5":
-                custom = input("Enter custom path: ").strip()
-                if custom:
-                    expanded = os.path.abspath(os.path.expanduser(custom))
-                    if _confirm_path(
-                        expanded, "Files storage"
-                    ) and set_custom_storage_path(expanded):
-                        print("\n✅ Custom storage path set successfully!")
-            elif choice == "6":
-                print("✅ Configuration cancelled")
-            else:
-                print("❌ Invalid option")
-
+            choice = input("Select option (1-5): ").strip()
         except KeyboardInterrupt:
-            print("\n👋 Configuration cancelled")
-        except Exception as e:
-            print(f"\n❌ Error: {e}")
-    else:
-        # For other platforms, show available presets
-        list_available_presets()
+            break
 
+        if choice == "1":
+            configure_files_path()
+            input("\nPress Enter to continue...")
+        elif choice == "2":
+            configure_db_path()
+            input("\nPress Enter to continue...")
+        elif choice == "3":
+            configure_cache_path()
+            input("\nPress Enter to continue...")
+        elif choice == "4":
+            configure_hls_cache_path()
+            input("\nPress Enter to continue...")
+        elif choice == "5":
+            break
+        else:
+            print("❌ Invalid option. Please choose 1-5.")
 
 def main_configuration_menu():
     """Main configuration menu"""
@@ -1001,7 +1297,10 @@ def view_current_settings():
     print("=" * 50)
 
     print(f"\n🗂️ Storage Settings:")
-    print(f"   Root Directory: {ROOT_DIR}")
+    print(f"   Files  (ROOT_DIR)   : {ROOT_DIR}")
+    print(f"   Database (DB_DIR)   : {get_db_dir()}")
+    print(f"   Cache (CACHE_DIR)   : {get_cache_dir()}")
+    print(f"   HLS Cache           : {get_hls_cache_dir()}")
 
     print(f"\n🔧 Server Settings:")
     print(f"   Port: {PORT}")

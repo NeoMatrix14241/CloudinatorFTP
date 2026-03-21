@@ -18,6 +18,8 @@
     <!-- @videojs/html web-component player — served locally, no CDN required -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/video.css') }}">
     <script type="module" src="{{ url_for('static', filename='js/video.js') }}"></script>
+    <!-- PDF.js — local, used for PDF preview on Android -->
+    <script src="{{ url_for('static', filename='js/pdf.min.js') }}"></script>
     <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp">
 </head>
 

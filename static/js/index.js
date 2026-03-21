@@ -3258,10 +3258,28 @@ function openFileViewer(itemPath, filename) {
                         </audio>
                      </div>`;
             break;
-        case 'pdf':
+        case 'pdf': {
             body.classList.add('viewer-pdf');
-            inner = `<iframe src="${viewUrl}" class="viewer-iframe" title="${escapeHtml(filename)}"></iframe>`;
+            body.innerHTML = `
+                <div class="viewer-pdfjs-wrap">
+                    <div class="viewer-pdfjs-controls">
+                        <span id="pdf-page-info">Loading…</span>
+                        <div class="viewer-pdfjs-zoom">
+                            <button class="viewer-pdfjs-btn" onclick="pdfZoomOut()" title="Zoom out"><i class="fas fa-search-minus"></i></button>
+                            <span id="pdf-zoom-level">100%</span>
+                            <button class="viewer-pdfjs-btn" onclick="pdfZoomIn()" title="Zoom in"><i class="fas fa-search-plus"></i></button>
+                            <button class="viewer-pdfjs-btn" onclick="pdfZoomReset()" title="Fit width"><i class="fas fa-expand-arrows-alt"></i></button>
+                        </div>
+                    </div>
+                    <div id="pdf-pages" class="viewer-pdfjs-pages">
+                        <div id="pdf-loading" class="viewer-pdfjs-loading"><i class="fas fa-circle-notch fa-spin"></i> Loading PDF…</div>
+                    </div>
+                </div>`;
+            _loadPdfJs(() => _renderPdfJs(viewUrl));
+            _pdfAttachPinchZoom(body);
+            inner = '';
             break;
+        }
         case 'text':
             body.classList.add('viewer-text');
             inner = `<div class="viewer-text-loading"><i class="fas fa-circle-notch fa-spin"></i> Loading…</div>`;
@@ -3301,8 +3319,8 @@ function openFileViewer(itemPath, filename) {
             break;
     }
 
-    // video case sets body.innerHTML itself — skip the overwrite
-    if (viewType !== 'video') body.innerHTML = inner;
+    // video and pdf cases set body.innerHTML themselves — skip the overwrite
+    if (viewType !== 'video' && viewType !== 'pdf') body.innerHTML = inner;
     modal.classList.add('show');
 }
 
@@ -3340,7 +3358,258 @@ function closeFileViewer() {
 
     // 4. Clear the body
     body.innerHTML = '';
+
+    // 5. Reset PDF.js state so reopening a PDF starts fresh
+    _pdfState.doc       = null;
+    _pdfState.scale     = 1;
+    _pdfState.baseScale = 1;
+    _pdfState.rendering = false;
 }
+
+// ── PDF.js helpers ────────────────────────────────────────────────────────────
+
+const _pdfState = { doc: null, scale: 1, baseScale: 1, rendering: false };
+
+function _loadPdfJs(cb) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/js/pdf.worker.min.js';
+    cb();
+}
+
+function _renderPdfJs(url) {
+    _pdfState.doc       = null;
+    _pdfState.scale     = 1;
+    _pdfState.baseScale = 1;
+    _pdfState.rendering = false;
+
+    pdfjsLib.getDocument(url).promise
+        .then(doc => {
+            _pdfState.doc = doc;
+            const loadingEl = document.getElementById('pdf-loading');
+            if (loadingEl) loadingEl.style.display = 'none';
+            const info = document.getElementById('pdf-page-info');
+            if (info) info.textContent = `${doc.numPages} page${doc.numPages !== 1 ? 's' : ''}`;
+
+            doc.getPage(1).then(page => {
+                const pagesEl = document.getElementById('pdf-pages');
+                const availW  = pagesEl ? pagesEl.clientWidth - 24 : window.innerWidth - 24;
+                _pdfState.baseScale = availW / page.getViewport({ scale: 1 }).width;
+                _pdfState.scale     = _pdfState.baseScale;
+                _pdfZoomLabel();
+                _renderAllPages();
+            });
+        })
+        .catch(err => {
+            const loadingEl = document.getElementById('pdf-loading');
+            if (loadingEl) loadingEl.innerHTML =
+                `<i class="fas fa-exclamation-triangle"></i> Could not load PDF: ${err.message}`;
+        });
+}
+
+function _renderAllPages(restoreScrollRatio) {
+    if (!_pdfState.doc) return;
+    const pagesEl = document.getElementById('pdf-pages');
+    if (!pagesEl) return;
+
+    const scrollRatio = restoreScrollRatio !== undefined
+        ? restoreScrollRatio
+        : (pagesEl.scrollHeight > 0 ? pagesEl.scrollTop / pagesEl.scrollHeight : 0);
+
+    const total    = _pdfState.doc.numPages;
+    const existing = [...pagesEl.querySelectorAll('.viewer-pdfjs-page')];
+
+    for (let i = existing.length + 1; i <= total; i++) {
+        const wrap = document.createElement('div');
+        wrap.className    = 'viewer-pdfjs-page';
+        wrap.dataset.page = i;
+
+        const canvas = document.createElement('canvas');
+        canvas.className = 'viewer-pdfjs-canvas';
+
+        const textLayer = document.createElement('div');
+        textLayer.className = 'viewer-pdfjs-text textLayer';
+
+        wrap.appendChild(canvas);
+        wrap.appendChild(textLayer);
+        pagesEl.appendChild(wrap);
+        existing.push(wrap);
+    }
+
+    const renders = existing.slice(0, total).map((wrap, idx) => {
+        const canvas    = wrap.querySelector('.viewer-pdfjs-canvas');
+        const textLayer = wrap.querySelector('.viewer-pdfjs-text');
+        return _renderSinglePage(idx + 1, canvas, textLayer);
+    });
+
+    Promise.all(renders).then(() => {
+        pagesEl.scrollTop = pagesEl.scrollHeight * scrollRatio;
+    });
+}
+
+function _renderSinglePage(pageNum, canvas, textLayer) {
+    const gen = (canvas._pdfGen = (canvas._pdfGen || 0) + 1);
+
+    return _pdfState.doc.getPage(pageNum).then(page => {
+        const dpr          = window.devicePixelRatio || 1;
+        const viewport     = page.getViewport({ scale: _pdfState.scale });
+        const viewportHiDp = page.getViewport({ scale: _pdfState.scale * dpr });
+
+        const offscreen  = document.createElement('canvas');
+        offscreen.width  = viewportHiDp.width;
+        offscreen.height = viewportHiDp.height;
+
+        return page.render({ canvasContext: offscreen.getContext('2d'), viewport: viewportHiDp }).promise.then(() => {
+            if (canvas._pdfGen !== gen) return;
+
+            canvas.width        = viewportHiDp.width;
+            canvas.height       = viewportHiDp.height;
+            canvas.style.width  = viewport.width  + 'px';
+            canvas.style.height = viewport.height + 'px';
+            canvas.getContext('2d').drawImage(offscreen, 0, 0);
+
+            const wrap = canvas.parentElement;
+            if (wrap) {
+                wrap.style.width  = viewport.width  + 'px';
+                wrap.style.height = viewport.height + 'px';
+            }
+
+            if (textLayer) {
+                textLayer.innerHTML = '';
+                textLayer.style.width  = viewport.width  + 'px';
+                textLayer.style.height = viewport.height + 'px';
+                // --scale-factor must be the logical scale (not DPR-multiplied)
+                textLayer.style.setProperty('--scale-factor', String(_pdfState.scale));
+                page.getTextContent().then(textContent => {
+                    if (canvas._pdfGen !== gen) return;
+                    // v3.11.174 correct API: textContentSource + container
+                    pdfjsLib.renderTextLayer({
+                        textContentSource: textContent,
+                        container:         textLayer,
+                        viewport:          viewport,
+                        textDivs:          [],
+                    });
+                });
+            }
+
+            const pagesEl = document.getElementById('pdf-pages');
+            if (pagesEl) {
+                pagesEl.style.alignItems = viewport.width <= pagesEl.clientWidth
+                    ? 'center'
+                    : 'flex-start';
+            }
+        });
+    });
+}
+function _pdfZoomLabel() {
+    const el = document.getElementById('pdf-zoom-level');
+    if (el) el.textContent = Math.round((_pdfState.scale / _pdfState.baseScale) * 100) + '%';
+}
+
+function pdfZoomIn() {
+    const pagesEl = document.getElementById('pdf-pages');
+    const ratio = pagesEl && pagesEl.scrollHeight > 0 ? pagesEl.scrollTop / pagesEl.scrollHeight : 0;
+    _pdfState.scale = Math.min(_pdfState.baseScale * 4, _pdfState.scale * 1.25);
+    _pdfZoomLabel();
+    _renderAllPages(ratio);
+}
+
+function pdfZoomOut() {
+    const pagesEl = document.getElementById('pdf-pages');
+    const ratio = pagesEl && pagesEl.scrollHeight > 0 ? pagesEl.scrollTop / pagesEl.scrollHeight : 0;
+    _pdfState.scale = Math.max(_pdfState.baseScale * 0.5, _pdfState.scale / 1.25);
+    _pdfZoomLabel();
+    _renderAllPages(ratio);
+}
+
+function pdfZoomReset() {
+    const pagesEl = document.getElementById('pdf-pages');
+    const ratio = pagesEl && pagesEl.scrollHeight > 0 ? pagesEl.scrollTop / pagesEl.scrollHeight : 0;
+    _pdfState.scale = _pdfState.baseScale;
+    _pdfZoomLabel();
+    _renderAllPages(ratio);
+}
+
+/**
+ * Intercepts native pinch-to-zoom on the PDF pages container.
+ * During pinch: re-renders only the visible pages each frame — fast enough
+ * to feel real-time. On release: re-renders all pages for full sharpness.
+ */
+function _pdfAttachPinchZoom(container) {
+    let startDist  = 0;
+    let startScale = 1;
+    let pinching   = false;
+    let rafPending = false;
+
+    function _dist(touches) {
+        const dx = touches[0].clientX - touches[1].clientX;
+        const dy = touches[0].clientY - touches[1].clientY;
+        return Math.hypot(dx, dy);
+    }
+
+    function _visibleCanvases() {
+        const pagesEl = document.getElementById('pdf-pages');
+        if (!pagesEl) return [];
+        const top    = pagesEl.scrollTop;
+        const bottom = top + pagesEl.clientHeight;
+        return [...pagesEl.querySelectorAll('.viewer-pdfjs-canvas')].filter(c => {
+            const wrap = c.parentElement;
+            const offsetTop = wrap ? wrap.offsetTop : c.offsetTop;
+            return offsetTop + (wrap ? wrap.offsetHeight : c.offsetHeight) >= top && offsetTop <= bottom;
+        });
+    }
+
+    function _renderVisible() {
+        _visibleCanvases().forEach(canvas => {
+            const pageNum   = parseInt(canvas.dataset.page, 10) ||
+                              parseInt(canvas.closest('.viewer-pdfjs-page')?.dataset.page, 10);
+            const textLayer = canvas.parentElement?.querySelector('.viewer-pdfjs-text');
+            if (pageNum) _renderSinglePage(pageNum, canvas, textLayer);
+        });
+        _pdfZoomLabel();
+    }
+
+    container.addEventListener('touchstart', e => {
+        if (e.touches.length === 2) {
+            pinching   = true;
+            startDist  = _dist(e.touches);
+            startScale = _pdfState.scale;
+            e.preventDefault();
+        }
+    }, { passive: false });
+
+    container.addEventListener('touchmove', e => {
+        if (!pinching || e.touches.length !== 2) return;
+        e.preventDefault();
+
+        const ratio    = _dist(e.touches) / startDist;
+        const newScale = Math.max(
+            _pdfState.baseScale * 0.5,
+            Math.min(_pdfState.baseScale * 4, startScale * ratio)
+        );
+        _pdfState.scale = newScale;
+
+        // Throttle to one render per animation frame
+        if (!rafPending) {
+            rafPending = true;
+            requestAnimationFrame(() => {
+                _renderVisible();
+                rafPending = false;
+            });
+        }
+    }, { passive: false });
+
+    container.addEventListener('touchend', e => {
+        if (!pinching || e.touches.length >= 2) return;
+        pinching = false;
+
+        // Re-render all pages (including off-screen) at the final scale
+        const pagesEl = document.getElementById('pdf-pages');
+        const scrollRatio = pagesEl && pagesEl.scrollHeight > 0
+            ? pagesEl.scrollTop / pagesEl.scrollHeight : 0;
+        _renderAllPages(scrollRatio);
+    });
+}
+
+// ── End PDF.js helpers ────────────────────────────────────────────────────────
 
 function _renderOfficePreview(body, data) {
     body.innerHTML = '';

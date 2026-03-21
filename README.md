@@ -20,6 +20,7 @@ A lightweight FTP-like file transfer server that runs on **Termux (Android), Lin
 - 🎨 [Font Awesome](https://fontawesome.com/) - Free v7.2.0
 - 🎬 [FFmpeg](https://www.ffmpeg.org/) - Essentials v57 build 2026-03-19
 - 📺 [Video.js](https://videojs.org/) - v10
+- 📄 [PDF.js](https://mozilla.github.io/pdf.js/) - v3.11.174
 
 ## 🚀 Quick Start
 
