@@ -15,13 +15,13 @@ A lightweight FTP-like file transfer server that runs on **Termux (Android), Lin
 ## 📷 Admin (READWRITE)
 <img width="1794" height="1531" alt="image" src="https://github.com/user-attachments/assets/b7167c30-0590-4c23-a391-2022f630e6bb" />
 
-## 🚀 Quick Start
-
 ## 📦 Dependencies / Tools
 
 - 🎨 [Font Awesome](https://fontawesome.com/) - Free v7.2.0
 - 🎬 [FFmpeg](https://www.ffmpeg.org/) - Essentials v57 build 2026-03-19
 - 📺 [Video.js](https://videojs.org/) - v10
+
+## 🚀 Quick Start
 
 ### Prerequisites
 
