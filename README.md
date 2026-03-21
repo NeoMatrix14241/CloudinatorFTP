@@ -269,7 +269,12 @@ This tool helps:
 ### Default Settings
 - **Port**: 5000 (configurable in `config.py`)
 - **Host**: 0.0.0.0 (listens on all interfaces)
-- **Chunk Size**: 10MB (for large file uploads)
+- **Chunk Size**: 10MB (`10485760` bytes, for large file uploads)
+- **Chunked Uploads**: Enabled
+- **Max Content Length**: 16GB (`17179869184` bytes)
+- **Session Lifetime**: 1 hour (`3600` seconds)
+- **HLS Minimum Size**: 25MB (`26214400` bytes)
+- **HLS Forced Formats**: 3gp, avi, flv, m2ts, mkv, mov, mpeg, mpg, mts, ogv, ts, wmv
 
 ### Firewall Configuration (If needed)
 
