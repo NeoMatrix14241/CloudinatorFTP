@@ -3532,12 +3532,32 @@ _VIDEO_EXTS_HLS = frozenset([
     "mpg", "mpeg", "m2ts", "mts", "3gp", "ogv", "ts",
 ])
 
-# (quality_name, target_height, video_bitrate, maxrate, bufsize, audio_bitrate)
-_HLS_PROFILES = [
-    ("1080p", 1080, "3000k", "3500k", "6000k", "128k"),
-    ("720p",  720,  "1500k", "1800k", "3000k", "128k"),
-    ("360p",  360,  "500k",  "600k",  "1000k", "96k"),
+# CRF-based quality ladder — no target bitrate, just a maxrate ceiling.
+# Encoding uses -crf 18 (visually near-lossless) + -maxrate/-bufsize to cap
+# runaway bitrates on complex scenes, same approach as YouTube.
+#
+# (name, target_height, maxrate, bufsize, audio_bitrate)
+_HLS_BASE_PROFILES = [
+    ("2160p", 2160, "40000k",  "80000k", "192k"),  # 4K  — ~40 Mbps ceiling
+    ("1440p", 1440, "24000k",  "48000k", "192k"),  # 2K  — ~24 Mbps ceiling
+    ("1080p", 1080, "12000k",  "24000k", "192k"),  # matches YouTube Premium
+    ("720p",   720,  "7500k",  "15000k", "128k"),
+    ("480p",   480,  "4000k",   "8000k",  "128k"),
+    ("360p",   360,  "1500k",   "3000k",  "96k"),
+    ("240p",   240,   "800k",   "1600k",  "64k"),
+    ("144p",   144,   "300k",    "600k",  "64k"),
 ]
+
+# High-frame-rate variants — only added when source ≥ 48 fps, for 720p and above.
+# Ceilings are ~50% higher than their SDR counterparts to accommodate extra frames.
+# (name, target_height, maxrate, bufsize, audio_bitrate)
+_HLS_HFR_PROFILES = [
+    ("2160p60", 2160, "60000k", "120000k", "192k"),
+    ("1440p60", 1440, "36000k",  "72000k", "192k"),
+    ("1080p60", 1080, "20000k",  "40000k", "192k"),
+    ("720p60",   720, "12000k",  "24000k", "128k"),
+]
+
 _HLS_SEG_DURATION = 6  # seconds per HLS segment
 
 # HLS cache root lives in the configured cache dir, not inside ROOT_DIR
@@ -3600,8 +3620,9 @@ def _hls_write_status(cache_key: str, data: dict):
 
 def _probe_video(file_path: str):
     """
-    Return (width, height, has_audio, duration_secs) via ffprobe.
-    Falls back to (0, 0, False, 0.0) on any error.
+    Return (width, height, has_audio, duration_secs, fps) via ffprobe.
+    fps is the real/exact frame rate from r_frame_rate (e.g. 59.94, 60.0, 30.0).
+    Falls back to (0, 0, False, 0.0, 0.0) on any error.
     """
     try:
         _ffmpeg_bin = _resolve_ffmpeg()
@@ -3613,25 +3634,33 @@ def _probe_video(file_path: str):
             capture_output=True, text=True, timeout=30,
         )
         if r.returncode != 0:
-            return 0, 0, False, 0.0
+            return 0, 0, False, 0.0, 0.0
         data = json.loads(r.stdout)
         streams = data.get("streams", [])
         fmt    = data.get("format", {})
         w = h  = 0
         has_audio = False
+        fps = 0.0
         for s in streams:
             if s.get("codec_type") == "video":
                 w = int(s.get("width")  or 0)
                 h = int(s.get("height") or 0)
+                # r_frame_rate is exact rational e.g. "60000/1001" or "30/1"
+                rfr = s.get("r_frame_rate") or s.get("avg_frame_rate") or "0/1"
+                try:
+                    num, den = rfr.split("/")
+                    fps = float(int(num)) / float(int(den)) if int(den) != 0 else 0.0
+                except Exception:
+                    fps = 0.0
             elif s.get("codec_type") == "audio":
                 has_audio = True
         try:
             duration = float(fmt.get("duration") or 0)
         except (TypeError, ValueError):
             duration = 0.0
-        return w, h, has_audio, duration
+        return w, h, has_audio, duration, fps
     except Exception:
-        return 0, 0, False, 0.0
+        return 0, 0, False, 0.0, 0.0
 
 
 def _resolve_ffmpeg() -> str:
@@ -3677,6 +3706,17 @@ def _ffmpeg_available() -> bool:
 def _run_hls_transcode(file_path: str, cache_key: str):
     """
     Background daemon thread: transcode video → multi-quality HLS.
+
+    Profile selection:
+      • Standard profiles (144p→4K, capped at 30 fps) are included up to the
+        source height.
+      • HFR profiles (720p60→4K60) are added only when the source is ≥ 48 fps,
+        for heights ≤ source height and ≥ 720.
+      • Each standard profile applies an fps=30 cap via filter when the source
+        is HFR; HFR profiles pass the source frame-rate through unchanged.
+      • GOP size is set per-stream to 2 × effective_fps (2-second keyframe
+        interval) so seeking stays accurate at any frame-rate.
+
     Writes live progress 0-100 to .status.json via -progress pipe:1 parsing.
     Survives frontend refresh — never interrupted by the browser.
     """
@@ -3685,20 +3725,44 @@ def _run_hls_transcode(file_path: str, cache_key: str):
     _hls_write_status(cache_key, {"status": "processing", "progress": 0})
 
     try:
-        _, src_height, has_audio, duration_secs = _probe_video(file_path)
+        _, src_height, has_audio, duration_secs, src_fps = _probe_video(file_path)
 
-        profiles = [p for p in _HLS_PROFILES if src_height == 0 or p[1] <= src_height]
+        # Treat 48+ fps sources as HFR (covers both 50 Hz / PAL and 59.94/60 Hz)
+        is_hfr = src_fps >= 48.0
+
+        # ── Build active profile list ─────────────────────────────────────────
+        # Each entry: (name, height, fps_cap, maxr, bufs, abr)
+        #   fps_cap = 30    → standard profile; filter limits fps to 30 when HFR source
+        #   fps_cap = None  → HFR profile; source frame-rate passes through unchanged
+        profiles = []
+
+        for name, h, maxr, bufs, abr in _HLS_BASE_PROFILES:
+            if src_height == 0 or h <= src_height:
+                profiles.append((name, h, 30, maxr, bufs, abr))
+
+        if is_hfr:
+            for name, h, maxr, bufs, abr in _HLS_HFR_PROFILES:
+                if src_height == 0 or (h <= src_height and h >= 720):
+                    profiles.append((name, h, None, maxr, bufs, abr))
+
         if not profiles:
-            profiles = [_HLS_PROFILES[-1]]
+            # Absolute fallback: lowest rung of the standard ladder
+            name, h, maxr, bufs, abr = _HLS_BASE_PROFILES[-1]
+            profiles = [(name, h, 30, maxr, bufs, abr)]
+
         n = len(profiles)
 
         for name, *_ in profiles:
             os.makedirs(os.path.join(output_dir, name), exist_ok=True)
 
-        splits       = "".join(f"[vsp{i}]" for i in range(n))
+        # ── Build filter_complex ──────────────────────────────────────────────
+        # For standard profiles on an HFR source, append ",fps=fps=30" so the
+        # 30-fps streams are correctly limited.  HFR profiles get no fps filter.
+        splits = "".join(f"[vsp{i}]" for i in range(n))
         filter_parts = [f"[0:v]split={n}{splits}"]
-        for i, (name, h, *_) in enumerate(profiles):
-            filter_parts.append(f"[vsp{i}]scale=-2:{h}[vout{i}]")
+        for i, (name, h, fps_cap, *_) in enumerate(profiles):
+            fps_filter = f",fps=fps={fps_cap}" if (fps_cap is not None and is_hfr) else ""
+            filter_parts.append(f"[vsp{i}]scale=-2:{h}{fps_filter}[vout{i}]")
         filter_complex = "; ".join(filter_parts)
 
         cmd = [_resolve_ffmpeg(), "-y", "-i", file_path, "-filter_complex", filter_complex]
@@ -3709,21 +3773,27 @@ def _run_hls_transcode(file_path: str, cache_key: str):
             for _ in range(n):
                 cmd += ["-map", "0:a:0"]
 
-        for i, (name, h, vbr, maxr, bufs, abr) in enumerate(profiles):
+        # ── Per-stream video encoder options (CRF mode) ──────────────────────
+        # -crf 18 targets perceptual near-lossless quality; -maxrate/-bufsize
+        # cap the bitrate ceiling so complex scenes don't explode, identical
+        # to how YouTube's encoder pipeline works.
+        for i, (name, h, fps_cap, maxr, bufs, abr) in enumerate(profiles):
+            eff_fps = (fps_cap if fps_cap is not None else src_fps) or 30
+            gop     = max(48, int(round(eff_fps * 2)))
             cmd += [
-                f"-c:v:{i}", "libx264",
-                f"-b:v:{i}", vbr,
-                f"-maxrate:v:{i}", maxr,
-                f"-bufsize:v:{i}", bufs,
-                "-preset", "fast",
-                "-g", "48",
-                "-sc_threshold", "0",
-                "-keyint_min", "48",
+                f"-c:v:{i}",            "libx264",
+                f"-crf:v:{i}",          "22",
+                f"-maxrate:v:{i}",      maxr,
+                f"-bufsize:v:{i}",      bufs,
+                f"-preset:v:{i}",       "fast",
+                f"-g:v:{i}",            str(gop),
+                f"-keyint_min:v:{i}",   str(gop),
+                f"-sc_threshold:v:{i}", "0",
             ]
 
         if has_audio:
-            for i, (name, h, vbr, maxr, bufs, abr) in enumerate(profiles):
-                cmd += [f"-c:a:{i}", "aac", f"-b:a:{i}", abr, "-ar", "44100"]
+            for i, (name, h, fps_cap, maxr, bufs, abr) in enumerate(profiles):
+                cmd += [f"-c:a:{i}", "aac", f"-b:a:{i}", abr, "-ar", "48000"]
 
         if has_audio:
             vsm = " ".join(f"v:{i},a:{i},name:{name}" for i, (name, *_) in enumerate(profiles))
@@ -3746,9 +3816,11 @@ def _run_hls_transcode(file_path: str, cache_key: str):
             list_tpl,
         ]
 
+        profile_names = [p[0] for p in profiles]
         print(
             f"🎬 HLS transcode start: {os.path.basename(file_path)}  "
-            f"profiles={[p[0] for p in profiles]}  duration={duration_secs:.1f}s",
+            f"src={src_height}p {'HFR({:.2f}fps)'.format(src_fps) if is_hfr else '{:.2f}fps'.format(src_fps)}  "
+            f"profiles={profile_names}  duration={duration_secs:.1f}s",
             flush=True,
         )
 

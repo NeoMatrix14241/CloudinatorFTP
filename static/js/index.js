@@ -9443,8 +9443,17 @@ function _buildQualityBar(profiles, cacheKey) {
         return btn;
     }
 
+    // Sort: highest resolution first; at same height, HFR (60fps) before standard.
+    // e.g.  2160p60 > 2160p > 1440p60 > 1440p > 1080p60 > 1080p > 720p60 > 720p > 480p > …
+    function profileSortKey(name) {
+        const m = name.match(/^(\d+)p(\d+)?/);
+        const height = m ? parseInt(m[1], 10) : 0;
+        const fps    = m && m[2] ? parseInt(m[2], 10) : 0;
+        return height * 1000 + fps;   // higher is "better"
+    }
+
     row.appendChild(makeBtn('Auto', `/hls_files/${cacheKey}/master.m3u8`));
-    const sorted = [...profiles].sort((a, b) => (parseInt(b) || 0) - (parseInt(a) || 0));
+    const sorted = [...profiles].sort((a, b) => profileSortKey(b) - profileSortKey(a));
     sorted.forEach(p => row.appendChild(makeBtn(p, `/hls_files/${cacheKey}/${p}/index.m3u8`)));
 }
 
