@@ -3163,7 +3163,7 @@ const EXTENSION_MAP = (function () {
 // ── File Viewer ───────────────────────────────────────────────────────────────
 // Extensions that can be previewed inline in the browser.
 const VIEWABLE_EXTENSIONS = {
-    image: new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'ico', 'avif', 'jfif']),
+    image: new Set(['jpg', 'jpeg', 'jfif', 'png', 'gif', 'webp', 'svg', 'avif', 'tif', 'tiff', 'bmp', 'dib', 'psd', 'psb', 'heic', 'heif', 'raw', 'cr2', 'cr3', 'nef', 'nrw', 'arw', 'srf', 'sr2', 'dng', 'orf', 'rw2', 'raf', '3fr', 'mef', 'mos', 'erf', 'kdc', 'dcr', 'mrw', 'x3f', 'exr', 'hdr', 'rgbe', 'tga', 'pcx', 'icb', 'vda', 'vst', 'wmf', 'emf', 'jxl', 'jp2', 'jpx', 'j2k', 'jpf', 'ico']),
     // All video formats supported by ffmpeg HLS transcoding
     video: new Set([
         'mp4', 'webm', 'ogv', 'mov', 'm4v',
@@ -3221,7 +3221,25 @@ function openFileViewer(itemPath, filename) {
     switch (viewType) {
         case 'image':
             body.classList.add('viewer-image');
-            inner = `<img src="${viewUrl}" alt="${escapeHtml(filename)}" class="viewer-img" onerror="this.outerHTML='<p class=viewer-error>Could not load image.</p>'">`;
+            // Non-native or large images are converted on the backend.
+            // Show a spinner immediately and swap to the real image once
+            // the backend signals ready via /image_preview_status/.
+            // Native small images resolve instantly (backend serves them
+            // directly) so the spinner is barely visible in those cases.
+            body.innerHTML = `
+                <div class="img-conv-wrap" id="img-conv-wrap">
+                    <div class="img-conv-spinner" id="img-conv-spinner">
+                        <div class="img-conv-ring"></div>
+                        <div class="img-conv-label" id="img-conv-label">Loading image…</div>
+                    </div>
+                    <img id="img-conv-result" class="viewer-img"
+                         alt="${escapeHtml(filename)}"
+                         style="display:none;"
+                         onerror="document.getElementById('img-conv-label') && (document.getElementById('img-conv-label').textContent='');
+                                  this.style.display='none';
+                                  document.getElementById('img-conv-spinner').innerHTML='<p class=viewer-error>Could not load image.</p>';">
+                </div>`;
+            _imgStartPreview(itemPath, filename);
             break;
         case 'video': {
             body.classList.add('viewer-video');
@@ -3319,9 +3337,127 @@ function openFileViewer(itemPath, filename) {
             break;
     }
 
-    // video and pdf cases set body.innerHTML themselves — skip the overwrite
-    if (viewType !== 'video' && viewType !== 'pdf') body.innerHTML = inner;
+    // video, pdf, and image cases set body.innerHTML themselves — skip the overwrite
+    if (viewType !== 'video' && viewType !== 'pdf' && viewType !== 'image') body.innerHTML = inner;
     modal.classList.add('show');
+}
+
+/**
+ * Image preview loader — mirrors the HLS spinner pattern.
+ *
+ * Flow:
+ *  1. Fetch /image_info/<path> to find out if backend processing is needed.
+ *  2a. If not needed (small native image) → set img.src directly, hide spinner.
+ *  2b. If needed and already cached → set img.src to /image_preview/, hide spinner.
+ *  2c. If needed and not yet cached  → show "Converting…" spinner, fire
+ *      /image_preview/ request (triggers backend conversion), then poll
+ *      /image_preview_status/<key> every 1 s until ready, then reveal image.
+ */
+async function _imgStartPreview(itemPath, filename) {
+    const _NATIVE_IMG = new Set(['jpg', 'jpeg', 'jfif', 'png', 'gif', 'webp', 'svg', 'avif', 'ico']);
+    const ext = filename.split('.').pop().toLowerCase();
+    const isNative = _NATIVE_IMG.has(ext);
+    const previewUrl = `/image_preview/${itemPath}`;
+    const viewUrl = `/view/${itemPath}`;
+
+    const wrap = document.getElementById('img-conv-wrap');
+    const spinner = document.getElementById('img-conv-spinner');
+    const label = document.getElementById('img-conv-label');
+    const img = document.getElementById('img-conv-result');
+
+    // Guard: modal may have been closed before async resumes
+    function _alive() { return document.getElementById('img-conv-wrap') === wrap; }
+
+    function _showImage(url) {
+        if (!_alive()) return;
+        img.onload = () => {
+            if (!_alive()) return;
+            spinner.style.display = 'none';
+            img.style.display = 'block';
+        };
+        img.src = url;
+    }
+
+    function _setLabel(text) {
+        if (label && _alive()) label.textContent = text;
+    }
+
+    // ── Small native image: load directly, no backend processing needed ───
+    if (isNative) {
+        _setLabel('Loading image…');
+        _showImage(viewUrl);
+        return;
+    }
+
+    // ── Non-native / potentially large: ask backend for info first ────────
+    let info;
+    try {
+        _setLabel('Checking image…');
+        const r = await fetch(`/image_info/${itemPath}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        info = await r.json();
+    } catch (e) {
+        _showImage(previewUrl);
+        return;
+    }
+
+    if (!_alive()) return;
+
+    // Already cached or no processing needed → serve immediately
+    if (!info.needs_processing || info.cached) {
+        _setLabel(info.needs_processing ? 'Loading converted image…' : 'Loading image…');
+        _showImage(previewUrl);
+        return;
+    }
+
+    // ── Needs conversion — show spinner and poll ───────────────────────────
+    if (!info.pyvips_available) {
+        _setLabel('⚠️ pyvips not installed — trying raw…');
+        _showImage(viewUrl);
+        return;
+    }
+
+    _setLabel('Converting image…');
+
+    // Kick off backend conversion by touching /image_preview/ once.
+    // Don't await — we discover completion via polling below.
+    fetch(previewUrl).catch(() => { });
+
+    // Poll /image_preview_status/<cache_key> every 1 s
+    const cacheKey = info.cache_key;
+    let elapsed = 0;
+    const poll = setInterval(async () => {
+        if (!_alive()) { clearInterval(poll); return; }
+
+        elapsed += 1;
+        const mins = Math.floor(elapsed / 60);
+        const secs = elapsed % 60;
+        const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+        _setLabel(`Converting image… ${timeStr}`);
+
+        let st;
+        try {
+            const r = await fetch(`/image_preview_status/${cacheKey}`);
+            st = await r.json();
+        } catch { return; }
+
+        if (!_alive()) { clearInterval(poll); return; }
+
+        if (st.status === 'ready') {
+            clearInterval(poll);
+            const fmt = st.out_fmt === 'jpeg' ? 'JPEG' : 'WebP';
+            const sizeMB = st.cached_size ? (st.cached_size / 1048576).toFixed(1) + ' MB' : '';
+            const extra = st.oversized ? ` (oversized → ${fmt})` : ` (${fmt})`;
+            _setLabel(`Done${extra}${sizeMB ? ' · ' + sizeMB : ''}`);
+            _showImage(previewUrl);
+        } else if (st.status === 'error') {
+            clearInterval(poll);
+            _setLabel('');
+            if (spinner && _alive()) {
+                spinner.innerHTML = `<p class="viewer-error">Conversion failed: ${st.message || 'unknown error'}</p>`;
+            }
+        }
+    }, 1000);
 }
 
 /** Close the file viewer and stop any media playback. */
