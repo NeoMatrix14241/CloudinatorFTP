@@ -5331,4 +5331,49 @@ td .fa-file {
         word-break: break-word !important;
         overflow-wrap: anywhere !important;
     }
+
+    /* ── Parent-directory sticky row — restore desktop appearance on mobile ──
+       The generic .table tbody tr / .table td rules above paint every row
+       rgba(48,84,140). Re-assert the desktop parent-dir-sticky colours here
+       so the ".. (Parent Directory)" row is visually distinct on mobile too.
+       ─────────────────────────────────────────────────────────────────────── */
+    #filesTable tbody tr.parent-dir-sticky,
+    .table tbody tr.parent-dir-sticky {
+        background: rgba(22, 48, 95, 0.97) !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4) !important;
+        border-bottom: 1px solid rgba(52, 152, 219, 0.3) !important;
+        position: sticky !important;
+        top: var(--table-thead-h, 57px) !important;
+        z-index: 15 !important;
+    }
+
+    /* TD cells inherit the row colour — needed because .table td sets
+       background directly on the cell, overriding the row background */
+    #filesTable tbody tr.parent-dir-sticky td,
+    .table tbody tr.parent-dir-sticky td {
+        background: rgba(22, 48, 95, 0.97) !important;
+    }
+
+    #filesTable tbody tr.parent-dir-sticky:hover,
+    .table tbody tr.parent-dir-sticky:hover {
+        background: rgba(32, 65, 118, 0.97) !important;
+        cursor: pointer !important;
+    }
+
+    #filesTable tbody tr.parent-dir-sticky:hover td,
+    .table tbody tr.parent-dir-sticky:hover td {
+        background: rgba(32, 65, 118, 0.97) !important;
+    }
+
+    /* Icon and link colour — match desktop's accent blue */
+    #filesTable tbody tr.parent-dir-sticky .folder-link,
+    .table tbody tr.parent-dir-sticky .folder-link {
+        color: #5dade2 !important;
+        font-weight: 600 !important;
+    }
+
+    #filesTable tbody tr.parent-dir-sticky .file-icon,
+    .table tbody tr.parent-dir-sticky .file-icon {
+        color: #5dade2 !important;
+    }
 }
