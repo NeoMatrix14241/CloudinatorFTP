@@ -51,7 +51,14 @@ import subprocess
 import hashlib
 import zipstream
 from datetime import datetime
-from config import PORT, ROOT_DIR, CHUNK_SIZE, ENABLE_CHUNKED_UPLOADS, HLS_MIN_SIZE, HLS_FORCE_FORMATS
+from config import (
+    PORT,
+    ROOT_DIR,
+    CHUNK_SIZE,
+    ENABLE_CHUNKED_UPLOADS,
+    HLS_MIN_SIZE,
+    HLS_FORCE_FORMATS,
+)
 from database import get_session_secret
 
 SESSION_SECRET = get_session_secret()
@@ -3527,10 +3534,25 @@ def detect_ready_assemblies():
 # HLS Adaptive Streaming  (ffmpeg backend → Video.js frontend)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_VIDEO_EXTS_HLS = frozenset([
-    "mp4", "webm", "mov", "m4v", "mkv", "avi", "wmv", "flv",
-    "mpg", "mpeg", "m2ts", "mts", "3gp", "ogv", "ts",
-])
+_VIDEO_EXTS_HLS = frozenset(
+    [
+        "mp4",
+        "webm",
+        "mov",
+        "m4v",
+        "mkv",
+        "avi",
+        "wmv",
+        "flv",
+        "mpg",
+        "mpeg",
+        "m2ts",
+        "mts",
+        "3gp",
+        "ogv",
+        "ts",
+    ]
+)
 
 # CRF-based quality ladder — no target bitrate, just a maxrate ceiling.
 # Encoding uses -crf 18 (visually near-lossless) + -maxrate/-bufsize to cap
@@ -3538,14 +3560,14 @@ _VIDEO_EXTS_HLS = frozenset([
 #
 # (name, target_height, maxrate, bufsize, audio_bitrate)
 _HLS_BASE_PROFILES = [
-    ("2160p", 2160, "40000k",  "80000k", "192k"),  # 4K  — ~40 Mbps ceiling
-    ("1440p", 1440, "24000k",  "48000k", "192k"),  # 2K  — ~24 Mbps ceiling
-    ("1080p", 1080, "12000k",  "24000k", "192k"),  # matches YouTube Premium
-    ("720p",   720,  "7500k",  "15000k", "128k"),
-    ("480p",   480,  "4000k",   "8000k",  "128k"),
-    ("360p",   360,  "1500k",   "3000k",  "96k"),
-    ("240p",   240,   "800k",   "1600k",  "64k"),
-    ("144p",   144,   "300k",    "600k",  "64k"),
+    ("2160p", 2160, "40000k", "80000k", "192k"),  # 4K  — ~40 Mbps ceiling
+    ("1440p", 1440, "24000k", "48000k", "192k"),  # 2K  — ~24 Mbps ceiling
+    ("1080p", 1080, "12000k", "24000k", "192k"),  # matches YouTube Premium
+    ("720p", 720, "7500k", "15000k", "128k"),
+    ("480p", 480, "4000k", "8000k", "128k"),
+    ("360p", 360, "1500k", "3000k", "96k"),
+    ("240p", 240, "800k", "1600k", "64k"),
+    ("144p", 144, "300k", "600k", "64k"),
 ]
 
 # High-frame-rate variants — only added when source ≥ 48 fps, for 720p and above.
@@ -3553,9 +3575,9 @@ _HLS_BASE_PROFILES = [
 # (name, target_height, maxrate, bufsize, audio_bitrate)
 _HLS_HFR_PROFILES = [
     ("2160p60", 2160, "60000k", "120000k", "192k"),
-    ("1440p60", 1440, "36000k",  "72000k", "192k"),
-    ("1080p60", 1080, "20000k",  "40000k", "192k"),
-    ("720p60",   720, "12000k",  "24000k", "128k"),
+    ("1440p60", 1440, "36000k", "72000k", "192k"),
+    ("1080p60", 1080, "20000k", "40000k", "192k"),
+    ("720p60", 720, "12000k", "24000k", "128k"),
 ]
 
 _HLS_SEG_DURATION = 6  # seconds per HLS segment
@@ -3629,21 +3651,31 @@ def _probe_video(file_path: str):
         _ffprobe_name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
         ffprobe_bin = os.path.join(os.path.dirname(_ffmpeg_bin), _ffprobe_name)
         r = subprocess.run(
-            [ffprobe_bin, "-v", "quiet", "-print_format", "json",
-             "-show_streams", "-show_format", file_path],
-            capture_output=True, text=True, timeout=30,
+            [
+                ffprobe_bin,
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_streams",
+                "-show_format",
+                file_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if r.returncode != 0:
             return 0, 0, False, 0.0, 0.0
         data = json.loads(r.stdout)
         streams = data.get("streams", [])
-        fmt    = data.get("format", {})
-        w = h  = 0
+        fmt = data.get("format", {})
+        w = h = 0
         has_audio = False
         fps = 0.0
         for s in streams:
             if s.get("codec_type") == "video":
-                w = int(s.get("width")  or 0)
+                w = int(s.get("width") or 0)
                 h = int(s.get("height") or 0)
                 # r_frame_rate is exact rational e.g. "60000/1001" or "30/1"
                 rfr = s.get("r_frame_rate") or s.get("avg_frame_rate") or "0/1"
@@ -3666,6 +3698,7 @@ def _probe_video(file_path: str):
 def _resolve_ffmpeg() -> str:
     """Return the ffmpeg executable path, searching PATH then common Windows install dirs."""
     import shutil as _shutil
+
     found = _shutil.which("ffmpeg")
     if found:
         return found
@@ -3693,11 +3726,14 @@ def _resolve_ffmpeg() -> str:
 def _ffmpeg_available() -> bool:
     """Quick check: is ffmpeg installed and executable?"""
     import shutil as _shutil
+
     bin_path = _resolve_ffmpeg()
     if bin_path == "ffmpeg" and not _shutil.which("ffmpeg"):
         return False
     try:
-        subprocess.run([bin_path, "-version"], capture_output=True, timeout=5, check=True)
+        subprocess.run(
+            [bin_path, "-version"], capture_output=True, timeout=5, check=True
+        )
         return True
     except Exception:
         return False
@@ -3761,11 +3797,20 @@ def _run_hls_transcode(file_path: str, cache_key: str):
         splits = "".join(f"[vsp{i}]" for i in range(n))
         filter_parts = [f"[0:v]split={n}{splits}"]
         for i, (name, h, fps_cap, *_) in enumerate(profiles):
-            fps_filter = f",fps=fps={fps_cap}" if (fps_cap is not None and is_hfr) else ""
+            fps_filter = (
+                f",fps=fps={fps_cap}" if (fps_cap is not None and is_hfr) else ""
+            )
             filter_parts.append(f"[vsp{i}]scale=-2:{h}{fps_filter}[vout{i}]")
         filter_complex = "; ".join(filter_parts)
 
-        cmd = [_resolve_ffmpeg(), "-y", "-i", file_path, "-filter_complex", filter_complex]
+        cmd = [
+            _resolve_ffmpeg(),
+            "-y",
+            "-i",
+            file_path,
+            "-filter_complex",
+            filter_complex,
+        ]
 
         for i in range(n):
             cmd += ["-map", f"[vout{i}]"]
@@ -3779,16 +3824,24 @@ def _run_hls_transcode(file_path: str, cache_key: str):
         # to how YouTube's encoder pipeline works.
         for i, (name, h, fps_cap, maxr, bufs, abr) in enumerate(profiles):
             eff_fps = (fps_cap if fps_cap is not None else src_fps) or 30
-            gop     = max(48, int(round(eff_fps * 2)))
+            gop = max(48, int(round(eff_fps * 2)))
             cmd += [
-                f"-c:v:{i}",            "libx264",
-                f"-crf:v:{i}",          "22",
-                f"-maxrate:v:{i}",      maxr,
-                f"-bufsize:v:{i}",      bufs,
-                f"-preset:v:{i}",       "fast",
-                f"-g:v:{i}",            str(gop),
-                f"-keyint_min:v:{i}",   str(gop),
-                f"-sc_threshold:v:{i}", "0",
+                f"-c:v:{i}",
+                "libx264",
+                f"-crf:v:{i}",
+                "22",
+                f"-maxrate:v:{i}",
+                maxr,
+                f"-bufsize:v:{i}",
+                bufs,
+                f"-preset:v:{i}",
+                "fast",
+                f"-g:v:{i}",
+                str(gop),
+                f"-keyint_min:v:{i}",
+                str(gop),
+                f"-sc_threshold:v:{i}",
+                "0",
             ]
 
         if has_audio:
@@ -3796,23 +3849,35 @@ def _run_hls_transcode(file_path: str, cache_key: str):
                 cmd += [f"-c:a:{i}", "aac", f"-b:a:{i}", abr, "-ar", "48000"]
 
         if has_audio:
-            vsm = " ".join(f"v:{i},a:{i},name:{name}" for i, (name, *_) in enumerate(profiles))
+            vsm = " ".join(
+                f"v:{i},a:{i},name:{name}" for i, (name, *_) in enumerate(profiles)
+            )
         else:
-            vsm = " ".join(f"v:{i},name:{name}"       for i, (name, *_) in enumerate(profiles))
+            vsm = " ".join(
+                f"v:{i},name:{name}" for i, (name, *_) in enumerate(profiles)
+            )
 
-        seg_tpl  = os.path.join(output_dir, "%v", "seg%03d.ts")
+        seg_tpl = os.path.join(output_dir, "%v", "seg%03d.ts")
         list_tpl = os.path.join(output_dir, "%v", "index.m3u8")
 
         cmd += [
-            "-progress", "pipe:1",   # newline-delimited key=value → stdout
-            "-nostats",              # suppress \r stats that block line iteration
-            "-f", "hls",
-            "-hls_time",          str(_HLS_SEG_DURATION),
-            "-hls_playlist_type", "vod",
-            "-hls_flags",         "independent_segments",
-            "-var_stream_map",    vsm,
-            "-master_pl_name",    "master.m3u8",
-            "-hls_segment_filename", seg_tpl,
+            "-progress",
+            "pipe:1",  # newline-delimited key=value → stdout
+            "-nostats",  # suppress \r stats that block line iteration
+            "-f",
+            "hls",
+            "-hls_time",
+            str(_HLS_SEG_DURATION),
+            "-hls_playlist_type",
+            "vod",
+            "-hls_flags",
+            "independent_segments",
+            "-var_stream_map",
+            vsm,
+            "-master_pl_name",
+            "master.m3u8",
+            "-hls_segment_filename",
+            seg_tpl,
             list_tpl,
         ]
 
@@ -3839,13 +3904,16 @@ def _run_hls_transcode(file_path: str, cache_key: str):
                 continue
             if "=" in line:
                 key, _, val = line.partition("=")
-                key = key.strip(); val = val.strip()
+                key = key.strip()
+                val = val.strip()
                 print(f"[ffmpeg progress] {key}={val}", flush=True)
                 # out_time_ms is in microseconds
                 if key == "out_time_ms" and duration_secs > 0:
                     try:
                         pct = min(99, int(int(val) / 1_000_000 / duration_secs * 100))
-                        _hls_write_status(cache_key, {"status": "processing", "progress": pct})
+                        _hls_write_status(
+                            cache_key, {"status": "processing", "progress": pct}
+                        )
                     except (ValueError, ZeroDivisionError):
                         pass
             else:
@@ -3857,19 +3925,27 @@ def _run_hls_transcode(file_path: str, cache_key: str):
         proc.wait()
 
         if proc.returncode == 0:
-            _hls_write_status(cache_key, {
-                "status": "ready",
-                "progress": 100,
-                "profiles": [p[0] for p in profiles],
-            })
+            _hls_write_status(
+                cache_key,
+                {
+                    "status": "ready",
+                    "progress": 100,
+                    "profiles": [p[0] for p in profiles],
+                },
+            )
             print(f"\u2705 HLS transcode done: {cache_key[:8]}\u2026", flush=True)
         else:
             err_tail = "\n".join(stderr_tail)[-800:]
             _hls_write_status(cache_key, {"status": "error", "message": err_tail})
-            print(f"\u274c HLS transcode failed (rc={proc.returncode}):\n{err_tail}", flush=True)
+            print(
+                f"\u274c HLS transcode failed (rc={proc.returncode}):\n{err_tail}",
+                flush=True,
+            )
 
     except subprocess.TimeoutExpired:
-        _hls_write_status(cache_key, {"status": "error", "message": "Transcoding timed out"})
+        _hls_write_status(
+            cache_key, {"status": "error", "message": "Transcoding timed out"}
+        )
         print(f"\u274c HLS transcode timed out: {cache_key[:8]}\u2026")
     except Exception as exc:
         _hls_write_status(cache_key, {"status": "error", "message": str(exc)})
@@ -3907,26 +3983,33 @@ def hls_start(video_path):
         except OSError:
             file_size = 0
         if file_size < HLS_MIN_SIZE:
-            return jsonify({
-                "hls_available": False,
-                "reason": "file_too_small",
-                "file_size": file_size,
-                "min_size": HLS_MIN_SIZE,
-            })
+            return jsonify(
+                {
+                    "hls_available": False,
+                    "reason": "file_too_small",
+                    "file_size": file_size,
+                    "min_size": HLS_MIN_SIZE,
+                }
+            )
 
     if not _ffmpeg_available():
-        print("\u26a0\ufe0f  ffmpeg not found — HLS unavailable, client will use raw playback")
+        print(
+            "\u26a0\ufe0f  ffmpeg not found — HLS unavailable, client will use raw playback"
+        )
         return jsonify({"hls_available": False, "reason": "ffmpeg_not_installed"})
 
     cache_key = _hls_cache_key(full_path)
-    status    = _hls_read_status(cache_key)
+    status = _hls_read_status(cache_key)
 
     # Guard stale "ready" when hls cache dir was wiped externally
     if status.get("status") == "ready":
         master = os.path.join(_hls_output_dir(cache_key), "master.m3u8")
         if os.path.exists(master):
             return jsonify({"hls_available": True, "cache_key": cache_key, **status})
-        print(f"\u26a0\ufe0f  HLS stale cache — re-transcoding: {cache_key[:8]}\u2026", flush=True)
+        print(
+            f"\u26a0\ufe0f  HLS stale cache — re-transcoding: {cache_key[:8]}\u2026",
+            flush=True,
+        )
         # fall through
 
     if status.get("status") == "processing":
@@ -3938,7 +4021,14 @@ def hls_start(video_path):
     ).start()
 
     _hls_write_status(cache_key, {"status": "processing", "progress": 0})
-    return jsonify({"hls_available": True, "cache_key": cache_key, "status": "processing", "progress": 0})
+    return jsonify(
+        {
+            "hls_available": True,
+            "cache_key": cache_key,
+            "status": "processing",
+            "progress": 0,
+        }
+    )
 
 
 @app.route("/hls_status/<cache_key>")
@@ -3962,20 +4052,24 @@ def hls_files(cache_key, hls_path):
     if ext.lower() not in (".m3u8", ".ts"):
         return "Forbidden", 403
     output_dir = _hls_output_dir(cache_key)
-    file_path  = os.path.normpath(os.path.join(output_dir, hls_path))
+    file_path = os.path.normpath(os.path.join(output_dir, hls_path))
     if not file_path.startswith(os.path.abspath(output_dir)):
         return "Path traversal", 403
     if not os.path.exists(file_path):
         return "Not found", 404
     if ext.lower() == ".m3u8":
-        return send_file(file_path, mimetype="application/vnd.apple.mpegurl", max_age=0, conditional=False)
+        return send_file(
+            file_path,
+            mimetype="application/vnd.apple.mpegurl",
+            max_age=0,
+            conditional=False,
+        )
     return send_file(file_path, mimetype="video/mp2t", max_age=3600)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # End HLS Adaptive Streaming
 # ─────────────────────────────────────────────────────────────────────────────
-
 
 
 # Initialize cleanup on startup

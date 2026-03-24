@@ -4045,8 +4045,15 @@ td .fa-file {
     line-height: 1;
 }
 
-.viewer-pdfjs-btn:hover  { background: #89b4fa; color: #1e1e2e; }
-.viewer-pdfjs-btn:active { background: #6a9fd8; color: #1e1e2e; }
+.viewer-pdfjs-btn:hover {
+    background: #89b4fa;
+    color: #1e1e2e;
+}
+
+.viewer-pdfjs-btn:active {
+    background: #6a9fd8;
+    color: #1e1e2e;
+}
 
 .viewer-pdfjs-pages {
     flex: 1;

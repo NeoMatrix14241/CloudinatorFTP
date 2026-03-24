@@ -65,12 +65,12 @@ function initTapTooltips() {
         const tw = tip.offsetWidth;
         const th = tip.offsetHeight;
         let left = rect.left + rect.width / 2 - tw / 2;
-        let top  = rect.top - th - 7;
+        let top = rect.top - th - 7;
         // Clamp inside viewport
         left = Math.max(6, Math.min(left, window.innerWidth - tw - 6));
         if (top < 6) top = rect.bottom + 7; // flip below if no room above
         tip.style.left = left + 'px';
-        tip.style.top  = top  + 'px';
+        tip.style.top = top + 'px';
     }
 
     function hideTip(delay) {
@@ -127,7 +127,7 @@ function lockTableColumnWidths() {
  */
 function smartTableColumnizer() {
     const wrapper = document.getElementById('tableScrollWrapper');
-    const table   = document.getElementById('filesTable');
+    const table = document.getElementById('filesTable');
     if (!wrapper || !table) return;
 
     if (_smartColumnizerRO) { _smartColumnizerRO.disconnect(); _smartColumnizerRO = null; }
@@ -146,21 +146,21 @@ function smartTableColumnizer() {
         // Mobile (<600px):  cb | name | size | actions               (type + modified hidden)
         // Tablet (600-899): cb | name | size | type | actions        (modified hidden, slimmer cols)
         // Desktop (≥900px): all 6 columns
-        const cbW   = 36;
+        const cbW = 36;
         const sizeW = isTablet ? 110 : 200;
         const typeW = isTablet ? 110 : 125;
-        const modW  = 140;
-        const actW  = isTablet ? 155 : 172;
+        const modW = 140;
+        const actW = isTablet ? 155 : 172;
 
         const showMod = !isTablet && !isMobile;
         const fixedTotal = cbW + sizeW + typeW + (showMod ? modW : 0) + actW;
 
         const nameFloor = isMobile ? 250 : isTablet ? 100 : 160;
-        const nameW  = Math.max(nameFloor, W - fixedTotal - 4);
+        const nameW = Math.max(nameFloor, W - fixedTotal - 4);
         const totalW = fixedTotal + nameW;
         _set(table, 'table-layout', 'fixed');
-        _set(table, 'width',        '100%');
-        _set(table, 'min-width',    totalW + 'px');
+        _set(table, 'width', '100%');
+        _set(table, 'min-width', totalW + 'px');
 
         const colDefs = [cbW, nameW, sizeW, typeW, showMod ? modW : 0, actW];
 
@@ -168,33 +168,33 @@ function smartTableColumnizer() {
 
         function _fixCheckbox(el) {
             if (!el) return;
-            _set(el, 'width',      '16px');
-            _set(el, 'height',     '16px');
-            _set(el, 'min-width',  '16px');
+            _set(el, 'width', '16px');
+            _set(el, 'height', '16px');
+            _set(el, 'min-width', '16px');
             _set(el, 'min-height', '16px');
-            _set(el, 'max-width',  '16px');
+            _set(el, 'max-width', '16px');
             _set(el, 'max-height', '16px');
-            _set(el, 'display',    'block');
-            _set(el, 'margin',     '0 auto');
+            _set(el, 'display', 'block');
+            _set(el, 'margin', '0 auto');
         }
 
         // ── Apply to <thead th> ───────────────────────────────────────────────────
         table.querySelectorAll('thead th').forEach((th, i) => {
             const w = colDefs[i];
             if (w === 0) { _set(th, 'display', 'none'); return; }
-            _set(th, 'display',     '');
-            _set(th, 'width',       w + 'px');
-            _set(th, 'max-width',   w + 'px');
+            _set(th, 'display', '');
+            _set(th, 'width', w + 'px');
+            _set(th, 'max-width', w + 'px');
             _set(th, 'white-space', 'nowrap');
             if (i === 0) {
-                _set(th, 'overflow',       'visible');
-                _set(th, 'padding',        '0');
-                _set(th, 'text-align',     'center');
+                _set(th, 'overflow', 'visible');
+                _set(th, 'padding', '0');
+                _set(th, 'text-align', 'center');
                 _set(th, 'vertical-align', 'middle');
                 _fixCheckbox(th.querySelector('input[type="checkbox"]'));
             } else {
                 _set(th, 'overflow', 'hidden');
-                _set(th, 'padding',  isMobile ? '14px 6px' : '18px 13px');
+                _set(th, 'padding', isMobile ? '14px 6px' : '18px 13px');
             }
         });
 
@@ -203,7 +203,7 @@ function smartTableColumnizer() {
     }
 
     function _styleRows(rows, colDefs, isMobile) {
-        const pad    = isMobile ? '8px 8px' : '11px 13px';
+        const pad = isMobile ? '8px 8px' : '11px 13px';
         const padTop = isMobile ? '8px' : '11px';
         rows.forEach(row => {
             if (row.classList.contains('empty-folder-row')) return;
@@ -213,66 +213,66 @@ function smartTableColumnizer() {
                 const w = colDefs[i];
                 if (w === 0) { _set(td, 'display', 'none'); return; }
 
-                _set(td, 'display',   '');
-                _set(td, 'width',     w + 'px');
+                _set(td, 'display', '');
+                _set(td, 'width', w + 'px');
                 _set(td, 'max-width', w + 'px');
 
                 if (i === 0) {
-                    _set(td, 'overflow',       'visible');
-                    _set(td, 'padding',        padTop + ' 0 0 0');
-                    _set(td, 'text-align',     'center');
+                    _set(td, 'overflow', 'visible');
+                    _set(td, 'padding', padTop + ' 0 0 0');
+                    _set(td, 'text-align', 'center');
                     _set(td, 'vertical-align', 'top');
-                    _set(td, 'line-height',    'normal');
+                    _set(td, 'line-height', 'normal');
                     const cb = td.querySelector('input[type="checkbox"]');
                     if (cb) {
-                        _set(cb, 'width',      '16px');
-                        _set(cb, 'height',     '16px');
-                        _set(cb, 'min-width',  '16px');
+                        _set(cb, 'width', '16px');
+                        _set(cb, 'height', '16px');
+                        _set(cb, 'min-width', '16px');
                         _set(cb, 'min-height', '16px');
-                        _set(cb, 'max-width',  '16px');
+                        _set(cb, 'max-width', '16px');
                         _set(cb, 'max-height', '16px');
-                        _set(cb, 'display',    'block');
-                        _set(cb, 'margin',     '0 auto');
+                        _set(cb, 'display', 'block');
+                        _set(cb, 'margin', '0 auto');
                     }
                     return;
                 }
 
-                _set(td, 'overflow',       'hidden');
-                _set(td, 'padding',        pad);
+                _set(td, 'overflow', 'hidden');
+                _set(td, 'padding', pad);
                 _set(td, 'vertical-align', 'top');
-                _set(td, 'line-height',    '1.3');
+                _set(td, 'line-height', '1.3');
 
                 if (i === 1) {
                     // Name: word-wrap on all breakpoints
-                    _set(td, 'white-space',   'normal');
+                    _set(td, 'white-space', 'normal');
                     _set(td, 'text-overflow', 'unset');
-                    _set(td, 'vertical-align','top');
+                    _set(td, 'vertical-align', 'top');
                     const fn = td.querySelector('.file-name');
                     if (fn) {
-                        _set(fn, 'display',      'flex');
-                        _set(fn, 'align-items',  'flex-start');
-                        _set(fn, 'gap',          '6px');
-                        _set(fn, 'overflow',     'hidden');
-                        _set(fn, 'white-space',  'normal');
-                        _set(fn, 'max-width',    '100%');
+                        _set(fn, 'display', 'flex');
+                        _set(fn, 'align-items', 'flex-start');
+                        _set(fn, 'gap', '6px');
+                        _set(fn, 'overflow', 'hidden');
+                        _set(fn, 'white-space', 'normal');
+                        _set(fn, 'max-width', '100%');
                         fn.querySelectorAll('a, span').forEach(el => {
-                            _set(el, 'white-space',   'normal');
-                            _set(el, 'word-break',    'break-word');
+                            _set(el, 'white-space', 'normal');
+                            _set(el, 'word-break', 'break-word');
                             _set(el, 'overflow-wrap', 'anywhere');
-                            _set(el, 'overflow',      'hidden');
+                            _set(el, 'overflow', 'hidden');
                             _set(el, 'text-overflow', 'unset');
-                            _set(el, 'display',       'block');
-                            _set(el, 'max-width',     '100%');
+                            _set(el, 'display', 'block');
+                            _set(el, 'max-width', '100%');
                         });
                     }
                 } else if (i === 2) {
                     // Size: allow wrapping so "5000 files, 5000 folders\n204 MB" shows fully
-                    _set(td, 'white-space',   'normal');
-                    _set(td, 'word-break',    'break-word');
+                    _set(td, 'white-space', 'normal');
+                    _set(td, 'word-break', 'break-word');
                     _set(td, 'text-overflow', 'unset');
                 } else {
                     // All other cells: single line, ellipsis
-                    _set(td, 'white-space',   'nowrap');
+                    _set(td, 'white-space', 'nowrap');
                     _set(td, 'text-overflow', 'ellipsis');
                 }
             });
@@ -281,16 +281,16 @@ function smartTableColumnizer() {
 
     // Expose helpers so applyColumnWidths can style new VT rows consistently
     smartTableColumnizer._styleRows = _styleRows;
-    smartTableColumnizer._getColDefs = function() {
+    smartTableColumnizer._getColDefs = function () {
         const W = wrapper.clientWidth || wrapper.offsetWidth || 800;
         const isMobile = W < 600;
         const isTablet = W >= 600 && W < 900;
-        const cbW=36, sizeW=isTablet?110:200, typeW=isTablet?110:125, modW=140, actW=isTablet?155:172;
+        const cbW = 36, sizeW = isTablet ? 110 : 200, typeW = isTablet ? 110 : 125, modW = 140, actW = isTablet ? 155 : 172;
         const showMod = !isTablet && !isMobile;
-        const fixedTotal=cbW+sizeW+typeW+(showMod?modW:0)+actW;
+        const fixedTotal = cbW + sizeW + typeW + (showMod ? modW : 0) + actW;
         const nameFloor = isMobile ? 250 : isTablet ? 100 : 160;
-        const nameW=Math.max(nameFloor, W-fixedTotal-4);
-        return { colDefs:[cbW,nameW,sizeW,typeW,showMod?modW:0,actW], isMobile };
+        const nameW = Math.max(nameFloor, W - fixedTotal - 4);
+        return { colDefs: [cbW, nameW, sizeW, typeW, showMod ? modW : 0, actW], isMobile };
     };
 
     applyWidths();
@@ -3327,7 +3327,7 @@ function openFileViewer(itemPath, filename) {
 /** Close the file viewer and stop any media playback. */
 function closeFileViewer() {
     const modal = document.getElementById('fileViewerModal');
-    const body  = document.getElementById('fileViewerBody');
+    const body = document.getElementById('fileViewerBody');
     if (!modal) return;
     modal.classList.remove('show');
 
@@ -3336,32 +3336,32 @@ function closeFileViewer() {
 
     // 1. Stop every media element first — pause + blank src + load resets decoder
     body.querySelectorAll('video, audio').forEach(m => {
-        try { m.pause(); } catch(_) {}
-        try { m.removeAttribute('src'); } catch(_) {}
-        try { while (m.firstChild) m.removeChild(m.firstChild); } catch(_) {}
-        try { m.load(); } catch(_) {}
+        try { m.pause(); } catch (_) { }
+        try { m.removeAttribute('src'); } catch (_) { }
+        try { while (m.firstChild) m.removeChild(m.firstChild); } catch (_) { }
+        try { m.load(); } catch (_) { }
     });
 
     // 2. Call the Lit web component's own destroy() — this is what actually
     //    releases the internal MediaSource / HLS stream held by the component.
     //    The props dump showed: destroy, destroyCallback on the element prototype.
     body.querySelectorAll('video-player, video-skin').forEach(el => {
-        try { if (typeof el.destroy === 'function') el.destroy(); } catch(_) {}
-        try { if (typeof el.destroyCallback === 'function') el.destroyCallback(); } catch(_) {}
+        try { if (typeof el.destroy === 'function') el.destroy(); } catch (_) { }
+        try { if (typeof el.destroyCallback === 'function') el.destroyCallback(); } catch (_) { }
     });
 
     // 3. Physically remove video elements from DOM before clearing innerHTML —
     //    this forces the browser to release the MediaSource reference immediately
     body.querySelectorAll('video, audio').forEach(m => {
-        try { m.parentNode && m.parentNode.removeChild(m); } catch(_) {}
+        try { m.parentNode && m.parentNode.removeChild(m); } catch (_) { }
     });
 
     // 4. Clear the body
     body.innerHTML = '';
 
     // 5. Reset PDF.js state so reopening a PDF starts fresh
-    _pdfState.doc       = null;
-    _pdfState.scale     = 1;
+    _pdfState.doc = null;
+    _pdfState.scale = 1;
     _pdfState.baseScale = 1;
     _pdfState.rendering = false;
 }
@@ -3376,8 +3376,8 @@ function _loadPdfJs(cb) {
 }
 
 function _renderPdfJs(url) {
-    _pdfState.doc       = null;
-    _pdfState.scale     = 1;
+    _pdfState.doc = null;
+    _pdfState.scale = 1;
     _pdfState.baseScale = 1;
     _pdfState.rendering = false;
 
@@ -3391,9 +3391,9 @@ function _renderPdfJs(url) {
 
             doc.getPage(1).then(page => {
                 const pagesEl = document.getElementById('pdf-pages');
-                const availW  = pagesEl ? pagesEl.clientWidth - 24 : window.innerWidth - 24;
+                const availW = pagesEl ? pagesEl.clientWidth - 24 : window.innerWidth - 24;
                 _pdfState.baseScale = availW / page.getViewport({ scale: 1 }).width;
-                _pdfState.scale     = _pdfState.baseScale;
+                _pdfState.scale = _pdfState.baseScale;
                 _pdfZoomLabel();
                 _renderAllPages();
             });
@@ -3414,12 +3414,12 @@ function _renderAllPages(restoreScrollRatio) {
         ? restoreScrollRatio
         : (pagesEl.scrollHeight > 0 ? pagesEl.scrollTop / pagesEl.scrollHeight : 0);
 
-    const total    = _pdfState.doc.numPages;
+    const total = _pdfState.doc.numPages;
     const existing = [...pagesEl.querySelectorAll('.viewer-pdfjs-page')];
 
     for (let i = existing.length + 1; i <= total; i++) {
         const wrap = document.createElement('div');
-        wrap.className    = 'viewer-pdfjs-page';
+        wrap.className = 'viewer-pdfjs-page';
         wrap.dataset.page = i;
 
         const canvas = document.createElement('canvas');
@@ -3435,7 +3435,7 @@ function _renderAllPages(restoreScrollRatio) {
     }
 
     const renders = existing.slice(0, total).map((wrap, idx) => {
-        const canvas    = wrap.querySelector('.viewer-pdfjs-canvas');
+        const canvas = wrap.querySelector('.viewer-pdfjs-canvas');
         const textLayer = wrap.querySelector('.viewer-pdfjs-text');
         return _renderSinglePage(idx + 1, canvas, textLayer);
     });
@@ -3449,32 +3449,32 @@ function _renderSinglePage(pageNum, canvas, textLayer) {
     const gen = (canvas._pdfGen = (canvas._pdfGen || 0) + 1);
 
     return _pdfState.doc.getPage(pageNum).then(page => {
-        const dpr          = window.devicePixelRatio || 1;
-        const viewport     = page.getViewport({ scale: _pdfState.scale });
+        const dpr = window.devicePixelRatio || 1;
+        const viewport = page.getViewport({ scale: _pdfState.scale });
         const viewportHiDp = page.getViewport({ scale: _pdfState.scale * dpr });
 
-        const offscreen  = document.createElement('canvas');
-        offscreen.width  = viewportHiDp.width;
+        const offscreen = document.createElement('canvas');
+        offscreen.width = viewportHiDp.width;
         offscreen.height = viewportHiDp.height;
 
         return page.render({ canvasContext: offscreen.getContext('2d'), viewport: viewportHiDp }).promise.then(() => {
             if (canvas._pdfGen !== gen) return;
 
-            canvas.width        = viewportHiDp.width;
-            canvas.height       = viewportHiDp.height;
-            canvas.style.width  = viewport.width  + 'px';
+            canvas.width = viewportHiDp.width;
+            canvas.height = viewportHiDp.height;
+            canvas.style.width = viewport.width + 'px';
             canvas.style.height = viewport.height + 'px';
             canvas.getContext('2d').drawImage(offscreen, 0, 0);
 
             const wrap = canvas.parentElement;
             if (wrap) {
-                wrap.style.width  = viewport.width  + 'px';
+                wrap.style.width = viewport.width + 'px';
                 wrap.style.height = viewport.height + 'px';
             }
 
             if (textLayer) {
                 textLayer.innerHTML = '';
-                textLayer.style.width  = viewport.width  + 'px';
+                textLayer.style.width = viewport.width + 'px';
                 textLayer.style.height = viewport.height + 'px';
                 // --scale-factor must be the logical scale (not DPR-multiplied)
                 textLayer.style.setProperty('--scale-factor', String(_pdfState.scale));
@@ -3483,9 +3483,9 @@ function _renderSinglePage(pageNum, canvas, textLayer) {
                     // v3.11.174 correct API: textContentSource + container
                     pdfjsLib.renderTextLayer({
                         textContentSource: textContent,
-                        container:         textLayer,
-                        viewport:          viewport,
-                        textDivs:          [],
+                        container: textLayer,
+                        viewport: viewport,
+                        textDivs: [],
                     });
                 });
             }
@@ -3534,9 +3534,9 @@ function pdfZoomReset() {
  * to feel real-time. On release: re-renders all pages for full sharpness.
  */
 function _pdfAttachPinchZoom(container) {
-    let startDist  = 0;
+    let startDist = 0;
     let startScale = 1;
-    let pinching   = false;
+    let pinching = false;
     let rafPending = false;
 
     function _dist(touches) {
@@ -3548,7 +3548,7 @@ function _pdfAttachPinchZoom(container) {
     function _visibleCanvases() {
         const pagesEl = document.getElementById('pdf-pages');
         if (!pagesEl) return [];
-        const top    = pagesEl.scrollTop;
+        const top = pagesEl.scrollTop;
         const bottom = top + pagesEl.clientHeight;
         return [...pagesEl.querySelectorAll('.viewer-pdfjs-canvas')].filter(c => {
             const wrap = c.parentElement;
@@ -3559,8 +3559,8 @@ function _pdfAttachPinchZoom(container) {
 
     function _renderVisible() {
         _visibleCanvases().forEach(canvas => {
-            const pageNum   = parseInt(canvas.dataset.page, 10) ||
-                              parseInt(canvas.closest('.viewer-pdfjs-page')?.dataset.page, 10);
+            const pageNum = parseInt(canvas.dataset.page, 10) ||
+                parseInt(canvas.closest('.viewer-pdfjs-page')?.dataset.page, 10);
             const textLayer = canvas.parentElement?.querySelector('.viewer-pdfjs-text');
             if (pageNum) _renderSinglePage(pageNum, canvas, textLayer);
         });
@@ -3569,8 +3569,8 @@ function _pdfAttachPinchZoom(container) {
 
     container.addEventListener('touchstart', e => {
         if (e.touches.length === 2) {
-            pinching   = true;
-            startDist  = _dist(e.touches);
+            pinching = true;
+            startDist = _dist(e.touches);
             startScale = _pdfState.scale;
             e.preventDefault();
         }
@@ -3580,7 +3580,7 @@ function _pdfAttachPinchZoom(container) {
         if (!pinching || e.touches.length !== 2) return;
         e.preventDefault();
 
-        const ratio    = _dist(e.touches) / startDist;
+        const ratio = _dist(e.touches) / startDist;
         const newScale = Math.max(
             _pdfState.baseScale * 0.5,
             Math.min(_pdfState.baseScale * 4, startScale * ratio)
@@ -3822,7 +3822,7 @@ document.addEventListener('keydown', function (e) {
     const modal = document.getElementById('fileViewerModal');
     if (modal && modal.classList.contains('show')) {
         if (e.key === 'ArrowRight') { e.preventDefault(); _hlsSkip(10); }
-        if (e.key === 'ArrowLeft')  { e.preventDefault(); _hlsSkip(-10); }
+        if (e.key === 'ArrowLeft') { e.preventDefault(); _hlsSkip(-10); }
     }
 });
 
@@ -9066,7 +9066,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ── Archive preview: load & retry ────────────────────────────────────────────
- 
+
 /**
  * Fetch archive listing from the server, handling password prompts & errors.
  * Called initially with password=null; retried with the user-supplied password.
@@ -9074,7 +9074,7 @@ document.addEventListener('visibilitychange', () => {
 function _loadArchivePreview(body, itemPath, password) {
     const url = `/archive_preview/${itemPath}` +
         (password != null ? `?password=${encodeURIComponent(password)}` : '');
- 
+
     fetch(url)
         .then(r => r.json())
         .then(data => {
@@ -9104,13 +9104,13 @@ function _loadArchivePreview(body, itemPath, password) {
                 </p>`;
         });
 }
- 
+
 // ── Archive preview: password prompt ─────────────────────────────────────────
- 
+
 function _renderArchivePasswordPrompt(body, itemPath, wrongPassword) {
     body.innerHTML = '';
     body.classList.add('viewer-archive');
- 
+
     const wrap = document.createElement('div');
     wrap.className = 'archive-password-wrap';
     wrap.innerHTML = `
@@ -9142,14 +9142,14 @@ function _renderArchivePasswordPrompt(body, itemPath, wrongPassword) {
         </div>
     `;
     body.appendChild(wrap);
- 
+
     const input = wrap.querySelector('#archivePasswordInput');
-    const btn   = wrap.querySelector('#archivePasswordBtn');
- 
+    const btn = wrap.querySelector('#archivePasswordBtn');
+
     const tryPassword = () => {
         const pw = input.value.trim();
         if (!pw) { input.focus(); input.classList.add('archive-input-shake'); setTimeout(() => input.classList.remove('archive-input-shake'), 500); return; }
- 
+
         btn.disabled = true;
         btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Unlocking…';
         // Show inline spinner while re-fetching
@@ -9158,78 +9158,78 @@ function _renderArchivePasswordPrompt(body, itemPath, wrongPassword) {
         </div>`;
         _loadArchivePreview(body, itemPath, pw);
     };
- 
+
     btn.addEventListener('click', tryPassword);
     input.addEventListener('keydown', e => { if (e.key === 'Enter') tryPassword(); });
- 
+
     // Prevent viewer Escape handler from eating keystrokes inside the input
     input.addEventListener('keydown', e => e.stopPropagation(), true);
- 
+
     input.focus();
 }
- 
+
 // ── Archive preview: main renderer ───────────────────────────────────────────
- 
+
 function _renderArchivePreview(body, data) {
     body.innerHTML = '';
     body.classList.add('viewer-archive');
- 
+
     // ── Helpers ──────────────────────────────────────────────────────────────
     const fmtSize = (bytes) => {
         if (bytes == null || bytes < 0) return '—';
-        if (bytes === 0)  return '0 B';
+        if (bytes === 0) return '0 B';
         if (bytes >= 1e12) return (bytes / 1e12).toFixed(2) + ' TB';
-        if (bytes >= 1e9)  return (bytes / 1e9).toFixed(2)  + ' GB';
-        if (bytes >= 1e6)  return (bytes / 1e6).toFixed(1)  + ' MB';
+        if (bytes >= 1e9) return (bytes / 1e9).toFixed(2) + ' GB';
+        if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + ' MB';
         if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
         return bytes + ' B';
     };
- 
+
     const fileIcon = (name) => {
         const ext = (name.split('.').pop() || '').toLowerCase();
         const map = {
             // images
-            jpg:'fa-file-image',jpeg:'fa-file-image',png:'fa-file-image',gif:'fa-file-image',
-            bmp:'fa-file-image',webp:'fa-file-image',svg:'fa-file-image',avif:'fa-file-image',
+            jpg: 'fa-file-image', jpeg: 'fa-file-image', png: 'fa-file-image', gif: 'fa-file-image',
+            bmp: 'fa-file-image', webp: 'fa-file-image', svg: 'fa-file-image', avif: 'fa-file-image',
             // video
-            mp4:'fa-file-video',avi:'fa-file-video',mov:'fa-file-video',
-            mkv:'fa-file-video',webm:'fa-file-video',wmv:'fa-file-video',
+            mp4: 'fa-file-video', avi: 'fa-file-video', mov: 'fa-file-video',
+            mkv: 'fa-file-video', webm: 'fa-file-video', wmv: 'fa-file-video',
             // audio
-            mp3:'fa-file-audio',wav:'fa-file-audio',flac:'fa-file-audio',
-            aac:'fa-file-audio',ogg:'fa-file-audio',m4a:'fa-file-audio',
+            mp3: 'fa-file-audio', wav: 'fa-file-audio', flac: 'fa-file-audio',
+            aac: 'fa-file-audio', ogg: 'fa-file-audio', m4a: 'fa-file-audio',
             // docs
-            pdf:'fa-file-pdf',
-            doc:'fa-file-word',docx:'fa-file-word',
-            xls:'fa-file-excel',xlsx:'fa-file-excel',
-            ppt:'fa-file-powerpoint',pptx:'fa-file-powerpoint',
+            pdf: 'fa-file-pdf',
+            doc: 'fa-file-word', docx: 'fa-file-word',
+            xls: 'fa-file-excel', xlsx: 'fa-file-excel',
+            ppt: 'fa-file-powerpoint', pptx: 'fa-file-powerpoint',
             // code / text
-            js:'fa-file-code',ts:'fa-file-code',jsx:'fa-file-code',tsx:'fa-file-code',
-            py:'fa-file-code',java:'fa-file-code',cpp:'fa-file-code',c:'fa-file-code',
-            cs:'fa-file-code',go:'fa-file-code',rb:'fa-file-code',php:'fa-file-code',
-            html:'fa-file-code',css:'fa-file-code',json:'fa-file-code',xml:'fa-file-code',
-            sh:'fa-file-code',bat:'fa-file-code',
-            txt:'fa-file-alt',md:'fa-file-alt',csv:'fa-file-alt',log:'fa-file-alt',
+            js: 'fa-file-code', ts: 'fa-file-code', jsx: 'fa-file-code', tsx: 'fa-file-code',
+            py: 'fa-file-code', java: 'fa-file-code', cpp: 'fa-file-code', c: 'fa-file-code',
+            cs: 'fa-file-code', go: 'fa-file-code', rb: 'fa-file-code', php: 'fa-file-code',
+            html: 'fa-file-code', css: 'fa-file-code', json: 'fa-file-code', xml: 'fa-file-code',
+            sh: 'fa-file-code', bat: 'fa-file-code',
+            txt: 'fa-file-alt', md: 'fa-file-alt', csv: 'fa-file-alt', log: 'fa-file-alt',
             // archives
-            zip:'fa-file-archive',rar:'fa-file-archive','7z':'fa-file-archive',
-            tar:'fa-file-archive',gz:'fa-file-archive',bz2:'fa-file-archive',
+            zip: 'fa-file-archive', rar: 'fa-file-archive', '7z': 'fa-file-archive',
+            tar: 'fa-file-archive', gz: 'fa-file-archive', bz2: 'fa-file-archive',
         };
         return map[ext] || 'fa-file';
     };
- 
+
     // ── Build tree from flat entry list ──────────────────────────────────────
     // Each node: { name, is_dir, size, compressed_size, modified, children: {} }
     const root = { children: {} };
- 
+
     for (const entry of data.entries) {
         // Normalise separators and strip leading slash
         const parts = entry.name.replace(/\\/g, '/').split('/').filter(p => p.length > 0);
         if (!parts.length) continue;
- 
+
         let node = root;
         for (let i = 0; i < parts.length; i++) {
             const part = parts[i];
             const isLast = i === parts.length - 1;
- 
+
             if (!node.children[part]) {
                 node.children[part] = {
                     name: part,
@@ -9248,14 +9248,14 @@ function _renderArchivePreview(body, data) {
             node = node.children[part];
         }
     }
- 
+
     // ── Header bar ───────────────────────────────────────────────────────────
-    const fileCt  = data.entries.filter(e => !e.is_dir).length;
-    const dirCt   = data.entries.filter(e =>  e.is_dir).length;
- 
+    const fileCt = data.entries.filter(e => !e.is_dir).length;
+    const dirCt = data.entries.filter(e => e.is_dir).length;
+
     const typeBadgeColour = { zip: '#e67e22', rar: '#8e44ad', '7z': '#2980b9', tar: '#27ae60' };
     const badgeStyle = `background:${typeBadgeColour[data.type] || '#555'}`;
- 
+
     const header = document.createElement('div');
     header.className = 'archive-header';
     header.innerHTML = `
@@ -9270,37 +9270,37 @@ function _renderArchivePreview(body, data) {
         </span>` : ''}
     `;
     body.appendChild(header);
- 
+
     // ── Tree ─────────────────────────────────────────────────────────────────
     const treeWrap = document.createElement('div');
     treeWrap.className = 'archive-tree';
     body.appendChild(treeWrap);
- 
+
     const renderNode = (node, container, depth) => {
         const sorted = Object.values(node.children).sort((a, b) => {
             if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
             return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
         });
- 
+
         for (const child of sorted) {
             const hasChildren = Object.keys(child.children).length > 0;
- 
+
             const row = document.createElement('div');
             row.className = 'archive-entry' + (child.is_dir ? ' archive-entry-dir' : '');
             row.style.paddingLeft = (depth * 16 + 10) + 'px';
- 
+
             // Compression ratio label
             let ratioHtml = '';
             if (!child.is_dir && child.size > 0 && child.compressed_size > 0 && child.compressed_size < child.size) {
                 const pct = Math.round((1 - child.compressed_size / child.size) * 100);
                 if (pct > 0) ratioHtml = `<span class="archive-entry-ratio">${pct}% saved</span>`;
             }
- 
+
             row.innerHTML = `
                 <span class="archive-entry-toggle">
                     ${child.is_dir
-                        ? `<i class="fas ${hasChildren ? 'fa-chevron-right' : 'fa-minus'} archive-chevron${hasChildren ? '' : ' archive-chevron-empty'}"></i>`
-                        : ''}
+                    ? `<i class="fas ${hasChildren ? 'fa-chevron-right' : 'fa-minus'} archive-chevron${hasChildren ? '' : ' archive-chevron-empty'}"></i>`
+                    : ''}
                 </span>
                 <i class="fas ${child.is_dir ? 'fa-folder' : fileIcon(child.name)} archive-entry-icon ${child.is_dir ? 'archive-icon-dir' : 'archive-icon-file'}"></i>
                 <span class="archive-entry-name">${escapeHtml(child.name)}</span>
@@ -9310,16 +9310,16 @@ function _renderArchivePreview(body, data) {
                     ${ratioHtml}
                 </span>
             `;
- 
+
             container.appendChild(row);
- 
+
             if (child.is_dir && hasChildren) {
                 const childContainer = document.createElement('div');
                 childContainer.className = 'archive-children';
                 childContainer.style.display = 'none';
                 renderNode(child, childContainer, depth + 1);
                 container.appendChild(childContainer);
- 
+
                 // Toggle expand/collapse on click
                 row.style.cursor = 'pointer';
                 row.addEventListener('click', () => {
@@ -9341,9 +9341,9 @@ function _renderArchivePreview(body, data) {
             }
         }
     };
- 
+
     renderNode(root, treeWrap, 0);
- 
+
     // Auto-expand if the archive has only one top-level folder
     const topLevelKeys = Object.keys(root.children);
     if (topLevelKeys.length === 1) {
@@ -9369,20 +9369,20 @@ function _initMobileDoubleTapSeek(area) {
     if (!area) return;
     let lastTap = 0, lastX = 0;
 
-    area.addEventListener('touchend', function(e) {
+    area.addEventListener('touchend', function (e) {
         // Ignore taps on buttons/controls
         if (e.target.closest('button, input, select, a, media-controls')) return;
         const now = Date.now();
         const touch = e.changedTouches[0];
-        const rect  = area.getBoundingClientRect();
-        const x     = touch.clientX - rect.left;
+        const rect = area.getBoundingClientRect();
+        const x = touch.clientX - rect.left;
         const isDouble = (now - lastTap) < 300 && Math.abs(touch.clientX - lastX) < 80;
         lastTap = now;
-        lastX   = touch.clientX;
+        lastX = touch.clientX;
         if (!isDouble) return;
         // Left third = back, right third = forward
         const third = rect.width / 3;
-        if (x < third)              _hlsSkip(-10);
+        if (x < third) _hlsSkip(-10);
         else if (x > rect.width - third) _hlsSkip(10);
     }, { passive: true });
 }
@@ -9434,30 +9434,30 @@ function _injectMobileSpeedHide(playerEl) {
 }
 
 async function _hlsStartStream(itemPath, wrapperId) {
-    window._hlsPollCancel    = false;
+    window._hlsPollCancel = false;
     window._vjsCurrentPlayer = null;
 
     const $id = id => document.getElementById(id);
 
-    function _setStatus(txt)   { const e = $id('hls-status-msg');  if (e) e.textContent  = txt; }
+    function _setStatus(txt) { const e = $id('hls-status-msg'); if (e) e.textContent = txt; }
     function _setProgress(pct) {
         const pw = $id('hls-progress-wrap'); if (pw) pw.style.display = 'block';
-        const pb = $id('hls-progress-bar');  if (pb) pb.style.width   = pct + '%';
-        const bl = $id('hls-btn-label');     if (bl) bl.textContent   = `Processing\u2026 ${pct}%`;
+        const pb = $id('hls-progress-bar'); if (pb) pb.style.width = pct + '%';
+        const bl = $id('hls-btn-label'); if (bl) bl.textContent = `Processing\u2026 ${pct}%`;
     }
     function _setStreamReady() {
         const bs = $id('hls-btn-spinner'); if (bs) bs.style.display = 'none';
-        const bl = $id('hls-btn-label');   if (bl) bl.textContent   = '\u26a1 Stream HLS';
-        const bt = $id('hls-btn-stream');  if (bt) { bt.disabled = false; bt.title = 'Play adaptive bitrate stream'; }
+        const bl = $id('hls-btn-label'); if (bl) bl.textContent = '\u26a1 Stream HLS';
+        const bt = $id('hls-btn-stream'); if (bt) { bt.disabled = false; bt.title = 'Play adaptive bitrate stream'; }
         const pw = $id('hls-progress-wrap'); if (pw) pw.style.display = 'none';
         _setStatus('');
     }
     function _hideStreamBtn() {
-        const bt = $id('hls-btn-stream');    if (bt) bt.style.display   = 'none';
-        const pw = $id('hls-progress-wrap'); if (pw) pw.style.display   = 'none';
+        const bt = $id('hls-btn-stream'); if (bt) bt.style.display = 'none';
+        const pw = $id('hls-progress-wrap'); if (pw) pw.style.display = 'none';
     }
     function _hideQualityRow() {
-        const qr = $id('hls-quality-row');   if (qr) qr.style.display   = 'none';
+        const qr = $id('hls-quality-row'); if (qr) qr.style.display = 'none';
     }
 
     // Tear down whatever is currently in hls-player-area before mounting
@@ -9467,10 +9467,10 @@ async function _hlsStartStream(itemPath, wrapperId) {
         const area = $id('hls-player-area');
         if (!area) return;
         area.querySelectorAll('video, audio').forEach(m => {
-            try { m.pause(); m.removeAttribute('src'); m.load(); } catch(_) {}
+            try { m.pause(); m.removeAttribute('src'); m.load(); } catch (_) { }
         });
         area.querySelectorAll('video-player, video-skin').forEach(el => {
-            try { if (typeof el.destroy === 'function') el.destroy(); } catch(_) {}
+            try { if (typeof el.destroy === 'function') el.destroy(); } catch (_) { }
         });
         // Remove only player elements, preserve the seek overlay
         Array.from(area.children).forEach(el => {
@@ -9562,8 +9562,8 @@ async function _hlsStartStream(itemPath, wrapperId) {
         _wireStreamButton(cacheKey, startData.profiles);
         _setStatus('');
         _mountHlsPlayer(`/hls_files/${cacheKey}/master.m3u8`, true);
-        const rb2 = $id('hls-btn-raw');    if (rb2) rb2.classList.remove('hls-btn-active');
-        const sb  = $id('hls-btn-stream'); if (sb)  sb.classList.add('hls-btn-active');
+        const rb2 = $id('hls-btn-raw'); if (rb2) rb2.classList.remove('hls-btn-active');
+        const sb = $id('hls-btn-stream'); if (sb) sb.classList.add('hls-btn-active');
         _buildQualityBar(startData.profiles, cacheKey);
         return;
     }
@@ -9607,10 +9607,10 @@ function _wireStreamButton(cacheKey, profiles) {
 
         // Destroy existing player before mounting HLS — prevents double audio
         area.querySelectorAll('video, audio').forEach(m => {
-            try { m.pause(); m.removeAttribute('src'); m.load(); } catch(_) {}
+            try { m.pause(); m.removeAttribute('src'); m.load(); } catch (_) { }
         });
         area.querySelectorAll('video-player, video-skin').forEach(el => {
-            try { if (typeof el.destroy === 'function') el.destroy(); } catch(_) {}
+            try { if (typeof el.destroy === 'function') el.destroy(); } catch (_) { }
         });
 
         area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;';
@@ -9659,7 +9659,7 @@ function _unmuteWhenReady(playerEl) {
             video.play().catch(() => {
                 // Browser blocked unmuted autoplay — play muted as fallback
                 video.muted = true;
-                video.play().catch(() => {});
+                video.play().catch(() => { });
             });
         }
 
@@ -9701,8 +9701,8 @@ function _buildQualityBar(profiles, cacheKey) {
             video.src = src;
             video.load();
             video.addEventListener('loadedmetadata', () => {
-                if (currentTime > 0) { try { video.currentTime = currentTime; } catch(_) {} }
-                if (!wasPaused) video.play().catch(() => {});
+                if (currentTime > 0) { try { video.currentTime = currentTime; } catch (_) { } }
+                if (!wasPaused) video.play().catch(() => { });
                 video.muted = false;
                 video.volume = 1;
             }, { once: true });
@@ -9717,7 +9717,7 @@ function _buildQualityBar(profiles, cacheKey) {
     function profileSortKey(name) {
         const m = name.match(/^(\d+)p(\d+)?/);
         const height = m ? parseInt(m[1], 10) : 0;
-        const fps    = m && m[2] ? parseInt(m[2], 10) : 0;
+        const fps = m && m[2] ? parseInt(m[2], 10) : 0;
         return height * 1000 + fps;   // higher is "better"
     }
 
