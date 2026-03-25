@@ -92,7 +92,7 @@ pip install -r requirements.txt
 python setup_storage.py
 ```
 
-**Server**
+**Server, Storage, & Cache (Advanced)**
 ```bash
 python config.py
 ```
