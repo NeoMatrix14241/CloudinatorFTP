@@ -23,7 +23,7 @@ A lightweight FTP-like file transfer server that runs on **Termux (Android), Lin
 - 📺 [Video.js](https://videojs.org/) - v10
 - 📄 [PDF.js](https://mozilla.github.io/pdf.js/) - v3.11.174
 - 🖼️ [libvips](https://www.libvips.org/) - v8.18.1
-- 🔧 [Git](https://git-scm.com/)
+- 🔧 [Git](https://git-scm.com/) - Latest Version/Build
 
 ## 🚀 Quick Start
 
