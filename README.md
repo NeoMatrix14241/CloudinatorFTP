@@ -266,7 +266,7 @@ This tool helps:
 | Port already in use | Change port in `config.py` or kill process |
 | Cloudflare tunnel fails | Check internet connection, try again |
 
-## 🌐 Network Configuration
+## 🌐 Network & Server Configuration
 
 ### Default Settings
 - **Port**: 5000 (configurable in `config.py`)
@@ -277,6 +277,8 @@ This tool helps:
 - **Session Lifetime**: 1 hour (`3600` seconds)
 - **HLS Minimum Size**: 25MB (`26214400` bytes)
 - **HLS Forced Formats**: 3gp, avi, flv, m2ts, mkv, mov, mpeg, mpg, mts, ogv, ts, wmv
+- **Compression Thresold**: 3.0 MB (`3145728` bytes)
+- **Lossy WebP Quality**: 50
 
 ### Firewall Configuration (If needed)
 
