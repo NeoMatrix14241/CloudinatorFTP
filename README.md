@@ -144,7 +144,7 @@ cloudflared tunnel --url http://localhost:5000
 
 You'll receive a public URL like: `https://random-words-12345.trycloudflare.com`
 
-Or if you want to use it with domain, use these configuration for config.yml of cloudflared:
+Or if you want to use it with domain, please refer to this [Advanced Cloudflared Tunneling Setup](https://github.com/NeoMatrix14241/CloudinatorFTP/wiki/Advanced-Cloudflare-Tunnelling-Setup) then use these configuration for config.yml of cloudflared:
 
 ```bash
 tunnel: <tunnel id>
