@@ -17,19 +17,21 @@ A lightweight FTP-like file transfer server that runs on **Termux (Android), Lin
 
 ## 📦 Dependencies / Tools
 
+- 📱 [Termux](https://termux.dev/en/) - [F-Droid](https://f-droid.org/packages/com.termux/) or [GitHub](https://github.com/termux/termux-app)
 - 🎨 [Font Awesome](https://fontawesome.com/) - Free v7.2.0
 - 🎬 [FFmpeg](https://www.ffmpeg.org/) - Essentials v57 build 2026-03-19
 - 📺 [Video.js](https://videojs.org/) - v10
 - 📄 [PDF.js](https://mozilla.github.io/pdf.js/) - v3.11.174
-- 🖼️ [libvips]https://www.libvips.org/ - v8.18.1
+- 🖼️ [libvips](https://www.libvips.org/) - v8.18.1
+- 🔧 [Git](https://git-scm.com/)
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- **Android**: Termux installed (Not the Play Store version — download from [GitHub](https://github.com/termux/termux-app) or [F-Droid](https://f-droid.org/packages/com.termux/))
-- **Linux**: Python 3.14.3+, pip, git, ffmpeg (optional)
-- **Windows**: Python 3.14.3+, pip, git, [FFmpeg](https://www.gyan.dev/ffmpeg/builds/) (optional)
+- **Android**: Termux installed (**NOT** the Play Store version)
+- **Linux**: Python 3.14.3+, pip, git, libvips, ffmpeg (optional)
+- **Windows**: Python 3.14.3+, pip, git, libvips, FFmpeg (optional)
 - Internet connection
 
 ### Installation & Setup
