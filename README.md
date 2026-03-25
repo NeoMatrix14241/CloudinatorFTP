@@ -191,10 +191,6 @@ After running `termux-setup-storage`, you can choose from:
 - `%USERPROFILE%\Downloads\CloudflareFTP` (Downloads)
 - `%USERPROFILE%\Desktop\CloudflareFTP` (Desktop)
 
-**macOS:**
-- `~/Documents/CloudflareFTP` (Documents)
-- `~/Downloads/CloudflareFTP` (Downloads)
-
 ## 👥 User Management Guide
 
 ### 🔐 User Roles
