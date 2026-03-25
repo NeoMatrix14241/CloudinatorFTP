@@ -3932,14 +3932,23 @@ td .fa-file {
     background: rgba(0, 0, 0, 0.5);
 }
 
-/* ── Image conversion loading UI ────────────────────────────────────────── */
+.viewer-img {
+    max-width: 100%;
+    max-height: 70vh;
+    object-fit: contain;
+    border-radius: 4px;
+    display: block;
+}
+
+/* ── Image preview loading state ─────────────────────────────────────────── */
 .img-conv-wrap {
+    position: relative;
+    width: 100%;
+    height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 100%;
-    min-height: 220px;
-    flex-direction: column;
+    min-height: 200px;
 }
 
 .img-conv-spinner {
@@ -3950,31 +3959,33 @@ td .fa-file {
 }
 
 .img-conv-ring {
-    width: 42px;
-    height: 42px;
+    width: 36px;
+    height: 36px;
     border: 3px solid rgba(255, 255, 255, 0.15);
     border-top-color: #3498db;
     border-radius: 50%;
-    animation: hls-spin 0.85s linear infinite;
-    flex-shrink: 0;
+    animation: img-conv-spin 0.8s linear infinite;
+}
+
+@keyframes img-conv-spin {
+    to { transform: rotate(360deg); }
 }
 
 .img-conv-label {
     color: rgba(255, 255, 255, 0.75);
     font-size: 13px;
     font-weight: 500;
-    letter-spacing: 0.3px;
     text-align: center;
-    min-height: 18px;
 }
-/* ── end image conversion loading UI ──────────────────────────────────── */
 
-.viewer-img {
-    max-width: 100%;
-    max-height: 70vh;
-    object-fit: contain;
-    border-radius: 4px;
-    display: block;
+#img-conv-result {
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+#img-conv-result[style*="display: block"],
+#img-conv-result[style*="display:block"] {
+    opacity: 1;
 }
 
 /* Video viewer */
@@ -4082,8 +4093,15 @@ td .fa-file {
     line-height: 1;
 }
 
-.viewer-pdfjs-btn:hover  { background: #89b4fa; color: #1e1e2e; }
-.viewer-pdfjs-btn:active { background: #6a9fd8; color: #1e1e2e; }
+.viewer-pdfjs-btn:hover {
+    background: #89b4fa;
+    color: #1e1e2e;
+}
+
+.viewer-pdfjs-btn:active {
+    background: #6a9fd8;
+    color: #1e1e2e;
+}
 
 .viewer-pdfjs-pages {
     flex: 1;
@@ -5367,5 +5385,50 @@ td .fa-file {
         white-space: normal !important;
         word-break: break-word !important;
         overflow-wrap: anywhere !important;
+    }
+
+    /* ── Parent-directory sticky row — restore desktop appearance on mobile ──
+       The generic .table tbody tr / .table td rules above paint every row
+       rgba(48,84,140). Re-assert the desktop parent-dir-sticky colours here
+       so the ".. (Parent Directory)" row is visually distinct on mobile too.
+       ─────────────────────────────────────────────────────────────────────── */
+    #filesTable tbody tr.parent-dir-sticky,
+    .table tbody tr.parent-dir-sticky {
+        background: rgba(22, 48, 95, 0.97) !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4) !important;
+        border-bottom: 1px solid rgba(52, 152, 219, 0.3) !important;
+        position: sticky !important;
+        top: var(--table-thead-h, 57px) !important;
+        z-index: 15 !important;
+    }
+
+    /* TD cells inherit the row colour — needed because .table td sets
+       background directly on the cell, overriding the row background */
+    #filesTable tbody tr.parent-dir-sticky td,
+    .table tbody tr.parent-dir-sticky td {
+        background: rgba(22, 48, 95, 0.97) !important;
+    }
+
+    #filesTable tbody tr.parent-dir-sticky:hover,
+    .table tbody tr.parent-dir-sticky:hover {
+        background: rgba(32, 65, 118, 0.97) !important;
+        cursor: pointer !important;
+    }
+
+    #filesTable tbody tr.parent-dir-sticky:hover td,
+    .table tbody tr.parent-dir-sticky:hover td {
+        background: rgba(32, 65, 118, 0.97) !important;
+    }
+
+    /* Icon and link colour — match desktop's accent blue */
+    #filesTable tbody tr.parent-dir-sticky .folder-link,
+    .table tbody tr.parent-dir-sticky .folder-link {
+        color: #5dade2 !important;
+        font-weight: 600 !important;
+    }
+
+    #filesTable tbody tr.parent-dir-sticky .file-icon,
+    .table tbody tr.parent-dir-sticky .file-icon {
+        color: #5dade2 !important;
     }
 }

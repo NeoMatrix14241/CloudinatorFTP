@@ -19,22 +19,33 @@ HLS_MIN_SIZE = 50 * 1024 * 1024  # 50 MB default
 # These formats always get HLS regardless of size — browser can't play them raw
 HLS_FORCE_FORMATS = {"mkv", "avi", "wmv", "flv", "mpg", "mpeg", "m2ts", "mts", "3gp", "ogv"}
 
+# Image preview / WebP compression configuration
+# Native images (jpg/png/gif/etc.) smaller than this are served raw with no conversion.
+# Above this threshold they are compressed to lossy WebP to save bandwidth.
+IMG_COMPRESS_MIN_SIZE = 3 * 1024 * 1024  # 3 MB default
+# Quality used for lossy WebP encoding (1-100). Lower = smaller file, more artefacts.
+IMG_WEBP_QUALITY = 50  # default
+
 # Path exports — create=False so importing config never creates directories.
 from paths import (
     get_db_dir,
     get_cache_dir,
     get_hls_cache_dir,
+    get_img_cache_dir,
     set_db_dir,
     set_cache_dir,
     set_hls_cache_dir,
+    set_img_cache_dir,
     reset_db_dir,
     reset_cache_dir,
     reset_hls_cache_dir,
+    reset_img_cache_dir,
 )
 
 DB_DIR = get_db_dir(create=False)
 CACHE_DIR = get_cache_dir(create=False)
 HLS_CACHE_DIR = get_hls_cache_dir(create=False)
+IMG_CACHE_DIR = get_img_cache_dir(create=False)
 
 
 def detect_platform():
@@ -446,11 +457,12 @@ def configure_server_settings():
         print(f"5. Session Timeout: {PERMANENT_SESSION_LIFETIME//60} minutes")
         print(f"6. Host Binding: {HOST}")
         print("7. Generate New Session Secret")
-        print(f"8. HLS Settings  (min size: {format_bytes(HLS_MIN_SIZE) if HLS_MIN_SIZE else 'always'})")
-        print("9. Save & Exit")
+        print(f"8. HLS Settings    (min size: {format_bytes(HLS_MIN_SIZE) if HLS_MIN_SIZE else 'always'})")
+        print(f"9. Image Settings  (compress >{format_bytes(IMG_COMPRESS_MIN_SIZE)}, WebP Q={IMG_WEBP_QUALITY})")
+        print("10. Save & Exit")
         print("0. Exit Without Saving")
 
-        choice = input("\nSelect option to configure (0-9): ").strip()
+        choice = input("\nSelect option to configure (0-10): ").strip()
 
         if choice == "1":
             configure_port()
@@ -469,6 +481,8 @@ def configure_server_settings():
         elif choice == "8":
             configure_hls_settings()
         elif choice == "9":
+            configure_image_settings()
+        elif choice == "10":
             save_server_config()
             print("✅ Server configuration saved!")
             break
@@ -476,7 +490,7 @@ def configure_server_settings():
             print("❌ Configuration cancelled")
             break
         else:
-            print("❌ Invalid option. Please choose 0-9.")
+            print("❌ Invalid option. Please choose 0-10.")
 
 
 def configure_port():
@@ -737,6 +751,8 @@ def save_server_config():
         "PERMANENT_SESSION_LIFETIME": PERMANENT_SESSION_LIFETIME,
         "HLS_MIN_SIZE": HLS_MIN_SIZE,
         "HLS_FORCE_FORMATS": sorted(HLS_FORCE_FORMATS),  # set → sorted list for JSON
+        "IMG_COMPRESS_MIN_SIZE": IMG_COMPRESS_MIN_SIZE,
+        "IMG_WEBP_QUALITY": IMG_WEBP_QUALITY,
         "configured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -753,6 +769,7 @@ def load_server_config():
     global PORT, CHUNK_SIZE, ENABLE_CHUNKED_UPLOADS
     global HOST, MAX_CONTENT_LENGTH, PERMANENT_SESSION_LIFETIME
     global HLS_MIN_SIZE, HLS_FORCE_FORMATS
+    global IMG_COMPRESS_MIN_SIZE, IMG_WEBP_QUALITY
 
     try:
         if os.path.exists("server_config.json"):
@@ -773,6 +790,8 @@ def load_server_config():
             # Stored as a list in JSON, convert back to set
             if "HLS_FORCE_FORMATS" in config:
                 HLS_FORCE_FORMATS = set(config["HLS_FORCE_FORMATS"])
+            IMG_COMPRESS_MIN_SIZE = config.get("IMG_COMPRESS_MIN_SIZE", IMG_COMPRESS_MIN_SIZE)
+            IMG_WEBP_QUALITY = config.get("IMG_WEBP_QUALITY", IMG_WEBP_QUALITY)
 
             print("✅ Server configuration loaded from server_config.json")
             return True
@@ -816,7 +835,7 @@ def _check_path(path):
 
 
 def _db_cache_examples(subfolder):
-    """Return suggested out-of-server-root paths for db / cache / hls."""
+    """Return suggested out-of-server-root paths for db / cache / hls / img."""
     home = os.path.expanduser("~")
     if os.name == "nt":
         return [
@@ -854,21 +873,23 @@ def _pick_suggested_path(kind, examples):
     if choice < 1 or choice > len(examples):
         return
     path = examples[choice - 1]
-    label = {"db": "Database", "cache": "Cache", "hls": "HLS Cache"}.get(kind, kind)
+    label = {"db": "Database", "cache": "Cache", "hls": "HLS Cache", "img": "Image Cache"}.get(kind, kind)
     if not _confirm_path(path, label):
         return
     if kind == "db":
         set_db_dir(path)
     elif kind == "cache":
         set_cache_dir(path)
-    else:
+    elif kind == "hls":
         set_hls_cache_dir(path)
+    else:
+        set_img_cache_dir(path)
 
 
 def _configure_custom_dir(kind):
-    """Prompt user for a custom directory path for db / cache / hls."""
-    label = {"db": "Database", "cache": "Cache", "hls": "HLS Cache"}.get(kind, kind)
-    subfolder = {"db": "db", "cache": "cache", "hls": "hls"}.get(kind, kind)
+    """Prompt user for a custom directory path for db / cache / hls / img."""
+    label = {"db": "Database", "cache": "Cache", "hls": "HLS Cache", "img": "Image Cache"}.get(kind, kind)
+    subfolder = {"db": "db", "cache": "cache", "hls": "hls", "img": "img"}.get(kind, kind)
     print(f"\n🎯 Custom {label} Directory")
     print(f"   Enter a parent folder — '{subfolder}' will be appended automatically.")
     print(f"   Example: /srv/cloudinator  →  /srv/cloudinator/{subfolder}")
@@ -887,8 +908,10 @@ def _configure_custom_dir(kind):
             set_db_dir(expanded)
         elif kind == "cache":
             set_cache_dir(expanded)
-        else:
+        elif kind == "hls":
             set_hls_cache_dir(expanded)
+        else:
+            set_img_cache_dir(expanded)
     except KeyboardInterrupt:
         print("\n👋 Cancelled")
 
@@ -1102,8 +1125,48 @@ def configure_hls_cache_path():
         print("🔄 HLS Cache directory reset to default.")
 
 
+def configure_img_cache_path():
+    """Configure Image Cache directory (IMG_CACHE_DIR)."""
+    print("\n🖼️  Image Cache Directory Configuration")
+    print("=" * 50)
+    print(f"Current: {get_img_cache_dir()}")
+    print()
+    print("This directory holds pyvips-converted image previews:")
+    print("  • <cache_key>.webp        — lossless or lossy WebP preview")
+    print("  • <cache_key>.jpg         — JPEG fallback for oversized images")
+    print("  • <cache_key>.meta.json   — conversion metadata (size, format, quality)")
+    print()
+    print("Safe to delete at any time — previews are regenerated on next view.")
+    print()
+
+    examples = _db_cache_examples("img")
+    print("Suggested locations:")
+    for ex in examples:
+        print(f"  • {ex}")
+    print()
+
+    print("1. 📁 Use a suggested location")
+    print("2. 🎯 Enter custom path")
+    print("3. 🔄 Reset to default  (inside cache dir)")
+    print("4. ↩️  Back")
+    print()
+
+    try:
+        choice = input("Select option (1-4): ").strip()
+    except KeyboardInterrupt:
+        return
+
+    if choice == "1":
+        _pick_suggested_path("img", examples)
+    elif choice == "2":
+        _configure_custom_dir("img")
+    elif choice == "3":
+        reset_img_cache_dir()
+        print("🔄 Image cache directory reset to default.")
+
+
 def configure_storage_path():
-    """Storage path submenu — covers all four storage directories."""
+    """Storage path submenu — covers all five storage directories."""
     while True:
         print("\n🗄️  Storage Configuration")
         print("=" * 50)
@@ -1111,16 +1174,18 @@ def configure_storage_path():
         print(f"  🔐 Database (DB_DIR)     : {get_db_dir()}")
         print(f"  ⚡ Cache    (CACHE_DIR)  : {get_cache_dir()}")
         print(f"  🎬 HLS Cache             : {get_hls_cache_dir()}")
+        print(f"  🖼️  Image Cache           : {get_img_cache_dir()}")
         print()
         print("1. 🗂️  Configure Files storage path   (ROOT_DIR)")
         print("2. 🔐 Configure Database directory    (DB_DIR)  ← keys & secrets")
         print("3. ⚡ Configure Cache directory       (CACHE_DIR)")
         print("4. 🎬 Configure HLS Cache directory   (HLS_CACHE_DIR)")
-        print("5. ↩️  Back")
+        print("5. 🖼️  Configure Image Cache directory (IMG_CACHE_DIR)")
+        print("6. ↩️  Back")
         print()
 
         try:
-            choice = input("Select option (1-5): ").strip()
+            choice = input("Select option (1-6): ").strip()
         except KeyboardInterrupt:
             break
 
@@ -1137,9 +1202,12 @@ def configure_storage_path():
             configure_hls_cache_path()
             input("\nPress Enter to continue...")
         elif choice == "5":
+            configure_img_cache_path()
+            input("\nPress Enter to continue...")
+        elif choice == "6":
             break
         else:
-            print("❌ Invalid option. Please choose 1-5.")
+            print("❌ Invalid option. Please choose 1-6.")
 
 def main_configuration_menu():
     """Main configuration menu"""
@@ -1291,6 +1359,141 @@ def _configure_hls_force_formats():
         print("❌ Please enter valid numbers")
 
 
+def configure_image_settings():
+    """Configure image preview / WebP compression thresholds"""
+    global IMG_COMPRESS_MIN_SIZE, IMG_WEBP_QUALITY
+
+    print("\n🖼️  Image Preview / WebP Compression Configuration")
+    print("=" * 50)
+
+    while True:
+        thresh = format_bytes(IMG_COMPRESS_MIN_SIZE) if IMG_COMPRESS_MIN_SIZE else "Always compress"
+        print(f"\nCurrent Settings:")
+        print(f"1. Compress threshold: {thresh}")
+        print(f"   (native images above this size are compressed to lossy WebP)")
+        print(f"2. Lossy WebP quality: {IMG_WEBP_QUALITY}  (1–100, lower = smaller file)")
+        print(f"   (non-native formats always convert to lossless WebP regardless)")
+        print("3. Save & Exit")
+        print("4. Exit Without Saving")
+        print()
+
+        choice = input("Select option (1-4): ").strip()
+
+        if choice == "1":
+            _configure_img_compress_min_size()
+        elif choice == "2":
+            _configure_img_webp_quality()
+        elif choice == "3":
+            save_server_config()
+            print("✅ Image configuration saved!")
+            break
+        elif choice == "4":
+            print("↩️  Cancelled")
+            break
+        else:
+            print("❌ Invalid option")
+
+
+def _configure_img_compress_min_size():
+    """Configure the file-size threshold above which native images are compressed to WebP"""
+    global IMG_COMPRESS_MIN_SIZE
+
+    size_options = {
+        "1": (0,                   "Always compress (all native images)"),
+        "2": (1  * 1024 * 1024,   "1 MB"),
+        "3": (3  * 1024 * 1024,   "3 MB  (default)"),
+        "4": (5  * 1024 * 1024,   "5 MB"),
+        "5": (10 * 1024 * 1024,   "10 MB"),
+        "6": (15 * 1024 * 1024,   "15 MB"),
+        "7": (25 * 1024 * 1024,   "25 MB"),
+    }
+
+    current_label = format_bytes(IMG_COMPRESS_MIN_SIZE) if IMG_COMPRESS_MIN_SIZE else "Always compress"
+    print(f"\nCurrent: {current_label}")
+    print("Native images (jpg/png/gif/webp/etc.) below this threshold are served raw.")
+    print("Non-native formats (tiff/heic/psd/raw/…) always convert regardless.\n")
+    for key, (val, label) in size_options.items():
+        marker = " ◀ current" if val == IMG_COMPRESS_MIN_SIZE else ""
+        print(f"{key}. {label}{marker}")
+    print("8. Custom size")
+    print("9. Keep current")
+
+    choice = input("\nSelect option (1-9): ").strip()
+
+    if choice in size_options:
+        IMG_COMPRESS_MIN_SIZE = size_options[choice][0]
+        label = format_bytes(IMG_COMPRESS_MIN_SIZE) if IMG_COMPRESS_MIN_SIZE else "always compress"
+        print(f"✅ Image compress threshold set to {label}")
+    elif choice == "8":
+        while True:
+            try:
+                raw = input("Enter size in MB (e.g. 20): ").strip()
+                if not raw:
+                    break
+                mb = float(raw)
+                if 0 <= mb <= 10240:
+                    IMG_COMPRESS_MIN_SIZE = int(mb * 1024 * 1024)
+                    print(f"✅ Image compress threshold set to {format_bytes(IMG_COMPRESS_MIN_SIZE)}")
+                    break
+                else:
+                    print("❌ Enter a value between 0 and 10240 MB")
+            except ValueError:
+                print("❌ Please enter a valid number")
+    elif choice == "9":
+        print("✅ Keeping current setting")
+    else:
+        print("❌ Invalid option")
+
+
+def _configure_img_webp_quality():
+    """Configure the lossy WebP quality used when compressing large native images"""
+    global IMG_WEBP_QUALITY
+
+    quality_options = {
+        "1": (30, "30 — maximum compression, visible artefacts"),
+        "2": (40, "40 — high compression"),
+        "3": (50, "50 — balanced  (default)"),
+        "4": (60, "60 — better quality"),
+        "5": (75, "75 — high quality"),
+        "6": (85, "85 — very high quality, larger files"),
+        "7": (95, "95 — near-lossless"),
+    }
+
+    print(f"\nCurrent lossy WebP quality: {IMG_WEBP_QUALITY}")
+    print("Applied when a native image exceeds the compress threshold.")
+    print("Non-native formats always use lossless WebP (this setting does not affect them).\n")
+    for key, (val, label) in quality_options.items():
+        marker = " ◀ current" if val == IMG_WEBP_QUALITY else ""
+        print(f"{key}. {label}{marker}")
+    print("8. Custom quality (1–100)")
+    print("9. Keep current")
+
+    choice = input("\nSelect option (1-9): ").strip()
+
+    if choice in quality_options:
+        IMG_WEBP_QUALITY = quality_options[choice][0]
+        print(f"✅ Lossy WebP quality set to {IMG_WEBP_QUALITY}")
+    elif choice == "8":
+        while True:
+            try:
+                raw = input("Enter quality (1–100): ").strip()
+                if not raw:
+                    break
+                q = int(raw)
+                if 1 <= q <= 100:
+                    IMG_WEBP_QUALITY = q
+                    print(f"✅ Lossy WebP quality set to {IMG_WEBP_QUALITY}")
+                    break
+                else:
+                    print("❌ Quality must be between 1 and 100")
+            except ValueError:
+                print("❌ Please enter a valid integer")
+    elif choice == "9":
+        print("✅ Keeping current setting")
+    else:
+        print("❌ Invalid option")
+
+
 def view_current_settings():
     """Display current configuration"""
     print("\n📋 Current Configuration")
@@ -1301,6 +1504,7 @@ def view_current_settings():
     print(f"   Database (DB_DIR)   : {get_db_dir()}")
     print(f"   Cache (CACHE_DIR)   : {get_cache_dir()}")
     print(f"   HLS Cache           : {get_hls_cache_dir()}")
+    print(f"   Image Cache         : {get_img_cache_dir()}")
 
     print(f"\n🔧 Server Settings:")
     print(f"   Port: {PORT}")
@@ -1314,6 +1518,11 @@ def view_current_settings():
     print(f"\n🎬 HLS Settings:")
     print(f"   Min size for HLS: {format_bytes(HLS_MIN_SIZE) if HLS_MIN_SIZE else 'Always HLS'}")
     print(f"   Always-HLS formats: {', '.join(sorted(HLS_FORCE_FORMATS))}")
+
+    print(f"\n🖼️  Image Settings:")
+    print(f"   Compress threshold: {format_bytes(IMG_COMPRESS_MIN_SIZE) if IMG_COMPRESS_MIN_SIZE else 'Always compress'}")
+    print(f"   Lossy WebP quality: {IMG_WEBP_QUALITY}  (1–100, lower = smaller file)")
+    print(f"   Image Cache         : {get_img_cache_dir()}")
 
 
 # Load configuration on import

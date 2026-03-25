@@ -58,6 +58,9 @@ from config import (
     ENABLE_CHUNKED_UPLOADS,
     HLS_MIN_SIZE,
     HLS_FORCE_FORMATS,
+    IMG_COMPRESS_MIN_SIZE,
+    IMG_WEBP_QUALITY,
+    IMG_CACHE_DIR,
 )
 from database import get_session_secret
 
@@ -4102,7 +4105,7 @@ def hls_files(cache_key, hls_path):
 # ═════════════════════════════════════════════════════════════════════════════
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-_IMG_CACHE_THRESHOLD = 15 * 1024 * 1024  # 15 MB — above this, always compress
+_IMG_CACHE_THRESHOLD = IMG_COMPRESS_MIN_SIZE  # configurable via Image Settings in config.py
 
 # Extensions the browser CANNOT render natively → always convert to WebP
 _IMG_NON_NATIVE: frozenset = frozenset(
@@ -4187,10 +4190,9 @@ _img_conv_events: dict = {}  # cache_key → threading.Event
 
 
 def _img_cache_root() -> str:
-    """Return (and create) cache/img/ alongside the existing HLS cache dir."""
-    hls_root = _get_hls_cache_dir(create=True)
-    img_root = os.path.join(os.path.dirname(hls_root), "img")
-    os.makedirs(img_root, exist_ok=True)
+    """Return (and create) the configured image cache directory."""
+    from paths import get_img_cache_dir
+    img_root = get_img_cache_dir(create=True)
     return img_root
 
 
@@ -4219,15 +4221,21 @@ def _img_cached_path_jpg(cache_key: str) -> str:
     return os.path.join(_img_cache_root(), f"{cache_key}.jpg")
 
 
+def _img_cached_path_png(cache_key: str) -> str:
+    """Last-resort cache path — PNG (used when image exceeds JPEG 65535px limit)."""
+    return os.path.join(_img_cache_root(), f"{cache_key}.png")
+
+
 def _img_find_cached(cache_key: str):
     """
     Return (cached_file_path, mimetype) for a completed conversion, or
     (None, None) if no valid cached file exists yet.
-    Checks WebP first, then JPEG fallback.
+    Checks WebP first, then JPEG, then PNG.
     """
     for path, mime in (
-        (_img_cached_path(cache_key), "image/webp"),
+        (_img_cached_path(cache_key),     "image/webp"),
         (_img_cached_path_jpg(cache_key), "image/jpeg"),
+        (_img_cached_path_png(cache_key), "image/png"),
     ):
         if os.path.exists(path):
             return path, mime
@@ -4275,22 +4283,23 @@ def _pyvips_available() -> bool:
 
 def _convert_to_webp(full_path: str, cache_key: str, lossy: bool) -> bool:
     """
-    Convert *full_path* to WebP (or JPEG if image exceeds WebP dimension limit).
+    Convert *full_path* to the best format based on image dimensions.
 
-    WebP hard limit: 16383 × 16383 px.
-    Any image with width or height > 16383 is saved as JPEG Q=85 instead.
+    Tier 1 — WebP  (dimensions ≤ 16383 px):
+      lossy=True  → lossy WebP Q=IMG_WEBP_QUALITY  (file > threshold)
+      lossy=False → lossless WebP                  (non-native format, ≤ threshold)
 
-    Compression rules:
-      lossy=True  → WebP Q=50  (file > 15 MB, any format)
-      lossy=False → WebP lossless (non-native format, ≤ 15 MB)
-      oversized   → JPEG Q=85  (either case, when dimensions exceed WebP limit)
+    Tier 2 — JPEG Q=85  (dimensions 16384–65535 px, exceeds WebP limit)
+
+    Tier 3 — PNG lossless  (dimensions > 65535 px, exceeds JPEG limit)
 
     pyvips passes all EXIF/XMP/IPTC metadata (DPI, GPS, colour profile)
     through automatically when strip=False.
 
     Returns True on success, False on any error.
     """
-    _WEBP_MAX_DIM = 16383  # WebP hard pixel limit per dimension
+    _WEBP_MAX_DIM = 16383   # WebP hard pixel limit per dimension
+    _JPEG_MAX_DIM = 65535   # JPEG hard pixel limit per dimension
 
     try:
         import pyvips
@@ -4310,33 +4319,41 @@ def _convert_to_webp(full_path: str, cache_key: str, lossy: bool) -> bool:
         # usage for giant TIFFs or RAW files.
         img = pyvips.Image.new_from_file(full_path, access="sequential")
 
-        oversized = img.width > _WEBP_MAX_DIM or img.height > _WEBP_MAX_DIM
+        exceeds_webp  = img.width > _WEBP_MAX_DIM or img.height > _WEBP_MAX_DIM
+        exceeds_jpeg  = img.width > _JPEG_MAX_DIM or img.height > _JPEG_MAX_DIM
         size_in = os.path.getsize(full_path)
 
-        if oversized:
-            # ── JPEG fallback for images that exceed WebP dimension limit ──
-            # JPEG limit is 65535 × 65535 — well above any realistic image.
-            # Q=85 gives good visual quality while keeping file size reasonable.
-            # strip=False preserves DPI + colour profile in EXIF.
+        if exceeds_jpeg:
+            # ── Tier 3: PNG — only format with no dimension ceiling ────────
+            out_path = _img_cached_path_png(cache_key)
+            tmp_path = out_path + ".tmp"
+            img.pngsave(tmp_path, compression=6, strip=False)
+            os.replace(tmp_path, out_path)
+            out_fmt = "png"
+            mode_str = f"PNG lossless (oversized {img.width}×{img.height} > {_JPEG_MAX_DIM}px JPEG limit)"
+
+        elif exceeds_webp:
+            # ── Tier 2: JPEG — dimensions exceed WebP limit but within JPEG ─
             out_path = _img_cached_path_jpg(cache_key)
             tmp_path = out_path + ".tmp"
             img.jpegsave(tmp_path, Q=85, strip=False, optimize_coding=True)
             os.replace(tmp_path, out_path)
             out_fmt = "jpeg"
             mode_str = f"JPEG Q=85 (oversized {img.width}×{img.height} > {_WEBP_MAX_DIM}px WebP limit)"
+
         else:
-            # ── WebP — primary format ──────────────────────────────────────
+            # ── Tier 1: WebP — primary format ─────────────────────────────
             # strip=False   → keep all metadata (EXIF DPI, GPS, colour profile)
             # effort=6      → reasonable encode speed vs. file-size tradeoff
             out_path = _img_cached_path(cache_key)
             tmp_path = out_path + ".tmp"
             if lossy:
-                img.webpsave(tmp_path, Q=50, lossless=False, strip=False, effort=6)
+                img.webpsave(tmp_path, Q=IMG_WEBP_QUALITY, lossless=False, strip=False, effort=6)
             else:
                 img.webpsave(tmp_path, lossless=True, strip=False, effort=6)
             os.replace(tmp_path, out_path)
             out_fmt = "webp"
-            mode_str = "lossy WebP Q=50" if lossy else "lossless WebP"
+            mode_str = f"lossy WebP Q={IMG_WEBP_QUALITY}" if lossy else "lossless WebP"
 
         size_out = os.path.getsize(out_path)
         ratio = round(size_out / size_in * 100, 1) if size_in else 0
@@ -4352,8 +4369,8 @@ def _convert_to_webp(full_path: str, cache_key: str, lossy: bool) -> bool:
             {
                 "status": "ready",
                 "out_fmt": out_fmt,
-                "lossy": lossy or oversized,
-                "oversized": oversized,
+                "lossy": lossy and not exceeds_jpeg,
+                "oversized": exceeds_webp,
                 "original_size": size_in,
                 "cached_size": size_out,
                 "created_at": time.time(),
@@ -4377,8 +4394,10 @@ def _convert_to_webp(full_path: str, cache_key: str, lossy: bool) -> bool:
         for p in (
             _img_cached_path(cache_key) + ".tmp",
             _img_cached_path_jpg(cache_key) + ".tmp",
+            _img_cached_path_png(cache_key) + ".tmp",
             _img_cached_path(cache_key),
             _img_cached_path_jpg(cache_key),
+            _img_cached_path_png(cache_key),
         ):
             try:
                 if os.path.exists(p):
@@ -4440,7 +4459,7 @@ def image_preview(path):
         return "Cannot read file", 500
 
     is_non_native = ext in _IMG_NON_NATIVE
-    needs_compress = file_size > _IMG_CACHE_THRESHOLD  # > 15 MB
+    needs_compress = file_size > _IMG_CACHE_THRESHOLD  # configurable, default 3 MB
     needs_processing = is_non_native or needs_compress
 
     # ── Fast path: small native image → serve as-is ───────────────────────

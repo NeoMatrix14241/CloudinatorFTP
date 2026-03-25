@@ -3445,7 +3445,7 @@ async function _imgStartPreview(itemPath, filename) {
 
         if (st.status === 'ready') {
             clearInterval(poll);
-            const fmt = st.out_fmt === 'jpeg' ? 'JPEG' : 'WebP';
+            const fmt = st.out_fmt === 'jpeg' ? 'JPEG' : st.out_fmt === 'png' ? 'PNG' : 'WebP';
             const sizeMB = st.cached_size ? (st.cached_size / 1048576).toFixed(1) + ' MB' : '';
             const extra = st.oversized ? ` (oversized → ${fmt})` : ` (${fmt})`;
             _setLabel(`Done${extra}${sizeMB ? ' · ' + sizeMB : ''}`);

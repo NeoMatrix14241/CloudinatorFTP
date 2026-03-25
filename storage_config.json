@@ -4,5 +4,6 @@
   "set_at": "1773928175.586095",
   "db_path": "C:\\Server\\config\\db",
   "cache_path": "C:\\Server\\config\\cache",
-  "hls_cache_path": "C:\\Server\\config\\cache\\hls"
+  "hls_cache_path": "C:\\Server\\config\\cache\\hls",
+  "img_cache_path": "C:\\Server\\config\\cache\\img"
 }
