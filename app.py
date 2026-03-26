@@ -3781,20 +3781,42 @@ def _run_hls_transcode(file_path: str, cache_key: str):
         # Each entry: (name, height, fps_cap, maxr, bufs, abr)
         #   fps_cap = 30    → standard profile; filter limits fps to 30 when HFR source
         #   fps_cap = None  → HFR profile; source frame-rate passes through unchanged
+        # ── Build active profile list ─────────────────────────────────────────
+        # Each entry: (name, height, fps_cap, maxr, bufs, abr)\n        #   fps_cap = 30    → standard profile; filter limits fps to 30 when HFR source
+        #   fps_cap = None  → HFR profile; source frame-rate passes through unchanged
         profiles = []
 
+        # Find the smallest standard profile height that is >= src_height.
+        # This is the "ceiling rung" — we include it so that non-standard source
+        # heights (open matte, anamorphic, etc.) are not silently capped one rung
+        # lower than they should be.  e.g. a 1040p open matte film gets a 1080p
+        # profile (tiny upscale) rather than being stuck at 720p.
+        # src_height == 0 means probe failed — use 1080 as a safe ceiling.
+        effective_src = src_height if src_height > 0 else 1080
+        base_heights = [h for _, h, *_ in _HLS_BASE_PROFILES]
+        ceiling_h = next((h for h in sorted(base_heights) if h >= effective_src), effective_src)
+
         for name, h, maxr, bufs, abr in _HLS_BASE_PROFILES:
-            # src_height == 0 means probe failed — cap at 1080p rather than
-            # including every profile up to 4K (which would upscale and waste CPU).
-            effective_max = src_height if src_height > 0 else 1080
-            if h <= effective_max:
+            if h < ceiling_h:
                 profiles.append((name, h, 30, maxr, bufs, abr))
+            elif h == ceiling_h:
+                # If src exactly matches a rung, use it as-is.
+                # If src is between rungs (e.g. 1040p), encode at the real source
+                # height and label it accurately (e.g. "1040p") — no upscaling.
+                actual_h = effective_src if effective_src < ceiling_h else ceiling_h
+                actual_name = f"{actual_h}p" if actual_h != ceiling_h else name
+                profiles.append((actual_name, actual_h, 30, maxr, bufs, abr))
 
         if is_hfr:
+            hfr_heights = [h for _, h, *_ in _HLS_HFR_PROFILES]
+            ceiling_hfr = next((h for h in sorted(hfr_heights) if h >= effective_src), effective_src)
             for name, h, maxr, bufs, abr in _HLS_HFR_PROFILES:
-                effective_max = src_height if src_height > 0 else 1080
-                if h <= effective_max and h >= 720:
+                if h < ceiling_hfr and h >= 720:
                     profiles.append((name, h, None, maxr, bufs, abr))
+                elif h == ceiling_hfr:
+                    actual_h = effective_src if effective_src < ceiling_hfr else ceiling_hfr
+                    actual_name = f"{actual_h}p60" if actual_h != ceiling_hfr else name
+                    profiles.append((actual_name, actual_h, None, maxr, bufs, abr))
 
         if not profiles:
             # Absolute fallback: lowest rung of the standard ladder

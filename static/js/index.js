@@ -9678,13 +9678,62 @@ async function _hlsStartStream(itemPath, wrapperId) {
     const _itemExt = itemPath.split('.').pop().toLowerCase();
     const _isWebNative = _WEB_NATIVE_EXTS.has(_itemExt);
 
+    // ── Check HLS status FIRST before mounting anything ───────────────────────
+    // If HLS cache is already ready, go straight to HLS — never flash raw first.
+    // Only fall back to raw if HLS is unavailable or still transcoding.
+    let startData;
+    try {
+        _setStatus('Checking stream\u2026');
+        const r = await fetch(`/hls_start/${itemPath}`, { cache: 'no-store' });
+        startData = await r.json();
+    } catch (err) {
+        _setStatus('');
+        _hideStreamBtn();
+        // Fetch failed entirely — fall back to raw
+        _mountRawPlayer(`/view/${itemPath}`, true);
+        const rb = $id('hls-btn-raw'); if (rb) rb.classList.add('hls-btn-active');
+        return;
+    }
+
+    if (!startData.hls_available) {
+        // No HLS (ffmpeg missing or unsupported format)
+        _hideStreamBtn();
+        _setStatus('');
+        if (!_isWebNative) {
+            // Non-native codec, no ffmpeg — raw probably won't work but it's all we have
+            const rb = $id('hls-btn-raw');
+            if (rb) { rb.style.opacity = ''; rb.style.pointerEvents = ''; rb.title = 'Play without transcoding'; }
+            _mountRawPlayer(`/view/${itemPath}`, false);
+            if (rb) rb.classList.add('hls-btn-active');
+            _setStatus('\u26a0\ufe0f ffmpeg not found \u2014 raw playback may fail for x265/HEVC files');
+        } else {
+            _mountRawPlayer(`/view/${itemPath}`, true);
+            const rb = $id('hls-btn-raw'); if (rb) rb.classList.add('hls-btn-active');
+        }
+        return;
+    }
+
+    const cacheKey = startData.cache_key;
+
+    if (startData.status === 'ready') {
+        // HLS already cached — go straight to HLS, never touch raw
+        _setStreamReady();
+        _wireStreamButton(cacheKey, startData.profiles);
+        _setStatus('');
+        _mountHlsPlayer(`/hls_files/${cacheKey}/master.m3u8`, true);
+        const rb2 = $id('hls-btn-raw'); if (rb2) rb2.classList.remove('hls-btn-active');
+        const sb = $id('hls-btn-stream'); if (sb) sb.classList.add('hls-btn-active');
+        _buildQualityBar(startData.profiles, cacheKey);
+        return;
+    }
+
+    // HLS is still transcoding — mount appropriate fallback while we wait
     if (_isWebNative) {
-        // Native format: try raw playback immediately while HLS prepares in background
+        // Web-native: raw plays fine while HLS processes in background
         _mountRawPlayer(`/view/${itemPath}`, true);
         const rb = $id('hls-btn-raw'); if (rb) rb.classList.add('hls-btn-active');
     } else {
-        // Non-native format (e.g. MKV x265/HEVC, AVI, WMV): browser can't decode raw.
-        // Show a loading placeholder — HLS (H.264) will autoplay once ready.
+        // Non-native: show placeholder — raw won't work, HLS will autoplay when ready
         const area = $id('hls-player-area');
         if (area) {
             area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;display:flex;align-items:center;justify-content:center;background:#111;border-radius:8px;';
@@ -9696,51 +9745,12 @@ async function _hlsStartStream(itemPath, wrapperId) {
               </div>`;
         }
         _setStatus('Transcoding for browser compatibility\u2026');
-        // Disable raw button — raw playback will not work for this codec
         const rb = $id('hls-btn-raw');
         if (rb) {
             rb.title = 'Raw playback unavailable — codec not supported by browser';
             rb.style.opacity = '0.4';
             rb.style.pointerEvents = 'none';
         }
-    }
-
-    let startData;
-    try {
-        if (_isWebNative) _setStatus('Checking adaptive stream\u2026');
-        const r = await fetch(`/hls_start/${itemPath}`, { cache: 'no-store' });
-        startData = await r.json();
-    } catch (err) {
-        _setStatus('');
-        _hideStreamBtn();
-        return;
-    }
-
-    if (!startData.hls_available) {
-        _hideStreamBtn();
-        _setStatus('');
-        // For non-native formats with no HLS, fall back to raw player with a warning
-        if (!_isWebNative) {
-            const rb = $id('hls-btn-raw');
-            if (rb) { rb.style.opacity = ''; rb.style.pointerEvents = ''; rb.title = 'Play without transcoding'; }
-            _mountRawPlayer(`/view/${itemPath}`, false);
-            rb && rb.classList.add('hls-btn-active');
-            _setStatus('\u26a0\ufe0f ffmpeg not found \u2014 raw playback may fail for x265/HEVC files');
-        }
-        return;
-    }
-
-    const cacheKey = startData.cache_key;
-
-    if (startData.status === 'ready') {
-        _setStreamReady();
-        _wireStreamButton(cacheKey, startData.profiles);
-        _setStatus('');
-        _mountHlsPlayer(`/hls_files/${cacheKey}/master.m3u8`, true);
-        const rb2 = $id('hls-btn-raw'); if (rb2) rb2.classList.remove('hls-btn-active');
-        const sb = $id('hls-btn-stream'); if (sb) sb.classList.add('hls-btn-active');
-        _buildQualityBar(startData.profiles, cacheKey);
-        return;
     }
 
     const MAX_POLLS = 300;
