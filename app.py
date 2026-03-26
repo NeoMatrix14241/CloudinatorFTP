@@ -3678,6 +3678,12 @@ def _probe_video(file_path: str):
         fps = 0.0
         for s in streams:
             if s.get("codec_type") == "video":
+                # Skip attached pictures (cover art embedded in MKV/MP4).
+                # ffprobe reports these as video streams but they are tiny
+                # images (e.g. 240×240) and would wrongly cap the quality ladder.
+                disposition = s.get("disposition") or {}
+                if disposition.get("attached_pic"):
+                    continue
                 w = int(s.get("width") or 0)
                 h = int(s.get("height") or 0)
                 # r_frame_rate is exact rational e.g. "60000/1001" or "30/1"
@@ -3687,6 +3693,7 @@ def _probe_video(file_path: str):
                     fps = float(int(num)) / float(int(den)) if int(den) != 0 else 0.0
                 except Exception:
                     fps = 0.0
+                break  # first non-attached video stream is the main track
             elif s.get("codec_type") == "audio":
                 has_audio = True
         try:
