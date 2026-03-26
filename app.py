@@ -3676,8 +3676,9 @@ def _probe_video(file_path: str):
         w = h = 0
         has_audio = False
         fps = 0.0
+        found_video = False
         for s in streams:
-            if s.get("codec_type") == "video":
+            if s.get("codec_type") == "video" and not found_video:
                 # Skip attached pictures (cover art embedded in MKV/MP4).
                 # ffprobe reports these as video streams but they are tiny
                 # images (e.g. 240×240) and would wrongly cap the quality ladder.
@@ -3693,7 +3694,7 @@ def _probe_video(file_path: str):
                     fps = float(int(num)) / float(int(den)) if int(den) != 0 else 0.0
                 except Exception:
                     fps = 0.0
-                break  # first non-attached video stream is the main track
+                found_video = True  # keep iterating — audio streams may come after
             elif s.get("codec_type") == "audio":
                 has_audio = True
         try:
@@ -3783,12 +3784,16 @@ def _run_hls_transcode(file_path: str, cache_key: str):
         profiles = []
 
         for name, h, maxr, bufs, abr in _HLS_BASE_PROFILES:
-            if src_height == 0 or h <= src_height:
+            # src_height == 0 means probe failed — cap at 1080p rather than
+            # including every profile up to 4K (which would upscale and waste CPU).
+            effective_max = src_height if src_height > 0 else 1080
+            if h <= effective_max:
                 profiles.append((name, h, 30, maxr, bufs, abr))
 
         if is_hfr:
             for name, h, maxr, bufs, abr in _HLS_HFR_PROFILES:
-                if src_height == 0 or (h <= src_height and h >= 720):
+                effective_max = src_height if src_height > 0 else 1080
+                if h <= effective_max and h >= 720:
                     profiles.append((name, h, None, maxr, bufs, abr))
 
         if not profiles:
