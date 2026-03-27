@@ -15,7 +15,7 @@ A lightweight FTP-like file transfer server that runs on **Termux (Android), Lin
 ## 📷 Admin (READWRITE)
 <img width="1794" height="1531" alt="image" src="https://github.com/user-attachments/assets/b7167c30-0590-4c23-a391-2022f630e6bb" />
 
-## � Table of Contents
+## 📋 Table of Contents
 
 - [📦 Dependencies / Tools](#-dependencies--tools)
 - [🚀 Quick Start](#-quick-start)
