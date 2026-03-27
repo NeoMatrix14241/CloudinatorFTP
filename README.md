@@ -15,7 +15,32 @@ A lightweight FTP-like file transfer server that runs on **Termux (Android), Lin
 ## 📷 Admin (READWRITE)
 <img width="1794" height="1531" alt="image" src="https://github.com/user-attachments/assets/b7167c30-0590-4c23-a391-2022f630e6bb" />
 
-## 📦 Dependencies / Tools
+## � Table of Contents
+
+- [📦 Dependencies / Tools](#-dependencies--tools)
+- [🚀 Quick Start](#-quick-start)
+- [📂 Storage Configuration Guide](#-storage-configuration-guide)
+- [👥 User Management Guide](#-user-management-guide)
+- [🛠️ Troubleshooting](#️-troubleshooting)
+- [🌐 Network & Server Configuration](#-network--server-configuration)
+- [🤝 Contributing](#-contributing)
+- [📄 License](#-license)
+
+## 🚀 Deployment Guides
+
+Platform-specific deployment and production guides are available in the **[`docs/`](./docs)** folder:
+
+| Platform | Guide | Purpose |
+|----------|-------|---------|
+| 🪟 **Windows** | [WINDOWS_DEPLOYMENT.md](./docs/WINDOWS_DEPLOYMENT.md) | Step-by-step setup for Windows systems |
+| 🐧 **Linux** | [LINUX_DEPLOYMENT.md](./docs/LINUX_DEPLOYMENT.md) | Installation and systemd service setup |
+| 📱 **Android (Termux)** | [ANDROID_DEPLOYMENT.md](./docs/ANDROID_DEPLOYMENT.md) | Android/Termux deployment and optimization |
+| 🪟 **Apache/WSGI** | [DEPLOY_APACHE.md](./docs/DEPLOY_APACHE.md) | Production Apache deployment with mod_wsgi |
+| 🔗 **Cloudflare Tunnel** | [SETUP_TUNNEL_ADVANCED.md](./docs/SETUP_TUNNEL_ADVANCED.md) | Advanced tunnel setup with custom domains |
+
+---
+
+## �📦 Dependencies / Tools
 
 - 📱 [Termux](https://termux.dev/en/) - [F-Droid](https://f-droid.org/packages/com.termux/) or [GitHub](https://github.com/termux/termux-app)
 - 🎨 [Font Awesome](https://fontawesome.com/) - Free v7.2.0
