@@ -1,4 +1,4 @@
-# 🪟 CloudinatorFTP Apache/mod_wsgi Production Deployment Guide
+# CloudinatorFTP Apache/mod_wsgi Production Deployment Guide
 
 A complete guide to deploy CloudinatorFTP in production using Apache HTTP Server with mod_wsgi on Windows (XAMPP).
 
