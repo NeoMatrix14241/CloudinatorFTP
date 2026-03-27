@@ -40,7 +40,7 @@ Platform-specific deployment and production guides are available in the **[`docs
 
 ---
 
-## �📦 Dependencies / Tools
+## 📦 Dependencies / Tools
 
 - 📱 [Termux](https://termux.dev/en/) - [F-Droid](https://f-droid.org/packages/com.termux/) or [GitHub](https://github.com/termux/termux-app)
 - 🎨 [Font Awesome](https://fontawesome.com/) - Free v7.2.0
