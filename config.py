@@ -19,10 +19,21 @@ HLS_MIN_SIZE = 50 * 1024 * 1024  # 50 MB default
 # These formats always get HLS regardless of size — browser can't play them raw
 HLS_FORCE_FORMATS = {"mkv", "avi", "wmv", "flv", "mpg", "mpeg", "m2ts", "mts", "3gp", "ogv"}
 
+# Feature toggles — both default to True (enabled).
+# When True and the tool IS installed     → full functionality (HLS / WebP conversion).
+# When True and the tool is NOT installed → existing graceful fallback (raw playback /
+#                                           raw image serving) — no change in behaviour.
+# When False                              → intentionally disabled regardless of whether
+#                                           the binary is present; raw fallback is used
+#                                           and a "requires processing" notice is shown
+#                                           for formats that cannot be displayed raw.
+ENABLE_FFMPEG = True    # False → skip HLS transcoding entirely, use raw playback only
+ENABLE_LIBVIPS = True   # False → skip image conversion entirely, use raw serving only
+
 # Image preview / WebP compression configuration
 # Native images (jpg/png/gif/etc.) smaller than this are served raw with no conversion.
 # Above this threshold they are compressed to lossy WebP to save bandwidth.
-IMG_COMPRESS_MIN_SIZE = 3 * 1024 * 1024  # 3 MB default
+IMG_COMPRESS_MIN_SIZE = 1 * 1024 * 1024  # 1 MB default
 # Quality used for lossy WebP encoding (1-100). Lower = smaller file, more artefacts.
 IMG_WEBP_QUALITY = 50  # default
 
@@ -442,6 +453,7 @@ def configure_server_settings():
     """Interactive server configuration"""
     global PORT, CHUNK_SIZE, ENABLE_CHUNKED_UPLOADS, SESSION_SECRET
     global HOST, MAX_CONTENT_LENGTH, PERMANENT_SESSION_LIFETIME
+    global ENABLE_FFMPEG, ENABLE_LIBVIPS
 
     print("\n🔧 Server Configuration")
     print("=" * 50)
@@ -459,10 +471,12 @@ def configure_server_settings():
         print("7. Generate New Session Secret")
         print(f"8. HLS Settings    (min size: {format_bytes(HLS_MIN_SIZE) if HLS_MIN_SIZE else 'always'})")
         print(f"9. Image Settings  (compress >{format_bytes(IMG_COMPRESS_MIN_SIZE)}, WebP Q={IMG_WEBP_QUALITY})")
+        print(f"11. ffmpeg (HLS):  {'✅ Enabled' if ENABLE_FFMPEG else '🚫 Disabled'}")
+        print(f"12. libvips (img): {'✅ Enabled' if ENABLE_LIBVIPS else '🚫 Disabled'}")
         print("10. Save & Exit")
         print("0. Exit Without Saving")
 
-        choice = input("\nSelect option to configure (0-10): ").strip()
+        choice = input("\nSelect option to configure (0-12): ").strip()
 
         if choice == "1":
             configure_port()
@@ -482,6 +496,10 @@ def configure_server_settings():
             configure_hls_settings()
         elif choice == "9":
             configure_image_settings()
+        elif choice == "11":
+            _toggle_ffmpeg()
+        elif choice == "12":
+            _toggle_libvips()
         elif choice == "10":
             save_server_config()
             print("✅ Server configuration saved!")
@@ -490,7 +508,7 @@ def configure_server_settings():
             print("❌ Configuration cancelled")
             break
         else:
-            print("❌ Invalid option. Please choose 0-10.")
+            print("❌ Invalid option. Please choose 0-12.")
 
 
 def configure_port():
@@ -740,6 +758,51 @@ def generate_session_secret():
     print("   Delete that file to regenerate it (logs out all active users)")
 
 
+def _toggle_ffmpeg():
+    """Toggle ffmpeg / HLS transcoding on or off."""
+    global ENABLE_FFMPEG
+    current = "Enabled" if ENABLE_FFMPEG else "Disabled"
+    print(f"\n🎬 ffmpeg (HLS transcoding) — currently: {current}")
+    print("  Enabled  + ffmpeg installed   → full HLS adaptive streaming")
+    print("  Enabled  + ffmpeg not found   → graceful raw-playback fallback (existing behaviour)")
+    print("  Disabled                      → raw playback always, regardless of installation")
+    print("\n1. Enable  ffmpeg")
+    print("2. Disable ffmpeg")
+    print("3. Keep current")
+    choice = input("\nSelect (1-3): ").strip()
+    if choice == "1":
+        ENABLE_FFMPEG = True
+        print("✅ ffmpeg enabled — HLS transcoding active (falls back to raw if not installed)")
+    elif choice == "2":
+        ENABLE_FFMPEG = False
+        print("🚫 ffmpeg disabled — raw playback only")
+    else:
+        print("✅ Keeping current setting")
+
+
+def _toggle_libvips():
+    """Toggle libvips / image conversion on or off."""
+    global ENABLE_LIBVIPS
+    current = "Enabled" if ENABLE_LIBVIPS else "Disabled"
+    print(f"\n🖼️  libvips (image conversion) — currently: {current}")
+    print("  Enabled  + libvips installed  → WebP conversion & compression")
+    print("  Enabled  + libvips not found  → graceful raw-serving fallback (existing behaviour)")
+    print("  Disabled                      → raw serving always; non-native formats show")
+    print("                                  a 'requires processing' notice instead of broken image")
+    print("\n1. Enable  libvips")
+    print("2. Disable libvips")
+    print("3. Keep current")
+    choice = input("\nSelect (1-3): ").strip()
+    if choice == "1":
+        ENABLE_LIBVIPS = True
+        print("✅ libvips enabled — image conversion active (falls back to raw if not installed)")
+    elif choice == "2":
+        ENABLE_LIBVIPS = False
+        print("🚫 libvips disabled — raw fallback only")
+    else:
+        print("✅ Keeping current setting")
+
+
 def save_server_config():
     """Save server configuration to file"""
     config_data = {
@@ -753,6 +816,8 @@ def save_server_config():
         "HLS_FORCE_FORMATS": sorted(HLS_FORCE_FORMATS),  # set → sorted list for JSON
         "IMG_COMPRESS_MIN_SIZE": IMG_COMPRESS_MIN_SIZE,
         "IMG_WEBP_QUALITY": IMG_WEBP_QUALITY,
+        "ENABLE_FFMPEG": ENABLE_FFMPEG,
+        "ENABLE_LIBVIPS": ENABLE_LIBVIPS,
         "configured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -770,6 +835,7 @@ def load_server_config():
     global HOST, MAX_CONTENT_LENGTH, PERMANENT_SESSION_LIFETIME
     global HLS_MIN_SIZE, HLS_FORCE_FORMATS
     global IMG_COMPRESS_MIN_SIZE, IMG_WEBP_QUALITY
+    global ENABLE_FFMPEG, ENABLE_LIBVIPS
 
     try:
         if os.path.exists("server_config.json"):
@@ -792,6 +858,8 @@ def load_server_config():
                 HLS_FORCE_FORMATS = set(config["HLS_FORCE_FORMATS"])
             IMG_COMPRESS_MIN_SIZE = config.get("IMG_COMPRESS_MIN_SIZE", IMG_COMPRESS_MIN_SIZE)
             IMG_WEBP_QUALITY = config.get("IMG_WEBP_QUALITY", IMG_WEBP_QUALITY)
+            ENABLE_FFMPEG = config.get("ENABLE_FFMPEG", ENABLE_FFMPEG)
+            ENABLE_LIBVIPS = config.get("ENABLE_LIBVIPS", ENABLE_LIBVIPS)
 
             print("✅ Server configuration loaded from server_config.json")
             return True
@@ -1400,8 +1468,8 @@ def _configure_img_compress_min_size():
 
     size_options = {
         "1": (0,                   "Always compress (all native images)"),
-        "2": (1  * 1024 * 1024,   "1 MB"),
-        "3": (3  * 1024 * 1024,   "3 MB  (default)"),
+        "2": (1  * 1024 * 1024,   "1 MB  (default)"),
+        "3": (3  * 1024 * 1024,   "3 MB"),
         "4": (5  * 1024 * 1024,   "5 MB"),
         "5": (10 * 1024 * 1024,   "10 MB"),
         "6": (15 * 1024 * 1024,   "15 MB"),
@@ -1515,11 +1583,13 @@ def view_current_settings():
     print(f"   Session Timeout: {PERMANENT_SESSION_LIFETIME//60} minutes")
     print(f"   Session Secret: Managed in db/session.secret")
 
-    print(f"\n🎬 HLS Settings:")
+    print(f"\n🎬 HLS / Video Settings:")
+    print(f"   ffmpeg (HLS):       {'✅ Enabled' if ENABLE_FFMPEG else '🚫 Disabled'}")
     print(f"   Min size for HLS: {format_bytes(HLS_MIN_SIZE) if HLS_MIN_SIZE else 'Always HLS'}")
     print(f"   Always-HLS formats: {', '.join(sorted(HLS_FORCE_FORMATS))}")
 
     print(f"\n🖼️  Image Settings:")
+    print(f"   libvips (convert):  {'✅ Enabled' if ENABLE_LIBVIPS else '🚫 Disabled'}")
     print(f"   Compress threshold: {format_bytes(IMG_COMPRESS_MIN_SIZE) if IMG_COMPRESS_MIN_SIZE else 'Always compress'}")
     print(f"   Lossy WebP quality: {IMG_WEBP_QUALITY}  (1–100, lower = smaller file)")
     print(f"   Image Cache         : {get_img_cache_dir()}")

@@ -61,6 +61,8 @@ from config import (
     IMG_COMPRESS_MIN_SIZE,
     IMG_WEBP_QUALITY,
     IMG_CACHE_DIR,
+    ENABLE_FFMPEG,
+    ENABLE_LIBVIPS,
 )
 from database import get_session_secret
 
@@ -3735,8 +3737,16 @@ def _resolve_ffmpeg() -> str:
 
 
 def _ffmpeg_available() -> bool:
-    """Quick check: is ffmpeg installed and executable?"""
+    """Return True if ffmpeg is both enabled in config AND installed/executable.
+
+    ENABLE_FFMPEG=True  + installed   → True  (full HLS)
+    ENABLE_FFMPEG=True  + not found   → False (graceful raw fallback, same as before)
+    ENABLE_FFMPEG=False               → False (intentionally disabled, raw fallback)
+    """
     import shutil as _shutil
+
+    if not ENABLE_FFMPEG:
+        return False
 
     bin_path = _resolve_ffmpeg()
     if bin_path == "ffmpeg" and not _shutil.which("ffmpeg"):
@@ -4030,10 +4040,11 @@ def hls_start(video_path):
             )
 
     if not _ffmpeg_available():
+        reason = "ffmpeg_disabled" if not ENABLE_FFMPEG else "ffmpeg_not_installed"
         print(
-            "\u26a0\ufe0f  ffmpeg not found — HLS unavailable, client will use raw playback"
+            f"\u26a0\ufe0f  ffmpeg {'disabled' if not ENABLE_FFMPEG else 'not found'} — HLS unavailable, client will use raw playback"
         )
-        return jsonify({"hls_available": False, "reason": "ffmpeg_not_installed"})
+        return jsonify({"hls_available": False, "reason": reason})
 
     cache_key = _hls_cache_key(full_path)
     status = _hls_read_status(cache_key)
@@ -4303,7 +4314,14 @@ def _img_read_meta(cache_key: str) -> dict:
 
 
 def _pyvips_available() -> bool:
-    """Return True if pyvips (and the underlying libvips C library) is present."""
+    """Return True if pyvips is both enabled in config AND importable.
+
+    ENABLE_LIBVIPS=True  + installed   → True  (full WebP conversion)
+    ENABLE_LIBVIPS=True  + not found   → False (graceful raw fallback, same as before)
+    ENABLE_LIBVIPS=False               → False (intentionally disabled, raw fallback)
+    """
+    if not ENABLE_LIBVIPS:
+        return False
     try:
         import pyvips  # noqa: F401
 
@@ -4504,12 +4522,22 @@ def image_preview(path):
 
     # ── pyvips not available → graceful raw fallback ──────────────────────
     if not _pyvips_available():
+        reason = "libvips_disabled" if not ENABLE_LIBVIPS else "libvips_not_installed"
         print(
-            f"⚠️  pyvips unavailable — serving {ext.upper()} raw "
+            f"⚠️  pyvips {'disabled' if not ENABLE_LIBVIPS else 'unavailable'} — serving {ext.upper()} raw "
             f"(may not render in browser). "
-            f"Install: pkg install libvips && pip install pyvips",
+            f"{'Enable libvips in server settings' if not ENABLE_LIBVIPS else 'Install: pkg install libvips && pip install pyvips'}",
             flush=True,
         )
+        # For non-native formats when libvips is explicitly disabled, signal the
+        # frontend so it can show the same "requires processing" placeholder as
+        # the HLS flow does for non-native video with ffmpeg disabled.
+        if is_non_native and not ENABLE_LIBVIPS:
+            return jsonify({
+                "error": "libvips_disabled",
+                "reason": reason,
+                "ext": ext,
+            }), 503
         directory = os.path.dirname(full_path)
         filename = os.path.basename(full_path)
         return send_from_directory(directory, filename, as_attachment=False)
@@ -4656,6 +4684,7 @@ def image_info(path):
         "needs_compress": needs_compress,
         "needs_processing": needs_processing,
         "pyvips_available": _pyvips_available(),
+        "libvips_enabled": ENABLE_LIBVIPS,
     }
 
     if needs_processing:

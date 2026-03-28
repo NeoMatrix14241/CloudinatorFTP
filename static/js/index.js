@@ -3412,8 +3412,29 @@ async function _imgStartPreview(itemPath, filename) {
 
     // ── Needs conversion — show spinner and poll ───────────────────────────
     if (!info.pyvips_available) {
-        _setLabel('⚠️ pyvips not installed — trying raw…');
-        _showImage(viewUrl);
+        if (!info.libvips_enabled && info.is_non_native) {
+            // libvips is intentionally disabled — show same "requires processing"
+            // placeholder as HLS uses for non-native video with ffmpeg disabled.
+            if (spinner && _alive()) {
+                spinner.style.display = 'none';
+            }
+            const wrap2 = document.getElementById('img-conv-wrap');
+            if (wrap2 && _alive()) {
+                wrap2.innerHTML = `
+                  <div style="text-align:center;color:rgba(255,255,255,0.6);padding:40px 32px;">
+                    <div style="font-size:36px;margin-bottom:14px;">🖼️</div>
+                    <div style="font-size:14px;font-weight:600;margin-bottom:8px;color:rgba(255,255,255,0.85);">Image Requires Processing</div>
+                    <div style="font-size:12px;opacity:0.65;line-height:1.6;">
+                      This format (${info.ext ? info.ext.toUpperCase() : 'image'}) cannot be displayed without libvips conversion.<br>
+                      libvips is currently disabled in server settings.<br>
+                      Download the file to view it in a local image viewer.
+                    </div>
+                  </div>`;
+            }
+        } else {
+            _setLabel('⚠️ pyvips not installed — trying raw…');
+            _showImage(viewUrl);
+        }
         return;
     }
 
@@ -9696,16 +9717,19 @@ async function _hlsStartStream(itemPath, wrapperId) {
     }
 
     if (!startData.hls_available) {
-        // No HLS (ffmpeg missing or unsupported format)
+        // No HLS (ffmpeg missing/disabled or unsupported format)
         _hideStreamBtn();
         _setStatus('');
         if (!_isWebNative) {
-            // Non-native codec, no ffmpeg — raw probably won't work but it's all we have
+            // Non-native codec, no HLS — mount raw (audio-only for x265/HEVC is fine)
             const rb = $id('hls-btn-raw');
             if (rb) { rb.style.opacity = ''; rb.style.pointerEvents = ''; rb.title = 'Play without transcoding'; }
             _mountRawPlayer(`/view/${itemPath}`, false);
             if (rb) rb.classList.add('hls-btn-active');
-            _setStatus('\u26a0\ufe0f ffmpeg not found \u2014 raw playback may fail for x265/HEVC files');
+            // Only warn when ffmpeg is genuinely missing; stay silent when it's intentionally disabled
+            if (startData.reason !== 'ffmpeg_disabled') {
+                _setStatus('\u26a0\ufe0f ffmpeg not found \u2014 raw playback may fail for x265/HEVC files');
+            }
         } else {
             _mountRawPlayer(`/view/${itemPath}`, true);
             const rb = $id('hls-btn-raw'); if (rb) rb.classList.add('hls-btn-active');
@@ -9716,12 +9740,19 @@ async function _hlsStartStream(itemPath, wrapperId) {
     const cacheKey = startData.cache_key;
 
     if (startData.status === 'ready') {
-        // HLS already cached — go straight to HLS, never touch raw
+        // HLS already cached — go straight to HLS, never flash raw first.
+        // Raw button is left enabled for audio-only access (e.g. x265 MKV).
         _setStreamReady();
         _wireStreamButton(cacheKey, startData.profiles);
         _setStatus('');
         _mountHlsPlayer(`/hls_files/${cacheKey}/master.m3u8`, true);
-        const rb2 = $id('hls-btn-raw'); if (rb2) rb2.classList.remove('hls-btn-active');
+        const rb2 = $id('hls-btn-raw');
+        if (rb2) {
+            rb2.classList.remove('hls-btn-active');
+            rb2.style.opacity = '';
+            rb2.style.pointerEvents = '';
+            if (!_isWebNative) rb2.title = 'Play raw (audio only for x265/HEVC)';
+        }
         const sb = $id('hls-btn-stream'); if (sb) sb.classList.add('hls-btn-active');
         _buildQualityBar(startData.profiles, cacheKey);
         return;
@@ -9768,9 +9799,17 @@ async function _hlsStartStream(itemPath, wrapperId) {
             _wireStreamButton(cacheKey, st.profiles);
             _buildQualityBar(st.profiles, cacheKey);
             if (!_isWebNative) {
-                // Non-native format: auto-switch to HLS — raw playback doesn't work
+                // Non-native format: auto-switch to HLS.
+                // Also re-enable raw button — now that processing is done it can
+                // be used for audio-only playback (e.g. x265/HEVC MKV).
                 _mountHlsPlayer(`/hls_files/${cacheKey}/master.m3u8`, true);
-                const rb3 = $id('hls-btn-raw'); if (rb3) rb3.classList.remove('hls-btn-active');
+                const rb3 = $id('hls-btn-raw');
+                if (rb3) {
+                    rb3.classList.remove('hls-btn-active');
+                    rb3.style.opacity = '';
+                    rb3.style.pointerEvents = '';
+                    rb3.title = 'Play raw (audio only for x265/HEVC)';
+                }
                 const sb3 = $id('hls-btn-stream'); if (sb3) sb3.classList.add('hls-btn-active');
                 _setStatus('');
             } else {

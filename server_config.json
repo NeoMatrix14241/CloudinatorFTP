@@ -22,5 +22,7 @@
   ],
   "IMG_COMPRESS_MIN_SIZE": 3145728,
   "IMG_WEBP_QUALITY": 50,
-  "configured_at": "2026-03-25 11:16:44"
+  "ENABLE_FFMPEG": true,
+  "ENABLE_LIBVIPS": true,
+  "configured_at": "2026-03-28 08:58:06"
 }
