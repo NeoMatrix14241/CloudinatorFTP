@@ -9681,23 +9681,27 @@ async function _hlsStartStream(itemPath, wrapperId) {
         _initMobileDoubleTapSeek(area);
     }
 
-    const rawBtn = $id('hls-btn-raw');
-    if (rawBtn) {
-        rawBtn.addEventListener('click', () => {
-            _setStatus('');
-            _destroyCurrentPlayer();
-            _mountRawPlayer(`/view/${itemPath}`, false);
-            rawBtn.classList.add('hls-btn-active');
-            const sb = $id('hls-btn-stream'); if (sb) sb.classList.remove('hls-btn-active');
-        });
-    }
-
     // Web-native formats browsers can decode directly without transcoding.
     // Non-native formats (mkv, avi, wmv, flv, etc.) must go through HLS because
     // browsers cannot decode x265/HEVC or many other codecs natively.
     const _WEB_NATIVE_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv']);
     const _itemExt = itemPath.split('.').pop().toLowerCase();
     const _isWebNative = _WEB_NATIVE_EXTS.has(_itemExt);
+
+    const rawBtn = $id('hls-btn-raw');
+    if (rawBtn) {
+        rawBtn.addEventListener('click', () => {
+            _destroyCurrentPlayer();
+            _mountRawPlayer(`/view/${itemPath}`, false);
+            rawBtn.classList.add('hls-btn-active');
+            const sb = $id('hls-btn-stream'); if (sb) sb.classList.remove('hls-btn-active');
+            if (!_isWebNative) {
+                _setStatus('\u26a0\ufe0f This format is not supported by the browser \u2014 video will not play, audio only');
+            } else {
+                _setStatus('');
+            }
+        });
+    }
 
     // ── Check HLS status FIRST before mounting anything ───────────────────────
     // If HLS cache is already ready, go straight to HLS — never flash raw first.
@@ -9719,18 +9723,20 @@ async function _hlsStartStream(itemPath, wrapperId) {
     if (!startData.hls_available) {
         // No HLS (ffmpeg missing/disabled or unsupported format)
         _hideStreamBtn();
-        _setStatus('');
         if (!_isWebNative) {
-            // Non-native codec, no HLS — mount raw (audio-only for x265/HEVC is fine)
+            // Non-native codec, no HLS — mount raw (audio only; video won't decode)
             const rb = $id('hls-btn-raw');
             if (rb) { rb.style.opacity = ''; rb.style.pointerEvents = ''; rb.title = 'Play without transcoding'; }
             _mountRawPlayer(`/view/${itemPath}`, false);
             if (rb) rb.classList.add('hls-btn-active');
-            // Only warn when ffmpeg is genuinely missing; stay silent when it's intentionally disabled
-            if (startData.reason !== 'ffmpeg_disabled') {
-                _setStatus('\u26a0\ufe0f ffmpeg not found \u2014 raw playback may fail for x265/HEVC files');
+            if (startData.reason === 'ffmpeg_not_installed') {
+                _setStatus('\u26a0\ufe0f ffmpeg not found \u2014 this format is not supported by the browser, audio only');
+            } else {
+                // ffmpeg_disabled or any other reason — still warn about codec support
+                _setStatus('\u26a0\ufe0f This format is not supported by the browser \u2014 video will not play, audio only');
             }
         } else {
+            _setStatus('');
             _mountRawPlayer(`/view/${itemPath}`, true);
             const rb = $id('hls-btn-raw'); if (rb) rb.classList.add('hls-btn-active');
         }
@@ -9751,7 +9757,7 @@ async function _hlsStartStream(itemPath, wrapperId) {
             rb2.classList.remove('hls-btn-active');
             rb2.style.opacity = '';
             rb2.style.pointerEvents = '';
-            if (!_isWebNative) rb2.title = 'Play raw (audio only for x265/HEVC)';
+            if (!_isWebNative) rb2.title = 'Play raw \u2014 audio only (video codec not supported by browser)';
         }
         const sb = $id('hls-btn-stream'); if (sb) sb.classList.add('hls-btn-active');
         _buildQualityBar(startData.profiles, cacheKey);
@@ -9800,15 +9806,14 @@ async function _hlsStartStream(itemPath, wrapperId) {
             _buildQualityBar(st.profiles, cacheKey);
             if (!_isWebNative) {
                 // Non-native format: auto-switch to HLS.
-                // Also re-enable raw button — now that processing is done it can
-                // be used for audio-only playback (e.g. x265/HEVC MKV).
+                // Re-enable raw button — usable for audio-only (e.g. x265/HEVC MKV).
                 _mountHlsPlayer(`/hls_files/${cacheKey}/master.m3u8`, true);
                 const rb3 = $id('hls-btn-raw');
                 if (rb3) {
                     rb3.classList.remove('hls-btn-active');
                     rb3.style.opacity = '';
                     rb3.style.pointerEvents = '';
-                    rb3.title = 'Play raw (audio only for x265/HEVC)';
+                    rb3.title = 'Play raw \u2014 audio only (video codec not supported by browser)';
                 }
                 const sb3 = $id('hls-btn-stream'); if (sb3) sb3.classList.add('hls-btn-active');
                 _setStatus('');
