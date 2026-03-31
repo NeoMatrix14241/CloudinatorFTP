@@ -475,15 +475,13 @@ function searchTable(searchTerm) {
 
     // Debounce search to avoid too many API calls
     searchTimeout = setTimeout(() => {
-        if (searchTerm.trim().length >= 2) {
-            // Use deep search for queries with 2+ characters
+        if (searchTerm.trim().length > 0) {
+            // Always use deep search for any non-empty query (no local-only shortcut)
             performDeepSearch(searchTerm.trim());
-        } else if (searchTerm.trim().length === 0) {
-            // Clear search - return to local filtering
-            performLocalSearch('');
         } else {
-            // Single character - use local search only
-            performLocalSearch(searchTerm.trim());
+            // Empty query — clear deep search and reset VT view
+            hideDeepSearchResults();
+            VT.applyFilter('');
         }
     }, 500); // Increased debounce for API calls
 }
@@ -566,8 +564,9 @@ function displayDeepSearchResults(data, searchTerm) {
     // Hide local results
     hideLocalResults();
 
-    // Mark that search results are now displayed
+    // Mark that search results are now displayed (also tells VT engine not to clobber the tbody)
     isSearchResultsDisplayed = true;
+    VT.markSearchResults();
 
     // Show deep search results with header above table
     const table = document.getElementById('filesTable');
@@ -5779,21 +5778,40 @@ function toggleSelectAll() {
     selectedItems.clear();
 
     if (isNowChecked) {
-        // Populate selectedItems from the full VT data array, not just visible DOM rows.
-        // Virtual scroll only renders ~80 rows at a time, so querySelectorAll misses the rest.
-        const curPath = VT.getPath();
-        VT.getAll().forEach(item => {
-            const itemPath = curPath ? `${curPath}/${item.name}` : item.name;
-            selectedItems.add(itemPath);
-        });
+        if (isSearchResultsDisplayed) {
+            // DEEP SEARCH MODE: only select paths from visible search-result rows.
+            // VT.getAll() returns the current-folder file list, NOT search results —
+            // selecting from it would queue up every file in the folder for deletion.
+            document.querySelectorAll('.search-result-row .item-checkbox').forEach(cb => {
+                if (cb.dataset.path) selectedItems.add(cb.dataset.path);
+            });
+        } else {
+            // NORMAL MODE: populate from full VT data array (handles virtual scroll).
+            // Virtual scroll only renders ~80 rows at a time, so querySelectorAll misses the rest.
+            const curPath = VT.getPath();
+            VT.getAll().forEach(item => {
+                const itemPath = curPath ? `${curPath}/${item.name}` : item.name;
+                selectedItems.add(itemPath);
+            });
+        }
     }
 
-    // Sync the visible DOM checkboxes to match
-    document.querySelectorAll('.item-checkbox').forEach(checkbox => {
-        checkbox.checked = isNowChecked;
-        const row = checkbox.closest('tr');
-        if (row) row.classList.toggle('selected', isNowChecked);
-    });
+    // Sync the visible DOM checkboxes to match.
+    // In deep search mode, only touch search-result checkboxes — hidden regular-table
+    // rows also have .item-checkbox and checking them here would corrupt selectedItems.
+    if (isSearchResultsDisplayed) {
+        document.querySelectorAll('.search-result-row .item-checkbox').forEach(checkbox => {
+            checkbox.checked = isNowChecked;
+            const row = checkbox.closest('tr');
+            if (row) row.classList.toggle('selected', isNowChecked);
+        });
+    } else {
+        document.querySelectorAll('.item-checkbox').forEach(checkbox => {
+            checkbox.checked = isNowChecked;
+            const row = checkbox.closest('tr');
+            if (row) row.classList.toggle('selected', isNowChecked);
+        });
+    }
 
     // Update the bulk actions UI
     const selectedCount = document.getElementById('selectedCount');
@@ -5854,6 +5872,11 @@ function updateSelection() {
 
     itemCheckboxes.forEach(checkbox => {
         const row = checkbox.closest('tr');
+        // CRITICAL: Skip checkboxes belonging to hidden rows.
+        // During deep search, regular file rows are hidden (display:none) but their
+        // checkboxes still exist in the DOM.  Picking them up here would pollute
+        // selectedItems with paths the user never chose, causing wrong bulk deletes.
+        if (row && row.style.display === 'none') return;
         if (checkbox.checked) {
             selectedItems.add(checkbox.dataset.path);
             if (row) row.classList.add('selected');
@@ -5864,7 +5887,12 @@ function updateSelection() {
     });
 
     const checkedCount = selectedItems.size;
-    const totalCount = VT.getAll().length;
+    // In deep search mode compare against visible search-result rows, not VT folder count.
+    // Using VT.getAll().length here would always show the wrong ratio and could allow
+    // selectAll to think everything is selected when it isn't.
+    const totalCount = isSearchResultsDisplayed
+        ? document.querySelectorAll('.search-result-row .item-checkbox').length
+        : VT.getAll().length;
 
     console.log(`📊 Selection update: ${checkedCount}/${totalCount} items selected`);
 
@@ -6739,7 +6767,21 @@ async function performBulkDelete(paths) {
         if (response.ok) {
             showUploadStatus(`🗑️ Successfully deleted ${result.deleted_count} item(s)`, 'success');
             clearSelection();
-            await refreshFileTable();
+            if (isSearchResultsDisplayed) {
+                // In deep search mode refreshFileTable() is a no-op (intentionally
+                // skipped to preserve the search view).  Remove deleted rows directly
+                // from the search results DOM and update the count badge.
+                paths.forEach(p => {
+                    const deadRow = document.querySelector(`.search-result-row[data-path="${CSS.escape(p)}"]`);
+                    if (deadRow) deadRow.remove();
+                });
+                const remaining = document.querySelectorAll('.search-result-row').length;
+                const countEl = document.querySelector('#searchResultsHeader .search-count');
+                if (countEl) countEl.textContent = `${remaining} items found`;
+                updateVisibleCount(remaining);
+            } else {
+                await refreshFileTable();
+            }
             refreshStorageStats('bulk delete operation');
         } else {
             showUploadStatus(`❌ Bulk delete failed: ${result.error}`, 'error');
@@ -7008,7 +7050,19 @@ async function deleteItem(itemPath, itemName) {
         if (response.ok) {
             showUploadStatus(`🗑️ Successfully deleted "${itemName}"`, 'success');
             clearSelection();
-            await refreshFileTable();
+            if (isSearchResultsDisplayed) {
+                // In deep search mode refreshFileTable() is a no-op (intentionally
+                // skipped to preserve the search view).  Remove the deleted row directly
+                // from the search results DOM instead, and update the count badge.
+                const deadRow = document.querySelector(`.search-result-row[data-path="${CSS.escape(itemPath)}"]`);
+                if (deadRow) deadRow.remove();
+                const remaining = document.querySelectorAll('.search-result-row').length;
+                const countEl = document.querySelector('#searchResultsHeader .search-count');
+                if (countEl) countEl.textContent = `${remaining} items found`;
+                updateVisibleCount(remaining);
+            } else {
+                await refreshFileTable();
+            }
         } else {
             const errorText = await response.text();
             showUploadStatus(`❌ Failed to delete "${itemName}": ${errorText}`, 'error');
