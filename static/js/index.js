@@ -3701,7 +3701,16 @@ function _renderPdfJs(url) {
     _pdfState.baseScale = 1;
     _pdfState.rendering = false;
 
-    pdfjsLib.getDocument(url).promise
+    // cMapUrl enables correct text extraction/selection for PDFs using
+    // non-standard font encodings (CJK, Symbol, custom encodings, etc.).
+    // Requires the cmaps/ folder to be served at /static/js/cmaps/.
+    // standardFontDataUrl covers the 14 standard PDF fonts for correct rendering.
+    pdfjsLib.getDocument({
+        url,
+        cMapUrl: '/static/js/cmaps/',
+        cMapPacked: true,
+        standardFontDataUrl: '/static/js/standard_fonts/',
+    }).promise
         .then(doc => {
             _pdfState.doc = doc;
             const loadingEl = document.getElementById('pdf-loading');
@@ -3710,12 +3719,20 @@ function _renderPdfJs(url) {
             if (info) info.textContent = `${doc.numPages} page${doc.numPages !== 1 ? 's' : ''}`;
 
             doc.getPage(1).then(page => {
-                const pagesEl = document.getElementById('pdf-pages');
-                const availW = pagesEl ? pagesEl.clientWidth - 24 : window.innerWidth - 24;
-                _pdfState.baseScale = availW / page.getViewport({ scale: 1 }).width;
-                _pdfState.scale = _pdfState.baseScale;
-                _pdfZoomLabel();
-                _renderAllPages();
+                // Defer measurement to next animation frame so the modal has
+                // finished layout and pagesEl.clientWidth is reliable.
+                // Without this, fast-loading / cached PDFs measure 0 and
+                // produce a broken baseScale that makes zoom non-functional.
+                requestAnimationFrame(() => {
+                    const pagesEl = document.getElementById('pdf-pages');
+                    const rawW = pagesEl ? pagesEl.clientWidth : 0;
+                    const availW = (rawW > 48 ? rawW : window.innerWidth) - 24;
+                    const pageW = page.getViewport({ scale: 1 }).width;
+                    _pdfState.baseScale = pageW > 0 ? availW / pageW : 1;
+                    _pdfState.scale = _pdfState.baseScale;
+                    _pdfZoomLabel();
+                    _renderAllPages();
+                });
             });
         })
         .catch(err => {
@@ -3768,6 +3785,12 @@ function _renderAllPages(restoreScrollRatio) {
 function _renderSinglePage(pageNum, canvas, textLayer) {
     const gen = (canvas._pdfGen = (canvas._pdfGen || 0) + 1);
 
+    // Cancel any in-flight renderTextLayer task for this text layer
+    if (textLayer && textLayer._pdfRenderTask) {
+        try { textLayer._pdfRenderTask.cancel(); } catch (_) { }
+        textLayer._pdfRenderTask = null;
+    }
+
     return _pdfState.doc.getPage(pageNum).then(page => {
         const dpr = window.devicePixelRatio || 1;
         const viewport = page.getViewport({ scale: _pdfState.scale });
@@ -3800,13 +3823,23 @@ function _renderSinglePage(pageNum, canvas, textLayer) {
                 textLayer.style.setProperty('--scale-factor', String(_pdfState.scale));
                 page.getTextContent().then(textContent => {
                     if (canvas._pdfGen !== gen) return;
-                    // v3.11.174 correct API: textContentSource + container
-                    pdfjsLib.renderTextLayer({
+                    // Cancel any previous task that may have snuck through
+                    if (textLayer._pdfRenderTask) {
+                        try { textLayer._pdfRenderTask.cancel(); } catch (_) { }
+                    }
+                    const task = pdfjsLib.renderTextLayer({
                         textContentSource: textContent,
                         container: textLayer,
                         viewport: viewport,
                         textDivs: [],
                     });
+                    textLayer._pdfRenderTask = task;
+                    // Clear the reference when done so we don't cancel a finished task
+                    if (task && task.promise) {
+                        task.promise.then(() => {
+                            if (textLayer._pdfRenderTask === task) textLayer._pdfRenderTask = null;
+                        }).catch(() => { });
+                    }
                 });
             }
 
@@ -10186,6 +10219,7 @@ function _buildQualityBar(profiles, cacheKey) {
         const fps = m && m[2] ? parseInt(m[2], 10) : 0;
         return height * 1000 + fps;   // higher is "better"
     }
+
 
     row.appendChild(makeBtn('Auto', `/hls_files/${cacheKey}/master.m3u8`));
     const sorted = [...profiles].sort((a, b) => profileSortKey(b) - profileSortKey(a));

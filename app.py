@@ -275,6 +275,10 @@ class AssemblyQueue:
 # Global assembly queue
 assembly_queue = AssemblyQueue()
 
+import mimetypes
+
+mimetypes.add_type("application/javascript", ".js")
+
 app = Flask(__name__)
 CORS(app)
 app.secret_key = SESSION_SECRET
