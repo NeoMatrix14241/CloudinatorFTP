@@ -50,7 +50,9 @@ SEARCH_INDEX_PATH = os.path.join(_DB_DIR, "search_index.db")
 
 _write_lock = threading.Lock()
 _bootstrapped = False
-_use_fts: Optional[bool] = None  # set at bootstrap; True = trigram FTS5, False = LIKE table
+_use_fts: Optional[bool] = (
+    None  # set at bootstrap; True = trigram FTS5, False = LIKE table
+)
 
 
 # ------------------------------------------------------------------
@@ -65,7 +67,7 @@ def _connect() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")  # safe with WAL, faster than FULL
-    conn.execute("PRAGMA cache_size=-8000")    # 8 MB page cache
+    conn.execute("PRAGMA cache_size=-8000")  # 8 MB page cache
     if not _bootstrapped:
         _bootstrapped = True
         _use_fts = _do_bootstrap(conn)
@@ -87,7 +89,8 @@ def _do_bootstrap(conn) -> bool:
     Returns True if FTS5 trigram is available, False otherwise.
     """
     # files_meta: always present, plain SQL, ext/count queries go here
-    conn.executescript("""
+    conn.executescript(
+        """
         CREATE TABLE IF NOT EXISTS files_meta (
             rel_path   TEXT PRIMARY KEY,
             name_lower TEXT NOT NULL,
@@ -98,13 +101,14 @@ def _do_bootstrap(conn) -> bool:
             ON files_meta(ext_lower, is_dir);
         CREATE INDEX IF NOT EXISTS idx_meta_name_lower
             ON files_meta(name_lower);
-    """)
+    """
+    )
 
     use_fts = False
     try:
         conn.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS _fts_probe "
-            "USING fts5(x, tokenize=\'trigram\')"
+            "USING fts5(x, tokenize='trigram')"
         )
         conn.execute("DROP TABLE IF EXISTS _fts_probe")
         use_fts = True
@@ -112,7 +116,8 @@ def _do_bootstrap(conn) -> bool:
         pass
 
     if use_fts:
-        conn.executescript("""
+        conn.executescript(
+            """
             CREATE VIRTUAL TABLE IF NOT EXISTS files USING fts5(
                 name,
                 rel_path,
@@ -120,11 +125,15 @@ def _do_bootstrap(conn) -> bool:
                 parent_rel,
                 tokenize=\'trigram\'
             );
-        """)
-        print("✅ Search index: FTS5 trigram + files_meta (fast name search + exact counts)")
+        """
+        )
+        print(
+            "✅ Search index: FTS5 trigram + files_meta (fast name search + exact counts)"
+        )
     else:
         # No FTS5 — files_meta handles everything via LIKE
-        conn.executescript("""
+        conn.executescript(
+            """
             CREATE TABLE IF NOT EXISTS files (
                 rel_path   TEXT PRIMARY KEY,
                 name       TEXT NOT NULL,
@@ -134,7 +143,8 @@ def _do_bootstrap(conn) -> bool:
             );
             CREATE INDEX IF NOT EXISTS idx_files_name_lower
                 ON files(name_lower);
-        """)
+        """
+        )
         print("✅ Search index: LIKE table mode (SQLite trigram unavailable)")
 
     return use_fts
@@ -190,7 +200,9 @@ class SearchIndexManager:
             if _use_fts:
                 fts_rows.append((name, rel_path, "1" if is_dir else "0", parent_rel))
             else:
-                fts_rows.append((rel_path, name, name_lower, 1 if is_dir else 0, parent_rel))
+                fts_rows.append(
+                    (rel_path, name, name_lower, 1 if is_dir else 0, parent_rel)
+                )
             meta_rows.append((rel_path, name_lower, ext_lower, 1 if is_dir else 0))
         return fts_rows, meta_rows
 
@@ -308,7 +320,7 @@ class SearchIndexManager:
                 # Re-insert with updated paths
                 new_entries = []
                 for r in rows:
-                    suffix = r["rel_path"][len(old_prefix):]   # '' or '/child/...'
+                    suffix = r["rel_path"][len(old_prefix) :]  # '' or '/child/...'
                     new_rel = new_prefix + suffix
                     new_entries.append((new_rel, r["name"], str(r["is_dir"]) == "1"))
 
@@ -329,14 +341,20 @@ class SearchIndexManager:
                         "INSERT OR REPLACE INTO files_meta"
                         "(rel_path, name_lower, ext_lower, is_dir) VALUES (?,?,?,?)",
                         [
-                            (new_prefix + r["rel_path"][len(old_prefix):],
-                             r["name_lower"], r["ext_lower"], r["is_dir"])
+                            (
+                                new_prefix + r["rel_path"][len(old_prefix) :],
+                                r["name_lower"],
+                                r["ext_lower"],
+                                r["is_dir"],
+                            )
                             for r in meta_rows_old
                         ],
                     )
 
         except Exception as e:
-            print(f"⚠️  Search index rename_tree error '{old_prefix}'→'{new_prefix}': {e}")
+            print(
+                f"⚠️  Search index rename_tree error '{old_prefix}'→'{new_prefix}': {e}"
+            )
 
     # ------------------------------------------------------------------
     # Public read API
@@ -419,9 +437,9 @@ class SearchIndexManager:
             print(f"⚠️  Search index count error: {e}")
             return -1
 
-
-    def search(self, query: str, ext_filter: list = None,
-               limit: int = 500, offset: int = 0) -> tuple:
+    def search(
+        self, query: str, ext_filter: list = None, limit: int = 500, offset: int = 0
+    ) -> tuple:
         """
         Paginated search. Returns (results, from_index, has_more).
 
@@ -440,8 +458,9 @@ class SearchIndexManager:
             rows, has_more = self._walk_fallback(query, ext_filter, limit, offset)
             return rows, False, has_more
 
-    def _db_search(self, query: str, ext_filter: list,
-                   limit: int, offset: int) -> tuple:
+    def _db_search(
+        self, query: str, ext_filter: list, limit: int, offset: int
+    ) -> tuple:
         """
         Three strategies, each using the right table for the job:
 
@@ -519,31 +538,39 @@ class SearchIndexManager:
             rel_path = row["rel_path"]
             name = rel_path.rsplit("/", 1)[-1] if "/" in rel_path else rel_path
             is_dir_val = row["is_dir"]
-            is_dir = (str(is_dir_val) == "1") if isinstance(is_dir_val, str) else bool(is_dir_val)
+            is_dir = (
+                (str(is_dir_val) == "1")
+                if isinstance(is_dir_val, str)
+                else bool(is_dir_val)
+            )
             full_path = os.path.join(ROOT_DIR, rel_path)
             try:
                 st = os.stat(full_path)
-                size     = 0 if is_dir else st.st_size
-                modified = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                size = 0 if is_dir else st.st_size
+                modified = datetime.fromtimestamp(st.st_mtime).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
             except OSError:
                 continue
             _, ext = os.path.splitext(name)
             file_type = "folder" if is_dir else (ext[1:].upper() if ext else "FILE")
-            results.append({
-                "name":       name,
-                "path":       rel_path,
-                "type":       file_type,
-                "is_dir":     is_dir,
-                "size":       size,
-                "modified":   modified,
-                "match_type": "name",
-            })
+            results.append(
+                {
+                    "name": name,
+                    "path": rel_path,
+                    "type": file_type,
+                    "is_dir": is_dir,
+                    "size": size,
+                    "modified": modified,
+                    "match_type": "name",
+                }
+            )
 
         return results, has_more
 
-
-    def _walk_fallback(self, query: str, ext_filter: list = None,
-                       limit: int = 500, offset: int = 0) -> tuple:
+    def _walk_fallback(
+        self, query: str, ext_filter: list = None, limit: int = 500, offset: int = 0
+    ) -> tuple:
         """
         os.walk fallback used on first boot while the crawler is still building.
         Supports the same limit/offset pagination so the API shape is identical.
@@ -569,13 +596,19 @@ class SearchIndexManager:
                     folder_path = (rel_path + "/" + dirname) if rel_path else dirname
                     try:
                         st = os.stat(os.path.join(root, dirname))
-                        collected.append({
-                            "name": dirname, "path": folder_path,
-                            "type": "folder", "is_dir": True, "size": 0,
-                            "modified": datetime.fromtimestamp(st.st_mtime).strftime(
-                                "%Y-%m-%d %H:%M:%S"),
-                            "match_type": "name",
-                        })
+                        collected.append(
+                            {
+                                "name": dirname,
+                                "path": folder_path,
+                                "type": "folder",
+                                "is_dir": True,
+                                "size": 0,
+                                "modified": datetime.fromtimestamp(
+                                    st.st_mtime
+                                ).strftime("%Y-%m-%d %H:%M:%S"),
+                                "match_type": "name",
+                            }
+                        )
                     except OSError:
                         continue
                     if len(collected) >= need:
@@ -596,19 +629,24 @@ class SearchIndexManager:
                 try:
                     st = os.stat(os.path.join(root, filename))
                     _, ext = os.path.splitext(filename)
-                    collected.append({
-                        "name": filename, "path": file_path,
-                        "type": ext[1:].upper() if ext else "FILE",
-                        "is_dir": False, "size": st.st_size,
-                        "modified": datetime.fromtimestamp(st.st_mtime).strftime(
-                            "%Y-%m-%d %H:%M:%S"),
-                        "match_type": "name",
-                    })
+                    collected.append(
+                        {
+                            "name": filename,
+                            "path": file_path,
+                            "type": ext[1:].upper() if ext else "FILE",
+                            "is_dir": False,
+                            "size": st.st_size,
+                            "modified": datetime.fromtimestamp(st.st_mtime).strftime(
+                                "%Y-%m-%d %H:%M:%S"
+                            ),
+                            "match_type": "name",
+                        }
+                    )
                 except OSError:
                     continue
 
         has_more = len(collected) > offset + limit
-        page = collected[offset: offset + limit]
+        page = collected[offset : offset + limit]
         return page, has_more
 
     # ------------------------------------------------------------------
@@ -659,8 +697,12 @@ class SearchIndexManager:
             #   B) files_meta empty / behind               → fresh crawl (rebuilds both)
             #   C) files empty (brand new DB)              → fresh crawl
             with _connect() as conn:
-                fts_count  = conn.execute("SELECT COUNT(*) AS c FROM files").fetchone()["c"]
-                meta_count = conn.execute("SELECT COUNT(*) AS c FROM files_meta").fetchone()["c"]
+                fts_count = conn.execute("SELECT COUNT(*) AS c FROM files").fetchone()[
+                    "c"
+                ]
+                meta_count = conn.execute(
+                    "SELECT COUNT(*) AS c FROM files_meta"
+                ).fetchone()["c"]
 
             # Case A: both tables populated and in sync → ready immediately
             if fts_count > 0 and meta_count > 0 and meta_count >= fts_count * 0.95:
@@ -689,7 +731,7 @@ class SearchIndexManager:
                     conn.execute("DELETE FROM files")
                 conn.execute("DELETE FROM files_meta")
 
-            dir_count  = 0
+            dir_count = 0
             file_count = 0
 
             for root, dirs, files in os.walk(ROOT_DIR):
@@ -727,7 +769,9 @@ class SearchIndexManager:
                         # Batch failed (e.g. encoding issue in one filename).
                         # Fall back to entry-by-entry so one bad file never
                         # silently drops the whole directory.
-                        print(f"⚠️  Search index batch error in '{rel_root}': {be} — retrying entry-by-entry")
+                        print(
+                            f"⚠️  Search index batch error in '{rel_root}': {be} — retrying entry-by-entry"
+                        )
                         for entry in batch:
                             try:
                                 with _write_lock, _connect() as conn:
@@ -767,10 +811,10 @@ class SearchIndexManager:
                 row = conn.execute("SELECT COUNT(*) AS c FROM files").fetchone()
                 total = row["c"] if row else 0
             return {
-                "ready":         self._ready,
+                "ready": self._ready,
                 "total_entries": total,
-                "mode":          "fts5_trigram" if _use_fts else "like_table",
-                "db_path":       SEARCH_INDEX_PATH,
+                "mode": "fts5_trigram" if _use_fts else "like_table",
+                "db_path": SEARCH_INDEX_PATH,
             }
         except Exception:
             return {"ready": self._ready, "total_entries": 0}

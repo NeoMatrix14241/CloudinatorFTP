@@ -17,7 +17,18 @@ PERMANENT_SESSION_LIFETIME = 3600  # 1 hour session timeout
 # Files smaller than HLS_MIN_SIZE skip HLS for web-native formats (play raw instead)
 HLS_MIN_SIZE = 50 * 1024 * 1024  # 50 MB default
 # These formats always get HLS regardless of size — browser can't play them raw
-HLS_FORCE_FORMATS = {"mkv", "avi", "wmv", "flv", "mpg", "mpeg", "m2ts", "mts", "3gp", "ogv"}
+HLS_FORCE_FORMATS = {
+    "mkv",
+    "avi",
+    "wmv",
+    "flv",
+    "mpg",
+    "mpeg",
+    "m2ts",
+    "mts",
+    "3gp",
+    "ogv",
+}
 
 # Feature toggles — both default to True (enabled).
 # When True and the tool IS installed     → full functionality (HLS / WebP conversion).
@@ -27,9 +38,11 @@ HLS_FORCE_FORMATS = {"mkv", "avi", "wmv", "flv", "mpg", "mpeg", "m2ts", "mts", "
 #                                           the binary is present; raw fallback is used
 #                                           and a "requires processing" notice is shown
 #                                           for formats that cannot be displayed raw.
-ENABLE_FFMPEG = True    # False → skip HLS transcoding entirely, use raw playback only
-ENABLE_LIBVIPS = True   # False → skip image conversion entirely, use raw serving only
-ENABLE_SEARCH_INDEX = True  # False → skip SQLite search index, always use os.walk fallback
+ENABLE_FFMPEG = True  # False → skip HLS transcoding entirely, use raw playback only
+ENABLE_LIBVIPS = True  # False → skip image conversion entirely, use raw serving only
+ENABLE_SEARCH_INDEX = (
+    True  # False → skip SQLite search index, always use os.walk fallback
+)
 
 # Image preview / WebP compression configuration
 # Native images (jpg/png/gif/etc.) smaller than this are served raw with no conversion.
@@ -470,8 +483,12 @@ def configure_server_settings():
         print(f"5. Session Timeout: {PERMANENT_SESSION_LIFETIME//60} minutes")
         print(f"6. Host Binding: {HOST}")
         print("7. Generate New Session Secret")
-        print(f"8. HLS Settings    (min size: {format_bytes(HLS_MIN_SIZE) if HLS_MIN_SIZE else 'always'})")
-        print(f"9. Image Settings  (compress >{format_bytes(IMG_COMPRESS_MIN_SIZE)}, WebP Q={IMG_WEBP_QUALITY})")
+        print(
+            f"8. HLS Settings    (min size: {format_bytes(HLS_MIN_SIZE) if HLS_MIN_SIZE else 'always'})"
+        )
+        print(
+            f"9. Image Settings  (compress >{format_bytes(IMG_COMPRESS_MIN_SIZE)}, WebP Q={IMG_WEBP_QUALITY})"
+        )
         print(f"11. ffmpeg (HLS):  {'✅ Enabled' if ENABLE_FFMPEG else '🚫 Disabled'}")
         print(f"12. libvips (img): {'✅ Enabled' if ENABLE_LIBVIPS else '🚫 Disabled'}")
         print("10. Save & Exit")
@@ -765,15 +782,21 @@ def _toggle_ffmpeg():
     current = "Enabled" if ENABLE_FFMPEG else "Disabled"
     print(f"\n🎬 ffmpeg (HLS transcoding) — currently: {current}")
     print("  Enabled  + ffmpeg installed   → full HLS adaptive streaming")
-    print("  Enabled  + ffmpeg not found   → graceful raw-playback fallback (existing behaviour)")
-    print("  Disabled                      → raw playback always, regardless of installation")
+    print(
+        "  Enabled  + ffmpeg not found   → graceful raw-playback fallback (existing behaviour)"
+    )
+    print(
+        "  Disabled                      → raw playback always, regardless of installation"
+    )
     print("\n1. Enable  ffmpeg")
     print("2. Disable ffmpeg")
     print("3. Keep current")
     choice = input("\nSelect (1-3): ").strip()
     if choice == "1":
         ENABLE_FFMPEG = True
-        print("✅ ffmpeg enabled — HLS transcoding active (falls back to raw if not installed)")
+        print(
+            "✅ ffmpeg enabled — HLS transcoding active (falls back to raw if not installed)"
+        )
     elif choice == "2":
         ENABLE_FFMPEG = False
         print("🚫 ffmpeg disabled — raw playback only")
@@ -787,16 +810,24 @@ def _toggle_libvips():
     current = "Enabled" if ENABLE_LIBVIPS else "Disabled"
     print(f"\n🖼️  libvips (image conversion) — currently: {current}")
     print("  Enabled  + libvips installed  → WebP conversion & compression")
-    print("  Enabled  + libvips not found  → graceful raw-serving fallback (existing behaviour)")
-    print("  Disabled                      → raw serving always; non-native formats show")
-    print("                                  a 'requires processing' notice instead of broken image")
+    print(
+        "  Enabled  + libvips not found  → graceful raw-serving fallback (existing behaviour)"
+    )
+    print(
+        "  Disabled                      → raw serving always; non-native formats show"
+    )
+    print(
+        "                                  a 'requires processing' notice instead of broken image"
+    )
     print("\n1. Enable  libvips")
     print("2. Disable libvips")
     print("3. Keep current")
     choice = input("\nSelect (1-3): ").strip()
     if choice == "1":
         ENABLE_LIBVIPS = True
-        print("✅ libvips enabled — image conversion active (falls back to raw if not installed)")
+        print(
+            "✅ libvips enabled — image conversion active (falls back to raw if not installed)"
+        )
     elif choice == "2":
         ENABLE_LIBVIPS = False
         print("🚫 libvips disabled — raw fallback only")
@@ -857,7 +888,9 @@ def load_server_config():
             # Stored as a list in JSON, convert back to set
             if "HLS_FORCE_FORMATS" in config:
                 HLS_FORCE_FORMATS = set(config["HLS_FORCE_FORMATS"])
-            IMG_COMPRESS_MIN_SIZE = config.get("IMG_COMPRESS_MIN_SIZE", IMG_COMPRESS_MIN_SIZE)
+            IMG_COMPRESS_MIN_SIZE = config.get(
+                "IMG_COMPRESS_MIN_SIZE", IMG_COMPRESS_MIN_SIZE
+            )
             IMG_WEBP_QUALITY = config.get("IMG_WEBP_QUALITY", IMG_WEBP_QUALITY)
             ENABLE_FFMPEG = config.get("ENABLE_FFMPEG", ENABLE_FFMPEG)
             ENABLE_LIBVIPS = config.get("ENABLE_LIBVIPS", ENABLE_LIBVIPS)
@@ -909,7 +942,9 @@ def _db_cache_examples(subfolder):
     if os.name == "nt":
         return [
             os.path.join(os.environ.get("APPDATA", home), "cloudinator", subfolder),
-            os.path.join(os.environ.get("LOCALAPPDATA", home), "cloudinator", subfolder),
+            os.path.join(
+                os.environ.get("LOCALAPPDATA", home), "cloudinator", subfolder
+            ),
             os.path.join(home, ".cloudinator", subfolder),
         ]
     else:
@@ -942,7 +977,12 @@ def _pick_suggested_path(kind, examples):
     if choice < 1 or choice > len(examples):
         return
     path = examples[choice - 1]
-    label = {"db": "Database", "cache": "Cache", "hls": "HLS Cache", "img": "Image Cache"}.get(kind, kind)
+    label = {
+        "db": "Database",
+        "cache": "Cache",
+        "hls": "HLS Cache",
+        "img": "Image Cache",
+    }.get(kind, kind)
     if not _confirm_path(path, label):
         return
     if kind == "db":
@@ -957,8 +997,15 @@ def _pick_suggested_path(kind, examples):
 
 def _configure_custom_dir(kind):
     """Prompt user for a custom directory path for db / cache / hls / img."""
-    label = {"db": "Database", "cache": "Cache", "hls": "HLS Cache", "img": "Image Cache"}.get(kind, kind)
-    subfolder = {"db": "db", "cache": "cache", "hls": "hls", "img": "img"}.get(kind, kind)
+    label = {
+        "db": "Database",
+        "cache": "Cache",
+        "hls": "HLS Cache",
+        "img": "Image Cache",
+    }.get(kind, kind)
+    subfolder = {"db": "db", "cache": "cache", "hls": "hls", "img": "img"}.get(
+        kind, kind
+    )
     print(f"\n🎯 Custom {label} Directory")
     print(f"   Enter a parent folder — '{subfolder}' will be appended automatically.")
     print(f"   Example: /srv/cloudinator  →  /srv/cloudinator/{subfolder}")
@@ -1278,6 +1325,7 @@ def configure_storage_path():
         else:
             print("❌ Invalid option. Please choose 1-6.")
 
+
 def main_configuration_menu():
     """Main configuration menu"""
     print("\n🏠 Cloudinator Configuration")
@@ -1344,13 +1392,13 @@ def _configure_hls_min_size():
     global HLS_MIN_SIZE
 
     size_options = {
-        "1": (0,                    "Always use HLS for all videos"),
-        "2": (10  * 1024 * 1024,   "10 MB"),
-        "3": (25  * 1024 * 1024,   "25 MB"),
-        "4": (50  * 1024 * 1024,   "50 MB  (default)"),
-        "5": (100 * 1024 * 1024,   "100 MB"),
-        "6": (250 * 1024 * 1024,   "250 MB"),
-        "7": (500 * 1024 * 1024,   "500 MB"),
+        "1": (0, "Always use HLS for all videos"),
+        "2": (10 * 1024 * 1024, "10 MB"),
+        "3": (25 * 1024 * 1024, "25 MB"),
+        "4": (50 * 1024 * 1024, "50 MB  (default)"),
+        "5": (100 * 1024 * 1024, "100 MB"),
+        "6": (250 * 1024 * 1024, "250 MB"),
+        "7": (500 * 1024 * 1024, "500 MB"),
     }
 
     print(f"\nCurrent: {format_bytes(HLS_MIN_SIZE)}")
@@ -1366,7 +1414,9 @@ def _configure_hls_min_size():
 
     if choice in size_options:
         HLS_MIN_SIZE = size_options[choice][0]
-        print(f"✅ HLS min size set to {format_bytes(HLS_MIN_SIZE) if HLS_MIN_SIZE else 'always HLS'}")
+        print(
+            f"✅ HLS min size set to {format_bytes(HLS_MIN_SIZE) if HLS_MIN_SIZE else 'always HLS'}"
+        )
     elif choice == "8":
         while True:
             try:
@@ -1392,8 +1442,22 @@ def _configure_hls_force_formats():
     """Configure which formats always get HLS regardless of file size"""
     global HLS_FORCE_FORMATS
 
-    all_formats = sorted({"mkv", "avi", "wmv", "flv", "mpg", "mpeg",
-                           "m2ts", "mts", "3gp", "ogv", "mov", "ts"})
+    all_formats = sorted(
+        {
+            "mkv",
+            "avi",
+            "wmv",
+            "flv",
+            "mpg",
+            "mpeg",
+            "m2ts",
+            "mts",
+            "3gp",
+            "ogv",
+            "mov",
+            "ts",
+        }
+    )
 
     print(f"\nCurrent always-HLS formats: {', '.join(sorted(HLS_FORCE_FORMATS))}")
     print("These formats can't be played raw in most browsers, so they")
@@ -1403,7 +1467,9 @@ def _configure_hls_force_formats():
         marker = "✅" if fmt in HLS_FORCE_FORMATS else "  "
         print(f"  {marker} {i:2d}. {fmt}")
 
-    print("\nEnter format numbers to toggle (comma-separated), or press Enter to cancel:")
+    print(
+        "\nEnter format numbers to toggle (comma-separated), or press Enter to cancel:"
+    )
     raw = input("> ").strip()
     if not raw:
         print("↩️  Cancelled")
@@ -1436,11 +1502,17 @@ def configure_image_settings():
     print("=" * 50)
 
     while True:
-        thresh = format_bytes(IMG_COMPRESS_MIN_SIZE) if IMG_COMPRESS_MIN_SIZE else "Always compress"
+        thresh = (
+            format_bytes(IMG_COMPRESS_MIN_SIZE)
+            if IMG_COMPRESS_MIN_SIZE
+            else "Always compress"
+        )
         print(f"\nCurrent Settings:")
         print(f"1. Compress threshold: {thresh}")
         print(f"   (native images above this size are compressed to lossy WebP)")
-        print(f"2. Lossy WebP quality: {IMG_WEBP_QUALITY}  (1–100, lower = smaller file)")
+        print(
+            f"2. Lossy WebP quality: {IMG_WEBP_QUALITY}  (1–100, lower = smaller file)"
+        )
         print(f"   (non-native formats always convert to lossless WebP regardless)")
         print("3. Save & Exit")
         print("4. Exit Without Saving")
@@ -1468,16 +1540,20 @@ def _configure_img_compress_min_size():
     global IMG_COMPRESS_MIN_SIZE
 
     size_options = {
-        "1": (0,                   "Always compress (all native images)"),
-        "2": (1  * 1024 * 1024,   "1 MB  (default)"),
-        "3": (3  * 1024 * 1024,   "3 MB"),
-        "4": (5  * 1024 * 1024,   "5 MB"),
-        "5": (10 * 1024 * 1024,   "10 MB"),
-        "6": (15 * 1024 * 1024,   "15 MB"),
-        "7": (25 * 1024 * 1024,   "25 MB"),
+        "1": (0, "Always compress (all native images)"),
+        "2": (1 * 1024 * 1024, "1 MB  (default)"),
+        "3": (3 * 1024 * 1024, "3 MB"),
+        "4": (5 * 1024 * 1024, "5 MB"),
+        "5": (10 * 1024 * 1024, "10 MB"),
+        "6": (15 * 1024 * 1024, "15 MB"),
+        "7": (25 * 1024 * 1024, "25 MB"),
     }
 
-    current_label = format_bytes(IMG_COMPRESS_MIN_SIZE) if IMG_COMPRESS_MIN_SIZE else "Always compress"
+    current_label = (
+        format_bytes(IMG_COMPRESS_MIN_SIZE)
+        if IMG_COMPRESS_MIN_SIZE
+        else "Always compress"
+    )
     print(f"\nCurrent: {current_label}")
     print("Native images (jpg/png/gif/webp/etc.) below this threshold are served raw.")
     print("Non-native formats (tiff/heic/psd/raw/…) always convert regardless.\n")
@@ -1491,7 +1567,11 @@ def _configure_img_compress_min_size():
 
     if choice in size_options:
         IMG_COMPRESS_MIN_SIZE = size_options[choice][0]
-        label = format_bytes(IMG_COMPRESS_MIN_SIZE) if IMG_COMPRESS_MIN_SIZE else "always compress"
+        label = (
+            format_bytes(IMG_COMPRESS_MIN_SIZE)
+            if IMG_COMPRESS_MIN_SIZE
+            else "always compress"
+        )
         print(f"✅ Image compress threshold set to {label}")
     elif choice == "8":
         while True:
@@ -1502,7 +1582,9 @@ def _configure_img_compress_min_size():
                 mb = float(raw)
                 if 0 <= mb <= 10240:
                     IMG_COMPRESS_MIN_SIZE = int(mb * 1024 * 1024)
-                    print(f"✅ Image compress threshold set to {format_bytes(IMG_COMPRESS_MIN_SIZE)}")
+                    print(
+                        f"✅ Image compress threshold set to {format_bytes(IMG_COMPRESS_MIN_SIZE)}"
+                    )
                     break
                 else:
                     print("❌ Enter a value between 0 and 10240 MB")
@@ -1530,7 +1612,9 @@ def _configure_img_webp_quality():
 
     print(f"\nCurrent lossy WebP quality: {IMG_WEBP_QUALITY}")
     print("Applied when a native image exceeds the compress threshold.")
-    print("Non-native formats always use lossless WebP (this setting does not affect them).\n")
+    print(
+        "Non-native formats always use lossless WebP (this setting does not affect them).\n"
+    )
     for key, (val, label) in quality_options.items():
         marker = " ◀ current" if val == IMG_WEBP_QUALITY else ""
         print(f"{key}. {label}{marker}")
@@ -1586,12 +1670,16 @@ def view_current_settings():
 
     print(f"\n🎬 HLS / Video Settings:")
     print(f"   ffmpeg (HLS):       {'✅ Enabled' if ENABLE_FFMPEG else '🚫 Disabled'}")
-    print(f"   Min size for HLS: {format_bytes(HLS_MIN_SIZE) if HLS_MIN_SIZE else 'Always HLS'}")
+    print(
+        f"   Min size for HLS: {format_bytes(HLS_MIN_SIZE) if HLS_MIN_SIZE else 'Always HLS'}"
+    )
     print(f"   Always-HLS formats: {', '.join(sorted(HLS_FORCE_FORMATS))}")
 
     print(f"\n🖼️  Image Settings:")
     print(f"   libvips (convert):  {'✅ Enabled' if ENABLE_LIBVIPS else '🚫 Disabled'}")
-    print(f"   Compress threshold: {format_bytes(IMG_COMPRESS_MIN_SIZE) if IMG_COMPRESS_MIN_SIZE else 'Always compress'}")
+    print(
+        f"   Compress threshold: {format_bytes(IMG_COMPRESS_MIN_SIZE) if IMG_COMPRESS_MIN_SIZE else 'Always compress'}"
+    )
     print(f"   Lossy WebP quality: {IMG_WEBP_QUALITY}  (1–100, lower = smaller file)")
     print(f"   Image Cache         : {get_img_cache_dir()}")
 

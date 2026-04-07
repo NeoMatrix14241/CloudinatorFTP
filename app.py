@@ -2587,15 +2587,22 @@ def search_files():
       offset — starting row for pagination (default 0)
       limit  — page size (default 500, max 1000)
     """
-    query   = request.args.get("q",      "").strip()
-    ext_raw = request.args.get("ext",    "").strip().lower()
-    offset  = max(0, int(request.args.get("offset", 0) or 0))
-    limit   = min(1000, max(1, int(request.args.get("limit", 500) or 500)))
+    query = request.args.get("q", "").strip()
+    ext_raw = request.args.get("ext", "").strip().lower()
+    offset = max(0, int(request.args.get("offset", 0) or 0))
+    limit = min(1000, max(1, int(request.args.get("limit", 500) or 500)))
 
-    ext_filter = [e.strip().lstrip(".") for e in ext_raw.split(",") if e.strip()] if ext_raw else []
+    ext_filter = (
+        [e.strip().lstrip(".") for e in ext_raw.split(",") if e.strip()]
+        if ext_raw
+        else []
+    )
 
     if not query and not ext_filter:
-        return jsonify({"results": [], "query": query, "has_more": False, "offset": 0}), 200
+        return (
+            jsonify({"results": [], "query": query, "has_more": False, "offset": 0}),
+            200,
+        )
 
     try:
         search_start = time.time()
@@ -2605,7 +2612,7 @@ def search_files():
         total_count = None
         if offset == 0 and ENABLE_SEARCH_INDEX:
             c = search_index_manager.count(query, ext_filter=ext_filter)
-            if c >= 0:          # -1 means index not ready yet
+            if c >= 0:  # -1 means index not ready yet
                 total_count = c
 
         if ENABLE_SEARCH_INDEX:
@@ -2620,18 +2627,23 @@ def search_files():
 
         search_time = time.time() - search_start
 
-        return jsonify({
-            "results":     results,
-            "query":       query,
-            "ext_filter":  ext_filter,
-            "total_found": len(results),
-            "total_count": total_count,   # exact grand total (first page only)
-            "offset":      offset,
-            "limit":       limit,
-            "has_more":    has_more,
-            "search_time": round(search_time, 3),
-            "from_index":  from_index,
-        }), 200
+        return (
+            jsonify(
+                {
+                    "results": results,
+                    "query": query,
+                    "ext_filter": ext_filter,
+                    "total_found": len(results),
+                    "total_count": total_count,  # exact grand total (first page only)
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": has_more,
+                    "search_time": round(search_time, 3),
+                    "from_index": from_index,
+                }
+            ),
+            200,
+        )
 
     except Exception as e:
         print(f"❌ Search error: {str(e)}")
@@ -3767,7 +3779,9 @@ def _run_hls_transcode(file_path: str, cache_key: str):
         # src_height == 0 means probe failed — use 1080 as a safe ceiling.
         effective_src = src_height if src_height > 0 else 1080
         base_heights = [h for _, h, *_ in _HLS_BASE_PROFILES]
-        ceiling_h = next((h for h in sorted(base_heights) if h >= effective_src), effective_src)
+        ceiling_h = next(
+            (h for h in sorted(base_heights) if h >= effective_src), effective_src
+        )
 
         for name, h, maxr, bufs, abr in _HLS_BASE_PROFILES:
             if h < ceiling_h:
@@ -3782,12 +3796,16 @@ def _run_hls_transcode(file_path: str, cache_key: str):
 
         if is_hfr:
             hfr_heights = [h for _, h, *_ in _HLS_HFR_PROFILES]
-            ceiling_hfr = next((h for h in sorted(hfr_heights) if h >= effective_src), effective_src)
+            ceiling_hfr = next(
+                (h for h in sorted(hfr_heights) if h >= effective_src), effective_src
+            )
             for name, h, maxr, bufs, abr in _HLS_HFR_PROFILES:
                 if h < ceiling_hfr and h >= 720:
                     profiles.append((name, h, None, maxr, bufs, abr))
                 elif h == ceiling_hfr:
-                    actual_h = effective_src if effective_src < ceiling_hfr else ceiling_hfr
+                    actual_h = (
+                        effective_src if effective_src < ceiling_hfr else ceiling_hfr
+                    )
                     actual_name = f"{actual_h}p60" if actual_h != ceiling_hfr else name
                     profiles.append((actual_name, actual_h, None, maxr, bufs, abr))
 
@@ -4113,7 +4131,9 @@ def hls_files(cache_key, hls_path):
 # ═════════════════════════════════════════════════════════════════════════════
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-_IMG_CACHE_THRESHOLD = IMG_COMPRESS_MIN_SIZE  # configurable via Image Settings in config.py
+_IMG_CACHE_THRESHOLD = (
+    IMG_COMPRESS_MIN_SIZE  # configurable via Image Settings in config.py
+)
 
 # Extensions the browser CANNOT render natively → always convert to WebP
 _IMG_NON_NATIVE: frozenset = frozenset(
@@ -4200,6 +4220,7 @@ _img_conv_events: dict = {}  # cache_key → threading.Event
 def _img_cache_root() -> str:
     """Return (and create) the configured image cache directory."""
     from paths import get_img_cache_dir
+
     img_root = get_img_cache_dir(create=True)
     return img_root
 
@@ -4241,7 +4262,7 @@ def _img_find_cached(cache_key: str):
     Checks WebP first, then JPEG, then PNG.
     """
     for path, mime in (
-        (_img_cached_path(cache_key),     "image/webp"),
+        (_img_cached_path(cache_key), "image/webp"),
         (_img_cached_path_jpg(cache_key), "image/jpeg"),
         (_img_cached_path_png(cache_key), "image/png"),
     ):
@@ -4313,8 +4334,8 @@ def _convert_to_webp(full_path: str, cache_key: str, lossy: bool) -> bool:
 
     Returns True on success, False on any error.
     """
-    _WEBP_MAX_DIM = 16383   # WebP hard pixel limit per dimension
-    _JPEG_MAX_DIM = 65535   # JPEG hard pixel limit per dimension
+    _WEBP_MAX_DIM = 16383  # WebP hard pixel limit per dimension
+    _JPEG_MAX_DIM = 65535  # JPEG hard pixel limit per dimension
 
     try:
         import pyvips
@@ -4334,8 +4355,8 @@ def _convert_to_webp(full_path: str, cache_key: str, lossy: bool) -> bool:
         # usage for giant TIFFs or RAW files.
         img = pyvips.Image.new_from_file(full_path, access="sequential")
 
-        exceeds_webp  = img.width > _WEBP_MAX_DIM or img.height > _WEBP_MAX_DIM
-        exceeds_jpeg  = img.width > _JPEG_MAX_DIM or img.height > _JPEG_MAX_DIM
+        exceeds_webp = img.width > _WEBP_MAX_DIM or img.height > _WEBP_MAX_DIM
+        exceeds_jpeg = img.width > _JPEG_MAX_DIM or img.height > _JPEG_MAX_DIM
         size_in = os.path.getsize(full_path)
 
         if exceeds_jpeg:
@@ -4363,7 +4384,9 @@ def _convert_to_webp(full_path: str, cache_key: str, lossy: bool) -> bool:
             out_path = _img_cached_path(cache_key)
             tmp_path = out_path + ".tmp"
             if lossy:
-                img.webpsave(tmp_path, Q=IMG_WEBP_QUALITY, lossless=False, strip=False, effort=6)
+                img.webpsave(
+                    tmp_path, Q=IMG_WEBP_QUALITY, lossless=False, strip=False, effort=6
+                )
             else:
                 img.webpsave(tmp_path, lossless=True, strip=False, effort=6)
             os.replace(tmp_path, out_path)
@@ -4496,11 +4519,16 @@ def image_preview(path):
         # frontend so it can show the same "requires processing" placeholder as
         # the HLS flow does for non-native video with ffmpeg disabled.
         if is_non_native and not ENABLE_LIBVIPS:
-            return jsonify({
-                "error": "libvips_disabled",
-                "reason": reason,
-                "ext": ext,
-            }), 503
+            return (
+                jsonify(
+                    {
+                        "error": "libvips_disabled",
+                        "reason": reason,
+                        "ext": ext,
+                    }
+                ),
+                503,
+            )
         directory = os.path.dirname(full_path)
         filename = os.path.basename(full_path)
         return send_from_directory(directory, filename, as_attachment=False)
