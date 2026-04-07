@@ -278,6 +278,7 @@ assembly_queue = AssemblyQueue()
 import mimetypes
 
 mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("text/javascript", ".mjs")
 
 app = Flask(__name__)
 CORS(app)
