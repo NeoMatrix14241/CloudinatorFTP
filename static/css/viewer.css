@@ -3094,7 +3094,7 @@
 @media (prefers-color-scheme: dark){
 
 :is(.annotationLayer,.annotationEditorLayer) .annotationCommentButton{
-    --csstools-color-scheme--light:;
+    --csstools-color-scheme--light:
   }
 }
 
@@ -3532,6 +3532,7 @@
               max-height:-moz-fit-content;
               max-height:fit-content;
               -webkit-line-clamp:unset;
+              line-clamp:unset;
             }
 
 .selected:is(:is(:is(#editorCommentsSidebar #editorCommentsSidebarListContainer) #editorCommentsSidebarList) .sidebarComment):not(.noComments) time::after{
@@ -3552,6 +3553,7 @@
           display:-webkit-box;
           -webkit-box-orient:vertical;
           -webkit-line-clamp:2;
+          line-clamp:2;
           overflow:hidden;
           overflow-wrap:break-word;
         }
@@ -3564,6 +3566,7 @@
             max-height:-moz-fit-content;
             max-height:fit-content;
             -webkit-line-clamp:unset;
+            line-clamp:unset;
             -webkit-user-select:none;
                -moz-user-select:none;
                     user-select:none;
@@ -3658,7 +3661,7 @@
 @media (prefers-color-scheme: dark){
 
 .commentPopup{
-  --csstools-color-scheme--light:;
+  --csstools-color-scheme--light:
 }
 }
 
@@ -7011,7 +7014,7 @@ button.hasPopupMenu[aria-expanded="false"] + menu{
 @media (prefers-color-scheme: dark){
 
 :root{
-  --csstools-color-scheme--light:;
+  --csstools-color-scheme--light:
 }
 }
 
@@ -7901,6 +7904,7 @@ body.wait::before{
 
 #pageNumber{
   -moz-appearance:textfield;
+  appearance:none;
   text-align:end;
   width:40px;
   background-size:0 0;
