@@ -74,16 +74,37 @@ def _connect() -> sqlite3.Connection:
 
 def _do_bootstrap(conn) -> bool:
     """
-    Create the files table.
-    Tries FTS5 trigram first (SQLite ≥ 3.34); falls back to a plain
-    indexed table if trigram is unavailable (e.g. older Termux builds).
-    Returns True if FTS5 trigram was used, False for plain table.
+    Create the search tables.
+
+    Always creates files_meta — a plain indexed table used for COUNT(*),
+    ext-filter queries, and the non-FTS fallback path.  Reliable, correct
+    SQL semantics with no FTS quirks.
+
+    Also tries to create the FTS5 trigram virtual table (SQLite >= 3.34)
+    for fast name-substring MATCH queries.  If unavailable, name search
+    falls back to LIKE on files_meta.
+
+    Returns True if FTS5 trigram is available, False otherwise.
     """
+    # files_meta: always present, plain SQL, ext/count queries go here
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS files_meta (
+            rel_path   TEXT PRIMARY KEY,
+            name_lower TEXT NOT NULL,
+            ext_lower  TEXT NOT NULL DEFAULT \'\',
+            is_dir     INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_meta_ext_lower
+            ON files_meta(ext_lower, is_dir);
+        CREATE INDEX IF NOT EXISTS idx_meta_name_lower
+            ON files_meta(name_lower);
+    """)
+
     use_fts = False
     try:
         conn.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS _fts_probe "
-            "USING fts5(x, tokenize='trigram')"
+            "USING fts5(x, tokenize=\'trigram\')"
         )
         conn.execute("DROP TABLE IF EXISTS _fts_probe")
         use_fts = True
@@ -97,18 +118,19 @@ def _do_bootstrap(conn) -> bool:
                 rel_path,
                 is_dir,
                 parent_rel,
-                tokenize='trigram'
+                tokenize=\'trigram\'
             );
         """)
-        print("✅ Search index: FTS5 trigram mode (fast substring search)")
+        print("✅ Search index: FTS5 trigram + files_meta (fast name search + exact counts)")
     else:
+        # No FTS5 — files_meta handles everything via LIKE
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS files (
                 rel_path   TEXT PRIMARY KEY,
                 name       TEXT NOT NULL,
                 name_lower TEXT NOT NULL,
                 is_dir     INTEGER NOT NULL DEFAULT 0,
-                parent_rel TEXT NOT NULL DEFAULT ''
+                parent_rel TEXT NOT NULL DEFAULT \'\'
             );
             CREATE INDEX IF NOT EXISTS idx_files_name_lower
                 ON files(name_lower);
@@ -151,53 +173,66 @@ class SearchIndexManager:
     # Internal write helpers
     # ------------------------------------------------------------------
 
-    def _rows_for_batch(self, entries: list) -> list:
+    def _rows_for_batch(self, entries: list) -> tuple:
         """
-        Convert a list of (rel_path, name, is_dir) tuples into DB row tuples.
-        Returns rows ready for executemany — format depends on _use_fts.
+        Convert a list of (rel_path, name, is_dir) tuples into two row lists:
+          fts_rows  — for the FTS5/plain files table
+          meta_rows — for files_meta (always populated, used for COUNT/ext queries)
         """
-        rows = []
+        fts_rows = []
+        meta_rows = []
         for rel_path, name, is_dir in entries:
             rel_path = rel_path.replace("\\", "/")
             parent_rel = rel_path.rsplit("/", 1)[0] if "/" in rel_path else ""
+            _, _ext = os.path.splitext(name)
+            ext_lower = _ext.lstrip(".").lower()
+            name_lower = name.lower()
             if _use_fts:
-                rows.append((name, rel_path, "1" if is_dir else "0", parent_rel))
+                fts_rows.append((name, rel_path, "1" if is_dir else "0", parent_rel))
             else:
-                rows.append((rel_path, name, name.lower(), 1 if is_dir else 0, parent_rel))
-        return rows
+                fts_rows.append((rel_path, name, name_lower, 1 if is_dir else 0, parent_rel))
+            meta_rows.append((rel_path, name_lower, ext_lower, 1 if is_dir else 0))
+        return fts_rows, meta_rows
 
     def _batch_insert(self, conn, entries: list):
         """
-        Bulk-insert a batch of (rel_path, name, is_dir) tuples.
+        Bulk-insert a batch of (rel_path, name, is_dir) tuples into both tables.
         Called from the crawler — conn is already open, no extra locking needed.
         """
         if not entries:
             return
-        rows = self._rows_for_batch(entries)
+        fts_rows, meta_rows = self._rows_for_batch(entries)
         if _use_fts:
             conn.executemany(
                 "INSERT INTO files(name, rel_path, is_dir, parent_rel) VALUES (?,?,?,?)",
-                rows,
+                fts_rows,
             )
         else:
             conn.executemany(
                 "INSERT OR IGNORE INTO files"
                 "(rel_path, name, name_lower, is_dir, parent_rel) VALUES (?,?,?,?,?)",
-                rows,
+                fts_rows,
             )
+        conn.executemany(
+            "INSERT OR IGNORE INTO files_meta(rel_path, name_lower, ext_lower, is_dir)"
+            " VALUES (?,?,?,?)",
+            meta_rows,
+        )
 
     # ------------------------------------------------------------------
     # Public write API — called from file_monitor watchdog hooks
     # ------------------------------------------------------------------
 
     def add(self, rel_path: str, name: str, is_dir: bool):
-        """Insert or replace a single entry (file or folder)."""
+        """Insert or replace a single entry in both files and files_meta."""
         rel_path = rel_path.replace("\\", "/")
         parent_rel = rel_path.rsplit("/", 1)[0] if "/" in rel_path else ""
+        _, _ext = os.path.splitext(name)
+        ext_lower = _ext.lstrip(".").lower()
+        name_lower = name.lower()
         try:
             with _write_lock, _connect() as conn:
                 if _use_fts:
-                    # FTS5 virtual tables have no REPLACE — delete then insert
                     conn.execute("DELETE FROM files WHERE rel_path = ?", (rel_path,))
                     conn.execute(
                         "INSERT INTO files(name, rel_path, is_dir, parent_rel) "
@@ -209,28 +244,37 @@ class SearchIndexManager:
                         "INSERT OR REPLACE INTO files"
                         "(rel_path, name, name_lower, is_dir, parent_rel) "
                         "VALUES (?,?,?,?,?)",
-                        (rel_path, name, name.lower(), 1 if is_dir else 0, parent_rel),
+                        (rel_path, name, name_lower, 1 if is_dir else 0, parent_rel),
                     )
+                conn.execute(
+                    "INSERT OR REPLACE INTO files_meta"
+                    "(rel_path, name_lower, ext_lower, is_dir) VALUES (?,?,?,?)",
+                    (rel_path, name_lower, ext_lower, 1 if is_dir else 0),
+                )
         except Exception as e:
             print(f"⚠️  Search index add error for '{rel_path}': {e}")
 
     def remove(self, rel_path: str):
-        """Remove a single entry."""
+        """Remove a single entry from both tables."""
         rel_path = rel_path.replace("\\", "/")
         try:
             with _write_lock, _connect() as conn:
                 conn.execute("DELETE FROM files WHERE rel_path = ?", (rel_path,))
+                conn.execute("DELETE FROM files_meta WHERE rel_path = ?", (rel_path,))
         except Exception as e:
             print(f"⚠️  Search index remove error for '{rel_path}': {e}")
 
     def remove_tree(self, rel_path_prefix: str):
-        """Remove a folder and every path beneath it."""
+        """Remove a folder and every path beneath it from both tables."""
         rel_path_prefix = rel_path_prefix.replace("\\", "/")
         try:
             with _write_lock, _connect() as conn:
+                args = (rel_path_prefix, rel_path_prefix + "/%")
                 conn.execute(
-                    "DELETE FROM files WHERE rel_path = ? OR rel_path LIKE ?",
-                    (rel_path_prefix, rel_path_prefix + "/%"),
+                    "DELETE FROM files WHERE rel_path = ? OR rel_path LIKE ?", args
+                )
+                conn.execute(
+                    "DELETE FROM files_meta WHERE rel_path = ? OR rel_path LIKE ?", args
                 )
         except Exception as e:
             print(f"⚠️  Search index remove_tree error for '{rel_path_prefix}': {e}")
@@ -270,12 +314,111 @@ class SearchIndexManager:
 
                 self._batch_insert(conn, new_entries)
 
+                # Migrate files_meta in one shot
+                meta_rows_old = conn.execute(
+                    "SELECT rel_path, name_lower, ext_lower, is_dir FROM files_meta "
+                    "WHERE rel_path = ? OR rel_path LIKE ?",
+                    (old_prefix, old_prefix + "/%"),
+                ).fetchall()
+                if meta_rows_old:
+                    conn.execute(
+                        "DELETE FROM files_meta WHERE rel_path = ? OR rel_path LIKE ?",
+                        (old_prefix, old_prefix + "/%"),
+                    )
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO files_meta"
+                        "(rel_path, name_lower, ext_lower, is_dir) VALUES (?,?,?,?)",
+                        [
+                            (new_prefix + r["rel_path"][len(old_prefix):],
+                             r["name_lower"], r["ext_lower"], r["is_dir"])
+                            for r in meta_rows_old
+                        ],
+                    )
+
         except Exception as e:
             print(f"⚠️  Search index rename_tree error '{old_prefix}'→'{new_prefix}': {e}")
 
     # ------------------------------------------------------------------
     # Public read API
     # ------------------------------------------------------------------
+
+    def count(self, query: str, ext_filter: list = None) -> int:
+        """
+        Return the exact total number of matching entries.
+        Always queries files_meta — a plain indexed table with correct SQL
+        semantics, no FTS quirks.  Sub-millisecond on indexed columns.
+        Returns -1 if the index isn't ready yet.
+        """
+        if not self._ready:
+            return -1
+        try:
+            query_lower = query.lower()
+            ext_list = [e.lstrip(".").lower() for e in (ext_filter or []) if e]
+            clauses: list = []
+            params: list = []
+            if query_lower:
+                clauses.append("name_lower LIKE ?")
+                params.append(f"%{query_lower}%")
+            if ext_list:
+                ext_sql = " OR ".join("ext_lower = ?" for _ in ext_list)
+                clauses.append(f"({ext_sql})")
+                params.extend(ext_list)
+                clauses.append("is_dir = 0")
+            where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+            with _connect() as conn:
+                row = conn.execute(
+                    f"SELECT COUNT(*) AS c FROM files_meta {where}", params
+                ).fetchone()
+            return row["c"] if row else 0
+        except Exception as e:
+            print(f"⚠️  Search index count error: {e}")
+            return -1
+        try:
+            query_lower = query.lower()
+            ext_list = [e.lstrip(".").lower() for e in (ext_filter or []) if e]
+            with _connect() as conn:
+                if _use_fts:
+                    clauses: list = []
+                    params: list = []
+                    if query_lower:
+                        safe = '"' + query_lower.replace('"', '""') + '"'
+                        clauses.append("files MATCH ?")
+                        params.append(safe)
+                        if ext_list:
+                            ext_likes = " OR ".join("name LIKE ?" for _ in ext_list)
+                            clauses.append(f"({ext_likes})")
+                            params.extend(f"%.{e}" for e in ext_list)
+                            clauses.append("is_dir = '0'")
+                    else:
+                        if ext_list:
+                            ext_likes = " OR ".join("name LIKE ?" for _ in ext_list)
+                            clauses.append(f"({ext_likes})")
+                            params.extend(f"%.{e}" for e in ext_list)
+                            clauses.append("is_dir = '0'")
+                    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+                    row = conn.execute(
+                        f"SELECT COUNT(*) AS c FROM files {where}", params
+                    ).fetchone()
+                else:
+                    clauses = []
+                    params = []
+                    if query_lower:
+                        clauses.append("name_lower LIKE ?")
+                        params.append(f"%{query_lower}%")
+                    if ext_list:
+                        ext_sql = " OR ".join("name_lower LIKE ?" for _ in ext_list)
+                        clauses.append(f"({ext_sql})")
+                        params.extend(f"%.{e}" for e in ext_list)
+                        clauses.append("is_dir = 0")
+                    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+                    row = conn.execute(
+                        f"SELECT COUNT(*) AS c FROM files {where}", params
+                    ).fetchone()
+            return row["c"] if row else 0
+        except Exception as e:
+            print(f"⚠️  Search index count error: {e}")
+            return -1
+
 
     def search(self, query: str, ext_filter: list = None,
                limit: int = 500, offset: int = 0) -> tuple:
@@ -299,55 +442,70 @@ class SearchIndexManager:
 
     def _db_search(self, query: str, ext_filter: list,
                    limit: int, offset: int) -> tuple:
+        """
+        Three strategies, each using the right table for the job:
+
+        A) Name + ext   -> FTS5 MATCH on `files` JOIN files_meta for ext (exact index)
+        B) Name only    -> FTS5 MATCH on `files`, no ext filter
+        C) Ext only     -> files_meta ext_lower IN (...) — exact indexed column, always correct
+
+        Plain-table mode: files_meta handles everything via LIKE + ext_lower.
+        """
         query_lower = query.lower()
         ext_list = [e.lstrip(".").lower() for e in (ext_filter or []) if e]
-
-        # Fetch limit+1 to detect whether a next page exists.
-        fetch = limit + 1
+        fetch = limit + 1  # fetch limit+1 to detect has_more
 
         with _connect() as conn:
             if _use_fts:
-                # FTS5 trigram — match by name, then post-filter by ext in Python.
-                # For pagination with ext-filtering we overfetch from the DB
-                # (offset+fetch)*20 rows, apply the Python ext filter, then slice.
-                clauses = []
-                params: list = []
-                if query_lower:
+                if query_lower and ext_list:
+                    # Strategy A: MATCH + ext exact match via files_meta JOIN
                     safe = '"' + query_lower.replace('"', '""') + '"'
-                    clauses.append("files MATCH ?")
-                    params.append(safe)
-                if ext_list:
-                    clauses.append("is_dir = '0'")
-                where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-                overfetch = (offset + fetch) * (20 if ext_list else 1)
-                raw_rows = conn.execute(
-                    f"SELECT name, rel_path, is_dir FROM files {where} LIMIT ?",
-                    params + [overfetch],
-                ).fetchall()
+                    ext_ph = ",".join("?" for _ in ext_list)
+                    rows = conn.execute(
+                        "SELECT f.name, f.rel_path, f.is_dir FROM files f "
+                        "JOIN files_meta m ON m.rel_path = f.rel_path "
+                        "WHERE f.files MATCH ? "
+                        f"AND m.ext_lower IN ({ext_ph}) "
+                        "AND m.is_dir = 0 "
+                        "LIMIT ? OFFSET ?",
+                        [safe] + ext_list + [fetch, offset],
+                    ).fetchall()
 
-                if ext_list:
-                    raw_rows = [
-                        r for r in raw_rows
-                        if os.path.splitext(r["name"])[1].lstrip(".").lower() in ext_list
-                    ]
-                rows = raw_rows[offset: offset + fetch]
+                elif query_lower:
+                    # Strategy B: MATCH only
+                    safe = '"' + query_lower.replace('"', '""') + '"'
+                    rows = conn.execute(
+                        "SELECT name, rel_path, is_dir FROM files "
+                        "WHERE files MATCH ? LIMIT ? OFFSET ?",
+                        [safe, fetch, offset],
+                    ).fetchall()
+
+                else:
+                    # Strategy C: ext-only via files_meta — always correct, indexed
+                    ext_ph = ",".join("?" for _ in ext_list)
+                    rows = conn.execute(
+                        "SELECT rel_path, is_dir FROM files_meta "
+                        f"WHERE ext_lower IN ({ext_ph}) AND is_dir = 0 "
+                        "LIMIT ? OFFSET ?",
+                        ext_list + [fetch, offset],
+                    ).fetchall()
 
             else:
-                # Plain table — push offset/limit into SQL directly.
-                clauses = []
-                params = []
+                # Plain table — files_meta handles everything
+                clauses: list = []
+                params: list = []
                 if query_lower:
                     clauses.append("name_lower LIKE ?")
                     params.append(f"%{query_lower}%")
                 if ext_list:
-                    ext_sql = " OR ".join("name_lower LIKE ?" for _ in ext_list)
-                    clauses.append(f"({ext_sql})")
-                    params.extend(f"%.{e}" for e in ext_list)
+                    ext_ph = ",".join("?" for _ in ext_list)
+                    clauses.append(f"ext_lower IN ({ext_ph})")
+                    params.extend(ext_list)
                     clauses.append("is_dir = 0")
                 where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
                 params += [fetch, offset]
                 rows = conn.execute(
-                    f"SELECT name, rel_path, is_dir FROM files {where} "
+                    f"SELECT rel_path, is_dir FROM files_meta {where} "
                     f"LIMIT ? OFFSET ?",
                     params,
                 ).fetchall()
@@ -356,19 +514,19 @@ class SearchIndexManager:
         if has_more:
             rows = rows[:limit]
 
-        # Resolve stat for each matched row — only hits matched files, not the whole tree
         results = []
         for row in rows:
-            name     = row["name"]
             rel_path = row["rel_path"]
-            is_dir   = str(row["is_dir"]) == "1" if _use_fts else bool(row["is_dir"])
+            name = rel_path.rsplit("/", 1)[-1] if "/" in rel_path else rel_path
+            is_dir_val = row["is_dir"]
+            is_dir = (str(is_dir_val) == "1") if isinstance(is_dir_val, str) else bool(is_dir_val)
             full_path = os.path.join(ROOT_DIR, rel_path)
             try:
                 st = os.stat(full_path)
                 size     = 0 if is_dir else st.st_size
                 modified = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
             except OSError:
-                continue  # deleted since last index update — skip silently
+                continue
             _, ext = os.path.splitext(name)
             file_type = "folder" if is_dir else (ext[1:].upper() if ext else "FILE")
             results.append({
@@ -382,6 +540,7 @@ class SearchIndexManager:
             })
 
         return results, has_more
+
 
     def _walk_fallback(self, query: str, ext_filter: list = None,
                        limit: int = 500, offset: int = 0) -> tuple:
@@ -488,21 +647,48 @@ class SearchIndexManager:
             with _connect():
                 pass
 
-            # If DB already has data (restart case), mark ready and return
+            # Decide whether we need a fresh crawl.
+            #
+            # files_meta is the authoritative table — it always reflects the
+            # filesystem.  We NEVER backfill it from the FTS5 table because the
+            # FTS5 table may itself be incomplete (the bug that caused wrong counts).
+            # The filesystem is always the ground truth.
+            #
+            # Restart cases:
+            #   A) files_meta populated and matches files  → ready, skip crawl
+            #   B) files_meta empty / behind               → fresh crawl (rebuilds both)
+            #   C) files empty (brand new DB)              → fresh crawl
             with _connect() as conn:
-                row = conn.execute("SELECT COUNT(*) AS c FROM files").fetchone()
-                existing = row["c"] if row else 0
+                fts_count  = conn.execute("SELECT COUNT(*) AS c FROM files").fetchone()["c"]
+                meta_count = conn.execute("SELECT COUNT(*) AS c FROM files_meta").fetchone()["c"]
 
-            if existing > 0:
+            # Case A: both tables populated and in sync → ready immediately
+            if fts_count > 0 and meta_count > 0 and meta_count >= fts_count * 0.95:
                 elapsed = time.time() - start
                 print(
-                    f"✅ Search index: existing DB loaded "
-                    f"({existing:,} entries, {elapsed:.1f}s)"
+                    f"✅ Search index: loaded from disk "
+                    f"(files={fts_count:,}  meta={meta_count:,}, {elapsed:.1f}s)"
                 )
                 self._ready = True
                 return
 
-            # Fresh crawl — walk ROOT_DIR
+            # Case B / C: crawl the filesystem — single source of truth
+            if meta_count < fts_count * 0.95:
+                print(
+                    f"🔄 Search index: files_meta incomplete "
+                    f"({meta_count:,} vs {fts_count:,}) — rebuilding from filesystem"
+                )
+            else:
+                print("🔍 Search index: fresh crawl starting…")
+
+            # Wipe both tables so we start clean (avoids stale partial data)
+            with _write_lock, _connect() as conn:
+                if _use_fts:
+                    conn.execute("DELETE FROM files")
+                else:
+                    conn.execute("DELETE FROM files")
+                conn.execute("DELETE FROM files_meta")
+
             dir_count  = 0
             file_count = 0
 
@@ -520,7 +706,7 @@ class SearchIndexManager:
 
                 batch = []
 
-                # The directory itself (skip root — it has no name to search by)
+                # The directory itself (skip root — no name to search)
                 if rel_root:
                     batch.append((rel_root, os.path.basename(root), True))
                     dir_count += 1
@@ -529,25 +715,34 @@ class SearchIndexManager:
                 for fname in files:
                     if fname.startswith("."):
                         continue
-                    frel = (
-                        (rel_root + "/" + fname) if rel_root else fname
-                    )
+                    frel = (rel_root + "/" + fname) if rel_root else fname
                     batch.append((frel, fname, False))
                     file_count += 1
 
                 if batch:
-                    with _write_lock, _connect() as conn:
-                        self._batch_insert(conn, batch)
+                    try:
+                        with _write_lock, _connect() as conn:
+                            self._batch_insert(conn, batch)
+                    except Exception as be:
+                        # Batch failed (e.g. encoding issue in one filename).
+                        # Fall back to entry-by-entry so one bad file never
+                        # silently drops the whole directory.
+                        print(f"⚠️  Search index batch error in '{rel_root}': {be} — retrying entry-by-entry")
+                        for entry in batch:
+                            try:
+                                with _write_lock, _connect() as conn:
+                                    self._batch_insert(conn, [entry])
+                            except Exception:
+                                pass  # skip truly unindexable entries
 
-                # Progress every 5 000 directories
+                # Progress log every 5 000 directories
                 if dir_count > 0 and dir_count % 5000 == 0:
                     print(
                         f"🔍 Search index: {dir_count:,} dirs, "
-                        f"{file_count:,} files indexed so far…"
+                        f"{file_count:,} files indexed…"
                     )
 
-                # Yield — 10 ms sleep keeps this from saturating disk I/O
-                time.sleep(0.01)
+                time.sleep(0.01)  # yield — prevents I/O saturation
 
             elapsed = time.time() - start
             print(

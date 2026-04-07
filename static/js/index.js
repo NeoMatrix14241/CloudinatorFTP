@@ -610,9 +610,7 @@ function _dsFetchNextPage() {
 
 function _dsUpdateCount() {
     updateVisibleCount(_dsRendered);
-    // Update the header count badge live
-    const badge = document.querySelector('#searchResultsHeader .search-count');
-    if (badge) badge.textContent = `${_dsRendered}${_dsHasMore || _dsResults.length ? '+' : ''} items found`;
+    // Header count badge is set once from total_count on first page — don't overwrite it
 }
 
 // ── *.ext query parser ────────────────────────────────────────────────────────
@@ -699,7 +697,6 @@ function removeHighlights(row) {
     });
 }
 
-// Deep search helper functions
 function displayDeepSearchResults(data, searchTerm, exts) {
     if (!data.results || data.results.length === 0) {
         const label = exts && exts.length
@@ -710,27 +707,23 @@ function displayDeepSearchResults(data, searchTerm, exts) {
         return;
     }
 
-    // Clear any existing search results FIRST to prevent duplicates
     hideDeepSearchResults();
     hideLocalResults();
 
-    // Seed pagination state from first-page response
     _dsResults    = data.results;
     _dsHasMore    = data.has_more || false;
-    _dsOffset     = data.results.length;  // next fetch starts here
+    _dsOffset     = data.results.length;
     _dsRendered   = 0;
     _dsSearchTerm = searchTerm;
 
-    // Mark VT engine so it won't clobber the tbody
     isSearchResultsDisplayed = true;
     VT.markSearchResults();
 
-    // Insert results header above the table
+    // Pass exact total_count to header so it shows immediately
     const table = document.getElementById('filesTable');
     const searchHeader = createSearchResultsHeaderDiv(data, exts);
     table.parentNode.insertBefore(searchHeader, table);
 
-    // Render first chunk from the local buffer
     const tbody = table.querySelector('tbody');
     const end = Math.min(_DS_CHUNK, _dsResults.length);
     const batch = _dsResults.splice(0, end);
@@ -739,14 +732,14 @@ function displayDeepSearchResults(data, searchTerm, exts) {
 
     _dsUpdateCount();
 
-    // Attach sentinel if local buffer still has rows OR server has more pages
     if (_dsResults.length > 0 || _dsHasMore) {
         _dsAttachSentinel();
     }
 
     const extLabel = exts && exts.length ? ` [*.${exts.join(', *.')}]` : '';
+    const totalLabel = data.total_count != null ? data.total_count.toLocaleString() : data.results.length;
     showNotification(
-        `Found results${extLabel} — scroll to load more (${data.search_time}s)`,
+        `Found ${totalLabel} results${extLabel} (${data.search_time}s)`,
         'SUCCESS'
     );
 }
@@ -760,12 +753,18 @@ function createSearchResultsHeaderDiv(data, exts) {
         ? `<span class="search-ext-badge">*.${exts.join(' *.')}</span>`
         : '';
 
+    // Show exact total immediately if the index provided it;
+    // fall back to page count with '+' if not (e.g. index still building).
+    const countLabel = data.total_count != null
+        ? data.total_count.toLocaleString()
+        : `${data.results.length}${data.has_more ? '+' : ''}`;
+
     headerDiv.innerHTML = `
         <div class="search-header-content">
             <div class="search-header-main">
                 <i class="fas fa-search-plus"></i>
                 <span class="search-title">Deep Search Results</span>
-                <span class="search-count">${data.results.length}${data.has_more ? '+' : ''} items found</span>
+                <span class="search-count">${countLabel} items found</span>
                 ${extBadge}
             </div>
             <div class="search-header-meta">

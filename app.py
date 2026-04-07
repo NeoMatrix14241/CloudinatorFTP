@@ -2600,6 +2600,14 @@ def search_files():
     try:
         search_start = time.time()
 
+        # Exact total — single COUNT(*), essentially free on the indexed DB.
+        # Only on offset=0 (first page) to avoid repeating it on every scroll page.
+        total_count = None
+        if offset == 0 and ENABLE_SEARCH_INDEX:
+            c = search_index_manager.count(query, ext_filter=ext_filter)
+            if c >= 0:          # -1 means index not ready yet
+                total_count = c
+
         if ENABLE_SEARCH_INDEX:
             results, from_index, has_more = search_index_manager.search(
                 query, ext_filter=ext_filter, limit=limit, offset=offset
@@ -2617,6 +2625,7 @@ def search_files():
             "query":       query,
             "ext_filter":  ext_filter,
             "total_found": len(results),
+            "total_count": total_count,   # exact grand total (first page only)
             "offset":      offset,
             "limit":       limit,
             "has_more":    has_more,
