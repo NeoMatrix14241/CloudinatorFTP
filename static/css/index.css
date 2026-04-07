@@ -3909,6 +3909,7 @@ td .fa-file {
 #fileViewerModal .file-viewer-modal-content {
     max-width: 900px;
     width: 94vw;
+    height: calc(100dvh - 40px);
     max-height: calc(100dvh - 40px);
     display: flex;
     flex-direction: column;
@@ -4051,6 +4052,7 @@ td .fa-file {
 
 /* PDF iframe */
 .file-viewer-body.viewer-pdf {
+    position: relative;
     padding: 0;
     background: #525659;
     align-items: stretch;
@@ -5229,6 +5231,7 @@ td .fa-file {
 @media (max-height: 740px),
 (max-width: 414px) {
     #fileViewerModal .file-viewer-modal-content {
+        height: calc(100dvh - 12px);
         max-height: calc(100dvh - 12px);
         width: 98vw;
     }

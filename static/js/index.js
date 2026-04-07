@@ -3446,7 +3446,7 @@ function openFileViewer(itemPath, filename) {
             const _pdfViewerUrl = '/pdfviewer?file=' + encodeURIComponent(viewUrl);
             body.innerHTML = `<iframe
                 src="${_pdfViewerUrl}"
-                style="width:100%;height:100%;border:none;display:block;"
+                style="position:absolute;inset:0;width:100%;height:100%;border:none;display:block;"
                 allowfullscreen>
             </iframe>`;
             inner = '';
