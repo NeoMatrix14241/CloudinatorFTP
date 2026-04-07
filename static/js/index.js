@@ -3441,23 +3441,14 @@ function openFileViewer(itemPath, filename) {
             break;
         case 'pdf': {
             body.classList.add('viewer-pdf');
-            body.innerHTML = `
-                <div class="viewer-pdfjs-wrap">
-                    <div class="viewer-pdfjs-controls">
-                        <span id="pdf-page-info">Loading…</span>
-                        <div class="viewer-pdfjs-zoom">
-                            <button class="viewer-pdfjs-btn" onclick="pdfZoomOut()" title="Zoom out"><i class="fas fa-search-minus"></i></button>
-                            <span id="pdf-zoom-level">100%</span>
-                            <button class="viewer-pdfjs-btn" onclick="pdfZoomIn()" title="Zoom in"><i class="fas fa-search-plus"></i></button>
-                            <button class="viewer-pdfjs-btn" onclick="pdfZoomReset()" title="Fit width"><i class="fas fa-expand-arrows-alt"></i></button>
-                        </div>
-                    </div>
-                    <div id="pdf-pages" class="viewer-pdfjs-pages">
-                        <div id="pdf-loading" class="viewer-pdfjs-loading"><i class="fas fa-circle-notch fa-spin"></i> Loading PDF…</div>
-                    </div>
-                </div>`;
-            _loadPdfJs(() => _renderPdfJs(viewUrl));
-            _pdfAttachPinchZoom(body);
+            // Use the official pdf.js viewer (web/viewer.html) via iframe —
+            // gives the full toolbar, thumbnails, search, print, etc. for free.
+            const _pdfViewerUrl = '/pdfviewer?file=' + encodeURIComponent(viewUrl);
+            body.innerHTML = `<iframe
+                src="${_pdfViewerUrl}"
+                style="width:100%;height:100%;border:none;display:block;"
+                allowfullscreen>
+            </iframe>`;
             inner = '';
             break;
         }
@@ -3690,9 +3681,19 @@ function closeFileViewer() {
 
 const _pdfState = { doc: null, scale: 1, baseScale: 1, rendering: false };
 
-function _loadPdfJs(cb) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/js/pdf.worker.min.js';
-    cb();
+// Lazily loaded PDF.js v5 ESM module reference
+let _pdfjsLib = null;
+let _pdfjsLoadPromise = null;
+
+function _loadPdfJs() {
+    if (_pdfjsLib) return Promise.resolve(_pdfjsLib);
+    if (_pdfjsLoadPromise) return _pdfjsLoadPromise;
+    _pdfjsLoadPromise = new Function('return import("/static/js/pdf.mjs")')().then(lib => {
+        _pdfjsLib = lib;
+        _pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/js/pdf.worker.mjs';
+        return lib;
+    });
+    return _pdfjsLoadPromise;
 }
 
 function _renderPdfJs(url) {
@@ -3705,7 +3706,7 @@ function _renderPdfJs(url) {
     // non-standard font encodings (CJK, Symbol, custom encodings, etc.).
     // Requires the cmaps/ folder to be served at /static/js/cmaps/.
     // standardFontDataUrl covers the 14 standard PDF fonts for correct rendering.
-    pdfjsLib.getDocument({
+    _pdfjsLib.getDocument({
         url,
         cMapUrl: '/static/js/cmaps/',
         cMapPacked: true,
@@ -3821,26 +3822,21 @@ function _renderSinglePage(pageNum, canvas, textLayer) {
                 textLayer.style.height = viewport.height + 'px';
                 // --scale-factor must be the logical scale (not DPR-multiplied)
                 textLayer.style.setProperty('--scale-factor', String(_pdfState.scale));
-                page.getTextContent().then(textContent => {
-                    if (canvas._pdfGen !== gen) return;
-                    // Cancel any previous task that may have snuck through
-                    if (textLayer._pdfRenderTask) {
-                        try { textLayer._pdfRenderTask.cancel(); } catch (_) { }
-                    }
-                    const task = pdfjsLib.renderTextLayer({
-                        textContentSource: textContent,
-                        container: textLayer,
-                        viewport: viewport,
-                        textDivs: [],
-                    });
-                    textLayer._pdfRenderTask = task;
-                    // Clear the reference when done so we don't cancel a finished task
-                    if (task && task.promise) {
-                        task.promise.then(() => {
-                            if (textLayer._pdfRenderTask === task) textLayer._pdfRenderTask = null;
-                        }).catch(() => { });
-                    }
+                // renderTextLayer removed in pdf.js v4; use TextLayer class instead
+                if (canvas._pdfGen !== gen) return;
+                if (textLayer._pdfRenderTask) {
+                    try { textLayer._pdfRenderTask.cancel(); } catch (_) { }
+                    textLayer._pdfRenderTask = null;
+                }
+                const tl = new _pdfjsLib.TextLayer({
+                    textContentSource: page.streamTextContent(),
+                    container: textLayer,
+                    viewport: viewport,
                 });
+                textLayer._pdfRenderTask = tl;
+                tl.render().then(() => {
+                    if (textLayer._pdfRenderTask === tl) textLayer._pdfRenderTask = null;
+                }).catch(() => { });
             }
 
             const pagesEl = document.getElementById('pdf-pages');

@@ -901,6 +901,12 @@ def view_file(path):
     return send_from_directory(directory, filename, as_attachment=False)
 
 
+@app.route("/pdfviewer")
+@login_required
+def pdf_viewer():
+    return render_template("viewer.html")
+
+
 @app.route("/office_preview/<path:path>")
 @login_required
 def office_preview(path):
