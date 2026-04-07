@@ -314,7 +314,6 @@ body {
     min-height: 150px;
     overflow-y: auto;
     overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
 }
 
 /* Sticky header inside scroll wrapper */
@@ -857,6 +856,7 @@ i.fa-file {
     gap: 4px;
     margin: 0;
     cursor: pointer;
+    -webkit-user-select: none;
     user-select: none;
 }
 
@@ -3679,6 +3679,7 @@ td .fa-file {
 }
 
 .sortable {
+    -webkit-user-select: none;
     user-select: none;
     position: relative;
     white-space: nowrap;
@@ -3808,7 +3809,6 @@ td .fa-file {
         justify-content: flex-start !important;
         align-items: center !important;
         overflow-x: auto !important;
-        -webkit-overflow-scrolling: touch !important;
         padding-bottom: 4px !important;
     }
 
@@ -3913,8 +3913,8 @@ td .fa-file {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    border-radius: 0 !important;
     -webkit-border-radius: 0 !important;
+    border-radius: 0 !important;
     padding: 0;
 }
 
@@ -3979,7 +3979,9 @@ td .fa-file {
 }
 
 @keyframes img-conv-spin {
-    to { transform: rotate(360deg); }
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .img-conv-label {
@@ -4165,6 +4167,7 @@ td .fa-file {
     line-height: 1;
     pointer-events: auto;
     -webkit-text-size-adjust: none;
+    text-size-adjust: none;
     forced-color-adjust: none;
     transform-origin: 0 0;
     z-index: 2;
@@ -4636,6 +4639,7 @@ td .fa-file {
     font-size: 13px;
     color: rgba(255, 255, 255, 0.82);
     transition: background 0.12s;
+    -webkit-user-select: none;
     user-select: none;
     min-height: 28px;
 }
@@ -4961,8 +4965,8 @@ td .fa-file {
     background: #0d1e3d;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
-    user-select: none;
     -webkit-user-select: none;
+    user-select: none;
 }
 
 /* video element — let Video.js control its own styling */
