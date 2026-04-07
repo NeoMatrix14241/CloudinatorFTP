@@ -24,6 +24,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from config import ROOT_DIR
 from file_index import file_index_manager
+from search_index import search_index_manager
 
 # Cache dir resolved via paths.py — created by ensure_dirs() at server startup.
 from paths import get_cache_dir
@@ -224,6 +225,10 @@ class InstantFileEventHandler(FileSystemEventHandler):
         if event.is_directory:
             file_index_manager.update_folder(src_rel, event.src_path)
 
+        # --- search index: add the new entry ---
+        _entry_name = os.path.basename(event.src_path)
+        search_index_manager.add(src_rel, _entry_name, event.is_directory)
+
         # Auto-arm settle if this looks like a bulk copy from outside the web UI
         if not event.is_directory:
             self._check_burst()
@@ -318,6 +323,12 @@ class InstantFileEventHandler(FileSystemEventHandler):
             _parent_rel = _rel(_parent_abs, str(self.monitor.root_path))
             file_index_manager.update_folder(_parent_rel, _parent_abs)
 
+        # --- search index: remove the deleted entry ---
+        if event.is_directory:
+            search_index_manager.remove_tree(src_rel)
+        else:
+            search_index_manager.remove(src_rel)
+
         self._schedule_notify()
 
     def on_moved(self, event):
@@ -411,6 +422,14 @@ class InstantFileEventHandler(FileSystemEventHandler):
             file_index_manager.update_folder(_src_parent_rel, _src_parent_abs)
             if _src_parent_rel != _dest_parent_rel:
                 file_index_manager.update_folder(_dest_parent_rel, _dest_parent_abs)
+
+        # --- search index: rename the moved entry or tree ---
+        _dest_name = os.path.basename(event.dest_path)
+        if event.is_directory:
+            search_index_manager.rename_tree(src_rel, dest_rel)
+        else:
+            search_index_manager.remove(src_rel)
+            search_index_manager.add(dest_rel, _dest_name, False)
 
         self._schedule_notify()
 

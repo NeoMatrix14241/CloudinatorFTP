@@ -29,6 +29,7 @@ HLS_FORCE_FORMATS = {"mkv", "avi", "wmv", "flv", "mpg", "mpeg", "m2ts", "mts", "
 #                                           for formats that cannot be displayed raw.
 ENABLE_FFMPEG = True    # False → skip HLS transcoding entirely, use raw playback only
 ENABLE_LIBVIPS = True   # False → skip image conversion entirely, use raw serving only
+ENABLE_SEARCH_INDEX = True  # False → skip SQLite search index, always use os.walk fallback
 
 # Image preview / WebP compression configuration
 # Native images (jpg/png/gif/etc.) smaller than this are served raw with no conversion.

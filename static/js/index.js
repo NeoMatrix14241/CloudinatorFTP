@@ -497,24 +497,173 @@ function performLocalSearch(searchTerm) {
     console.log(`🔍 Local VT filter for "${searchTerm}"`);
 }
 
-// Deep search using API to scan nested folders
-function performDeepSearch(searchTerm) {
-    console.log(`🔍 Starting deep search for: "${searchTerm}"`);
+// ── Deep search pagination state ─────────────────────────────────────────────
+const _DS_CHUNK   = 80;      // rows to render per DOM batch (visual smoothness)
+const _DS_LIMIT   = 500;     // rows to fetch from server per API call
+let _dsResults    = [];      // buffer of fetched-but-not-yet-rendered rows
+let _dsRendered   = 0;       // total rows appended to tbody this session
+let _dsOffset     = 0;       // next API offset to request
+let _dsHasMore    = false;   // server says more rows exist beyond current offset
+let _dsFetching   = false;   // guard against concurrent fetches
+let _dsObserver   = null;
+let _dsQuery      = '';      // current query (for next-page requests)
+let _dsExts       = [];      // current ext filter
+let _dsSearchTerm = '';      // raw display term for highlight
 
-    // Show loading indicator
+function _dsDisconnectObserver() {
+    if (_dsObserver) { _dsObserver.disconnect(); _dsObserver = null; }
+}
+
+function _dsRemoveSentinel() {
+    const row = document.getElementById('dsSearchSentinelRow');
+    if (row) row.remove();
+}
+
+function _dsAttachSentinel() {
+    const tbody = document.querySelector('#filesTable tbody');
+    if (!tbody) return;
+    _dsRemoveSentinel();
+
+    const loadRow = document.createElement('tr');
+    loadRow.id = 'dsSearchSentinelRow';
+    loadRow.className = 'vt-loading-row';
+    loadRow.innerHTML = `<td colspan="6">
+        <span id="dsSearchSentinel" style="display:inline-block;height:1px;width:100%;"></span>
+        <i class="fas fa-circle-notch fa-spin" style="margin-right:6px;opacity:0.6;font-size:12px;"></i>
+        <span class="ds-sentinel-label" style="font-size:12px;opacity:0.7;">Loading more results…</span>
+    </td>`;
+    tbody.appendChild(loadRow);
+
+    const sentinel = document.getElementById('dsSearchSentinel');
+    if (!sentinel) return;
+
+    const wrapper = document.getElementById('tableScrollWrapper');
+    _dsObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                _dsDisconnectObserver();
+                _dsAdvance();
+            }
+        });
+    }, { root: wrapper, threshold: 0.1 });
+    _dsObserver.observe(sentinel);
+}
+
+// Render up to _DS_CHUNK rows from the local buffer; fetch next page when empty.
+function _dsAdvance() {
+    const tbody = document.querySelector('#filesTable tbody');
+    if (!tbody) return;
+    _dsRemoveSentinel();
+
+    // Render from local buffer first
+    if (_dsResults.length > 0) {
+        const end = Math.min(_DS_CHUNK, _dsResults.length);
+        const batch = _dsResults.splice(0, end);
+        batch.forEach(r => tbody.appendChild(createSearchResultRow(r, _dsSearchTerm)));
+        _dsRendered += batch.length;
+        _dsUpdateCount();
+    }
+
+    // If buffer is empty and server has more, fetch next page
+    if (_dsResults.length === 0 && _dsHasMore && !_dsFetching) {
+        _dsFetchNextPage();
+        return; // sentinel re-attached inside _dsFetchNextPage after data arrives
+    }
+
+    // Still have rows in buffer — keep scrolling
+    if (_dsResults.length > 0) {
+        _dsAttachSentinel();
+    }
+}
+
+function _dsFetchNextPage() {
+    if (_dsFetching) return;
+    _dsFetching = true;
+
+    // Re-attach sentinel immediately so the loading spinner stays visible
+    _dsAttachSentinel();
+
+    let url = `/api/search?q=${encodeURIComponent(_dsQuery)}&offset=${_dsOffset}&limit=${_DS_LIMIT}`;
+    if (_dsExts.length) url += `&ext=${encodeURIComponent(_dsExts.join(','))}`;
+
+    fetch(url)
+        .then(r => r.json())
+        .then(data => {
+            if (!isSearchResultsDisplayed) return; // user cleared search mid-fetch
+
+            _dsResults  = data.results || [];
+            _dsHasMore  = data.has_more || false;
+            _dsOffset  += _dsResults.length;
+
+            // Remove sentinel before rendering
+            _dsRemoveSentinel();
+            _dsFetching = false;
+
+            _dsAdvance();
+        })
+        .catch(err => {
+            console.error('❌ Deep search next page error:', err);
+            _dsRemoveSentinel();
+            _dsFetching = false;
+        });
+}
+
+function _dsUpdateCount() {
+    updateVisibleCount(_dsRendered);
+    // Update the header count badge live
+    const badge = document.querySelector('#searchResultsHeader .search-count');
+    if (badge) badge.textContent = `${_dsRendered}${_dsHasMore || _dsResults.length ? '+' : ''} items found`;
+}
+
+// ── *.ext query parser ────────────────────────────────────────────────────────
+// Supports: *.css  |  *.css,js,ts  |  report *.css  |  *.css,js report
+function _parseSearchQuery(rawTerm) {
+    const extRe = /\*\.([a-zA-Z0-9]+(?:,[a-zA-Z0-9]+)*)/g;
+    let exts = [];
+    let m;
+    while ((m = extRe.exec(rawTerm)) !== null) {
+        m[1].split(',').forEach(e => { if (e) exts.push(e.toLowerCase()); });
+    }
+    const query = rawTerm.replace(/\s*\*\.[a-zA-Z0-9]+(?:,[a-zA-Z0-9]+)*/g, '').trim();
+    return { query, exts };
+}
+
+// Deep search using API to scan nested folders
+function performDeepSearch(rawTerm) {
+    const { query, exts } = _parseSearchQuery(rawTerm);
+
+    if (!query && !exts.length) {
+        hideDeepSearchResults();
+        VT.applyFilter('');
+        return;
+    }
+
+    console.log(`🔍 Starting deep search: query="${query}" exts=${JSON.stringify(exts)}`);
     showSearchLoading(true);
 
-    fetch(`/api/search?q=${encodeURIComponent(searchTerm)}`)
+    // Reset pagination state for a fresh search
+    _dsResults    = [];
+    _dsRendered   = 0;
+    _dsOffset     = 0;
+    _dsHasMore    = false;
+    _dsFetching   = false;
+    _dsQuery      = query;
+    _dsExts       = exts;
+    _dsSearchTerm = query || exts.join(',');
+
+    let url = `/api/search?q=${encodeURIComponent(query)}&offset=0&limit=${_DS_LIMIT}`;
+    if (exts.length) url += `&ext=${encodeURIComponent(exts.join(','))}`;
+
+    fetch(url)
         .then(response => response.json())
         .then(data => {
             console.log(`✅ Deep search results:`, data);
-            displayDeepSearchResults(data, searchTerm);
+            displayDeepSearchResults(data, _dsSearchTerm, exts);
         })
         .catch(error => {
             console.error('❌ Deep search error:', error);
             showNotification('Search failed. Please try again.', 'ERROR');
-            // Fallback to local search
-            performLocalSearch(searchTerm);
+            performLocalSearch(query || rawTerm);
         })
         .finally(() => {
             showSearchLoading(false);
@@ -551,58 +700,73 @@ function removeHighlights(row) {
 }
 
 // Deep search helper functions
-function displayDeepSearchResults(data, searchTerm) {
+function displayDeepSearchResults(data, searchTerm, exts) {
     if (!data.results || data.results.length === 0) {
-        showNotification(`No results found for "${searchTerm}"`, 'INFO');
-        performLocalSearch(searchTerm); // Fallback to local search
+        const label = exts && exts.length
+            ? `*.${exts.join(', *.')}${searchTerm && searchTerm !== exts.join(',') ? ` containing "${searchTerm}"` : ''}`
+            : `"${searchTerm}"`;
+        showNotification(`No results found for ${label}`, 'INFO');
+        performLocalSearch(searchTerm);
         return;
     }
 
     // Clear any existing search results FIRST to prevent duplicates
     hideDeepSearchResults();
-
-    // Hide local results
     hideLocalResults();
 
-    // Mark that search results are now displayed (also tells VT engine not to clobber the tbody)
+    // Seed pagination state from first-page response
+    _dsResults    = data.results;
+    _dsHasMore    = data.has_more || false;
+    _dsOffset     = data.results.length;  // next fetch starts here
+    _dsRendered   = 0;
+    _dsSearchTerm = searchTerm;
+
+    // Mark VT engine so it won't clobber the tbody
     isSearchResultsDisplayed = true;
     VT.markSearchResults();
 
-    // Show deep search results with header above table
+    // Insert results header above the table
     const table = document.getElementById('filesTable');
-    const tbody = table.querySelector('tbody');
-
-    // Create search results header as a separate element
-    const searchHeader = createSearchResultsHeaderDiv(data);
-
-    // Insert header before the table
+    const searchHeader = createSearchResultsHeaderDiv(data, exts);
     table.parentNode.insertBefore(searchHeader, table);
 
-    // Add search results to table
-    data.results.forEach(result => {
-        const row = createSearchResultRow(result, searchTerm);
-        tbody.appendChild(row);
-    });
+    // Render first chunk from the local buffer
+    const tbody = table.querySelector('tbody');
+    const end = Math.min(_DS_CHUNK, _dsResults.length);
+    const batch = _dsResults.splice(0, end);
+    batch.forEach(r => tbody.appendChild(createSearchResultRow(r, searchTerm)));
+    _dsRendered += batch.length;
 
-    // Update visible count
-    updateVisibleCount(data.results.length);
+    _dsUpdateCount();
 
-    const truncatedMsg = data.truncated ? ` (showing first ${data.total_found})` : '';
-    showNotification(`Found ${data.total_found} results${truncatedMsg} in ${data.search_time}s`, 'SUCCESS');
+    // Attach sentinel if local buffer still has rows OR server has more pages
+    if (_dsResults.length > 0 || _dsHasMore) {
+        _dsAttachSentinel();
+    }
+
+    const extLabel = exts && exts.length ? ` [*.${exts.join(', *.')}]` : '';
+    showNotification(
+        `Found results${extLabel} — scroll to load more (${data.search_time}s)`,
+        'SUCCESS'
+    );
 }
 
-function createSearchResultsHeaderDiv(data) {
+function createSearchResultsHeaderDiv(data, exts) {
     const headerDiv = document.createElement('div');
     headerDiv.className = 'search-results-header-div';
     headerDiv.id = 'searchResultsHeader';
+
+    const extBadge = exts && exts.length
+        ? `<span class="search-ext-badge">*.${exts.join(' *.')}</span>`
+        : '';
 
     headerDiv.innerHTML = `
         <div class="search-header-content">
             <div class="search-header-main">
                 <i class="fas fa-search-plus"></i>
                 <span class="search-title">Deep Search Results</span>
-                <span class="search-count">${data.total_found} items found</span>
-                ${data.truncated ? '<span class="search-truncated">(showing first 100)</span>' : ''}
+                <span class="search-count">${data.results.length}${data.has_more ? '+' : ''} items found</span>
+                ${extBadge}
             </div>
             <div class="search-header-meta">
                 <span class="search-time">Search time: ${data.search_time}s</span>
@@ -761,8 +925,16 @@ function hideLocalResults() {
 }
 
 function hideDeepSearchResults() {
-    // Mark that search results are no longer displayed
     isSearchResultsDisplayed = false;
+
+    // Tear down pagination state
+    _dsDisconnectObserver();
+    _dsRemoveSentinel();
+    _dsResults  = [];
+    _dsRendered = 0;
+    _dsOffset   = 0;
+    _dsHasMore  = false;
+    _dsFetching = false;
 
     // Remove table-based search headers
     const searchRows = document.querySelectorAll('.search-results-header, .search-result-row');
@@ -770,18 +942,11 @@ function hideDeepSearchResults() {
 
     // Remove div-based search header
     const searchHeaderDiv = document.getElementById('searchResultsHeader');
-    if (searchHeaderDiv) {
-        searchHeaderDiv.remove();
-    }
+    if (searchHeaderDiv) searchHeaderDiv.remove();
 
     // Show local results again
-    const table = document.getElementById('filesTable');
-    const tbody = table.querySelector('tbody');
-    const localRows = tbody.querySelectorAll('tr');
-
-    localRows.forEach(row => {
-        row.style.display = '';
-    });
+    const tbody = document.querySelector('#filesTable tbody');
+    if (tbody) tbody.querySelectorAll('tr').forEach(row => { row.style.display = ''; });
 }
 
 function showSearchLoading(show) {

@@ -3190,6 +3190,17 @@ td .fa-file {
     font-weight: 500;
 }
 
+.search-ext-badge {
+    background: rgba(99, 179, 237, 0.2);
+    color: #63b3ed;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: monospace;
+    letter-spacing: 0.02em;
+}
+
 .search-header-meta {
     display: flex;
     align-items: center;

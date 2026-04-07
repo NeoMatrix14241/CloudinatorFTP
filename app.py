@@ -63,6 +63,7 @@ from config import (
     IMG_CACHE_DIR,
     ENABLE_FFMPEG,
     ENABLE_LIBVIPS,
+    ENABLE_SEARCH_INDEX,
 )
 from database import get_session_secret
 
@@ -152,6 +153,7 @@ rate_limiter = RateLimiter()
 
 # File monitoring and real-time updates
 from file_monitor import get_file_monitor, init_file_monitor
+from search_index import search_index_manager
 from realtime_stats import storage_stats_sse, trigger_storage_update, get_event_manager
 
 # Assembly Queue System
@@ -342,6 +344,12 @@ storage.ensure_root()
 file_monitor = init_file_monitor()
 file_monitor.add_change_callback(trigger_storage_update)
 print(f"📡 File system monitoring started for: {ROOT_DIR}")
+
+# Start search index crawler (daemon thread, non-blocking)
+if ENABLE_SEARCH_INDEX:
+    search_index_manager.start_crawler()
+else:
+    print("ℹ️  Search index disabled — using os.walk fallback for all searches")
 
 
 @app.before_request
@@ -2571,104 +2579,50 @@ def health_check():
 @app.route("/api/search", methods=["GET"])
 @login_required
 def search_files():
-    """Deep search through all folders for files/folders matching query"""
-    query = request.args.get("q", "").strip()
-    if not query:
-        return jsonify({"results": [], "query": query}), 200
+    """Paginated deep search.
+
+    Query params:
+      q      — filename substring (case-insensitive)
+      ext    — comma-separated extensions, e.g. "css,js"
+      offset — starting row for pagination (default 0)
+      limit  — page size (default 500, max 1000)
+    """
+    query   = request.args.get("q",      "").strip()
+    ext_raw = request.args.get("ext",    "").strip().lower()
+    offset  = max(0, int(request.args.get("offset", 0) or 0))
+    limit   = min(1000, max(1, int(request.args.get("limit", 500) or 500)))
+
+    ext_filter = [e.strip().lstrip(".") for e in ext_raw.split(",") if e.strip()] if ext_raw else []
+
+    if not query and not ext_filter:
+        return jsonify({"results": [], "query": query, "has_more": False, "offset": 0}), 200
 
     try:
-        query_lower = query.lower()
-        results = []
         search_start = time.time()
-        max_results = 100  # Limit results to avoid overwhelming UI
 
-        # Walk through all directories starting from ROOT_DIR
-        for root, dirs, files in os.walk(ROOT_DIR):
-            # Stop if we've found enough results
-            if len(results) >= max_results:
-                break
-
-            # Calculate relative path from ROOT_DIR
-            rel_path = os.path.relpath(root, ROOT_DIR)
-            if rel_path == ".":
-                rel_path = ""
-
-            # Search in folder names
-            for dirname in dirs[:]:  # Use slice to allow modification during iteration
-                if query_lower in dirname.lower():
-                    folder_path = (
-                        os.path.join(rel_path, dirname) if rel_path else dirname
-                    )
-                    try:
-                        full_path = os.path.join(root, dirname)
-                        stat_info = os.stat(full_path)
-
-                        results.append(
-                            {
-                                "name": dirname,
-                                "path": folder_path.replace("\\", "/"),
-                                "type": "folder",
-                                "is_dir": True,
-                                "size": 0,
-                                "modified": datetime.fromtimestamp(
-                                    stat_info.st_mtime
-                                ).strftime("%Y-%m-%d %H:%M:%S"),
-                                "match_type": "name",
-                            }
-                        )
-                    except (OSError, IOError):
-                        continue  # Skip inaccessible folders
-
-                    if len(results) >= max_results:
-                        break
-
-            # Search in file names
-            for filename in files:
-                if len(results) >= max_results:
-                    break
-
-                if query_lower in filename.lower():
-                    file_path = (
-                        os.path.join(rel_path, filename) if rel_path else filename
-                    )
-                    try:
-                        full_path = os.path.join(root, filename)
-                        stat_info = os.stat(full_path)
-
-                        # Get file extension for type
-                        _, ext = os.path.splitext(filename)
-                        file_type = ext[1:].upper() if ext else "FILE"
-
-                        results.append(
-                            {
-                                "name": filename,
-                                "path": file_path.replace("\\", "/"),
-                                "type": file_type,
-                                "is_dir": False,
-                                "size": stat_info.st_size,
-                                "modified": datetime.fromtimestamp(
-                                    stat_info.st_mtime
-                                ).strftime("%Y-%m-%d %H:%M:%S"),
-                                "match_type": "name",
-                            }
-                        )
-                    except (OSError, IOError):
-                        continue  # Skip inaccessible files
+        if ENABLE_SEARCH_INDEX:
+            results, from_index, has_more = search_index_manager.search(
+                query, ext_filter=ext_filter, limit=limit, offset=offset
+            )
+        else:
+            results, has_more = search_index_manager._walk_fallback(
+                query, ext_filter, limit, offset
+            )
+            from_index = False
 
         search_time = time.time() - search_start
 
-        return (
-            jsonify(
-                {
-                    "results": results,
-                    "query": query,
-                    "total_found": len(results),
-                    "search_time": round(search_time, 3),
-                    "truncated": len(results) >= max_results,
-                }
-            ),
-            200,
-        )
+        return jsonify({
+            "results":     results,
+            "query":       query,
+            "ext_filter":  ext_filter,
+            "total_found": len(results),
+            "offset":      offset,
+            "limit":       limit,
+            "has_more":    has_more,
+            "search_time": round(search_time, 3),
+            "from_index":  from_index,
+        }), 200
 
     except Exception as e:
         print(f"❌ Search error: {str(e)}")
