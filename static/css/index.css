@@ -5450,3 +5450,44 @@ td .fa-file {
         color: #5dade2 !important;
     }
 }
+
+/* ── PDF iframe mobile fix ───────────────────────────────────────────────────
+   Prevents the pdf.js iframe from causing horizontal page scroll on mobile.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* 1. Lock the page from scrolling sideways while the viewer modal is open */
+body:has(#fileViewerModal.show) {
+    overflow: hidden;
+}
+
+/* 2. Clamp the modal content to the viewport width on ALL screens
+      (prevents the 94 vw box from ever extending past the edge on narrow
+       viewports where vw includes any scrollbar gutter) */
+#fileViewerModal .file-viewer-modal-content {
+    max-width: min(900px, 100vw);
+}
+
+/* 3. On mobile go truly full-screen so there is zero gap for content to bleed */
+@media (max-width: 768px) {
+    #fileViewerModal .file-viewer-modal-content {
+        width: 100vw !important;
+        max-width: 100vw !important;
+        height: 100dvh !important;
+        max-height: 100dvh !important;
+        border-radius: 0 !important;
+        margin: 0 !important;
+    }
+
+    /* Ensure the viewer body fills its parent and the iframe can't overflow */
+    .file-viewer-body.viewer-pdf {
+        width: 100%;
+        max-width: 100%;
+        overflow: hidden;
+    }
+
+    /* The iframe itself: hard-clamp to viewport width */
+    .file-viewer-body.viewer-pdf iframe {
+        max-width: 100vw !important;
+        width: 100% !important;
+    }
+}

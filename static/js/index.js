@@ -3444,11 +3444,64 @@ function openFileViewer(itemPath, filename) {
             // Use the official pdf.js viewer (web/viewer.html) via iframe —
             // gives the full toolbar, thumbnails, search, print, etc. for free.
             const _pdfViewerUrl = '/pdfviewer?file=' + encodeURIComponent(viewUrl);
-            body.innerHTML = `<iframe
-                src="${_pdfViewerUrl}"
-                style="position:absolute;inset:0;width:100%;height:100%;border:none;display:block;"
-                allowfullscreen>
-            </iframe>`;
+            const _pdfIframe = document.createElement('iframe');
+            _pdfIframe.src = _pdfViewerUrl;
+            _pdfIframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;display:block;';
+            _pdfIframe.allowFullscreen = true;
+            // Inject mobile-responsive CSS into the pdf.js viewer (same-origin)
+            _pdfIframe.addEventListener('load', () => {
+                try {
+                    const iDoc = _pdfIframe.contentDocument || _pdfIframe.contentWindow.document;
+                    const mobileStyle = iDoc.createElement('style');
+                    mobileStyle.textContent = `
+                        @media (max-width: 768px) {
+                            /* Make the toolbar scroll horizontally instead of clipping */
+                            #toolbarViewer,
+                            .toolbar,
+                            #toolbarContainer {
+                                overflow-x: auto !important;
+                                overflow-y: hidden !important;
+                                flex-wrap: nowrap !important;
+                                -webkit-overflow-scrolling: touch;
+                                scrollbar-width: none; /* hide scrollbar but keep scrollability */
+                            }
+                            #toolbarViewer::-webkit-scrollbar,
+                            .toolbar::-webkit-scrollbar,
+                            #toolbarContainer::-webkit-scrollbar { display: none; }
+
+                            /* Keep toolbar sections from shrinking so all buttons stay visible */
+                            #toolbarViewerLeft,
+                            #toolbarViewerMiddle,
+                            #toolbarViewerRight {
+                                flex-shrink: 0 !important;
+                            }
+
+                            /* Slightly shrink buttons/inputs so more fit without scrolling */
+                            #toolbarViewer input,
+                            #toolbarViewer button,
+                            #toolbarViewer select,
+                            #toolbarViewer .toolbarButton,
+                            #toolbarViewer .dropdownToolbarButton {
+                                min-width: unset !important;
+                                padding-left: 4px !important;
+                                padding-right: 4px !important;
+                                font-size: 12px !important;
+                            }
+
+                            /* Scale the viewer area to fill remaining space */
+                            #viewerContainer,
+                            #mainContainer {
+                                top: 0 !important;
+                                width: 100% !important;
+                                max-width: 100% !important;
+                            }
+                        }
+                    `;
+                    iDoc.head.appendChild(mobileStyle);
+                } catch (e) { /* cross-origin safety — silently skip */ }
+            });
+            body.innerHTML = '';
+            body.appendChild(_pdfIframe);
             inner = '';
             break;
         }
