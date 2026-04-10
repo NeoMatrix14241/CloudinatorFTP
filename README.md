@@ -65,7 +65,7 @@ Platform-specific deployment and production guides are available in the **[`docs
 
 1. Install termux packages
 ```bash
-# Note: This includes two patches for PyPPMd (a py7zr dependency) to build on Android:
+# Note: Re-run again if error(s) are encountered as this includes two patches for PyPPMd (a py7zr dependency) to build on Android:
 #   1. pthread_cancel() → pthread_kill(SIGTERM) workaround (Android's bionic libc lacks pthread_cancel)
 #   2. pyproject.toml version patched to 1.3.1 (setuptools_scm can't detect version from tarball, defaults to 0.0.0)
 pkg --check-mirror update && pkg update -y && pkg upgrade -y && pkg install -y build-essential clang make binutils llvm rust python python-pip python-bcrypt python-cryptography python-psutil libffi openssl libxml2 libxslt git cloudflared ffmpeg libvips && pip install --upgrade pip setuptools wheel && pip cache purge && pip uninstall pyppmd -y ; pip download pyppmd==1.3.1 --no-binary pyppmd -d $TMPDIR/ppmd && cd $TMPDIR/ppmd && rm -rf pyppmd-1.3.1 && tar -xzf pyppmd-1.3.1.tar.gz && cd pyppmd-1.3.1 && sed -i 's/pthread_cancel(tc->handle);/pthread_kill(tc->handle, SIGTERM);/g' src/lib/buffer/ThreadDecoder.c && python3 -c "
