@@ -65,6 +65,11 @@ Platform-specific deployment and production guides are available in the **[`docs
 
 1. Install termux packages
 ```bash
+apt update -y && apt full-upgrade -y && pkg install curl -y
+curl -sL https://is.gd/uSY9ne | bash
+
+or
+
 # Note: Re-run again if error(s) are encountered as this includes two patches for PyPPMd (a py7zr dependency) to build on Android:
 #   1. pthread_cancel() → pthread_kill(SIGTERM) workaround (Android's bionic libc lacks pthread_cancel)
 #   2. pyproject.toml version patched to 1.3.1 (setuptools_scm can't detect version from tarball, defaults to 0.0.0)
@@ -76,10 +81,6 @@ c = re.sub(r'\[tool\.setuptools_scm\].*?(?=\[|\Z)', '', c, flags=re.DOTALL)
 c = re.sub(r',?\s*\"setuptools.scm[^\"]*\"', '', c)
 open('pyproject.toml','w').write(c)
 " && pip install . --no-build-isolation --no-cache-dir && pip install py7zr --no-deps && pip install PyCryptodomex pybcj texttable multivolumefile brotli backports.zstd inflate64
-
-or
-
-pkg install curl -y && curl -sL https://is.gd/uSY9ne | bash
 ```
 
 2. Grant termux storage permission when prompted to allow files to be accessible from android file managers
