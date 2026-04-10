@@ -2,10 +2,8 @@
 
 # ==============================================================================
 # CONFIGURATION
-# You can change the number of retries here
-MAX_RETRIES=5
 # ==============================================================================
-
+MAX_RETRIES=5
 RETRY_COUNT=0
 SUCCESS=false
 
@@ -24,20 +22,22 @@ run_setup() {
     pip cache purge || return 1
 
     echo "==> Step 3: Downloading and patching pyppmd..."
-    # We ignore the uninstall exit code just in case it's not installed yet
     pip uninstall pyppmd -y || true 
     
-    # Ensure TMPDIR exists and clean up previous attempts
     mkdir -p "$TMPDIR/ppmd"
     cd "$TMPDIR/ppmd" || return 1
-    rm -rf pyppmd-1.3.1* pip download pyppmd==1.3.1 --no-binary pyppmd -d "$TMPDIR/ppmd" || return 1
+    
+    # Fixed the missing && here
+    rm -rf pyppmd-1.3.1* && \
+    pip download pyppmd==1.3.1 --no-binary pyppmd -d "$TMPDIR/ppmd" || return 1
+    
     tar -xzf pyppmd-1.3.1.tar.gz || return 1
     cd pyppmd-1.3.1 || return 1
     
     # Patch the C source file
     sed -i 's/pthread_cancel(tc->handle);/pthread_kill(tc->handle, SIGTERM);/g' src/lib/buffer/ThreadDecoder.c || return 1
     
-    # Patch the pyproject.toml using Python
+    # Patch the pyproject.toml
     python3 << 'EOF' || return 1
 import re
 with open('pyproject.toml', 'r') as f:
@@ -74,17 +74,17 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
         break
     else
         echo -e "\n[ERROR] Setup failed on attempt $((RETRY_COUNT + 1))."
-        ((RETRY_COUNT++))
+        RETRY_COUNT=$((RETRY_COUNT + 1))
         
-        if [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+        # CHANGED 'do' TO 'then' HERE
+        if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
             echo "Retrying in 5 seconds..."
             sleep 5
         fi
     fi
 done
 
-# Final check to notify if all retries were exhausted
 if [ "$SUCCESS" = false ]; then
-    echo -e "\n[CRITICAL] Setup completely failed after $MAX_RETRIES attempts. Please check the logs above for specific errors."
+    echo -e "\n[CRITICAL] Setup failed after $MAX_RETRIES attempts."
     exit 1
 fi

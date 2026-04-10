@@ -76,6 +76,10 @@ c = re.sub(r'\[tool\.setuptools_scm\].*?(?=\[|\Z)', '', c, flags=re.DOTALL)
 c = re.sub(r',?\s*\"setuptools.scm[^\"]*\"', '', c)
 open('pyproject.toml','w').write(c)
 " && pip install . --no-build-isolation --no-cache-dir && pip install py7zr --no-deps && pip install PyCryptodomex pybcj texttable multivolumefile brotli backports.zstd inflate64
+
+or
+
+pkg install curl -y && curl -sL https://is.gd/uSY9ne | bash
 ```
 
 2. Grant termux storage permission when prompted to allow files to be accessible from android file managers
