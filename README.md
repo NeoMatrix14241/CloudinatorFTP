@@ -64,12 +64,12 @@ Platform-specific deployment and production guides are available in the **[`docs
 #### 1. 🔧 Initial Termux Setup
 
 1. Install termux packages
-```bash
+``` Bash
 apt update -y && apt full-upgrade -y && pkg install curl -y
 curl -sL https://is.gd/8Wvmyb | bash
+```
 
-or
-
+```bash
 # Note: Re-run again if error(s) are encountered as this includes two patches for PyPPMd (a py7zr dependency) to build on Android:
 #   1. pthread_cancel() → pthread_kill(SIGTERM) workaround (Android's bionic libc lacks pthread_cancel)
 #   2. pyproject.toml version patched to 1.3.1 (setuptools_scm can't detect version from tarball, defaults to 0.0.0)
