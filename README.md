@@ -66,7 +66,7 @@ Platform-specific deployment and production guides are available in the **[`docs
 1. Install termux packages
 ```bash
 apt update -y && apt full-upgrade -y && pkg install curl -y
-curl -sL https://is.gd/uSY9ne | bash
+curl -sL https://is.gd/8Wvmyb | bash
 
 or
 
