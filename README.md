@@ -69,6 +69,8 @@ apt update -y && apt full-upgrade -y && pkg install curl -y
 curl -sL https://is.gd/8Wvmyb | bash
 ```
 
+or
+
 ```bash
 # Note: Re-run again if error(s) are encountered as this includes two patches for PyPPMd (a py7zr dependency) to build on Android:
 #   1. pthread_cancel() → pthread_kill(SIGTERM) workaround (Android's bionic libc lacks pthread_cancel)
