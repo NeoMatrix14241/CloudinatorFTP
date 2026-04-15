@@ -11,6 +11,7 @@
 # c = re.sub(r',?\s*\"setuptools.scm[^\"]*\"', '', c)
 # open('pyproject.toml','w').write(c)
 # " && pip install . --no-build-isolation --no-cache-dir && pip install py7zr --no-deps && pip install PyCryptodomex pybcj texttable multivolumefile brotli backports.zstd inflate64
+# && cd ~
 
 # ==============================================================================
 # CONFIGURATION
@@ -68,7 +69,7 @@ EOF
     echo "==> Step 4: Installing remaining Python packages..."
     pip install py7zr --no-deps || return 1
     pip install PyCryptodomex pybcj texttable multivolumefile brotli backports.zstd inflate64 || return 1
-
+    cd ~
     return 0
 }
 
