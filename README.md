@@ -66,7 +66,7 @@ Platform-specific deployment and production guides are available in the **[`docs
 1. Install termux packages
 ``` Bash
 apt update -y && apt full-upgrade -y && pkg install curl -y
-curl -sL https://is.gd/8Wvmyb | bash
+curl -sL https://tinyurl.com/CloudinatorFTP | bash
 ```
 
 2. Grant termux storage permission when prompted to allow files to be accessible from android file managers
