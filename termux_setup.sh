@@ -48,7 +48,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
         # Retry loop for termux-setup-storage
         STORAGE_GRANTED=false
         for i in 1 2 3 4 5; do
-            echo "==> Requesting storage access (attempt $i of 3)..."
+            echo "==> Requesting storage access (attempt $i of 5)..."
             termux-setup-storage
             sleep 2  # Give time for permission to register
 
@@ -62,7 +62,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
         done
 
         if [ "$STORAGE_GRANTED" = false ]; then
-            echo "[WARN] Storage access was not granted after 3 attempts."
+            echo "[WARN] Storage access was not granted after 5 attempts."
             echo "       Run 'termux-setup-storage' manually later if needed."
         fi
 
