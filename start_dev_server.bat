@@ -23,5 +23,3 @@ echo 📁 Press Ctrl+C to stop the server
 echo.
 
 python dev_server.py
-
-pause

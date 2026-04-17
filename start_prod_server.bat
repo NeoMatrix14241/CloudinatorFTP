@@ -21,6 +21,4 @@ echo 🔧 Debug mode: OFF - Auto-reload disabled
 echo 📁 Press Ctrl+C to stop the server
 echo.
 
-python dev_server.py
-
-pause
+python prod_server.py
