@@ -42,17 +42,37 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
     echo "============================================================"
     echo " Starting Setup - Attempt $((RETRY_COUNT + 1)) of $MAX_RETRIES "
     echo "============================================================"
-    
+
     if run_setup; then
         echo -e "\n[SUCCESS] Termux setup completed successfully!"
-        echo "==> Requesting storage access..."
-        termux-setup-storage
+
+        # Retry loop for termux-setup-storage
+        STORAGE_GRANTED=false
+        for i in 1 2 3; do
+            echo "==> Requesting storage access (attempt $i of 3)..."
+            termux-setup-storage
+            sleep 2  # Give time for permission to register
+
+            if [ -d ~/storage ]; then
+                echo "[OK] Storage access granted!"
+                STORAGE_GRANTED=true
+                break
+            else
+                echo "[WARN] Storage permission not granted. Retrying..."
+            fi
+        done
+
+        if [ "$STORAGE_GRANTED" = false ]; then
+            echo "[WARN] Storage access was not granted after 3 attempts."
+            echo "       Run 'termux-setup-storage' manually later if needed."
+        fi
+
         SUCCESS=true
         break
     else
         echo -e "\n[ERROR] Setup failed on attempt $((RETRY_COUNT + 1))."
         RETRY_COUNT=$((RETRY_COUNT + 1))
-        
+
         # CHANGED 'do' TO 'then' HERE
         if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
             echo "Retrying in 5 seconds..."
