@@ -45,6 +45,8 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
     
     if run_setup; then
         echo -e "\n[SUCCESS] Termux setup completed successfully!"
+        echo "==> Requesting storage access..."
+        termux-setup-storage
         SUCCESS=true
         break
     else
