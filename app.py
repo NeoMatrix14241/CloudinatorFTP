@@ -41,6 +41,26 @@ import threading
 import time
 import logging
 import uuid
+import socket
+
+
+def get_local_ip() -> str:
+    """
+    Resolve the machine's LAN IP without parsing ifconfig/ipconfig.
+    Works identically on Windows, Linux, macOS, and Termux (Android).
+    A UDP socket to 8.8.8.8:80 sends no packets — it just forces the OS
+    to pick the right outbound interface, revealing the real LAN IP.
+    Falls back to 127.0.0.1 if the device has no network.
+    """
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
 
 # Ensure ffmpeg and thread prints appear immediately in terminal
 sys.stdout.reconfigure(line_buffering=True)
@@ -4769,5 +4789,9 @@ if __name__ == "__main__":
     print("   • Real-time status updates via API")
     print("   • Resume capability after page refresh")
     print("   • Automatic recovery of incomplete uploads")
+
+    LOCAL_IP = get_local_ip()
+    print(f"🌐 Local network:  http://{LOCAL_IP}:{PORT}")
+    print(f"🔁 Localhost:      http://localhost:{PORT}")
 
     app.run(host="0.0.0.0", port=PORT, debug=False)

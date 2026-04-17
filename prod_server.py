@@ -7,7 +7,20 @@ Enhanced to match ASGI configuration capabilities.
 
 import os
 import sys
+import socket
 from datetime import timedelta
+
+
+def get_local_ip() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
 
 # Add the application directory to Python path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -64,6 +77,11 @@ if __name__ == "__main__":
         print(f"📁 Windows location: {ROOT_DIR}")
     else:
         print(f"📁 Unix location: {ROOT_DIR}")
+    print()
+
+    LOCAL_IP = get_local_ip()
+    print(f"🌐 Local network:  http://{LOCAL_IP}:5000")
+    print(f"🔁 Localhost:      http://localhost:5000")
     print()
 
     try:
