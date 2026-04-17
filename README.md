@@ -63,16 +63,10 @@ Platform-specific deployment and production guides are available in the **[`docs
 
 #### 1. 🔧 Initial Termux Setup
 
-1. Install termux packages
+Install termux packages
 ``` Bash
 apt update -y && apt full-upgrade -y && pkg install curl -y
 curl -sL https://tinyurl.com/CloudinatorFTP | bash
-```
-
-2. Grant termux storage permission when prompted to allow files to be accessible from android file managers
-```bash
-# Note: Required if serving files with Internal Storage - else will use the termux data path which is inaccessible when not rooted
-termux-setup-storage
 ```
 
 Note: For compatible platforms, [FFmpeg](https://www.gyan.dev/ffmpeg/builds/) is optional for adaptive bitrate video preview with [Video.js](https://videojs.org/).
