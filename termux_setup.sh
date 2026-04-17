@@ -30,7 +30,6 @@ run_setup() {
     pkg install -y build-essential clang make binutils llvm rust python \
                    python-pip python-bcrypt python-cryptography python-pyppmd python-psutil \
                    libffi openssl libxml2 libxslt git cloudflared ffmpeg libvips || return 1
-    pip install -r "$(dirname "$0")/requirements.txt" || return 1
     return 0
 }
 
