@@ -28,8 +28,8 @@ run_setup() {
     pkg update -y && \
     pkg upgrade -y && \
     pkg install -y build-essential clang make binutils llvm rust python \
-                   python-pip python-bcrypt python-cryptography python-pyppmd python-psutil \
-                   libffi openssl libxml2 libxslt git cloudflared ffmpeg libvips || return 1
+    python-pip python-bcrypt python-cryptography python-pyppmd python-psutil \
+    libffi openssl libxml2 libxslt git cloudflared ffmpeg libvips || return 1
     return 0
 }
 
@@ -45,26 +45,17 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
     if run_setup; then
         echo -e "\n[SUCCESS] Termux setup completed successfully!"
 
-        # Retry loop for termux-setup-storage
-        STORAGE_GRANTED=false
-        for i in 1 2 3 4 5; do
-            echo "==> Requesting storage access (attempt $i of 5)..."
-            termux-setup-storage
-            sleep 2  # Give time for permission to register
+        echo "==> Requesting storage access..."
+        termux-setup-storage
+        echo "[INFO] Waiting for you to accept the permission dialog..."
 
+        while true; do
             if [ -d ~/storage ]; then
                 echo "[OK] Storage access granted!"
-                STORAGE_GRANTED=true
                 break
-            else
-                echo "[WARN] Storage permission not granted. Retrying..."
             fi
+            sleep 1
         done
-
-        if [ "$STORAGE_GRANTED" = false ]; then
-            echo "[WARN] Storage access was not granted after 5 attempts."
-            echo "       Run 'termux-setup-storage' manually later if needed."
-        fi
 
         SUCCESS=true
         break
@@ -72,7 +63,6 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
         echo -e "\n[ERROR] Setup failed on attempt $((RETRY_COUNT + 1))."
         RETRY_COUNT=$((RETRY_COUNT + 1))
 
-        # CHANGED 'do' TO 'then' HERE
         if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
             echo "Retrying in 5 seconds..."
             sleep 5
