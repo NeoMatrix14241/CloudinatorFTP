@@ -4257,7 +4257,8 @@ td .fa-file {
 
 .office-docx-body {
     width: 100%;
-    height: 72vh;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 32px 44px;
     background: #fff;
@@ -4392,7 +4393,7 @@ td .fa-file {
     flex: 1;
     overflow: auto;
     min-height: 0;
-    max-height: calc(72vh - 48px);
+    max-height: none;
     width: 0;
     min-width: 100%;
 }
@@ -4535,7 +4536,6 @@ td .fa-file {
 @media (max-width: 768px) {
     .office-docx-body {
         padding: 18px 20px;
-        height: 60vh;
     }
 
     .pptx-slide {
