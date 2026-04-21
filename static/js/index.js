@@ -498,16 +498,16 @@ function performLocalSearch(searchTerm) {
 }
 
 // ── Deep search pagination state ─────────────────────────────────────────────
-const _DS_CHUNK   = 80;      // rows to render per DOM batch (visual smoothness)
-const _DS_LIMIT   = 500;     // rows to fetch from server per API call
-let _dsResults    = [];      // buffer of fetched-but-not-yet-rendered rows
-let _dsRendered   = 0;       // total rows appended to tbody this session
-let _dsOffset     = 0;       // next API offset to request
-let _dsHasMore    = false;   // server says more rows exist beyond current offset
-let _dsFetching   = false;   // guard against concurrent fetches
-let _dsObserver   = null;
-let _dsQuery      = '';      // current query (for next-page requests)
-let _dsExts       = [];      // current ext filter
+const _DS_CHUNK = 80;      // rows to render per DOM batch (visual smoothness)
+const _DS_LIMIT = 500;     // rows to fetch from server per API call
+let _dsResults = [];      // buffer of fetched-but-not-yet-rendered rows
+let _dsRendered = 0;       // total rows appended to tbody this session
+let _dsOffset = 0;       // next API offset to request
+let _dsHasMore = false;   // server says more rows exist beyond current offset
+let _dsFetching = false;   // guard against concurrent fetches
+let _dsObserver = null;
+let _dsQuery = '';      // current query (for next-page requests)
+let _dsExts = [];      // current ext filter
 let _dsSearchTerm = '';      // raw display term for highlight
 
 function _dsDisconnectObserver() {
@@ -591,9 +591,9 @@ function _dsFetchNextPage() {
         .then(data => {
             if (!isSearchResultsDisplayed) return; // user cleared search mid-fetch
 
-            _dsResults  = data.results || [];
-            _dsHasMore  = data.has_more || false;
-            _dsOffset  += _dsResults.length;
+            _dsResults = data.results || [];
+            _dsHasMore = data.has_more || false;
+            _dsOffset += _dsResults.length;
 
             // Remove sentinel before rendering
             _dsRemoveSentinel();
@@ -640,13 +640,13 @@ function performDeepSearch(rawTerm) {
     showSearchLoading(true);
 
     // Reset pagination state for a fresh search
-    _dsResults    = [];
-    _dsRendered   = 0;
-    _dsOffset     = 0;
-    _dsHasMore    = false;
-    _dsFetching   = false;
-    _dsQuery      = query;
-    _dsExts       = exts;
+    _dsResults = [];
+    _dsRendered = 0;
+    _dsOffset = 0;
+    _dsHasMore = false;
+    _dsFetching = false;
+    _dsQuery = query;
+    _dsExts = exts;
     _dsSearchTerm = query || exts.join(',');
 
     let url = `/api/search?q=${encodeURIComponent(query)}&offset=0&limit=${_DS_LIMIT}`;
@@ -710,10 +710,10 @@ function displayDeepSearchResults(data, searchTerm, exts) {
     hideDeepSearchResults();
     hideLocalResults();
 
-    _dsResults    = data.results;
-    _dsHasMore    = data.has_more || false;
-    _dsOffset     = data.results.length;
-    _dsRendered   = 0;
+    _dsResults = data.results;
+    _dsHasMore = data.has_more || false;
+    _dsOffset = data.results.length;
+    _dsRendered = 0;
     _dsSearchTerm = searchTerm;
 
     isSearchResultsDisplayed = true;
@@ -929,10 +929,10 @@ function hideDeepSearchResults() {
     // Tear down pagination state
     _dsDisconnectObserver();
     _dsRemoveSentinel();
-    _dsResults  = [];
+    _dsResults = [];
     _dsRendered = 0;
-    _dsOffset   = 0;
-    _dsHasMore  = false;
+    _dsOffset = 0;
+    _dsHasMore = false;
     _dsFetching = false;
 
     // Remove table-based search headers
@@ -9859,10 +9859,20 @@ function _injectMobileSpeedHide(playerEl) {
             }
         }
     `;
+    const cueCss = `
+        ::cue {
+            background: transparent !important;
+            background-color: transparent !important;
+            text-shadow:
+                -1px -1px 0 #000,  1px -1px 0 #000,
+                -1px  1px 0 #000,  1px  1px 0 #000,
+                0 2px 8px rgba(0,0,0,0.9);
+            color: #fff;
+        }
+    `;
     let attempts = 0;
     const iv = setInterval(() => {
         attempts++;
-        // video-skin is a direct child of video-player
         const skin = playerEl.querySelector('video-skin');
         if (skin && skin.shadowRoot) {
             if (!skin.shadowRoot.querySelector('style[data-speed-hide]')) {
@@ -9871,17 +9881,30 @@ function _injectMobileSpeedHide(playerEl) {
                 s.textContent = css;
                 skin.shadowRoot.appendChild(s);
             }
+            if (!skin.shadowRoot.querySelector('style[data-cue-style]')) {
+                const s = document.createElement('style');
+                s.setAttribute('data-cue-style', '1');
+                s.textContent = cueCss;
+                skin.shadowRoot.appendChild(s);
+            }
             clearInterval(iv);
             return;
         }
-        // Also try playerEl's own shadow root
         if (playerEl.shadowRoot) {
             const skin2 = playerEl.shadowRoot.querySelector('video-skin');
-            if (skin2 && skin2.shadowRoot && !skin2.shadowRoot.querySelector('style[data-speed-hide]')) {
-                const s = document.createElement('style');
-                s.setAttribute('data-speed-hide', '1');
-                s.textContent = css;
-                skin2.shadowRoot.appendChild(s);
+            if (skin2 && skin2.shadowRoot) {
+                if (!skin2.shadowRoot.querySelector('style[data-speed-hide]')) {
+                    const s = document.createElement('style');
+                    s.setAttribute('data-speed-hide', '1');
+                    s.textContent = css;
+                    skin2.shadowRoot.appendChild(s);
+                }
+                if (!skin2.shadowRoot.querySelector('style[data-cue-style]')) {
+                    const s = document.createElement('style');
+                    s.setAttribute('data-cue-style', '1');
+                    s.textContent = cueCss;
+                    skin2.shadowRoot.appendChild(s);
+                }
                 clearInterval(iv);
                 return;
             }
@@ -9918,21 +9941,21 @@ async function _hlsStartStream(itemPath, wrapperId) {
     }
 
     // Tear down whatever is currently in hls-player-area before mounting
-    // a new player. Calling destroy() on the Lit web component is what
-    // actually releases the MediaSource — just setting innerHTML doesn't.
+    // a new player. Pausing and nulling src on the <video> releases the
+    // MediaSource; removing the web component from the DOM cleans up the rest.
     function _destroyCurrentPlayer() {
         const area = $id('hls-player-area');
         if (!area) return;
         area.querySelectorAll('video, audio').forEach(m => {
             try { m.pause(); m.removeAttribute('src'); m.load(); } catch (_) { }
         });
-        area.querySelectorAll('video-player, video-skin').forEach(el => {
-            try { if (typeof el.destroy === 'function') el.destroy(); } catch (_) { }
+        // Remove audio/subtitle selector rows and overlay so they're rebuilt fresh on next mount
+        ['hls-audio-row', 'hls-subtitle-row', 'hls-subtitle-overlay'].forEach(id => {
+            const el = $id(id);
+            if (el) el.remove();
         });
-        // Remove only player elements, preserve the seek overlay
-        Array.from(area.children).forEach(el => {
-            el.remove();
-        });
+        // Shadow-root overlay is removed with the player element itself (innerHTML = '')
+        area.innerHTML = '';
     }
 
     function _mountRawPlayer(src, autoplay) {
@@ -9955,12 +9978,18 @@ async function _hlsStartStream(itemPath, wrapperId) {
         _initMobileDoubleTapSeek(area);
     }
 
-    function _mountHlsPlayer(masterUrl, autoplay) {
+    function _mountHlsPlayer(masterUrl, autoplay, audioMeta, subMeta, cacheKey) {
         const area = $id('hls-player-area');
         if (!area) return;
         _destroyCurrentPlayer();
         area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;position:relative;';
         const ap = autoplay ? 'autoplay muted' : '';
+
+        // Inject <track> elements so the player's built-in caption button works.
+        const trackEls = (subMeta || []).map(s =>
+            `<track kind="subtitles" src="/hls_files/${cacheKey}/${encodeURIComponent(s.vtt_filename)}" srclang="${escapeHtml(s.lang)}" label="${escapeHtml(s.label)}">`
+        ).join('');
+
         area.insertAdjacentHTML('afterbegin', `
           <video-player class="vjs-cloudinator-player" style="width:100%;height:100%;display:block;">
             <video-skin>
@@ -9970,6 +9999,7 @@ async function _hlsStartStream(itemPath, wrapperId) {
                      ${ap}
                      playsinline
                      style="width:100%;height:100%;">
+                ${trackEls}
               </video>
             </video-skin>
           </video-player>`);
@@ -9979,6 +10009,7 @@ async function _hlsStartStream(itemPath, wrapperId) {
         _attachQualitySelector(playerEl);
         _injectMobileSpeedHide(playerEl);
         _initMobileDoubleTapSeek(area);
+        _buildTrackSelectors(playerEl, audioMeta || [], subMeta || [], cacheKey);
     }
 
     // Web-native formats browsers can decode directly without transcoding.
@@ -10049,9 +10080,9 @@ async function _hlsStartStream(itemPath, wrapperId) {
         // HLS already cached — go straight to HLS, never flash raw first.
         // Raw button is left enabled for audio-only access (e.g. x265 MKV).
         _setStreamReady();
-        _wireStreamButton(cacheKey, startData.profiles);
+        _wireStreamButton(cacheKey, startData.profiles, startData.audio_tracks, startData.sub_tracks);
         _setStatus('');
-        _mountHlsPlayer(`/hls_files/${cacheKey}/master.m3u8`, true);
+        _mountHlsPlayer(`/hls_files/${cacheKey}/master.m3u8`, true, startData.audio_tracks, startData.sub_tracks, cacheKey);
         const rb2 = $id('hls-btn-raw');
         if (rb2) {
             rb2.classList.remove('hls-btn-active');
@@ -10102,12 +10133,12 @@ async function _hlsStartStream(itemPath, wrapperId) {
 
         if (st.status === 'ready') {
             _setStreamReady();
-            _wireStreamButton(cacheKey, st.profiles);
+            _wireStreamButton(cacheKey, st.profiles, st.audio_tracks, st.sub_tracks);
             _buildQualityBar(st.profiles, cacheKey);
             if (!_isWebNative) {
                 // Non-native format: auto-switch to HLS.
                 // Re-enable raw button — usable for audio-only (e.g. x265/HEVC MKV).
-                _mountHlsPlayer(`/hls_files/${cacheKey}/master.m3u8`, true);
+                _mountHlsPlayer(`/hls_files/${cacheKey}/master.m3u8`, true, st.audio_tracks, st.sub_tracks, cacheKey);
                 const rb3 = $id('hls-btn-raw');
                 if (rb3) {
                     rb3.classList.remove('hls-btn-active');
@@ -10142,7 +10173,7 @@ async function _hlsStartStream(itemPath, wrapperId) {
     }
 }
 
-function _wireStreamButton(cacheKey, profiles) {
+function _wireStreamButton(cacheKey, profiles, audioMeta, subMeta) {
     const btn = document.getElementById('hls-btn-stream');
     if (!btn) return;
     const fresh = btn.cloneNode(true);
@@ -10153,15 +10184,19 @@ function _wireStreamButton(cacheKey, profiles) {
         const area = document.getElementById('hls-player-area');
         if (!area) return;
 
-        // Destroy existing player before mounting HLS — prevents double audio
         area.querySelectorAll('video, audio').forEach(m => {
             try { m.pause(); m.removeAttribute('src'); m.load(); } catch (_) { }
         });
-        area.querySelectorAll('video-player, video-skin').forEach(el => {
-            try { if (typeof el.destroy === 'function') el.destroy(); } catch (_) { }
+        ['hls-audio-row', 'hls-subtitle-row', 'hls-subtitle-overlay'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.remove();
         });
 
-        area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;';
+        const trackEls = (subMeta || []).map(s =>
+            `<track kind="subtitles" src="/hls_files/${cacheKey}/${encodeURIComponent(s.vtt_filename)}" srclang="${s.lang}" label="${s.label || s.lang}">`
+        ).join('');
+
+        area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;position:relative;';
         area.innerHTML = `
           <video-player class="vjs-cloudinator-player" style="width:100%;height:100%;display:block;">
             <video-skin>
@@ -10170,6 +10205,7 @@ function _wireStreamButton(cacheKey, profiles) {
                      type="application/x-mpegURL"
                      playsinline
                      style="width:100%;height:100%;">
+                ${trackEls}
               </video>
             </video-skin>
           </video-player>`;
@@ -10177,6 +10213,7 @@ function _wireStreamButton(cacheKey, profiles) {
         window._vjsCurrentPlayer = playerEl;
         _unmuteWhenReady(playerEl);
         _buildQualityBar(profiles, cacheKey);
+        _buildTrackSelectors(playerEl, audioMeta || [], subMeta || [], cacheKey);
         fresh.classList.add('hls-btn-active');
         const rawBtn = document.getElementById('hls-btn-raw');
         if (rawBtn) rawBtn.classList.remove('hls-btn-active');
@@ -10277,6 +10314,138 @@ function _buildQualityBar(profiles, cacheKey) {
 
 function _attachQualitySelector(playerEl) {
     // no-op stub — quality bar is built via _buildQualityBar(profiles, cacheKey)
+}
+
+/**
+ * Build audio-track and subtitle selector rows.
+ *
+ * Subtitles: we fetch the .vtt file ourselves, parse cues in JS, and drive
+ * a custom overlay on timeupdate — completely bypassing the browser's native
+ * TextTrack system and the player's built-in caption button.
+ *
+ * Audio: Safari native audioTracks / HLS.js audioTrack setter.
+ */
+function _buildTrackSelectors(playerEl, audioMeta, subMeta, cacheKey) {
+    if (!playerEl) return;
+    const hasAudio = Array.isArray(audioMeta) && audioMeta.length > 1;
+    const hasSubs = Array.isArray(subMeta) && subMeta.length > 0;
+    if (!hasAudio && !hasSubs) return;
+
+    const LABEL_CSS = 'color:rgba(255,255,255,0.55);user-select:none;margin-right:2px;flex-shrink:0;';
+    const SEL_CSS = [
+        'background:rgba(255,255,255,0.1)',
+        'border:1px solid rgba(255,255,255,0.25)',
+        'color:#fff', 'border-radius:4px',
+        'padding:3px 24px 3px 8px', 'font-size:12px',
+        'cursor:pointer', 'outline:none',
+        '-webkit-appearance:none', 'appearance:none',
+        "background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,0.5)'/%3E%3C/svg%3E\")",
+        'background-repeat:no-repeat', 'background-position:right 7px center',
+        'min-width:120px',
+    ].join(';');
+
+    function _ensureRow(id, insertAfterId) {
+        let row = document.getElementById(id);
+        if (!row) {
+            row = document.createElement('div');
+            row.id = id;
+            row.className = 'hls-track-row';
+            row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 10px;flex-wrap:wrap;font-size:12px;';
+            const ref = document.getElementById(insertAfterId);
+            if (ref && ref.parentNode) ref.parentNode.insertBefore(row, ref.nextSibling);
+            else {
+                const wrap = document.querySelector('.hls-player-outer');
+                if (wrap) wrap.insertBefore(row, document.getElementById('hls-player-area'));
+            }
+        }
+        return row;
+    }
+
+    function _getVideo(cb) {
+        let tries = 0;
+        const iv = setInterval(() => {
+            const v = playerEl.querySelector('video[slot="media"]');
+            if (v || ++tries > 20) { clearInterval(iv); if (v) cb(v); }
+        }, 150);
+    }
+
+    // ── Audio row ─────────────────────────────────────────────────────────────
+    if (hasAudio) {
+        const row = _ensureRow('hls-audio-row', 'hls-quality-row');
+        row.innerHTML = '';
+        const lbl = document.createElement('span');
+        lbl.textContent = '🔊 Audio:';
+        lbl.style.cssText = LABEL_CSS;
+        row.appendChild(lbl);
+        const sel = document.createElement('select');
+        sel.style.cssText = SEL_CSS;
+        audioMeta.forEach((t, i) => {
+            const opt = document.createElement('option');
+            opt.value = i;
+            opt.textContent = t.label || t.lang || `Track ${i + 1}`;
+            sel.appendChild(opt);
+        });
+        row.appendChild(sel);
+        row.style.display = 'flex';
+        sel.addEventListener('change', () => {
+            const idx = parseInt(sel.value, 10);
+            _getVideo(video => {
+                if (video.audioTracks && video.audioTracks.length > 0) {
+                    Array.from(video.audioTracks).forEach((t, i) => { t.enabled = (i === idx); });
+                    return;
+                }
+                const hls = video._hls || video.__hls || playerEl._hls || playerEl.__hls;
+                if (hls && typeof hls.audioTrack !== 'undefined') hls.audioTrack = idx;
+            });
+        });
+    }
+
+    // ── Subtitle row — delegates entirely to native player tracks ─────────────
+    // The player's caption button already works. Our dropdown just mirrors it,
+    // giving a language-labelled selector above the player to match the audio row.
+    // We do NOT render anything ourselves — zero overlay, zero custom engine.
+    if (!hasSubs) return;
+
+    const row = _ensureRow('hls-subtitle-row', hasAudio ? 'hls-audio-row' : 'hls-quality-row');
+    row.innerHTML = '';
+    const lbl = document.createElement('span');
+    lbl.textContent = '💬 Subtitles:';
+    lbl.style.cssText = LABEL_CSS;
+    row.appendChild(lbl);
+    const sel = document.createElement('select');
+    sel.style.cssText = SEL_CSS;
+    const offOpt = document.createElement('option');
+    offOpt.value = '-1';
+    offOpt.textContent = 'Off';
+    sel.appendChild(offOpt);
+    subMeta.forEach((t, i) => {
+        const opt = document.createElement('option');
+        opt.value = i;
+        opt.textContent = t.label || t.lang || `Subtitle ${i + 1}`;
+        sel.appendChild(opt);
+    });
+    row.appendChild(sel);
+    row.style.display = 'flex';
+
+    // Wire select → player's native textTracks
+    _getVideo(video => {
+        // Keep our dropdown in sync if the player's caption button is used
+        video.textTracks.addEventListener('change', () => {
+            const tracks = Array.from(video.textTracks).filter(
+                t => t.kind === 'subtitles' || t.kind === 'captions'
+            );
+            const activeIdx = tracks.findIndex(t => t.mode === 'showing');
+            sel.value = activeIdx >= 0 ? activeIdx : '-1';
+        });
+
+        sel.addEventListener('change', () => {
+            const idx = parseInt(sel.value, 10);
+            const tracks = Array.from(video.textTracks).filter(
+                t => t.kind === 'subtitles' || t.kind === 'captions'
+            );
+            tracks.forEach((t, i) => { t.mode = i === idx ? 'showing' : 'disabled'; });
+        });
+    });
 }
 
 function _hlsSleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }

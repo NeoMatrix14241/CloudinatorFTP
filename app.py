@@ -3714,6 +3714,152 @@ def _probe_video(file_path: str):
         return 0, 0, False, 0.0, 0.0
 
 
+def _probe_streams(file_path: str):
+    """
+    Return (audio_streams, sub_streams) with per-track language/label info.
+
+    audio_streams — list of dicts, one per audio track:
+        {"index": int, "lang": str, "label": str, "dir_name": str}
+    sub_streams   — list of dicts, only TEXT-based subtitle tracks (not PGS/VOBSUB):
+        {"src_idx": int, "lang": str, "label": str}
+
+    Falls back to ([], []) on any error.
+    """
+    _LANG_NAMES = {
+        "eng": "English",
+        "spa": "Spanish",
+        "fra": "French",
+        "fre": "French",
+        "deu": "German",
+        "ger": "German",
+        "ita": "Italian",
+        "por": "Portuguese",
+        "jpn": "Japanese",
+        "kor": "Korean",
+        "zho": "Chinese",
+        "chi": "Chinese",
+        "ara": "Arabic",
+        "rus": "Russian",
+        "hin": "Hindi",
+        "tur": "Turkish",
+        "pol": "Polish",
+        "nld": "Dutch",
+        "dut": "Dutch",
+        "swe": "Swedish",
+        "nor": "Norwegian",
+        "dan": "Danish",
+        "fin": "Finnish",
+        "heb": "Hebrew",
+        "tha": "Thai",
+        "vie": "Vietnamese",
+        "ind": "Indonesian",
+        "ces": "Czech",
+        "cze": "Czech",
+        "slk": "Slovak",
+        "slo": "Slovak",
+        "hun": "Hungarian",
+        "ron": "Romanian",
+        "rum": "Romanian",
+        "bul": "Bulgarian",
+        "hrv": "Croatian",
+        "srp": "Serbian",
+        "ukr": "Ukrainian",
+        "cat": "Catalan",
+        "ell": "Greek",
+        "gre": "Greek",
+    }
+    # Only extract these text-based subtitle codecs (not bitmap formats like PGS/VOBSUB)
+    _TEXT_SUB_CODECS = frozenset(
+        [
+            "subrip",
+            "srt",
+            "ass",
+            "ssa",
+            "webvtt",
+            "mov_text",
+            "text",
+            "jacosub",
+            "microdvd",
+            "realtext",
+            "sami",
+            "stl",
+            "pjs",
+            "vplayer",
+        ]
+    )
+    try:
+        _ffmpeg_bin = _resolve_ffmpeg()
+        _ffprobe_name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+        ffprobe_bin = os.path.join(os.path.dirname(_ffmpeg_bin), _ffprobe_name)
+        r = subprocess.run(
+            [
+                ffprobe_bin,
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_streams",
+                file_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if r.returncode != 0:
+            return [], []
+        streams = json.loads(r.stdout).get("streams", [])
+
+        audio_streams = []
+        sub_streams = []
+        used_dir_names: set = set()
+        sub_src_idx = 0  # running index over ALL subtitle streams in the file
+
+        for s in streams:
+            tags = s.get("tags") or {}
+            raw_lang = (tags.get("language") or "").lower().strip()[:3]
+            title = (tags.get("title") or "").strip()
+            codec = s.get("codec_name", "").lower()
+
+            if s.get("codec_type") == "audio":
+                i = len(audio_streams)
+                lang = raw_lang or f"aud{i}"
+                label = title or _LANG_NAMES.get(raw_lang, "") or f"Track {i + 1}"
+                # Build a filesystem-safe unique directory name
+                safe = re.sub(r"[^a-zA-Z0-9]", "", lang)[:8] or f"aud{i}"
+                dir_name = f"aud_{safe}"
+                if dir_name in used_dir_names:
+                    dir_name = f"aud_{safe}_{i}"
+                used_dir_names.add(dir_name)
+                audio_streams.append(
+                    {
+                        "index": i,
+                        "lang": lang,
+                        "label": label,
+                        "dir_name": dir_name,
+                    }
+                )
+
+            elif s.get("codec_type") == "subtitle":
+                if codec in _TEXT_SUB_CODECS:
+                    j = len(sub_streams)
+                    lang = raw_lang or f"sub{j}"
+                    label = (
+                        title or _LANG_NAMES.get(raw_lang, "") or f"Subtitle {j + 1}"
+                    )
+                    sub_streams.append(
+                        {
+                            "src_idx": sub_src_idx,  # for -map 0:s:N
+                            "lang": lang,
+                            "label": label,
+                        }
+                    )
+                sub_src_idx += 1
+
+        return audio_streams, sub_streams
+    except Exception:
+        return [], []
+
+
 def _resolve_ffmpeg() -> str:
     """Return the ffmpeg executable path, searching PATH then common Windows install dirs."""
     import shutil as _shutil
@@ -3789,6 +3935,11 @@ def _run_hls_transcode(file_path: str, cache_key: str):
 
     try:
         _, src_height, has_audio, duration_secs, src_fps = _probe_video(file_path)
+        audio_streams, sub_streams = _probe_streams(file_path)
+
+        # Use multi-audio agroup mode when the source has 2+ audio tracks.
+        # Single-audio keeps the simpler muxed approach for maximum compatibility.
+        use_multi_audio = has_audio and len(audio_streams) > 1
 
         # Treat 48+ fps sources as HFR (covers both 50 Hz / PAL and 59.94/60 Hz)
         is_hfr = src_fps >= 48.0
@@ -3873,7 +4024,15 @@ def _run_hls_transcode(file_path: str, cache_key: str):
 
         for i in range(n):
             cmd += ["-map", f"[vout{i}]"]
-        if has_audio:
+
+        # ── Audio stream mapping ──────────────────────────────────────────────
+        # Multi-audio (2+ tracks): map each unique audio track once — ffmpeg
+        # will create separate audio-only HLS renditions via agroup in var_stream_map.
+        # Single-audio: duplicate the one track per quality profile (muxed, existing behaviour).
+        if use_multi_audio:
+            for aud in audio_streams:
+                cmd += ["-map", f"0:a:{aud['index']}"]
+        elif has_audio:
             for _ in range(n):
                 cmd += ["-map", "0:a:0"]
 
@@ -3903,11 +4062,32 @@ def _run_hls_transcode(file_path: str, cache_key: str):
                 "0",
             ]
 
-        if has_audio:
+        # ── Audio encoder options ─────────────────────────────────────────────
+        if use_multi_audio:
+            # Separate audio renditions: use best-quality AAC for all tracks
+            for i, aud in enumerate(audio_streams):
+                cmd += [f"-c:a:{i}", "aac", f"-b:a:{i}", "192k", f"-ar:a:{i}", "48000"]
+        elif has_audio:
+            # Muxed single-audio: per-profile bitrate (lower for low-quality rungs)
             for i, (name, h, fps_cap, maxr, bufs, abr) in enumerate(profiles):
                 cmd += [f"-c:a:{i}", "aac", f"-b:a:{i}", abr, "-ar", "48000"]
 
-        if has_audio:
+        # ── var_stream_map ────────────────────────────────────────────────────
+        if use_multi_audio:
+            # Audio-only renditions first (agroup ties them to the video streams)
+            aud_parts = []
+            for i, aud in enumerate(audio_streams):
+                default_flag = "YES" if i == 0 else "NO"
+                aud_parts.append(
+                    f"a:{i},agroup:aud,language:{aud['lang']},"
+                    f"name:{aud['dir_name']},default:{default_flag}"
+                )
+            # Video-only renditions reference the same agroup
+            vid_parts = [
+                f"v:{i},agroup:aud,name:{name}" for i, (name, *_) in enumerate(profiles)
+            ]
+            vsm = " ".join(aud_parts + vid_parts)
+        elif has_audio:
             vsm = " ".join(
                 f"v:{i},a:{i},name:{name}" for i, (name, *_) in enumerate(profiles)
             )
@@ -3984,12 +4164,28 @@ def _run_hls_transcode(file_path: str, cache_key: str):
         proc.wait()
 
         if proc.returncode == 0:
+            # ── Subtitle extraction (text-based tracks → WebVTT) ──────────────
+            # Run as a separate pass after the main transcode so subtitle
+            # failures never block the video from playing.
+            extracted_subs = _extract_subtitles(file_path, output_dir, sub_streams)
+
             _hls_write_status(
                 cache_key,
                 {
                     "status": "ready",
                     "progress": 100,
                     "profiles": [p[0] for p in profiles],
+                    "audio_tracks": [
+                        {"lang": a["lang"], "label": a["label"]} for a in audio_streams
+                    ],
+                    "sub_tracks": [
+                        {
+                            "lang": s["lang"],
+                            "label": s["label"],
+                            "vtt_filename": s["vtt_filename"],
+                        }
+                        for s in extracted_subs
+                    ],
                 },
             )
             print(f"\u2705 HLS transcode done: {cache_key[:8]}\u2026", flush=True)
@@ -4009,6 +4205,102 @@ def _run_hls_transcode(file_path: str, cache_key: str):
     except Exception as exc:
         _hls_write_status(cache_key, {"status": "error", "message": str(exc)})
         print(f"\u274c HLS transcode error: {exc}")
+
+
+def _extract_subtitles(file_path: str, output_dir: str, sub_streams: list) -> list:
+    """
+    Extract each text-based subtitle stream to a WebVTT file in output_dir.
+
+    Returns a list of the sub_streams entries that were successfully extracted,
+    each augmented with a "vtt_filename" key for the generated file.
+    """
+    if not sub_streams:
+        return []
+    ffmpeg_bin = _resolve_ffmpeg()
+    extracted = []
+    for sub in sub_streams:
+        lang = re.sub(r"[^a-zA-Z0-9]", "", sub["lang"])[:8] or f"sub{sub['src_idx']}"
+        vtt_filename = f"sub_{sub['src_idx']}_{lang}.vtt"
+        vtt_path = os.path.join(output_dir, vtt_filename)
+        try:
+            r = subprocess.run(
+                [
+                    ffmpeg_bin,
+                    "-y",
+                    "-i",
+                    file_path,
+                    "-map",
+                    f"0:s:{sub['src_idx']}",
+                    "-c:s",
+                    "webvtt",
+                    vtt_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if (
+                r.returncode == 0
+                and os.path.exists(vtt_path)
+                and os.path.getsize(vtt_path) > 0
+            ):
+                extracted.append({**sub, "vtt_filename": vtt_filename})
+                print(
+                    f"\u2705 Subtitle extracted: {vtt_filename} ({sub['label']})",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"\u26a0\ufe0f  Subtitle extraction failed for track {sub['src_idx']} "
+                    f"({sub['label']}): {r.stderr[-200:] if r.stderr else 'unknown error'}",
+                    flush=True,
+                )
+        except Exception as exc:
+            print(f"\u26a0\ufe0f  Subtitle extraction error: {exc}", flush=True)
+    return extracted
+
+
+def _patch_master_m3u8_subtitles(master_path: str, extracted_subs: list) -> None:
+    """
+    Post-process the ffmpeg-generated master.m3u8 to inject EXT-X-MEDIA subtitle
+    entries and add SUBTITLES="subs" to every EXT-X-STREAM-INF line.
+    No-ops gracefully if the file doesn't exist or subs list is empty.
+    """
+    if not extracted_subs or not os.path.exists(master_path):
+        return
+    try:
+        with open(master_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        # Build EXT-X-MEDIA subtitle declarations
+        media_lines = []
+        for i, sub in enumerate(extracted_subs):
+            media_lines.append(
+                f'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",'
+                f'LANGUAGE="{sub["lang"]}",NAME="{sub["label"]}",'
+                f"DEFAULT=NO,AUTOSELECT=NO,FORCED=NO,"
+                f'URI="{sub["vtt_filename"]}"\n'
+            )
+
+        new_lines: list = []
+        inserted = False
+        for line in lines:
+            # Insert subtitle media declarations before the first stream variant
+            if line.startswith("#EXT-X-STREAM-INF") and not inserted:
+                new_lines.extend(media_lines)
+                inserted = True
+            if line.startswith("#EXT-X-STREAM-INF") and "SUBTITLES=" not in line:
+                line = line.rstrip() + ',SUBTITLES="subs"\n'
+            new_lines.append(line)
+
+        with open(master_path, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+        print(
+            f"\u2705 master.m3u8 patched with {len(extracted_subs)} subtitle track(s)",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"\u26a0\ufe0f  Failed to patch master.m3u8 subtitles: {exc}", flush=True)
 
 
 @app.route("/hls_start/<path:video_path>")
@@ -4109,7 +4401,7 @@ def hls_files(cache_key, hls_path):
     if ".." in hls_path or hls_path.startswith("/"):
         return "Forbidden", 403
     _, ext = os.path.splitext(hls_path)
-    if ext.lower() not in (".m3u8", ".ts"):
+    if ext.lower() not in (".m3u8", ".ts", ".vtt"):
         return "Forbidden", 403
     output_dir = _hls_output_dir(cache_key)
     file_path = os.path.normpath(os.path.join(output_dir, hls_path))
@@ -4123,6 +4415,12 @@ def hls_files(cache_key, hls_path):
             mimetype="application/vnd.apple.mpegurl",
             max_age=0,
             conditional=False,
+        )
+    if ext.lower() == ".vtt":
+        return send_file(
+            file_path,
+            mimetype="text/vtt",
+            max_age=3600,
         )
     return send_file(file_path, mimetype="video/mp2t", max_age=3600)
 

@@ -5103,6 +5103,51 @@ td .fa-file {
     border-color: rgba(52, 152, 219, 0.75);
 }
 
+/* ── Audio / Subtitle track selector rows ────────────────────────────────────── */
+.hls-track-row {
+    display: none; /* shown by JS once tracks are available */
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    background: rgba(22, 48, 95, 0.75);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.hls-track-row select {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: rgba(255, 255, 255, 0.85);
+    border-radius: 6px;
+    padding: 4px 26px 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,0.45)'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+    min-width: 110px;
+}
+
+.hls-track-row select:hover,
+.hls-track-row select:focus {
+    background-color: rgba(255, 255, 255, 0.14);
+    border-color: rgba(52, 152, 219, 0.75);
+    color: #fff;
+}
+
+/* Dropdown options inherit from OS but we can nudge the dark background */
+.hls-track-row select option {
+    background: #0d1e3d;
+    color: #fff;
+}
+
 /* ── Progress bar ─────────────────────────────────────────────────────────────── */
 .hls-progress-wrap {
     width: 100%;
@@ -5222,6 +5267,7 @@ td .fa-file {
 /* Controls sit outside the video area — exempt from clip */
 .hls-btn-row,
 .hls-quality-row,
+.hls-track-row,
 .hls-status-bar {
     position: relative;
     z-index: 5;
@@ -5255,6 +5301,16 @@ td .fa-file {
 
     .hls-quality-row {
         padding: 2px 8px;
+    }
+
+    .hls-track-row {
+        padding: 2px 8px;
+        gap: 6px;
+    }
+
+    .hls-track-row select {
+        font-size: 11px;
+        padding: 2px 18px 2px 6px;
     }
 
     /* Force Video.js control bar to not overflow — targets web component parts */
