@@ -3390,17 +3390,29 @@ function openFileViewer(itemPath, filename) {
             // Native small images resolve instantly (backend serves them
             // directly) so the spinner is barely visible in those cases.
             body.innerHTML = `
-                <div class="img-conv-wrap" id="img-conv-wrap">
-                    <div class="img-conv-spinner" id="img-conv-spinner">
-                        <div class="img-conv-ring"></div>
-                        <div class="img-conv-label" id="img-conv-label">Loading image…</div>
+                <div class="img-conv-wrap" id="img-conv-wrap" style="display:flex;flex-direction:column;width:100%;height:100%;min-height:420px;background:#111;border-radius:inherit;">
+                    <div class="img-zoom-toolbar" id="img-zoom-toolbar" style="display:none;align-items:center;gap:5px;padding:5px 10px;background:rgba(0,0,0,0.65);border-bottom:1px solid rgba(255,255,255,0.1);flex-shrink:0;user-select:none;">
+                        <button id="img-zoom-out" title="Zoom Out" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;border-radius:4px;width:28px;height:28px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:13px;"><i class="fas fa-search-minus"></i></button>
+                        <span id="img-zoom-level" style="color:rgba(255,255,255,0.75);font-size:12px;min-width:42px;text-align:center;font-variant-numeric:tabular-nums;">100%</span>
+                        <button id="img-zoom-in" title="Zoom In" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;border-radius:4px;width:28px;height:28px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:13px;"><i class="fas fa-search-plus"></i></button>
+                        <button id="img-zoom-reset" title="Reset to 100%" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;border-radius:4px;padding:0 9px;height:28px;cursor:pointer;font-size:11px;white-space:nowrap;"><i class="fas fa-undo-alt" style="margin-right:4px;"></i>Reset</button>
+                        <button id="img-zoom-fit" title="Fit to Window" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;border-radius:4px;padding:0 9px;height:28px;cursor:pointer;font-size:11px;white-space:nowrap;"><i class="fas fa-compress-alt" style="margin-right:4px;"></i>Fit</button>
+                        <span style="flex:1;"></span>
+                        <span style="color:rgba(255,255,255,0.3);font-size:11px;display:none;" class="img-zoom-hint">Scroll · Drag · Dblclick reset</span>
+                        <button id="img-fullscreen" title="Fullscreen" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;border-radius:4px;width:28px;height:28px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:13px;margin-left:4px;"><i class="fas fa-expand"></i></button>
                     </div>
-                    <img id="img-conv-result" class="viewer-img"
-                         alt="${escapeHtml(filename)}"
-                         style="display:none;"
-                         onerror="document.getElementById('img-conv-label') && (document.getElementById('img-conv-label').textContent='');
-                                  this.style.display='none';
-                                  document.getElementById('img-conv-spinner').innerHTML='<p class=viewer-error>Could not load image.</p>';">
+                    <div id="img-zoom-viewport" style="flex:1;overflow:hidden;display:flex;align-items:center;justify-content:center;position:relative;min-height:0;touch-action:none;width:100%;">
+                        <div class="img-conv-spinner" id="img-conv-spinner">
+                            <div class="img-conv-ring"></div>
+                            <div class="img-conv-label" id="img-conv-label">Loading image…</div>
+                        </div>
+                        <img id="img-conv-result" class="viewer-img"
+                             alt="${escapeHtml(filename)}"
+                             style="display:none;max-width:100%;max-height:100%;object-fit:contain;transform-origin:center center;"
+                             onerror="document.getElementById('img-conv-label') && (document.getElementById('img-conv-label').textContent='');
+                                      this.style.display='none';
+                                      document.getElementById('img-conv-spinner').innerHTML='<p class=viewer-error>Could not load image.</p>';">
+                    </div>
                 </div>`;
             _imgStartPreview(itemPath, filename);
             break;
@@ -3578,9 +3590,10 @@ async function _imgStartPreview(itemPath, filename) {
     function _showImage(url) {
         if (!_alive()) return;
         img.onload = () => {
-            if (!_alive()) return;
-            spinner.style.display = 'none';
-            img.style.display = 'block';
+            spinner.style.display = "none";
+            img.style.display = "block";
+            img.style.setProperty("opacity", "1", "important");
+            _initImageZoom(img, wrap);
         };
         img.src = url;
     }
@@ -3688,12 +3701,334 @@ async function _imgStartPreview(itemPath, filename) {
     }, 1000);
 }
 
+/**
+ * Initialise zoom, pan, and fullscreen for the image preview.
+ * Called once the <img> has fully loaded.
+ */
+function _initImageZoom(img, wrap) {
+    if (window._imgZoomAbortCtrl) {
+        try { window._imgZoomAbortCtrl.abort(); } catch (_) { }
+    }
+    window._imgZoomAbortCtrl = new AbortController();
+
+    // Remove any scroller left over from a previous preview (e.g. re-opening
+    // the viewer or a failed fix attempt that left the DOM in a dirty state).
+    const _staleScroller = document.getElementById('_imgz_scroller');
+    if (_staleScroller) _staleScroller.remove();
+    const sig = { signal: window._imgZoomAbortCtrl.signal };
+
+    const viewport = document.getElementById('img-zoom-viewport');
+    const toolbar = document.getElementById('img-zoom-toolbar');
+    const zoomInBtn = document.getElementById('img-zoom-in');
+    const zoomOutBtn = document.getElementById('img-zoom-out');
+    const resetBtn = document.getElementById('img-zoom-reset');
+    const fitBtn = document.getElementById('img-zoom-fit');
+    const fsBtn = document.getElementById('img-fullscreen');
+    const zoomLabel = document.getElementById('img-zoom-level');
+    const hint = toolbar ? toolbar.querySelector('.img-zoom-hint') : null;
+
+    if (!viewport || !toolbar) return;
+    toolbar.style.display = 'flex';
+    if (hint) hint.style.display = viewport.clientWidth >= 600 ? 'inline' : 'none';
+
+    // ── Structure ────────────────────────────────────────────────────────────
+    // viewport  (overflow:hidden, position:relative)
+    //   └─ scroller (position:absolute;inset:0;overflow:scroll)  ← clientW/H = vw/vh
+    //        └─ canvas  (explicit cw×ch, position:relative)      ← scrollW/H = cw/ch
+    //             └─ img (position:absolute; left:padL; top:padT; w:iw; h:ih)
+    //
+    // Zoom  = change img + canvas dimensions
+    // Pan   = native scrollLeft/scrollTop on scroller
+    // Focal = save image-space fraction under cursor before resize, restore after
+    //
+    // WHY canvas wrapper:
+    //   With position:absolute;inset:0, the scroller fills the viewport (clientW=vw).
+    //   For the scroller to scroll, its CONTENT must be wider than vw.
+    //   Using an explicit-width canvas child guarantees scrollWidth = cw regardless
+    //   of browser trailing-margin behaviour.  Symmetrical margins on img would NOT
+    //   work reliably because right/bottom margins are excluded from scrollWidth by
+    //   most browsers.
+    //
+    // WHY no visibility:hidden:
+    //   The CSS already handles the fade-in via
+    //       #img-conv-result { opacity:0; transition:opacity 0.3s }
+    //       #img-conv-result[style*="display:block"] { opacity:1 }
+    //   Using visibility:hidden here means the image stays invisible if applyZoom()
+    //   ever throws before reaching img.style.visibility='visible'.  Instead we
+    //   start the img at 0×0 (no unsized flash) and let CSS opacity handle reveal.
+
+    // Inject webkit scrollbar CSS once
+    if (!document.getElementById('_imgz_sb_css')) {
+        const st = document.createElement('style');
+        st.id = '_imgz_sb_css';
+        st.textContent = '#_imgz_scroller::-webkit-scrollbar{display:none}';
+        document.head.appendChild(st);
+    }
+
+    // Build scroller + canvas
+    const scroller = document.createElement('div');
+    scroller.id = '_imgz_scroller';
+    scroller.style.cssText = 'position:absolute;inset:0;overflow:scroll;scrollbar-width:none;-ms-overflow-style:none;';
+
+    const canvas = document.createElement('div');
+    canvas.id = '_imgz_canvas';
+    canvas.style.cssText = 'position:relative;';   // width/height set in applyZoom
+
+    viewport.style.position = 'relative';
+    viewport.style.overflow = 'hidden';
+    scroller.appendChild(canvas);
+    canvas.appendChild(img);          // img lives inside canvas
+    viewport.appendChild(scroller);   // scroller (with canvas+img) added to viewport
+
+    // Set structural styles — no opacity:0 or width:0/height:0 to avoid an
+    // invisible intermediate state.  applyZoom() is called immediately below to
+    // size the image before the first paint; the rAF/ResizeObserver below correct
+    // any layout dimensions that weren't available yet at this point.
+    img.style.cssText = 'display:block;max-width:none;max-height:none;border-radius:4px;position:absolute;';
+    // Re-assert opacity:1 !important — cssText reset cleared the value set in
+    // _showImage, and the stylesheet may have opacity:0 [!important] on this id.
+    img.style.setProperty('opacity', '1', 'important');
+
+    const NW = img.naturalWidth || 1;
+    const NH = img.naturalHeight || 1;
+
+    let scale = 1;
+    const MIN_SCALE = 0.1;
+    const MAX_SCALE = Math.max(8, NW / 100);
+    const ZOOM_STEP = 1.25;
+
+    function vp() {
+        const w = viewport.clientWidth || wrap.clientWidth || window.innerWidth || 1;
+        const h = viewport.clientHeight || wrap.clientHeight || Math.round(window.innerHeight * 0.65) || 1;
+        return { vw: w, vh: h };
+    }
+
+    // Size of the image at scale=1 (fit to viewport, never upscale)
+    function fitPx() {
+        const { vw, vh } = vp();
+        const s = Math.min(vw / NW, vh / NH, 1);
+        return { fw: Math.round(NW * s), fh: Math.round(NH * s) };
+    }
+
+    // Resize image + canvas + restore scroll position around focal point.
+    // focalVx/Vy = viewport pixel coords that should stay fixed (default: center)
+    function applyZoom(focalVx, focalVy) {
+        const { vw, vh } = vp();
+        const { fw, fh } = fitPx();
+        const iw = Math.round(fw * scale);
+        const ih = Math.round(fh * scale);
+
+        // Canvas = content area seen by the scroller.  Always >= viewport so the
+        // scroller has something to "sit on" even when the image is smaller.
+        const cw = Math.max(vw, iw);
+        const ch = Math.max(vh, ih);
+
+        // Centering offsets (0 when image overflows the viewport)
+        const padL = Math.max(0, Math.round((cw - iw) / 2));
+        const padT = Math.max(0, Math.round((ch - ih) / 2));
+
+        // Focal point in viewport coords (default = center)
+        const fx = focalVx !== undefined ? focalVx : vw / 2;
+        const fy = focalVy !== undefined ? focalVy : vh / 2;
+
+        // ── Save image-space fraction under focal point (BEFORE resize) ──────
+        // Canvas dimensions before this call (fall back to cw/ch on first render)
+        const oldCw = canvas.offsetWidth || cw;
+        const oldCh = canvas.offsetHeight || ch;
+        const oldIw = img.offsetWidth || iw;
+        const oldIh = img.offsetHeight || ih;
+        const oldPadL = Math.max(0, Math.round((oldCw - oldIw) / 2));
+        const oldPadT = Math.max(0, Math.round((oldCh - oldIh) / 2));
+        const imgPxX = scroller.scrollLeft + fx - oldPadL;
+        const imgPxY = scroller.scrollTop + fy - oldPadT;
+        const fracX = oldIw > 0 ? imgPxX / oldIw : 0.5;
+        const fracY = oldIh > 0 ? imgPxY / oldIh : 0.5;
+
+        // ── Resize canvas (sets scrollWidth/Height for the scroller) ─────────
+        canvas.style.width = cw + 'px';
+        canvas.style.height = ch + 'px';
+
+        // ── Size and position image within canvas ─────────────────────────────
+        img.style.width = iw + 'px';
+        img.style.height = ih + 'px';
+        img.style.left = padL + 'px';
+        img.style.top = padT + 'px';
+
+        // ── Restore focal scroll position ─────────────────────────────────────
+        // maxScroll = canvas size − scroller viewport size
+        const maxSL = Math.max(0, cw - vw);
+        const maxST = Math.max(0, ch - vh);
+        const targetSL = fracX * iw + padL - fx;
+        const targetST = fracY * ih + padT - fy;
+        scroller.scrollLeft = Math.max(0, Math.min(maxSL, targetSL));
+        scroller.scrollTop = Math.max(0, Math.min(maxST, targetST));
+
+        if (zoomLabel) zoomLabel.textContent = Math.round(scale * 100) + '%';
+        const canPan = iw > vw || ih > vh;
+        scroller.style.cursor = canPan ? 'grab' : 'default';
+    }
+
+    function zoomTo(newScale, viewportX, viewportY) {
+        scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
+        applyZoom(viewportX, viewportY);
+    }
+
+    // ── Scroll wheel zoom ────────────────────────────────────────────────────
+    scroller.addEventListener('wheel', e => {
+        e.preventDefault();
+        const r = scroller.getBoundingClientRect();
+        zoomTo(scale * (e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP),
+            e.clientX - r.left, e.clientY - r.top);
+    }, { passive: false, ...sig });
+
+    // ── Mouse drag to pan ────────────────────────────────────────────────────
+    let dragging = false, dragSX = 0, dragSY = 0, dragSL = 0, dragST = 0;
+
+    scroller.addEventListener('mousedown', e => {
+        if (e.button !== 0) return;
+        const { vw, vh } = vp();
+        const { fw, fh } = fitPx();
+        if (fw * scale <= vw && fh * scale <= vh) return; // nothing to pan
+        dragging = true;
+        dragSX = e.clientX; dragSY = e.clientY;
+        dragSL = scroller.scrollLeft; dragST = scroller.scrollTop;
+        scroller.style.cursor = 'grabbing';
+        e.preventDefault();
+    }, sig);
+
+    window.addEventListener('mousemove', e => {
+        if (!dragging) return;
+        scroller.scrollLeft = dragSL - (e.clientX - dragSX);
+        scroller.scrollTop = dragST - (e.clientY - dragSY);
+    }, sig);
+
+    window.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        const { vw, vh } = vp();
+        const { fw, fh } = fitPx();
+        scroller.style.cursor = (fw * scale > vw || fh * scale > vh) ? 'grab' : 'default';
+    }, sig);
+
+    // ── Double-click to reset ────────────────────────────────────────────────
+    scroller.addEventListener('dblclick', () => {
+        scale = 1; applyZoom();
+    }, sig);
+
+    // ── Touch: one-finger pan + two-finger pinch ─────────────────────────────
+    let lastPinchDist = null;
+    let t1x = 0, t1y = 0, t1sl = 0, t1st = 0;
+
+    scroller.addEventListener('touchstart', e => {
+        if (e.touches.length === 2) {
+            lastPinchDist = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY);
+        } else if (e.touches.length === 1) {
+            t1x = e.touches[0].clientX; t1y = e.touches[0].clientY;
+            t1sl = scroller.scrollLeft; t1st = scroller.scrollTop;
+        }
+    }, { passive: true, ...sig });
+
+    scroller.addEventListener('touchmove', e => {
+        if (e.touches.length === 2 && lastPinchDist) {
+            const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY);
+            const r = scroller.getBoundingClientRect();
+            const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left;
+            const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top;
+            zoomTo(scale * d / lastPinchDist, cx, cy);
+            lastPinchDist = d;
+            e.preventDefault();
+        } else if (e.touches.length === 1) {
+            scroller.scrollLeft = t1sl - (e.touches[0].clientX - t1x);
+            scroller.scrollTop = t1st - (e.touches[0].clientY - t1y);
+            e.preventDefault();
+        }
+    }, { passive: false, ...sig });
+
+    scroller.addEventListener('touchend', () => { lastPinchDist = null; }, { passive: true, ...sig });
+
+    // ── Toolbar buttons ──────────────────────────────────────────────────────
+    if (zoomInBtn) zoomInBtn.addEventListener('click', () => zoomTo(scale * ZOOM_STEP), sig);
+    if (zoomOutBtn) zoomOutBtn.addEventListener('click', () => zoomTo(scale / ZOOM_STEP), sig);
+    if (resetBtn) resetBtn.addEventListener('click', () => { scale = 1; applyZoom(); }, sig);
+    if (fitBtn) fitBtn.addEventListener('click', () => { scale = 1; applyZoom(); }, sig);
+
+    // ── Fullscreen ───────────────────────────────────────────────────────────
+    function updateFsIcon() {
+        if (!fsBtn) return;
+        fsBtn.innerHTML = document.fullscreenElement
+            ? '<i class="fas fa-compress"></i>' : '<i class="fas fa-expand"></i>';
+        fsBtn.title = document.fullscreenElement ? 'Exit Fullscreen' : 'Fullscreen';
+        setTimeout(applyZoom, 150);
+    }
+    if (fsBtn) {
+        fsBtn.addEventListener('click', () => {
+            const el = document.getElementById('img-conv-wrap') || wrap;
+            if (!el) return;
+            if (!document.fullscreenElement) {
+                (el.requestFullscreen || el.webkitRequestFullscreen || function () { }).call(el);
+            } else {
+                (document.exitFullscreen || document.webkitExitFullscreen || function () { }).call(document);
+            }
+        }, sig);
+    }
+    document.addEventListener('fullscreenchange', updateFsIcon, sig);
+    document.addEventListener('webkitfullscreenchange', updateFsIcon, sig);
+
+    // ── Initial synchronous size — image is already visible (opacity:1 !important
+    // set above), so just size it correctly before the first paint.  rAF below
+    // re-runs applyZoom if the viewport had stale/zero dimensions at this point.
+    applyZoom();
+
+    // If the viewport was still zero-sized at that point (e.g. modal CSS not yet
+    // applied), a ResizeObserver fires a corrective applyZoom once it gets size.
+    let _hasRealSize = false;
+    requestAnimationFrame(() => {
+        const { vw, vh } = vp();
+        if (vw > 1 && vh > 1) {
+            _hasRealSize = true;
+            applyZoom();
+        }
+        // Keep opacity forced on (cssText assignment may have cleared it)
+        img.style.setProperty('opacity', '1', 'important');
+    });
+
+    // Fallback: if the modal is still laying out when the rAF fires, a
+    // ResizeObserver re-runs applyZoom the first time the viewport is non-zero.
+    if (typeof ResizeObserver !== 'undefined') {
+        const _ro = new ResizeObserver(() => {
+            if (_hasRealSize) { _ro.disconnect(); return; }
+            const { vw, vh } = vp();
+            if (vw > 1 && vh > 1) {
+                _hasRealSize = true;
+                applyZoom();
+                img.style.setProperty('opacity', '1', 'important');
+                _ro.disconnect();
+            }
+        });
+        _ro.observe(viewport);
+        // Auto-disconnect on close (AbortController signal teardown)
+        sig.signal.addEventListener('abort', () => _ro.disconnect());
+    }
+}
+
 /** Close the file viewer and stop any media playback. */
 function closeFileViewer() {
     const modal = document.getElementById('fileViewerModal');
     const body = document.getElementById('fileViewerBody');
     if (!modal) return;
     modal.classList.remove('show');
+
+    // Clean up image zoom listeners and exit fullscreen if active
+    if (window._imgZoomAbortCtrl) {
+        try { window._imgZoomAbortCtrl.abort(); } catch (_) { }
+        window._imgZoomAbortCtrl = null;
+    }
+    if (document.fullscreenElement) {
+        try { document.exitFullscreen(); } catch (_) { }
+    }
 
     window._hlsPollCancel = true;
     window._vjsCurrentPlayer = null;

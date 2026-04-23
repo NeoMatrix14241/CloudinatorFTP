@@ -3950,6 +3950,9 @@ td .fa-file {
     object-fit: contain;
     border-radius: 4px;
     display: block;
+    /* Prevent GPU compositing layer from downsampling on HiDPI/Retina screens */
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: high-quality;
 }
 
 /* ── Image preview loading state ─────────────────────────────────────────── */
@@ -5336,6 +5339,10 @@ td .fa-file {
 #fileViewerModal .file-viewer-modal-content,
 #fileViewerModal .modal-content {
     border-radius: 12px !important;
+    /* backdrop-filter on modal-content forces a GPU compositing layer that
+       downsamples child images on HiDPI screens — disable it for the viewer */
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
 }
 
 #fileViewerModal .file-viewer-body {

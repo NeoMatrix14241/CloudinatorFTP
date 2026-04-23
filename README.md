@@ -91,12 +91,6 @@ cd CloudinatorFTP
 pip install -r requirements.txt
 ```
 
-> **⚠️ Troubleshooting bcrypt installation:**
-> If bcrypt installation fails, install build tools first:
-> ```bash
-> pkg install clang python libcrypt
-> ```
-
 #### 4. 📂 Configure Server and Storage Location
 
 **Storage & Cache**
@@ -270,7 +264,6 @@ This tool helps:
 
 | Issue | Solution |
 |-------|----------|
-| `bcrypt` installation fails | `pkg install clang python-dev libcrypt-dev` |
 | Port already in use | Change port in `config.py` or kill process |
 | Cloudflare tunnel fails | Check internet connection, try again |
 
