@@ -4001,6 +4001,12 @@ def _run_hls_transcode(file_path: str, cache_key: str):
         for name, *_ in profiles:
             os.makedirs(os.path.join(output_dir, name), exist_ok=True)
 
+        # Pre-create audio rendition subdirs too — ffmpeg won't create them
+        # and without them the init.mp4 falls back to CWD (project root).
+        if use_multi_audio:
+            for aud in audio_streams:
+                os.makedirs(os.path.join(output_dir, aud["dir_name"]), exist_ok=True)
+
         # ── Build filter_complex ──────────────────────────────────────────────
         # For standard profiles on an HFR source, append ",fps=fps=30" so the
         # 30-fps streams are correctly limited.  HFR profiles get no fps filter.
@@ -4096,19 +4102,26 @@ def _run_hls_transcode(file_path: str, cache_key: str):
                 f"v:{i},name:{name}" for i, (name, *_) in enumerate(profiles)
             )
 
-        seg_tpl = os.path.join(output_dir, "%v", "seg%03d.ts")
+        seg_tpl  = os.path.join(output_dir, "%v", "seg%03d.m4s")
         list_tpl = os.path.join(output_dir, "%v", "index.m3u8")
 
         cmd += [
             "-progress",
-            "pipe:1",  # newline-delimited key=value → stdout
-            "-nostats",  # suppress \r stats that block line iteration
+            "pipe:1",
+            "-nostats",
             "-f",
             "hls",
             "-hls_time",
             str(_HLS_SEG_DURATION),
             "-hls_playlist_type",
             "vod",
+            "-hls_segment_type",
+            "fmp4",
+            "-hls_fmp4_init_filename",
+            os.path.join(output_dir, "%v", "init.mp4"),
+                               # absolute path + %v → files land in output_dir/%v/init.mp4
+                               # ffmpeg writes the full path as EXT-X-MAP:URI — we fix
+                               # that to just "init.mp4" in _fix_fmp4_init_uris() below
             "-hls_flags",
             "independent_segments",
             "-var_stream_map",
@@ -4128,12 +4141,21 @@ def _run_hls_transcode(file_path: str, cache_key: str):
             flush=True,
         )
 
+        # Resolve ffmpeg to an absolute path before changing cwd —
+        # on Windows, a bare "ffmpeg" would fail to resolve once cwd changes.
+        import shutil as _shutil
+        if not os.path.isabs(cmd[0]):
+            abs_ffmpeg = _shutil.which(cmd[0])
+            if abs_ffmpeg:
+                cmd[0] = abs_ffmpeg
+
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            cwd=output_dir,  # ffmpeg resolves "%v/init.mp4" relative to here
         )
 
         stderr_tail = []
@@ -4164,6 +4186,11 @@ def _run_hls_transcode(file_path: str, cache_key: str):
         proc.wait()
 
         if proc.returncode == 0:
+            # Fix EXT-X-MAP URIs: ffmpeg writes the absolute path we passed
+            # to -hls_fmp4_init_filename verbatim into each playlist.
+            # Replace it with just "init.mp4" so browsers can fetch it correctly.
+            _fix_fmp4_init_uris(output_dir)
+
             # ── Subtitle extraction (text-based tracks → WebVTT) ──────────────
             # Run as a separate pass after the main transcode so subtitle
             # failures never block the video from playing.
@@ -4258,6 +4285,34 @@ def _extract_subtitles(file_path: str, output_dir: str, sub_streams: list) -> li
         except Exception as exc:
             print(f"\u26a0\ufe0f  Subtitle extraction error: {exc}", flush=True)
     return extracted
+
+
+def _fix_fmp4_init_uris(output_dir: str) -> None:
+    """
+    ffmpeg writes the full absolute path passed to -hls_fmp4_init_filename
+    verbatim into EXT-X-MAP:URI in each variant playlist.  Replace those
+    absolute paths with just "init.mp4" so browsers can resolve them
+    relative to the playlist URL via the normal HLS file-serving route.
+    """
+    import glob as _glob
+    for playlist in _glob.glob(os.path.join(output_dir, "**", "index.m3u8"), recursive=True):
+        try:
+            with open(playlist, "r", encoding="utf-8") as f:
+                content = f.read()
+            if "#EXT-X-MAP" not in content:
+                continue
+            # Replace any EXT-X-MAP URI value with just "init.mp4"
+            fixed = re.sub(
+                r'#EXT-X-MAP:URI="[^"]*"',
+                '#EXT-X-MAP:URI="init.mp4"',
+                content,
+            )
+            if fixed != content:
+                with open(playlist, "w", encoding="utf-8") as f:
+                    f.write(fixed)
+                print(f"  fixed EXT-X-MAP URI in {os.path.relpath(playlist, output_dir)}")
+        except Exception as e:
+            print(f"  warning: could not fix {playlist}: {e}")
 
 
 def _patch_master_m3u8_subtitles(master_path: str, extracted_subs: list) -> None:
@@ -4401,7 +4456,7 @@ def hls_files(cache_key, hls_path):
     if ".." in hls_path or hls_path.startswith("/"):
         return "Forbidden", 403
     _, ext = os.path.splitext(hls_path)
-    if ext.lower() not in (".m3u8", ".ts", ".vtt"):
+    if ext.lower() not in (".m3u8", ".ts", ".m4s", ".vtt", ".mp4"):
         return "Forbidden", 403
     output_dir = _hls_output_dir(cache_key)
     file_path = os.path.normpath(os.path.join(output_dir, hls_path))
@@ -4422,6 +4477,11 @@ def hls_files(cache_key, hls_path):
             mimetype="text/vtt",
             max_age=3600,
         )
+    if ext.lower() == ".mp4":
+        return send_file(file_path, mimetype="video/mp4", max_age=3600)
+    if ext.lower() == ".m4s":
+        return send_file(file_path, mimetype="video/iso.segment", max_age=3600)
+    # .ts segments
     return send_file(file_path, mimetype="video/mp2t", max_age=3600)
 
 

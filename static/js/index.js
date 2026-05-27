@@ -10284,6 +10284,8 @@ async function _hlsStartStream(itemPath, wrapperId) {
         area.querySelectorAll('video, audio').forEach(m => {
             try { m.pause(); m.removeAttribute('src'); m.load(); } catch (_) { }
         });
+        // Destroy the external HLS.js audio instance used for audio track switching
+        _destroyAudioTrackEl();
         // Remove audio/subtitle selector rows and overlay so they're rebuilt fresh on next mount
         ['hls-audio-row', 'hls-subtitle-row', 'hls-subtitle-overlay'].forEach(id => {
             const el = $id(id);
@@ -10291,6 +10293,22 @@ async function _hlsStartStream(itemPath, wrapperId) {
         });
         // Shadow-root overlay is removed with the player element itself (innerHTML = '')
         area.innerHTML = '';
+    }
+
+    function _destroyAudioTrackEl() {
+        if (window._audioTrackHls) {
+            try { window._audioTrackHls.destroy(); } catch (_) {}
+            window._audioTrackHls = null;
+        }
+        if (window._audioTrackEl) {
+            try { window._audioTrackEl.pause(); window._audioTrackEl.remove(); } catch (_) {}
+            window._audioTrackEl = null;
+        }
+        if (window._audioTrackSync) {
+            clearInterval(window._audioTrackSync);
+            window._audioTrackSync = null;
+        }
+        window._audioTrackIdx = null;
     }
 
     function _mountRawPlayer(src, autoplay) {
@@ -10318,13 +10336,18 @@ async function _hlsStartStream(itemPath, wrapperId) {
         if (!area) return;
         _destroyCurrentPlayer();
         area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;position:relative;';
-        const ap = autoplay ? 'autoplay muted' : '';
 
         // Inject <track> elements so the player's built-in caption button works.
         const trackEls = (subMeta || []).map(s =>
             `<track kind="subtitles" src="/hls_files/${cacheKey}/${encodeURIComponent(s.vtt_filename)}" srclang="${escapeHtml(s.lang)}" label="${escapeHtml(s.label)}">`
         ).join('');
 
+        // `autoplay muted` is required — without autoplay, VHS never starts
+        // buffering and canplay never fires, leaving the video permanently paused.
+        // The old NotSupportedError race (browser autoplay vs HLS.js MSE setup)
+        // no longer applies with fMP4 segments and the current VHS version.
+        // _unmuteWhenReady handles unmuting once VHS has buffered enough data.
+        const ap = autoplay ? 'autoplay muted' : '';
         area.insertAdjacentHTML('afterbegin', `
           <video-player class="vjs-cloudinator-player" style="width:100%;height:100%;display:block;">
             <video-skin>
@@ -10340,6 +10363,11 @@ async function _hlsStartStream(itemPath, wrapperId) {
           </video-player>`);
         const playerEl = area.querySelector('video-player');
         window._vjsCurrentPlayer = playerEl;
+        // Store the original master URL so audio switching can reset to it
+        // if quality buttons have changed video.src to a variant URL.
+        window._hlsMasterUrl  = masterUrl;
+        window._hlsCacheKey   = cacheKey;
+        window._hlsAudioIdx   = 0;
         if (autoplay) _unmuteWhenReady(playerEl);
         _attachQualitySelector(playerEl);
         _injectMobileSpeedHide(playerEl);
@@ -10426,7 +10454,7 @@ async function _hlsStartStream(itemPath, wrapperId) {
             if (!_isWebNative) rb2.title = 'Play raw \u2014 audio only (video codec not supported by browser)';
         }
         const sb = $id('hls-btn-stream'); if (sb) sb.classList.add('hls-btn-active');
-        _buildQualityBar(startData.profiles, cacheKey);
+        _buildQualityBar(startData.profiles, cacheKey, startData.audio_tracks || []);
         return;
     }
 
@@ -10469,7 +10497,7 @@ async function _hlsStartStream(itemPath, wrapperId) {
         if (st.status === 'ready') {
             _setStreamReady();
             _wireStreamButton(cacheKey, st.profiles, st.audio_tracks, st.sub_tracks);
-            _buildQualityBar(st.profiles, cacheKey);
+            _buildQualityBar(st.profiles, cacheKey, st.audio_tracks || []);
             if (!_isWebNative) {
                 // Non-native format: auto-switch to HLS.
                 // Re-enable raw button — usable for audio-only (e.g. x265/HEVC MKV).
@@ -10546,8 +10574,9 @@ function _wireStreamButton(cacheKey, profiles, audioMeta, subMeta) {
           </video-player>`;
         const playerEl = area.querySelector('video-player');
         window._vjsCurrentPlayer = playerEl;
+        window._hlsMasterUrl = masterUrl;
         _unmuteWhenReady(playerEl);
-        _buildQualityBar(profiles, cacheKey);
+        _buildQualityBar(profiles, cacheKey, audioMeta || []);
         _buildTrackSelectors(playerEl, audioMeta || [], subMeta || [], cacheKey);
         fresh.classList.add('hls-btn-active');
         const rawBtn = document.getElementById('hls-btn-raw');
@@ -10572,30 +10601,295 @@ function _unmuteWhenReady(playerEl) {
         clearInterval(poll);
 
         function doPlayUnmuted() {
-            // Unmute first, then play — if play() is blocked by autoplay policy
-            // we fall back to muted play so at least the video starts
-            video.muted = false;
+            // Restore seek position saved before a remount (e.g. audio track switch)
+            if (window._hlsRestoreTime > 0) {
+                try { video.currentTime = window._hlsRestoreTime; } catch (_) {}
+                window._hlsRestoreTime = 0;
+            }
+            video.muted  = false;
             video.volume = 1;
             video.play().catch(() => {
                 // Browser blocked unmuted autoplay — play muted as fallback
                 video.muted = true;
-                video.play().catch(() => { });
+                video.play().catch(() => {});
             });
         }
 
-        if (video.readyState >= 1) {
+        // Wait for canplay — fires AFTER HLS.js has attached to MSE and the
+        // browser confirms it can decode. readyState >= 1 (loadedmetadata) is
+        // too early on VHS-managed elements: HLS.js may not have handed off the
+        // MSE source buffer yet, so play() throws NotSupportedError.
+        if (video.readyState >= 3) {
             doPlayUnmuted();
         } else {
-            video.addEventListener('loadedmetadata', doPlayUnmuted, { once: true });
+            video.addEventListener('canplay', doPlayUnmuted, { once: true });
         }
     }, 50);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Audio track switching via a separate HLS.js-backed <audio> element.
+//
+// Problem: VHS (the HLS engine inside @videojs/html) lives in a CLOSED shadow
+// root. We have zero API access to it. Changing video.src or video.load()
+// externally causes VHS to throw NotSupportedError. XHR/fetch interception
+// also fails because VHS never re-fetches master.m3u8 after initialisation.
+//
+// Solution: leave the <video> element (and VHS) completely alone for picture.
+//           Mute the video, then play the desired audio rendition in a hidden
+//           <audio> element backed by our own HLS.js instance. Sync playback
+//           via periodic currentTime checks.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _hlsJsPromise = null; // kept for compat but no longer used
+
+/**
+ * Switch the audio track using the Web Audio API.
+ *
+ * WHY Web Audio instead of HLS.js on a separate element:
+ *   The main VHS player occupies an MSE MediaSource. When our HLS.js instance
+ *   tries to create its own MSE SourceBuffer, Chrome's per-page MSE quota
+ *   causes perpetual bufferAppendError regardless of <audio> or <video>.
+ *   The Web Audio API bypasses MSE entirely: we fetch segments, demux
+ *   MPEG-TS to raw AAC ADTS, decode with AudioContext.decodeAudioData(),
+ *   and schedule AudioBufferSourceNodes. No MSE involved at all.
+ */
+async function _switchAudioTrack(video, idx, audioMeta, cacheKey) {
+    // Once createMediaElementSource(video) is called, the video element's native
+    // audio output is permanently routed through that AudioContext. Closing the
+    // AudioContext severs the connection forever — even after creating a new one.
+    // Solution: create the AudioContext + capture ONCE per video element session,
+    // then just adjust gain values to switch between VHS audio and our segments.
+
+    function stopLoop() {
+        window._audioRunning = false;
+        if (window._audioTrackSync) { clearInterval(window._audioTrackSync); window._audioTrackSync = null; }
+        // Stop all scheduled nodes so they don't keep playing after a track switch
+        if (window._audioActiveNodes) {
+            window._audioActiveNodes.forEach(n => { try { n.stop(0); } catch(_) {} });
+            window._audioActiveNodes = [];
+        }
+    }
+
+    // Initialise the shared AudioContext + gain nodes on first call
+    if (!window._audioCtx || window._audioCtx.state === 'closed') {
+        const ctx = new AudioContext();
+        window._audioCtx = ctx;
+
+        // GainNode for VHS audio (default: fully on)
+        window._videoGain = ctx.createGain();
+        window._videoGain.gain.value = 1;
+        window._videoGain.connect(ctx.destination);
+
+        // GainNode for our audio segments (default: silent)
+        window._audioGain = ctx.createGain();
+        window._audioGain.gain.value = 0;
+        window._audioGain.connect(ctx.destination);
+
+        // Capture video element audio permanently — routes ALL VHS audio through
+        // Web Audio API so we can control it without touching video.muted
+        try {
+            const vSrc = ctx.createMediaElementSource(video);
+            vSrc.connect(window._videoGain);
+            window._videoGainCapture = true;
+        } catch(e) {
+            console.warn('[audio] createMediaElementSource failed:', e.message);
+            window._videoGainCapture = false;
+        }
+
+        // Mirror player volume/mute to whichever gain is active
+        video.addEventListener('volumechange', () => {
+            const v = video.muted ? 0 : video.volume;
+            if (window._audioRunning) {
+                if (window._audioGain) window._audioGain.gain.value = v;
+            } else {
+                if (window._videoGain) window._videoGain.gain.value = v;
+            }
+        });
+    }
+
+    const audioCtx = window._audioCtx;
+    const gainNode = window._audioGain;
+
+    // idx === 0 means "default track":
+    // - In Auto/master mode: VHS handles audio natively, restore gain routing and return.
+    // - In variant mode (a specific quality stream loaded directly): VHS has no audio
+    //   because variant playlists carry no audio rendition. Detect this and fall through
+    //   to the Web Audio segment engine, loading audioUris[0] (the default rendition).
+    if (idx === 0) {
+        stopLoop();
+        window._audioTrackEl = null;
+
+        const _currentSrc  = video.src || '';
+        const _masterUrl   = window._hlsMasterUrl || '';
+        const _variantMode = _masterUrl &&
+            !_currentSrc.endsWith('/master.m3u8') &&
+            !_currentSrc.includes('/master.m3u8');
+
+        if (!_variantMode) {
+            // Master / Auto mode — VHS owns audio, restore gain routing.
+            if (window._videoGainCapture) {
+                window._videoGain.gain.value = video.volume;
+                window._audioGain.gain.value = 0;
+                video.muted = false;
+                if (window._audioCtx && window._audioCtx.state === 'suspended') {
+                    window._audioCtx.resume().catch(() => {});
+                }
+                if (window._audioCtxResumeListener) {
+                    video.removeEventListener('play', window._audioCtxResumeListener);
+                }
+                window._audioCtxResumeListener = () => {
+                    if (window._audioCtx && window._audioCtx.state === 'suspended') {
+                        window._audioCtx.resume().catch(() => {});
+                    }
+                };
+                video.addEventListener('play', window._audioCtxResumeListener);
+            } else {
+                video.muted = false;
+                video.volume = 1;
+            }
+            return;
+        }
+        // Variant mode: fall through with idx=0 to load audioUris[0]
+        // (the default audio rendition from the master) via Web Audio.
+        console.log('[audio] variant mode — loading default rendition via Web Audio');
+    }
+
+    // Switching to custom track: silence VHS, activate our segments
+    stopLoop();
+    // Increment generation so stale async continuations from a previous call bail out
+    // before creating audio nodes — prevents double-audio on rapid quality switches.
+    window._audioGeneration = (window._audioGeneration || 0) + 1;
+    const _gen = window._audioGeneration;
+    if (window._videoGainCapture) {
+        window._videoGain.gain.value = 0;
+        window._audioGain.gain.value = video.volume;
+    } else {
+        video.muted = true;
+    }
+    window._audioRunning = true;
+    window._audioTrackEl = {};
+
+    try {
+        const masterUrl  = window._hlsMasterUrl || `/hls_files/${cacheKey}/master.m3u8`;
+        const masterBase = masterUrl.slice(0, masterUrl.lastIndexOf('/') + 1);
+        const masterText = await fetch(masterUrl, { cache: 'no-store' }).then(r => r.text());
+        if (_gen !== window._audioGeneration || !window._audioRunning) return; // superseded
+
+        const audioUris = masterText.split('\n')
+            .filter(l => l.startsWith('#EXT-X-MEDIA:TYPE=AUDIO'))
+            .map(l => { const m = l.match(/URI="([^"]+)"/); return m ? m[1].replace(/\\/g, '/') : null; })
+            .filter(Boolean);
+
+        if (idx >= audioUris.length) {
+            console.error('[audio] idx out of range');
+            window._videoGain.gain.value = video.volume;
+            window._audioGain.gain.value = 0;
+            window._audioRunning = false;
+            return;
+        }
+
+        const renditionUrl   = masterBase + audioUris[idx];
+        const renditionBase  = renditionUrl.slice(0, renditionUrl.lastIndexOf('/') + 1);
+        const playlistText   = await fetch(renditionUrl, { cache: 'no-store' }).then(r => r.text());
+        if (_gen !== window._audioGeneration || !window._audioRunning) return; // superseded
+        const segments       = playlistText.split('\n').filter(l => l.trim() && !l.startsWith('#')).map(l => renditionBase + l.trim());
+        const targetDuration = parseFloat(playlistText.match(/#EXT-X-TARGETDURATION:(\d+(?:\.\d+)?)/)?.[1] || '6');
+
+        console.log('[audio] switching to', renditionUrl, '—', segments.length, 'segments');
+
+        const initUriRaw = playlistText.match(/#EXT-X-MAP:URI="([^"]+)"/)?.[1];
+        let initData = null;
+        if (initUriRaw) {
+            const initFilename = initUriRaw.replace(/\\/g, '/').split('/').pop();
+            const initUrl = renditionBase + initFilename;
+            console.log('[audio] init segment:', initUrl);
+            initData = await fetch(initUrl).then(r => r.arrayBuffer()).catch(e => {
+                console.error('[audio] init fetch failed:', e.message); return null;
+            });
+            if (_gen !== window._audioGeneration || !window._audioRunning) return; // superseded
+        }
+
+        async function fetchSegment(url) {
+            const segData = await fetch(url).then(r => r.arrayBuffer());
+            if (!initData) return segData;
+            const combined = new Uint8Array(initData.byteLength + segData.byteLength);
+            combined.set(new Uint8Array(initData), 0);
+            combined.set(new Uint8Array(segData), initData.byteLength);
+            return combined.buffer;
+        }
+
+        let segIdx = Math.max(0, Math.floor(video.currentTime / targetDuration));
+
+        async function loadNext() {
+            if (_gen !== window._audioGeneration || !window._audioRunning || segIdx >= segments.length) return;
+            const si            = segIdx++;
+            const segMediaStart = si * targetDuration;
+            try {
+                const buf     = await fetchSegment(segments[si]);
+                if (_gen !== window._audioGeneration || !window._audioRunning) return; // superseded during fetch
+                const decoded = await audioCtx.decodeAudioData(buf);
+                if (_gen !== window._audioGeneration || !window._audioRunning || audioCtx.state === 'closed') return; // superseded during decode
+
+                const videoNow    = video.currentTime;
+                const ctxNow      = audioCtx.currentTime;
+                const mediaOffset = segMediaStart - videoNow;
+                if (mediaOffset < -decoded.duration) { loadNext(); return; }
+
+                const playOffset = Math.max(0, -mediaOffset);
+                const when       = Math.max(ctxNow + 0.02, ctxNow + mediaOffset);
+                const node = audioCtx.createBufferSource();
+                node.buffer = decoded;
+                node.connect(gainNode);
+                if (!window._audioActiveNodes) window._audioActiveNodes = [];
+                window._audioActiveNodes.push(node);
+                node.onended = () => {
+                    const i = window._audioActiveNodes ? window._audioActiveNodes.indexOf(node) : -1;
+                    if (i >= 0) window._audioActiveNodes.splice(i, 1);
+                };
+                node.start(when, playOffset);
+
+                const segEndCtx = when + decoded.duration - playOffset;
+                if (_gen === window._audioGeneration && window._audioRunning)
+                    setTimeout(loadNext, Math.max(0, (segEndCtx - audioCtx.currentTime - 2) * 1000));
+            } catch(e) {
+                console.error('[audio] seg error:', segments[si], e.message);
+                if (_gen === window._audioGeneration && window._audioRunning) setTimeout(loadNext, 500);
+            }
+        }
+
+        loadNext(); loadNext();
+
+        video.addEventListener('seeked', function onSeeked() {
+            if (!window._audioRunning) { video.removeEventListener('seeked', onSeeked); return; }
+            video.removeEventListener('seeked', onSeeked);
+            stopLoop();
+            window._audioRunning = false;
+            _switchAudioTrack(video, idx, audioMeta, cacheKey);
+        });
+
+        window._audioTrackSync = setInterval(() => {
+            if (!window._audioRunning) return;
+            if (!window._videoGainCapture && !video.muted) video.muted = true;
+            if (video.paused && audioCtx.state === 'running')    audioCtx.suspend().catch(()=>{});
+            if (!video.paused && audioCtx.state === 'suspended') audioCtx.resume().catch(()=>{});
+        }, 200);
+
+    } catch(e) {
+        console.error('[audio track] setup failed:', e);
+        if (window._videoGain) window._videoGain.gain.value = video.volume;
+        if (window._audioGain) window._audioGain.gain.value = 0;
+        window._audioRunning = false;
+    }
+}
+
+
 
 /**
  * Build Auto/1080p/720p/360p quality bar using direct <video> src swaps.
  * No VJS API needed — the <video> element is in the light DOM.
  */
-function _buildQualityBar(profiles, cacheKey) {
+function _buildQualityBar(profiles, cacheKey, audioMeta) {
     const row = document.getElementById('hls-quality-row');
     if (!row || !profiles || profiles.length < 2) return;
 
@@ -10616,15 +10910,66 @@ function _buildQualityBar(profiles, cacheKey) {
             if (!playerEl) return;
             const video = playerEl.querySelector('video[slot="media"]');
             if (!video) return;
-            const wasPaused = video.paused;
             const currentTime = video.currentTime;
+
             video.src = src;
             video.load();
-            video.addEventListener('loadedmetadata', () => {
-                if (currentTime > 0) { try { video.currentTime = currentTime; } catch (_) { } }
-                if (!wasPaused) video.play().catch(() => { });
-                video.muted = false;
+            video.addEventListener('canplay', () => {
+                if (currentTime > 0) { try { video.currentTime = currentTime; } catch (_) {} }
+
+                if (text === 'Auto') {
+                    // Back to master.m3u8 — VHS handles audio natively again.
+                    // Stop any Web Audio that was running for a specific variant so
+                    // we don't play both VHS audio and our Web Audio simultaneously.
+                    if (window._audioRunning) {
+                        window._audioRunning = false;
+                        if (window._audioTrackSync) { clearInterval(window._audioTrackSync); window._audioTrackSync = null; }
+                        if (window._audioActiveNodes) {
+                            window._audioActiveNodes.forEach(n => { try { n.stop(0); } catch (_) {} });
+                            window._audioActiveNodes = [];
+                        }
+                        window._audioTrackEl = null;
+                        if (window._videoGainCapture) {
+                            window._videoGain.gain.value = video.volume;
+                            window._audioGain.gain.value = 0;
+                        }
+                        video.muted = false;
+                        video.volume = 1;
+                    }
+                } else if (audioMeta && audioMeta.length > 0) {
+                    // Switched to a specific variant — that stream contains only video.
+                    // Audio lives in a separate rendition in the master playlist and
+                    // VHS won't load it when we bypass the master. Use the existing
+                    // Web Audio segment engine to load it manually instead.
+                    // Honour whatever language the user had selected (default = 0).
+                    const audioIdx = window._hlsUserAudioIdx ?? 0;
+                    _switchAudioTrack(video, audioIdx, audioMeta, cacheKey);
+                }
+
+                if (window._audioTrackEl) {
+                    // External audio track is active.
+                    // If using createMediaElementSource (capture mode), video MUST stay
+                    // unmuted so VHS audio flows through the Web Audio capture graph —
+                    // _videoGain (gain=0) silences it, not video.muted.
+                    // Only set video.muted=true in the legacy fallback path.
+                    if (!window._videoGainCapture) video.muted = true;
+                    video.play().catch(() => {});
+                    return;
+                }
+                video.removeAttribute('muted');
+                video.muted  = false;
                 video.volume = 1;
+                video.play().catch(() => {
+                    video.muted = true;
+                    video.play().catch(() => {});
+                });
+                let polls = 0;
+                const unmutePoll = setInterval(() => {
+                    if (!window._audioTrackEl && video.muted) {
+                        video.removeAttribute('muted'); video.muted = false; video.volume = 1;
+                    }
+                    if (++polls >= 6) clearInterval(unmutePoll);
+                }, 250);
             }, { once: true });
             row.querySelectorAll('.hls-quality-btn').forEach(b => b.classList.remove('hls-quality-active'));
             btn.classList.add('hls-quality-active');
@@ -10724,13 +11069,10 @@ function _buildTrackSelectors(playerEl, audioMeta, subMeta, cacheKey) {
         row.style.display = 'flex';
         sel.addEventListener('change', () => {
             const idx = parseInt(sel.value, 10);
+            // Remember this choice so quality switches can restore it.
+            window._hlsUserAudioIdx = idx;
             _getVideo(video => {
-                if (video.audioTracks && video.audioTracks.length > 0) {
-                    Array.from(video.audioTracks).forEach((t, i) => { t.enabled = (i === idx); });
-                    return;
-                }
-                const hls = video._hls || video.__hls || playerEl._hls || playerEl.__hls;
-                if (hls && typeof hls.audioTrack !== 'undefined') hls.audioTrack = idx;
+                _switchAudioTrack(video, idx, audioMeta, cacheKey);
             });
         });
     }
