@@ -10337,16 +10337,15 @@ async function _hlsStartStream(itemPath, wrapperId) {
         _destroyCurrentPlayer();
         area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;position:relative;';
 
-        // Inject <track> elements so the player's built-in caption button works.
-        const trackEls = (subMeta || []).map(s =>
-            `<track kind="subtitles" src="/hls_files/${cacheKey}/${encodeURIComponent(s.vtt_filename)}" srclang="${escapeHtml(s.lang)}" label="${escapeHtml(s.label)}">`
-        ).join('');
-
         // `autoplay muted` is required — without autoplay, VHS never starts
         // buffering and canplay never fires, leaving the video permanently paused.
         // The old NotSupportedError race (browser autoplay vs HLS.js MSE setup)
         // no longer applies with fMP4 segments and the current VHS version.
         // _unmuteWhenReady handles unmuting once VHS has buffered enough data.
+        // NOTE: <track> elements are intentionally omitted here — they are injected
+        // dynamically inside _buildTrackSelectors._getVideo, AFTER the change
+        // listener is active. This ensures tracks are never in the DOM before
+        // we can synchronously disable them, eliminating the subtitle flash.
         const ap = autoplay ? 'autoplay muted' : '';
         area.insertAdjacentHTML('afterbegin', `
           <video-player class="vjs-cloudinator-player" style="width:100%;height:100%;display:block;">
@@ -10357,7 +10356,6 @@ async function _hlsStartStream(itemPath, wrapperId) {
                      ${ap}
                      playsinline
                      style="width:100%;height:100%;">
-                ${trackEls}
               </video>
             </video-skin>
           </video-player>`);
@@ -10555,11 +10553,9 @@ function _wireStreamButton(cacheKey, profiles, audioMeta, subMeta) {
             if (el) el.remove();
         });
 
-        const trackEls = (subMeta || []).map(s =>
-            `<track kind="subtitles" src="/hls_files/${cacheKey}/${encodeURIComponent(s.vtt_filename)}" srclang="${s.lang}" label="${s.label || s.lang}">`
-        ).join('');
-
         area.style.cssText = 'width:100%;min-height:300px;flex:1 1 auto;position:relative;';
+        // NOTE: <track> elements are intentionally omitted — injected dynamically
+        // inside _buildTrackSelectors._getVideo after the change listener is active.
         area.innerHTML = `
           <video-player class="vjs-cloudinator-player" style="width:100%;height:100%;display:block;">
             <video-skin>
@@ -10568,7 +10564,6 @@ function _wireStreamButton(cacheKey, profiles, audioMeta, subMeta) {
                      type="application/x-mpegURL"
                      playsinline
                      style="width:100%;height:100%;">
-                ${trackEls}
               </video>
             </video-skin>
           </video-player>`;
@@ -10919,8 +10914,7 @@ function _buildQualityBar(profiles, cacheKey, audioMeta) {
 
                 if (text === 'Auto') {
                     // Back to master.m3u8 — VHS handles audio natively again.
-                    // Stop any Web Audio that was running for a specific variant so
-                    // we don't play both VHS audio and our Web Audio simultaneously.
+                    // Stop any Web Audio that was running for a specific variant.
                     if (window._audioRunning) {
                         window._audioRunning = false;
                         if (window._audioTrackSync) { clearInterval(window._audioTrackSync); window._audioTrackSync = null; }
@@ -10937,11 +10931,7 @@ function _buildQualityBar(profiles, cacheKey, audioMeta) {
                         video.volume = 1;
                     }
                 } else if (audioMeta && audioMeta.length > 0) {
-                    // Switched to a specific variant — that stream contains only video.
-                    // Audio lives in a separate rendition in the master playlist and
-                    // VHS won't load it when we bypass the master. Use the existing
-                    // Web Audio segment engine to load it manually instead.
-                    // Honour whatever language the user had selected (default = 0).
+                    // Specific variant — video-only stream, start Web Audio for audio.
                     const audioIdx = window._hlsUserAudioIdx ?? 0;
                     _switchAudioTrack(video, audioIdx, audioMeta, cacheKey);
                 }
@@ -10999,9 +10989,9 @@ function _attachQualitySelector(playerEl) {
 /**
  * Build audio-track and subtitle selector rows.
  *
- * Subtitles: we fetch the .vtt file ourselves, parse cues in JS, and drive
- * a custom overlay on timeupdate — completely bypassing the browser's native
- * TextTrack system and the player's built-in caption button.
+ * Subtitles: one managed <track> element; the language dropdown and the
+ * player's CC button both drive that single native TextTrack so only one
+ * caption stream is ever active.
  *
  * Audio: Safari native audioTracks / HLS.js audioTrack setter.
  */
@@ -11069,7 +11059,6 @@ function _buildTrackSelectors(playerEl, audioMeta, subMeta, cacheKey) {
         row.style.display = 'flex';
         sel.addEventListener('change', () => {
             const idx = parseInt(sel.value, 10);
-            // Remember this choice so quality switches can restore it.
             window._hlsUserAudioIdx = idx;
             _getVideo(video => {
                 _switchAudioTrack(video, idx, audioMeta, cacheKey);
@@ -11077,10 +11066,7 @@ function _buildTrackSelectors(playerEl, audioMeta, subMeta, cacheKey) {
         });
     }
 
-    // ── Subtitle row — delegates entirely to native player tracks ─────────────
-    // The player's caption button already works. Our dropdown just mirrors it,
-    // giving a language-labelled selector above the player to match the audio row.
-    // We do NOT render anything ourselves — zero overlay, zero custom engine.
+    // ── Subtitle row — one managed <track>, synced with CC button ───────────
     if (!hasSubs) return;
 
     const row = _ensureRow('hls-subtitle-row', hasAudio ? 'hls-audio-row' : 'hls-quality-row');
@@ -11104,23 +11090,216 @@ function _buildTrackSelectors(playerEl, audioMeta, subMeta, cacheKey) {
     row.appendChild(sel);
     row.style.display = 'flex';
 
-    // Wire select → player's native textTracks
     _getVideo(video => {
-        // Keep our dropdown in sync if the player's caption button is used
-        video.textTracks.addEventListener('change', () => {
-            const tracks = Array.from(video.textTracks).filter(
+        let _activeIdx   = -1;
+        let _subChanging = false;
+        let _loadGen     = 0;
+        let trackEl      = null;
+
+        // Keep native captions bottom-centred; override per-cue VTT positioning.
+        if (!document.getElementById('_sub-native-fix')) {
+            const s = document.createElement('style');
+            s.id = '_sub-native-fix';
+            s.textContent =
+                'video[data-cloudinator-subs]::-webkit-media-text-track-container{' +
+                '  transform:none!important;' +
+                '  bottom:3em!important;top:auto!important;' +
+                '  left:0!important;right:0!important;' +
+                '  width:100%!important;' +
+                '  text-align:center!important}' +
+                'video[data-cloudinator-subs]::cue{' +
+                '  text-align:center!important;' +
+                '  white-space:pre-wrap}';
+            document.head.appendChild(s);
+        }
+        video.setAttribute('data-cloudinator-subs', '');
+
+        const _emptyVtt = URL.createObjectURL(
+            new Blob(['WEBVTT\n\n'], { type: 'text/vtt' })
+        );
+        const _vttUrls = subMeta.map(s =>
+            `/hls_files/${cacheKey}/${encodeURIComponent(s.vtt_filename)}`
+        );
+
+        const _ourTrack = () => trackEl?.track ?? null;
+        let _captionsEnabled = false; // Track whether captions should be displayed
+
+        function _allSubTracks() {
+            return Array.from(video.textTracks).filter(
                 t => t.kind === 'subtitles' || t.kind === 'captions'
             );
-            const activeIdx = tracks.findIndex(t => t.mode === 'showing');
-            sel.value = activeIdx >= 0 ? activeIdx : '-1';
+        }
+
+        function _disableForeignTracks() {
+            const ours = _ourTrack();
+            _allSubTracks().forEach(t => {
+                if (t !== ours) t.mode = 'disabled';
+            });
+        }
+
+        function _notifyTracksChanged() {
+            video.textTracks.dispatchEvent(new Event('change'));
+        }
+
+        function _removeTrackEl() {
+            if (!trackEl) return;
+            const t = trackEl.track;
+            if (t) t.mode = 'hidden';
+            trackEl.remove();
+            trackEl = null;
+        }
+
+        // Replace the <track> element so every language gets a fresh load event.
+        function _mountTrack(meta, url, onReady) {
+            const gen = _loadGen;
+            const oldTrackEl = trackEl; // Keep reference to old track
+            
+            const el = document.createElement('track');
+            el.kind = 'subtitles';
+            el.src = url;
+            if (meta) {
+                el.srclang = meta.lang || '';
+                el.label = meta.label || meta.lang || '';
+            }
+            el.setAttribute('data-cloudinator-sub', '1');
+            
+            const done = () => { 
+                if (gen === _loadGen) {
+                    // Remove the old track now that new one is loaded
+                    if (oldTrackEl && oldTrackEl !== el) {
+                        if (oldTrackEl.track) oldTrackEl.track.mode = 'hidden';
+                        oldTrackEl.remove();
+                    }
+                    onReady?.();
+                }
+            };
+            
+            el.addEventListener('load', done, { once: true });
+            el.addEventListener('error', done, { once: true });
+            video.appendChild(el);
+            
+            // Immediately update trackEl reference to the new element
+            trackEl = el;
+        }
+
+        function _setOff() {
+            _loadGen++;
+            _subChanging = true;
+            _activeIdx = -1;
+            _captionsEnabled = false;
+            _syncSelect(-1);
+            const t = _ourTrack();
+            if (t) t.mode = 'hidden';
+            _disableForeignTracks();
+            _subChanging = false;
+            _notifyTracksChanged();
+        }
+
+        function _syncSelect(idx) {
+            sel.value = idx < 0 ? '-1' : String(idx);
+        }
+
+        function _setSubIdx(idx) {
+            const meta = subMeta[idx];
+            const url = _vttUrls[idx];
+            if (!meta || !url) { _setOff(); return; }
+
+            const gen = ++_loadGen;
+            _subChanging = true;
+            _activeIdx = idx;
+            _captionsEnabled = true; // Auto-enable captions when selecting subtitle
+            _syncSelect(idx);
+
+            // Keep current track visible while loading new one
+            const curTrack = _ourTrack();
+            if (curTrack) curTrack.mode = 'showing';
+
+            _mountTrack(meta, url, () => {
+                if (gen !== _loadGen) return;
+                _disableForeignTracks();
+                _subChanging = false;
+                const loaded = _ourTrack();
+                if (loaded) loaded.mode = _captionsEnabled ? 'showing' : 'hidden';
+                _notifyTracksChanged();
+            });
+
+            // Immediately enable captions for the new subtitle (will be shown once track loads)
+            _subChanging = true;
+            const newTrack = _ourTrack();
+            if (newTrack) newTrack.mode = 'showing';
+            _disableForeignTracks();
+            _subChanging = false;
+            _notifyTracksChanged();
+        }
+
+        function _applySubIdx(idx) {
+            if (idx < 0) _setOff();
+            else _setSubIdx(idx);
+        }
+
+        // CC button toggles all subtitle tracks — keep only our single managed track.
+        video.textTracks.addEventListener('change', () => {
+            if (_subChanging) return;
+
+            const ours = _ourTrack();
+            const showing = _allSubTracks().filter(t => t.mode === 'showing');
+            const hasAnyTrack = _allSubTracks().length > 0;
+
+            // If captions are being enabled and we have a selected subtitle, show it
+            if (showing.length > 0 && ours && showing[0] === ours && _activeIdx >= 0) {
+                _captionsEnabled = true;
+                _subChanging = true;
+                ours.mode = 'showing';
+                _subChanging = false;
+                return;
+            }
+
+            // If all tracks are hidden/disabled, captions are off
+            if (showing.length === 0) {
+                _captionsEnabled = false;
+                if (_activeIdx >= 0) {
+                    // Keep the selection, just hide the subtitle
+                    const t = _ourTrack();
+                    if (t) t.mode = 'hidden';
+                }
+                return;
+            }
+
+            // If a foreign track is showing, sync to the correct subtitle
+            if (showing.length > 1 || (showing.length === 1 && showing[0] !== ours)) {
+                if (_activeIdx >= 0) {
+                    _subChanging = true;
+                    _applySubIdx(_activeIdx);
+                    _subChanging = false;
+                } else {
+                    // No selection, load first language
+                    _subChanging = true;
+                    _applySubIdx(0);
+                    _subChanging = false;
+                }
+                return;
+            }
+
+            // CC turned on while dropdown is Off — load the first language.
+            if (showing[0] === ours && _activeIdx < 0) {
+                _captionsEnabled = true;
+                _subChanging = true;
+                _applySubIdx(0);
+                _subChanging = false;
+            }
+        });
+
+        video.textTracks.addEventListener('addtrack', e => {
+            if (e.track && e.track !== _ourTrack()) e.track.mode = 'disabled';
+        });
+
+        _mountTrack(null, _emptyVtt, () => {
+            const t = _ourTrack();
+            if (t) t.mode = 'hidden';
         });
 
         sel.addEventListener('change', () => {
-            const idx = parseInt(sel.value, 10);
-            const tracks = Array.from(video.textTracks).filter(
-                t => t.kind === 'subtitles' || t.kind === 'captions'
-            );
-            tracks.forEach((t, i) => { t.mode = i === idx ? 'showing' : 'disabled'; });
+            _applySubIdx(parseInt(sel.value, 10));
         });
     });
 }
