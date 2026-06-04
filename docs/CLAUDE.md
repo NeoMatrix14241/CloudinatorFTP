@@ -187,7 +187,392 @@ CREATE TABLE server_token (
 
 ---
 
-## 🔐 Authentication & Sessions
+## � Flask Routes & API
+
+### Authentication Routes
+
+| Route | Method | Auth | Purpose |
+|-------|--------|------|---------|
+| `/login` | GET | None | Show login form |
+| `/login` | POST | None | Process login credentials |
+| `/logout` | GET | Required | Clear session + redirect |
+| `/check_session` | GET | None | JSON: verify session validity |
+
+**Login POST Response**:
+```json
+{
+  "success": true,
+  "username": "admin",
+  "role": "readwrite",
+  "redirect": "/"
+}
+```
+
+**Check Session Response**:
+```json
+{
+  "logged_in": true,
+  "username": "admin",
+  "role": "readwrite",
+  "token_valid": true
+}
+```
+
+---
+
+### File Browsing & Download Routes
+
+| Route | Method | Auth | Purpose |
+|-------|--------|------|---------|
+| `/` | GET | Required | List root directory |
+| `/<path:path>` | GET | Required | List or open file/folder |
+| `/download/<path:path>` | GET | Required | Download file as attachment |
+| `/view/<path:path>` | GET | Required | View file inline (img/pdf/video) |
+
+**Directory Listing Response**:
+```json
+{
+  "path": "photos/2024",
+  "is_dir": true,
+  "parent_path": "photos",
+  "entries": [
+    {"name": "vacation.jpg", "is_dir": false, "size": 5000000, "modified": 1693324800},
+    {"name": "family", "is_dir": true, "size": 0, "modified": 1693324800}
+  ],
+  "file_count": 150,
+  "dir_count": 8,
+  "total_size": 50000000000,
+  "from_cache": true
+}
+```
+
+---
+
+### Media Preview Routes
+
+| Route | Method | Auth | Purpose |
+|-------|--------|------|---------|
+| `/pdfviewer` | GET | Required | PDF viewer UI |
+| `/office_preview/<path:path>` | GET | Required | Convert Office docs to HTML/JSON |
+| `/archive_preview/<path:path>` | GET | Required | List archive contents (ZIP/RAR/7Z) |
+
+**Office Preview Response**:
+```json
+{
+  "type": "docx",
+  "content": "<h1>Document Title</h1><p>Content here...</p>",
+  "preview_pages": 5
+}
+```
+
+**Archive Preview Response**:
+```json
+{
+  "type": "zip",
+  "total_entries": 1250,
+  "total_size": 5000000000,
+  "compressed_size": 2500000000,
+  "entries": [
+    {"name": "folder/", "is_dir": true, "size": 0, "compressed_size": 0},
+    {"name": "file.txt", "is_dir": false, "size": 1000, "compressed_size": 300}
+  ]
+}
+```
+
+---
+
+### File Modification Routes
+
+| Route | Method | Auth | Purpose |
+|-------|--------|------|---------|
+| `/upload` | POST | readwrite | Upload file chunk |
+| `/cancel_upload/<file_id>` | POST | readwrite | Cancel chunked upload |
+| `/cleanup_chunks` | POST | readwrite | Manual orphan cleanup |
+| `/bulk-download` | POST | readwrite | Download multiple files as ZIP |
+
+**Upload Chunk Request**:
+```json
+{
+  "file_id": "uuid-1234",
+  "chunk_num": 0,
+  "total_chunks": 100,
+  "dest_path": "uploads/"
+}
+```
+
+**Upload Chunk Response**:
+```json
+{
+  "success": true,
+  "chunk_num": 0,
+  "assembled": false,
+  "percentage": 1,
+  "file_id": "uuid-1234"
+}
+```
+
+**Bulk Download Request**:
+```json
+{
+  "paths": ["file1.txt", "folder/file2.pdf"],
+  "format": "zip"
+}
+```
+
+**Bulk Download Response**: Binary ZIP stream (application/zip)
+
+---
+
+### File System Modification Routes
+
+| Route | Method | Auth | Purpose |
+|-------|--------|------|---------|
+| `/api/create_folder` | POST | readwrite | Create new folder |
+| `/api/rename` | POST | readwrite | Rename file/folder |
+| `/api/move` | POST | readwrite | Move file/folder |
+| `/api/copy` | POST | readwrite | Copy file/folder |
+| `/api/delete` | POST | readwrite | Delete file/folder |
+| `/api/bulk_copy` | POST | readwrite | Copy multiple items |
+| `/api/bulk_delete` | POST | readwrite | Delete multiple items |
+| `/api/bulk_move` | POST | readwrite | Move multiple items |
+
+**Create Folder Request**:
+```json
+{
+  "path": "photos/",
+  "folder_name": "vacation"
+}
+```
+
+**Rename Request**:
+```json
+{
+  "path": "old_file.txt",
+  "new_name": "new_file.txt"
+}
+```
+
+**Move Request**:
+```json
+{
+  "source": "file.txt",
+  "dest": "subfolder/"
+}
+```
+
+**Delete Request**:
+```json
+{
+  "path": "file_to_delete.txt"
+}
+```
+
+**Bulk Copy Request**:
+```json
+{
+  "sources": ["file1.txt", "folder1/"],
+  "dest": "target_folder/",
+  "conflict": "rename"
+}
+```
+
+**Success Response**:
+```json
+{
+  "success": true,
+  "message": "Operation completed",
+  "count": 1
+}
+```
+
+---
+
+### Search Routes
+
+| Route | Method | Auth | Purpose |
+|-------|--------|------|---------|
+| `/api/search` | GET | Required | Full-text search |
+
+**Search Request**:
+```
+GET /api/search?q=mountain&ext=csv,txt&offset=0&limit=50
+```
+
+**Search Response**:
+```json
+{
+  "results": [
+    {"rel_path": "data/mountain.csv", "name": "mountain.csv", "is_dir": false},
+    {"rel_path": "docs/guide.txt", "name": "guide.txt", "is_dir": false}
+  ],
+  "total_count": 237,
+  "has_more": true,
+  "search_time": 0.042,
+  "from_index": true
+}
+```
+
+---
+
+### Real-Time Stats Routes
+
+| Route | Method | Auth | Response |
+|-------|--------|------|----------|
+| `/api/storage_stats` | GET | Required | SSE stream: real-time stats |
+| `/api/dir_info/<path:path>` | GET | Required | Instant dir counters |
+| `/api/monitoring_status` | GET | Required | Watchdog + reconcile status |
+
+**SSE Storage Stats Event**:
+```json
+{
+  "event": "storage_stats_update",
+  "data": {
+    "timestamp": 1693324800.5,
+    "file_count": 125000,
+    "dir_count": 8500,
+    "total_size": 2684354560,
+    "reconcile_complete": false,
+    "walk_progress": 45
+  }
+}
+```
+
+**Dir Info Response**:
+```json
+{
+  "path": "photos/",
+  "file_count": 500,
+  "dir_count": 12,
+  "total_size": 50000000000,
+  "from_cache": true
+}
+```
+
+---
+
+### Video/Media Routes
+
+| Route | Method | Auth | Purpose |
+|-------|--------|------|---------|
+| `/video/<cacheKey>/<filename>` | GET | Required | HLS master playlist (m3u8) |
+| `/segment/<segmentId>` | GET | Required | HLS video segment (.ts) |
+| `/image_proxy/<path:path>` | GET | Required | Image with optional WebP conversion |
+| `/video_status/<cacheKey>` | GET | Required | Transcode progress JSON |
+
+**HLS Playlist (manifest.m3u8)**:
+```m3u8
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXT-X-MEDIA-SEQUENCE:0
+
+#EXT-X-STREAM-INF:BANDWIDTH=300000,RESOLUTION=256x144
+/segment/144p_0
+#EXT-X-STREAM-INF:BANDWIDTH=7500000,RESOLUTION=1280x720
+/segment/720p_0
+```
+
+**Video Status Response**:
+```json
+{
+  "status": "transcoding",
+  "progress": 45,
+  "profiles_done": ["144p", "360p"],
+  "profiles_total": 8,
+  "eta_seconds": 120,
+  "audio_tracks": [
+    {"index": 0, "language": "eng", "label": "English"}
+  ],
+  "subtitle_tracks": [
+    {"index": 0, "language": "eng", "label": "English"},
+    {"index": 1, "language": "por", "label": "Portuguese"}
+  ]
+}
+```
+
+---
+
+### Admin Routes
+
+| Route | Method | Auth | Purpose |
+|-------|--------|------|---------|
+| `/admin/rebuild_cache` | POST | readwrite | Delete + rebuild file_index.json |
+| `/admin/cleanup_chunks` | POST | readwrite | Force orphaned chunk cleanup |
+| `/admin/chunk_stats` | GET | readwrite | Active uploads + queue status |
+| `/admin/upload_status` | GET | readwrite | Per-session assembly jobs |
+
+**Chunk Stats Response**:
+```json
+{
+  "orphaned_count": 5,
+  "orphaned_size": 500000000,
+  "active_uploads": 2,
+  "queue_length": 3,
+  "oldest_orphan_age_hours": 48
+}
+```
+
+**Upload Status Response**:
+```json
+{
+  "session_id": "abc123",
+  "active_jobs": [
+    {
+      "file_id": "uuid-1234",
+      "filename": "large_video.mkv",
+      "status": "processing",
+      "progress": 75,
+      "error": null
+    }
+  ],
+  "total_active": 1
+}
+```
+
+---
+
+### Health & Diagnostic Routes
+
+| Route | Method | Auth | Response |
+|-------|--------|------|----------|
+| `/api/health_check` | GET | None | `{status: 'ok'}` |
+| `/api/speedtest/ping` | GET | None | `{latency_ms: N}` |
+| `/api/speedtest/upload` | POST | None | `{upload_speed_mbps: N}` |
+| `/api/speedtest/download` | GET | None | `{download_speed_mbps: N}` |
+| `/api/disk_stats_fast` | GET | Required | `{total, used, free}` |
+
+**Health Check Response**:
+```json
+{
+  "status": "ok",
+  "version": "3.1",
+  "database": "connected",
+  "file_monitor": "running",
+  "search_index": "ready"
+}
+```
+
+**Speedtest Upload**:
+```json
+{
+  "upload_speed_mbps": 45.3,
+  "latency_ms": 2.1,
+  "packet_loss": 0
+}
+```
+
+---
+
+### Utility Routes
+
+| Route | Method | Auth | Purpose |
+|-------|--------|------|---------|
+| `/cancel_bulk_zip` | POST | Required | Stop bulk ZIP download |
+| `/404` | GET | None | Custom 404 page |
+
+---
+
+## �🔐 Authentication & Sessions
 
 ### Login Flow
 
