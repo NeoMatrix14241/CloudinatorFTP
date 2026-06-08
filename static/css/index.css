@@ -5212,6 +5212,8 @@ td .fa-file {
     height: 28px !important;
     min-width: 28px !important;
     max-width: 28px !important;
+    min-height: 28px !important; /* cancels pointer:coarse { .btn { min-height:44px } } */
+    max-height: 28px !important;
     padding: 0 !important;
     margin: 0 !important;
     font-size: 0 !important;
@@ -5220,6 +5222,7 @@ td .fa-file {
     align-items: center !important;
     justify-content: center !important;
     flex-shrink: 0 !important;
+    flex-grow: 0 !important;
     border-radius: 4px !important;
     line-height: 1 !important;
 }
