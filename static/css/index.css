@@ -416,7 +416,7 @@ body {
 }
 
 .table td {
-    padding: 11px 13px;
+    padding: 6px 8px;
     vertical-align: middle;
     color: white;
     overflow: hidden;
@@ -424,16 +424,16 @@ body {
 }
 
 .file-checkbox {
-    width: 18px;
-    height: 18px;
-    margin-right: 10px;
+    width: 16px;
+    height: 16px;
+    margin-right: 8px;
     cursor: pointer;
 }
 
 .file-icon {
-    font-size: 18px;
-    margin-right: 10px;
-    width: 20px;
+    font-size: 16px;
+    margin-right: 8px;
+    width: 18px;
     text-align: center;
 }
 
@@ -594,13 +594,13 @@ i.fa-file {
 
 /* Individual action button styling — icon-only, square */
 .actions .btn-sm {
-    padding: 5px 7px;
+    padding: 4px 6px;
     margin: 0;
-    font-size: 12px;
+    font-size: 11px;
     line-height: 1;
-    min-width: 28px;
-    width: 28px;
-    height: 28px;
+    min-width: 24px;
+    width: 24px;
+    height: 24px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -608,7 +608,7 @@ i.fa-file {
 }
 
 .actions .btn-sm i {
-    font-size: 12px;
+    font-size: 11px;
     margin: 0;
 }
 
@@ -5448,9 +5448,15 @@ td .fa-file {
     .table td {
         background: rgba(48, 84, 140, 255) !important;
         color: white !important;
-        padding: 11px 13px !important;
+        padding: 6px 8px !important;
         line-height: 1.2 !important;
         font-size: 13px !important;
+        vertical-align: middle !important;
+    }
+
+    /* Actions cell — always centred, never top-pinned even in tall rows */
+    .table td.actions-cell {
+        vertical-align: middle !important;
     }
 
     .table th {

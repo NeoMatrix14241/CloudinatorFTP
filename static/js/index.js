@@ -203,8 +203,8 @@ function smartTableColumnizer() {
     }
 
     function _styleRows(rows, colDefs, isMobile) {
-        const pad = isMobile ? '8px 8px' : '11px 13px';
-        const padTop = isMobile ? '8px' : '11px';
+        const pad = isMobile ? '6px 8px' : '11px 13px';
+        const padTop = isMobile ? '6px' : '11px';
         rows.forEach(row => {
             if (row.classList.contains('empty-folder-row')) return;
             if (row.cells.length && row.cells[0].colSpan > 1) return;
@@ -271,9 +271,10 @@ function smartTableColumnizer() {
                     _set(td, 'word-break', 'break-word');
                     _set(td, 'text-overflow', 'unset');
                 } else {
-                    // All other cells: single line, ellipsis
+                    // All other cells (type, modified, actions): single line, ellipsis, centred vertically
                     _set(td, 'white-space', 'nowrap');
                     _set(td, 'text-overflow', 'ellipsis');
+                    _set(td, 'vertical-align', 'middle');
                 }
             });
         });
