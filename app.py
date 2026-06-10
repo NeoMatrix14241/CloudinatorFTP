@@ -4102,7 +4102,7 @@ def _run_hls_transcode(file_path: str, cache_key: str):
                 f"v:{i},name:{name}" for i, (name, *_) in enumerate(profiles)
             )
 
-        seg_tpl  = os.path.join(output_dir, "%v", "seg%03d.m4s")
+        seg_tpl = os.path.join(output_dir, "%v", "seg%03d.m4s")
         list_tpl = os.path.join(output_dir, "%v", "index.m3u8")
 
         cmd += [
@@ -4119,9 +4119,9 @@ def _run_hls_transcode(file_path: str, cache_key: str):
             "fmp4",
             "-hls_fmp4_init_filename",
             os.path.join(output_dir, "%v", "init.mp4"),
-                               # absolute path + %v → files land in output_dir/%v/init.mp4
-                               # ffmpeg writes the full path as EXT-X-MAP:URI — we fix
-                               # that to just "init.mp4" in _fix_fmp4_init_uris() below
+            # absolute path + %v → files land in output_dir/%v/init.mp4
+            # ffmpeg writes the full path as EXT-X-MAP:URI — we fix
+            # that to just "init.mp4" in _fix_fmp4_init_uris() below
             "-hls_flags",
             "independent_segments",
             "-var_stream_map",
@@ -4144,6 +4144,7 @@ def _run_hls_transcode(file_path: str, cache_key: str):
         # Resolve ffmpeg to an absolute path before changing cwd —
         # on Windows, a bare "ffmpeg" would fail to resolve once cwd changes.
         import shutil as _shutil
+
         if not os.path.isabs(cmd[0]):
             abs_ffmpeg = _shutil.which(cmd[0])
             if abs_ffmpeg:
@@ -4295,7 +4296,10 @@ def _fix_fmp4_init_uris(output_dir: str) -> None:
     relative to the playlist URL via the normal HLS file-serving route.
     """
     import glob as _glob
-    for playlist in _glob.glob(os.path.join(output_dir, "**", "index.m3u8"), recursive=True):
+
+    for playlist in _glob.glob(
+        os.path.join(output_dir, "**", "index.m3u8"), recursive=True
+    ):
         try:
             with open(playlist, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -4310,7 +4314,9 @@ def _fix_fmp4_init_uris(output_dir: str) -> None:
             if fixed != content:
                 with open(playlist, "w", encoding="utf-8") as f:
                     f.write(fixed)
-                print(f"  fixed EXT-X-MAP URI in {os.path.relpath(playlist, output_dir)}")
+                print(
+                    f"  fixed EXT-X-MAP URI in {os.path.relpath(playlist, output_dir)}"
+                )
         except Exception as e:
             print(f"  warning: could not fix {playlist}: {e}")
 

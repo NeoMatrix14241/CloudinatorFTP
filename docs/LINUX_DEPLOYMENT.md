@@ -12,10 +12,12 @@ A comprehensive guide to deploy CloudinatorFTP on Linux systems, enabling lightw
 6. [Configuration](#configuration)
 7. [User Management](#user-management)
 8. [Launch Server](#launch-server)
-9. [Systemd Service Setup](#systemd-service-setup)
-10. [Network Exposure](#network-exposure)
-11. [Storage Configuration](#storage-configuration)
-12. [Troubleshooting](#troubleshooting)
+9. [Server Management Script (manage.sh)](#-server-management-script-managesh)
+10. [Updating Python Dependencies](#-updating-python-dependencies)
+11. [Systemd Service Setup](#systemd-service-setup)
+12. [Network Exposure](#network-exposure)
+13. [Storage Configuration](#storage-configuration)
+14. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -307,6 +309,107 @@ screen -S cloudinator
 python prod_server.py
 # Ctrl+A then D to detach
 ```
+
+---
+
+## 🖥️ Server Management Script (`manage.sh`)
+
+> 💡 **Recommended:** Use `manage.sh` instead of `nohup`/`screen` — it manages background servers, log files, and utilities from a single command.
+
+### ⚡ Setup
+
+```bash
+chmod +x manage.sh
+```
+
+> **Note**: `termux_setup.sh` is for **Android (Termux) only** and is not applicable on Linux. For Linux dependencies, follow the steps above.
+
+### 🚦 Server Commands
+
+> ⚠️ Only one server can run at a time. Starting a second shows a clear status block instead.
+
+| Command | Description |
+|---------|-------------|
+| `./manage.sh start server` | Start `prod_server.py` (Waitress) in the background |
+| `./manage.sh start dev_server` | Start `dev_server.py` (Flask) in the background |
+| `./manage.sh stop` | Gracefully stop the running server |
+| `./manage.sh restart` | Restart the currently active server |
+| `./manage.sh status` | Show server status, PID, uptime, and recent log tail |
+
+### 📋 Log Commands
+
+Logs are saved to `logs/` with datetime stamps — each server start creates a new file (e.g. `logs/prod_server_2026-06-09_10-32-01.log`).
+
+| Command | Description |
+|---------|-------------|
+| `./manage.sh logs` | Last 50 lines (auto-detects active server) |
+| `./manage.sh logs server -f` | Follow live production logs |
+| `./manage.sh logs dev_server -f` | Follow live dev logs |
+| `./manage.sh clean-logs` | Delete old log files (with confirmation) |
+
+> 💡 **Ctrl-C while following logs detaches your terminal without stopping the server.**
+
+### 🔧 Utility Commands
+
+Run any of these **while a server is running in the same terminal**:
+
+| Command | Equivalent |
+|---------|------------|
+| `./manage.sh config` | `python config.py` |
+| `./manage.sh create-user` | `python create_user.py` |
+| `./manage.sh debug-pw` | `python debug_passwords.py` |
+| `./manage.sh reset-db` | `python reset_db.py` |
+| `./manage.sh setup-storage` | `python setup_storage.py` |
+| `./manage.sh update-modules` | `bash update_pymodules.sh` |
+
+### 🎛️ Interactive Menu
+
+```bash
+./manage.sh menu
+```
+
+### 💡 Typical Workflow
+
+```bash
+# Start production server in the background
+./manage.sh start server
+
+# Run utilities in the same terminal while the server is up
+./manage.sh create-user
+./manage.sh config
+
+# Check server is still running (also shown on open with no args)
+./manage.sh
+
+# View logs on demand — Ctrl-C detaches, server keeps running
+./manage.sh logs server -f
+
+# Stop when done
+./manage.sh stop
+```
+
+---
+
+## 🔄 Updating Python Dependencies
+
+To update all Python packages to their latest available versions on PyPI:
+
+```bash
+bash update_pymodules.sh
+```
+
+This script will:
+1. Check the latest available version of each package on PyPI
+2. Update `requirements.txt` with the latest versions
+3. Prompt you to install the updates immediately
+
+Or via `manage.sh`:
+
+```bash
+./manage.sh update-modules
+```
+
+> **Note**: If using a virtual environment, activate it first: `source venv/bin/activate`
 
 ---
 

@@ -5108,7 +5108,8 @@ td .fa-file {
 
 /* ── Audio / Subtitle track selector rows ────────────────────────────────────── */
 .hls-track-row {
-    display: none; /* shown by JS once tracks are available */
+    display: none;
+    /* shown by JS once tracks are available */
     align-items: center;
     gap: 8px;
     padding: 4px 10px;
@@ -5212,7 +5213,8 @@ td .fa-file {
     height: 28px !important;
     min-width: 28px !important;
     max-width: 28px !important;
-    min-height: 28px !important; /* cancels pointer:coarse { .btn { min-height:44px } } */
+    min-height: 28px !important;
+    /* cancels pointer:coarse { .btn { min-height:44px } } */
     max-height: 28px !important;
     padding: 0 !important;
     margin: 0 !important;

@@ -13,8 +13,10 @@ A comprehensive guide to deploy CloudinatorFTP on Windows systems, enabling file
 7. [Configuration](#configuration)
 8. [User Management](#user-management)
 9. [Launch Server](#launch-server)
-10. [Batch Script Setup](#batch-script-setup)
-11. [Windows Service Setup](#windows-service-setup)
+10. [Server Management Script (manage.sh)](#-server-management-script-managesh)
+11. [Updating Python Dependencies](#-updating-python-dependencies)
+12. [Batch Script Setup](#batch-script-setup)
+13. [Windows Service Setup](#windows-service-setup)
 12. [Cloudflare Tunnel](#cloudflare-tunnel)
 13. [Apache/WSGI Deployment](#apachewsgi-deployment-optional)
 14. [Storage Configuration](#storage-configuration)
@@ -336,6 +338,106 @@ start_dev_server.bat
 ```
 
 > **Keep terminal open while server is running**
+
+---
+
+## 🖥️ Server Management Script (`manage.sh`)
+
+> 💡 **Recommended for Git Bash users:** Use `manage.sh` to run servers in the background while keeping your terminal free — no separate window or batch file needed.
+
+### ⚡ Setup (Git Bash)
+
+```bash
+chmod +x manage.sh
+```
+
+> **Note**: `termux_setup.sh` is for **Android (Termux) only** and is not applicable on Windows. Use the Python/pip installation steps above instead.
+
+### 🚦 Server Commands
+
+> ⚠️ Only one server can run at a time. Starting a second shows a clear status block instead.
+
+| Command | Description |
+|---------|-------------|
+| `./manage.sh start server` | Start `prod_server.py` (Waitress) in the background |
+| `./manage.sh start dev_server` | Start `dev_server.py` (Flask) in the background |
+| `./manage.sh stop` | Gracefully stop the running server |
+| `./manage.sh restart` | Restart the currently active server |
+| `./manage.sh status` | Show server status, PID, and recent log tail |
+
+### 📋 Log Commands
+
+Logs are saved to `logs/` with datetime stamps — each server start creates a new file (e.g. `logs/prod_server_2026-06-09_10-32-01.log`).
+
+| Command | Description |
+|---------|-------------|
+| `./manage.sh logs` | Last 50 lines (auto-detects active server) |
+| `./manage.sh logs server -f` | Follow live production logs |
+| `./manage.sh logs dev_server -f` | Follow live dev logs |
+| `./manage.sh clean-logs` | Delete old log files (with confirmation) |
+
+> 💡 **Ctrl-C while following logs detaches your terminal without stopping the server.** The server runs as a fully detached Windows process (`CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS`), so Ctrl-C never reaches it.
+
+### 🔧 Utility Commands
+
+Run any of these **while a server is running in the same Git Bash window**:
+
+| Command | Equivalent |
+|---------|------------|
+| `./manage.sh config` | `python config.py` |
+| `./manage.sh create-user` | `python create_user.py` |
+| `./manage.sh debug-pw` | `python debug_passwords.py` |
+| `./manage.sh reset-db` | `python reset_db.py` |
+| `./manage.sh setup-storage` | `python setup_storage.py` |
+| `./manage.sh update-modules` | `bash update_pymodules.sh` |
+
+### 🎛️ Interactive Menu
+
+```bash
+./manage.sh menu
+```
+
+### 💡 Typical Workflow (Git Bash)
+
+```bash
+# Start production server in the background
+./manage.sh start server
+
+# Run utilities in the same Git Bash window while the server is up
+./manage.sh create-user
+./manage.sh config
+
+# Check server is still running (also shown on open with no args)
+./manage.sh
+
+# View logs on demand — Ctrl-C detaches, server keeps running
+./manage.sh logs server -f
+
+# Stop when done
+./manage.sh stop
+```
+
+---
+
+## 🔄 Updating Python Dependencies
+
+To update all Python packages to their latest available versions on PyPI:
+
+```bash
+# Git Bash
+bash update_pymodules.sh
+
+# Or via manage.sh
+./manage.sh update-modules
+```
+
+This script will:
+1. Check the latest available version of each package on PyPI
+2. Update `requirements.txt` with the latest versions
+3. Prompt you to install the updates immediately
+
+> **Note**: If using a virtual environment, activate it first:
+> `venv\Scripts\activate.bat` (CMD) or `source venv/Scripts/activate` (Git Bash)
 
 ---
 

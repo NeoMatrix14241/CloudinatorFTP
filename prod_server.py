@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Development Server for CloudinatorFTP
-This file runs the Flask development server for testing and debugging.
-Enhanced to match ASGI configuration capabilities.
+Production Server for CloudinatorFTP
+Runs the Waitress WSGI server for production/live use.
 """
 
 import os
 import sys
+import signal
 import socket
 from datetime import timedelta
 
@@ -25,58 +25,75 @@ def get_local_ip() -> str:
 # Add the application directory to Python path
 sys.path.insert(0, os.path.dirname(__file__))
 
-# Set environment variables for better development experience
-os.environ["PYTHONUNBUFFERED"] = (
-    "1"  # Immediate console output (like ASGI access_log=True)
-)
+os.environ["PYTHONUNBUFFERED"] = "1"
 os.environ["FLASK_ENV"] = "development"
 
-# Import the Flask application
+# ---------------------------------------------------------------------------
+# Background-service mode  (set by manage.sh launcher)
+#   _BG = True  → SIGINT ignored, manage.sh stop/taskkill handles shutdown
+#   _BG = False → running directly; two-stage Ctrl+C handler is installed
+# ---------------------------------------------------------------------------
+_BG = os.environ.get("CLOUDINATOR_BG") == "1"
+if _BG:
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, signal.SIG_IGN)
+
 # ensure_dirs() is called inside app.py before anything else loads.
 from app import app
 
 if __name__ == "__main__":
-    # Configure Flask app to match ASGI capabilities
+
+    # ── Two-stage Ctrl+C handler (direct-run only) ───────────────────────────
+    # 1st Ctrl+C → graceful shutdown with thread report
+    # 2nd Ctrl+C → os._exit(0) immediately (no more waiting)
+    if not _BG:
+        _stopping = False
+
+        def _sigint_handler(sig, frame):
+            global _stopping
+            if _stopping:
+                print("\n⚡ Force quitting — terminating immediately…", flush=True)
+                os._exit(0)
+            _stopping = True
+            print(
+                "\n🛑 Interrupt received — shutting down…  (Ctrl+C again to force quit)",
+                flush=True,
+            )
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGINT, _sigint_handler)
+
+    # ── Flask / app config ───────────────────────────────────────────────────
     app.config.update(
-        # Large file handling (equivalent to h11_max_incomplete_event_size=None)
-        MAX_CONTENT_LENGTH=None,  # No upload size limit (like ASGI)
-        # Connection/session settings (equivalent to timeout_keep_alive=0)
-        PERMANENT_SESSION_LIFETIME=timedelta(hours=24),  # 24 hours — matches app.py
-        SEND_FILE_MAX_AGE_DEFAULT=0,  # No caching for development
-        # Development optimizations
+        MAX_CONTENT_LENGTH=None,
+        PERMANENT_SESSION_LIFETIME=timedelta(hours=24),
+        SEND_FILE_MAX_AGE_DEFAULT=0,
         TESTING=False,
         DEBUG=True,
-        THREADED=True,  # Multi-threading (equivalent to limit_concurrency=50)
-        # Error handling (equivalent to graceful error handling in ASGI)
+        THREADED=True,
         PROPAGATE_EXCEPTIONS=True,
         PRESERVE_CONTEXT_ON_EXCEPTION=None,
-        # Template and static file settings for development
         TEMPLATES_AUTO_RELOAD=True,
         EXPLAIN_TEMPLATE_LOADING=False,
     )
 
+    # ── Startup banner ───────────────────────────────────────────────────────
     print("🧪 Starting CloudinatorFTP Production Server...")
     print("🌐 Server running on http://localhost:5000")
-    print("🔧 Configuration matching ASGI setup:")
-    print("   • Debug mode: ON - Auto-reload enabled")
-    print("   • Threading: Enabled (concurrent requests supported)")
-    print("   • Upload size limit: NONE (unlimited like ASGI)")
-    print("   • Request timeout: System default (no artificial limits)")
-    print("   • Max requests: No limit (no auto-restart like ASGI)")
-    print("   • Buffer size: Unlimited (like ASGI h11_max_incomplete_event_size=None)")
-    print("   • Access logging: Enabled in debug mode")
-    print("📁 Press Ctrl+C to stop the server")
+    if _BG:
+        print("🔒 Background service mode (managed by manage.sh)")
+        print("   • Ctrl+C disabled — use './manage.sh stop' to stop")
+    print("🔧 Configuration:")
+    print("   • Threads: 24  |  Connection limit: 500  |  Channel timeout: 30s")
+    print("   • Upload size limit: NONE  |  SSE streaming: enabled")
+    if not _BG:
+        print("📁 Press Ctrl+C to stop  (Ctrl+C twice to force quit)")
     print()
 
-    # Additional development info
     from config import ROOT_DIR
 
-    print(f"📋 Using storage directory: {ROOT_DIR}")
-
-    if os.name == "nt":
-        print(f"📁 Windows location: {ROOT_DIR}")
-    else:
-        print(f"📁 Unix location: {ROOT_DIR}")
+    print(f"📋 Storage directory: {ROOT_DIR}")
     print()
 
     LOCAL_IP = get_local_ip()
@@ -84,10 +101,11 @@ if __name__ == "__main__":
     print(f"🔁 Localhost:      http://localhost:5000")
     print()
 
+    # ── Serve ────────────────────────────────────────────────────────────────
     try:
         from waitress import serve
 
-        print("🚀 Starting Waitress server...")
+        print("🚀 Starting Waitress server…")
         print(
             "✅ HTTP keep-alive enabled — TCP connections reused for multiple requests"
         )
@@ -96,27 +114,66 @@ if __name__ == "__main__":
             app,
             host="0.0.0.0",
             port=5000,
-            threads=24,  # Increased: resume can briefly spike to N_groups concurrent uploads
+            threads=24,
             connection_limit=500,
-            channel_timeout=30,  # Reduced from 120s: frees threads faster after hard refresh/disconnect
-            # 30s is safe because upload chunks complete in seconds.
-            # SSE clients auto-reconnect when the channel closes.
-            cleanup_interval=5,  # More frequent cleanup of dead channels (was 10)
+            channel_timeout=30,
+            cleanup_interval=5,
             asyncore_use_poll=True,
         )
+
     except ImportError:
         print("⚠️  Waitress not installed — run: pip install waitress")
-        print("⚠️  Falling back to Flask dev server (16k file upload limit applies)")
+        print("⚠️  Falling back to Flask dev server (16 MB upload limit applies)")
         app.run(
             host="0.0.0.0",
             port=5000,
             debug=True,
             threaded=True,
-            use_reloader=True,
+            use_reloader=not _BG,
             use_debugger=True,
         )
+
     except KeyboardInterrupt:
-        print("\n👋 Development server stopped by user")
+        import threading as _t, time as _time
+
+        print("\n🛑 Stopping Waitress server…")
+
+        # Brief pause — lets asyncore close the listening socket
+        _time.sleep(0.3)
+
+        active = [
+            t for t in _t.enumerate() if t is not _t.main_thread() and t.is_alive()
+        ]
+        if active:
+            print(f"   ⏳ {len(active)} thread(s) still running:")
+            for t in active:
+                tag = "[daemon]" if t.daemon else "[active]"
+                print(f"      • {t.name} {tag}")
+            print("   Waiting up to 3s for threads to finish…")
+
+            deadline = _time.time() + 3
+            while _time.time() < deadline:
+                pending = [
+                    t
+                    for t in _t.enumerate()
+                    if t is not _t.main_thread() and t.is_alive() and not t.daemon
+                ]
+                if not pending:
+                    break
+                _time.sleep(0.2)
+
+            stuck = [
+                t
+                for t in _t.enumerate()
+                if t is not _t.main_thread() and t.is_alive() and not t.daemon
+            ]
+            if stuck:
+                print(f"   ⚠️  {len(stuck)} thread(s) did not finish — forcing exit")
+                os._exit(0)
+
+        print("👋 Production server stopped.")
+        sys.exit(0)
+
     except Exception as e:
         print(f"💥 Server error: {e}")
         import traceback

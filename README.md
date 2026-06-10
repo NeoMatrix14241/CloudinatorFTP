@@ -19,6 +19,8 @@ A lightweight FTP-like file transfer server that runs on **Termux (Android), Lin
 
 - [📦 Dependencies / Tools](#-dependencies--tools)
 - [🚀 Quick Start](#-quick-start)
+- [🖥️ Server Management Script (manage.sh)](#️-server-management-script-managesh)
+- [🔄 Updating Python Dependencies](#-updating-python-dependencies)
 - [📂 Storage Configuration Guide](#-storage-configuration-guide)
 - [👥 User Management Guide](#-user-management-guide)
 - [🛠️ Troubleshooting](#️-troubleshooting)
@@ -69,6 +71,8 @@ apt update -y && apt full-upgrade -y && pkg install curl -y
 curl -sL https://tinyurl.com/CloudinatorFTP | bash
 ```
 
+> The above URL runs `termux_setup.sh` automatically. This script installs all required Termux packages, applies Android-specific PyPPMd patches, requests storage permission, and **retries up to 5 times** on failure. After cloning the repo you can also run it directly with `bash termux_setup.sh`.
+
 Note: For compatible platforms, [FFmpeg](https://www.gyan.dev/ffmpeg/builds/) is optional for adaptive bitrate video preview with [Video.js](https://videojs.org/).
 
 #### 2. 📥 Clone the Project
@@ -117,6 +121,8 @@ python create_user.py
 ```
 
 #### 6. 🎯 Launch the Server
+
+> 💡 **Recommended for Windows/Linux:** Use [`manage.sh`](#️-server-management-script-managesh) to run servers in the background while keeping your terminal free for utilities.
 
 For Waitress WSGI (Production/Live)
 ```bash
@@ -168,6 +174,108 @@ ingress:
       expectContinueTimeout: 0s
   - service: http_status:404
 ```
+
+## 🖥️ Server Management Script (`manage.sh`)
+
+A shell script for **Windows (Git Bash) and Linux/macOS** that runs a server in the background while keeping your terminal free to run utilities — no separate terminal window needed.
+
+### ⚡ Setup
+
+```bash
+chmod +x manage.sh
+```
+
+### 🚦 Server Commands
+
+> ⚠️ Only one server can run at a time. Attempting to start a second will show a clear status block and stop.
+
+| Command | Description |
+|---------|-------------|
+| `./manage.sh start server` | Start `prod_server.py` (Waitress) in the background |
+| `./manage.sh start dev_server` | Start `dev_server.py` (Flask) in the background |
+| `./manage.sh stop` | Gracefully stop whichever server is running |
+| `./manage.sh restart` | Restart the currently active server |
+| `./manage.sh status` | Show server status, PID, uptime, and recent log tail |
+
+### 📋 Log Commands
+
+Logs are always saved to `logs/` regardless of whether you're watching them.
+
+| Command | Description |
+|---------|-------------|
+| `./manage.sh logs` | Last 50 lines (auto-detects active server) |
+| `./manage.sh logs server` | Last 50 lines of production logs |
+| `./manage.sh logs server -f` | Follow live production logs |
+| `./manage.sh logs dev_server -f` | Follow live dev logs |
+
+> 💡 **Ctrl-C while following logs detaches your terminal without stopping the server.**
+
+### 🔧 Utility Commands
+
+Run any utility **while a server is running in the same terminal**:
+
+| Command | Equivalent |
+|---------|------------|
+| `./manage.sh config` | `python config.py` |
+| `./manage.sh create-user` | `python create_user.py` |
+| `./manage.sh debug-pw` | `python debug_passwords.py` |
+| `./manage.sh reset-db` | `python reset_db.py` |
+| `./manage.sh setup-storage` | `python setup_storage.py` |
+
+### 🎛️ Interactive Menu
+
+```bash
+./manage.sh menu
+```
+
+A numbered menu covering all server and utility commands with live status shown at the top.
+
+### 💡 Typical Workflow
+
+```bash
+# 1. Start production server in the background
+./manage.sh start server
+
+# 2. Run utilities in the same terminal while the server is up
+./manage.sh create-user
+./manage.sh config
+
+# 3. Check server is still running
+./manage.sh status
+
+# 4. View logs on demand (Ctrl-C detaches, server keeps running)
+./manage.sh logs server -f
+
+# 5. Stop when done
+./manage.sh stop
+```
+
+---
+
+## 🔄 Updating Python Dependencies
+
+Keep all packages current without manually editing `requirements.txt`:
+
+```bash
+bash update_pymodules.sh
+```
+
+Or via `manage.sh` (works on all platforms):
+
+```bash
+./manage.sh update-modules
+```
+
+The script will:
+1. Query PyPI for the latest available version of each package
+2. Update `requirements.txt` in place
+3. Prompt you to install the updates immediately
+
+> **Android / Termux**: Run the same command in your Termux session.
+> **Windows**: Run in Git Bash, or double-click if you have a `.bat` wrapper.
+> **Linux**: Activate your virtual environment first (`source venv/bin/activate`).
+
+---
 
 ## 📂 Storage Configuration Guide
 
@@ -303,4 +411,3 @@ Apache License - see [LICENSE](LICENSE) file for details.
 
 
 ---
-

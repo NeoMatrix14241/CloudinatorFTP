@@ -10298,11 +10298,11 @@ async function _hlsStartStream(itemPath, wrapperId) {
 
     function _destroyAudioTrackEl() {
         if (window._audioTrackHls) {
-            try { window._audioTrackHls.destroy(); } catch (_) {}
+            try { window._audioTrackHls.destroy(); } catch (_) { }
             window._audioTrackHls = null;
         }
         if (window._audioTrackEl) {
-            try { window._audioTrackEl.pause(); window._audioTrackEl.remove(); } catch (_) {}
+            try { window._audioTrackEl.pause(); window._audioTrackEl.remove(); } catch (_) { }
             window._audioTrackEl = null;
         }
         if (window._audioTrackSync) {
@@ -10364,9 +10364,9 @@ async function _hlsStartStream(itemPath, wrapperId) {
         window._vjsCurrentPlayer = playerEl;
         // Store the original master URL so audio switching can reset to it
         // if quality buttons have changed video.src to a variant URL.
-        window._hlsMasterUrl  = masterUrl;
-        window._hlsCacheKey   = cacheKey;
-        window._hlsAudioIdx   = 0;
+        window._hlsMasterUrl = masterUrl;
+        window._hlsCacheKey = cacheKey;
+        window._hlsAudioIdx = 0;
         if (autoplay) _unmuteWhenReady(playerEl);
         _attachQualitySelector(playerEl);
         _injectMobileSpeedHide(playerEl);
@@ -10599,15 +10599,15 @@ function _unmuteWhenReady(playerEl) {
         function doPlayUnmuted() {
             // Restore seek position saved before a remount (e.g. audio track switch)
             if (window._hlsRestoreTime > 0) {
-                try { video.currentTime = window._hlsRestoreTime; } catch (_) {}
+                try { video.currentTime = window._hlsRestoreTime; } catch (_) { }
                 window._hlsRestoreTime = 0;
             }
-            video.muted  = false;
+            video.muted = false;
             video.volume = 1;
             video.play().catch(() => {
                 // Browser blocked unmuted autoplay — play muted as fallback
                 video.muted = true;
-                video.play().catch(() => {});
+                video.play().catch(() => { });
             });
         }
 
@@ -10662,7 +10662,7 @@ async function _switchAudioTrack(video, idx, audioMeta, cacheKey) {
         if (window._audioTrackSync) { clearInterval(window._audioTrackSync); window._audioTrackSync = null; }
         // Stop all scheduled nodes so they don't keep playing after a track switch
         if (window._audioActiveNodes) {
-            window._audioActiveNodes.forEach(n => { try { n.stop(0); } catch(_) {} });
+            window._audioActiveNodes.forEach(n => { try { n.stop(0); } catch (_) { } });
             window._audioActiveNodes = [];
         }
     }
@@ -10688,7 +10688,7 @@ async function _switchAudioTrack(video, idx, audioMeta, cacheKey) {
             const vSrc = ctx.createMediaElementSource(video);
             vSrc.connect(window._videoGain);
             window._videoGainCapture = true;
-        } catch(e) {
+        } catch (e) {
             console.warn('[audio] createMediaElementSource failed:', e.message);
             window._videoGainCapture = false;
         }
@@ -10716,8 +10716,8 @@ async function _switchAudioTrack(video, idx, audioMeta, cacheKey) {
         stopLoop();
         window._audioTrackEl = null;
 
-        const _currentSrc  = video.src || '';
-        const _masterUrl   = window._hlsMasterUrl || '';
+        const _currentSrc = video.src || '';
+        const _masterUrl = window._hlsMasterUrl || '';
         const _variantMode = _masterUrl &&
             !_currentSrc.endsWith('/master.m3u8') &&
             !_currentSrc.includes('/master.m3u8');
@@ -10729,14 +10729,14 @@ async function _switchAudioTrack(video, idx, audioMeta, cacheKey) {
                 window._audioGain.gain.value = 0;
                 video.muted = false;
                 if (window._audioCtx && window._audioCtx.state === 'suspended') {
-                    window._audioCtx.resume().catch(() => {});
+                    window._audioCtx.resume().catch(() => { });
                 }
                 if (window._audioCtxResumeListener) {
                     video.removeEventListener('play', window._audioCtxResumeListener);
                 }
                 window._audioCtxResumeListener = () => {
                     if (window._audioCtx && window._audioCtx.state === 'suspended') {
-                        window._audioCtx.resume().catch(() => {});
+                        window._audioCtx.resume().catch(() => { });
                     }
                 };
                 video.addEventListener('play', window._audioCtxResumeListener);
@@ -10767,7 +10767,7 @@ async function _switchAudioTrack(video, idx, audioMeta, cacheKey) {
     window._audioTrackEl = {};
 
     try {
-        const masterUrl  = window._hlsMasterUrl || `/hls_files/${cacheKey}/master.m3u8`;
+        const masterUrl = window._hlsMasterUrl || `/hls_files/${cacheKey}/master.m3u8`;
         const masterBase = masterUrl.slice(0, masterUrl.lastIndexOf('/') + 1);
         const masterText = await fetch(masterUrl, { cache: 'no-store' }).then(r => r.text());
         if (_gen !== window._audioGeneration || !window._audioRunning) return; // superseded
@@ -10785,11 +10785,11 @@ async function _switchAudioTrack(video, idx, audioMeta, cacheKey) {
             return;
         }
 
-        const renditionUrl   = masterBase + audioUris[idx];
-        const renditionBase  = renditionUrl.slice(0, renditionUrl.lastIndexOf('/') + 1);
-        const playlistText   = await fetch(renditionUrl, { cache: 'no-store' }).then(r => r.text());
+        const renditionUrl = masterBase + audioUris[idx];
+        const renditionBase = renditionUrl.slice(0, renditionUrl.lastIndexOf('/') + 1);
+        const playlistText = await fetch(renditionUrl, { cache: 'no-store' }).then(r => r.text());
         if (_gen !== window._audioGeneration || !window._audioRunning) return; // superseded
-        const segments       = playlistText.split('\n').filter(l => l.trim() && !l.startsWith('#')).map(l => renditionBase + l.trim());
+        const segments = playlistText.split('\n').filter(l => l.trim() && !l.startsWith('#')).map(l => renditionBase + l.trim());
         const targetDuration = parseFloat(playlistText.match(/#EXT-X-TARGETDURATION:(\d+(?:\.\d+)?)/)?.[1] || '6');
 
         console.log('[audio] switching to', renditionUrl, '—', segments.length, 'segments');
@@ -10819,21 +10819,21 @@ async function _switchAudioTrack(video, idx, audioMeta, cacheKey) {
 
         async function loadNext() {
             if (_gen !== window._audioGeneration || !window._audioRunning || segIdx >= segments.length) return;
-            const si            = segIdx++;
+            const si = segIdx++;
             const segMediaStart = si * targetDuration;
             try {
-                const buf     = await fetchSegment(segments[si]);
+                const buf = await fetchSegment(segments[si]);
                 if (_gen !== window._audioGeneration || !window._audioRunning) return; // superseded during fetch
                 const decoded = await audioCtx.decodeAudioData(buf);
                 if (_gen !== window._audioGeneration || !window._audioRunning || audioCtx.state === 'closed') return; // superseded during decode
 
-                const videoNow    = video.currentTime;
-                const ctxNow      = audioCtx.currentTime;
+                const videoNow = video.currentTime;
+                const ctxNow = audioCtx.currentTime;
                 const mediaOffset = segMediaStart - videoNow;
                 if (mediaOffset < -decoded.duration) { loadNext(); return; }
 
                 const playOffset = Math.max(0, -mediaOffset);
-                const when       = Math.max(ctxNow + 0.02, ctxNow + mediaOffset);
+                const when = Math.max(ctxNow + 0.02, ctxNow + mediaOffset);
                 const node = audioCtx.createBufferSource();
                 node.buffer = decoded;
                 node.connect(gainNode);
@@ -10848,7 +10848,7 @@ async function _switchAudioTrack(video, idx, audioMeta, cacheKey) {
                 const segEndCtx = when + decoded.duration - playOffset;
                 if (_gen === window._audioGeneration && window._audioRunning)
                     setTimeout(loadNext, Math.max(0, (segEndCtx - audioCtx.currentTime - 2) * 1000));
-            } catch(e) {
+            } catch (e) {
                 console.error('[audio] seg error:', segments[si], e.message);
                 if (_gen === window._audioGeneration && window._audioRunning) setTimeout(loadNext, 500);
             }
@@ -10867,11 +10867,11 @@ async function _switchAudioTrack(video, idx, audioMeta, cacheKey) {
         window._audioTrackSync = setInterval(() => {
             if (!window._audioRunning) return;
             if (!window._videoGainCapture && !video.muted) video.muted = true;
-            if (video.paused && audioCtx.state === 'running')    audioCtx.suspend().catch(()=>{});
-            if (!video.paused && audioCtx.state === 'suspended') audioCtx.resume().catch(()=>{});
+            if (video.paused && audioCtx.state === 'running') audioCtx.suspend().catch(() => { });
+            if (!video.paused && audioCtx.state === 'suspended') audioCtx.resume().catch(() => { });
         }, 200);
 
-    } catch(e) {
+    } catch (e) {
         console.error('[audio track] setup failed:', e);
         if (window._videoGain) window._videoGain.gain.value = video.volume;
         if (window._audioGain) window._audioGain.gain.value = 0;
@@ -10911,7 +10911,7 @@ function _buildQualityBar(profiles, cacheKey, audioMeta) {
             video.src = src;
             video.load();
             video.addEventListener('canplay', () => {
-                if (currentTime > 0) { try { video.currentTime = currentTime; } catch (_) {} }
+                if (currentTime > 0) { try { video.currentTime = currentTime; } catch (_) { } }
 
                 if (text === 'Auto') {
                     // Back to master.m3u8 — VHS handles audio natively again.
@@ -10920,7 +10920,7 @@ function _buildQualityBar(profiles, cacheKey, audioMeta) {
                         window._audioRunning = false;
                         if (window._audioTrackSync) { clearInterval(window._audioTrackSync); window._audioTrackSync = null; }
                         if (window._audioActiveNodes) {
-                            window._audioActiveNodes.forEach(n => { try { n.stop(0); } catch (_) {} });
+                            window._audioActiveNodes.forEach(n => { try { n.stop(0); } catch (_) { } });
                             window._audioActiveNodes = [];
                         }
                         window._audioTrackEl = null;
@@ -10944,15 +10944,15 @@ function _buildQualityBar(profiles, cacheKey, audioMeta) {
                     // _videoGain (gain=0) silences it, not video.muted.
                     // Only set video.muted=true in the legacy fallback path.
                     if (!window._videoGainCapture) video.muted = true;
-                    video.play().catch(() => {});
+                    video.play().catch(() => { });
                     return;
                 }
                 video.removeAttribute('muted');
-                video.muted  = false;
+                video.muted = false;
                 video.volume = 1;
                 video.play().catch(() => {
                     video.muted = true;
-                    video.play().catch(() => {});
+                    video.play().catch(() => { });
                 });
                 let polls = 0;
                 const unmutePoll = setInterval(() => {
@@ -11092,10 +11092,10 @@ function _buildTrackSelectors(playerEl, audioMeta, subMeta, cacheKey) {
     row.style.display = 'flex';
 
     _getVideo(video => {
-        let _activeIdx   = -1;
+        let _activeIdx = -1;
         let _subChanging = false;
-        let _loadGen     = 0;
-        let trackEl      = null;
+        let _loadGen = 0;
+        let trackEl = null;
 
         // Keep native captions bottom-centred; override per-cue VTT positioning.
         if (!document.getElementById('_sub-native-fix')) {
@@ -11154,7 +11154,7 @@ function _buildTrackSelectors(playerEl, audioMeta, subMeta, cacheKey) {
         function _mountTrack(meta, url, onReady) {
             const gen = _loadGen;
             const oldTrackEl = trackEl; // Keep reference to old track
-            
+
             const el = document.createElement('track');
             el.kind = 'subtitles';
             el.src = url;
@@ -11163,8 +11163,8 @@ function _buildTrackSelectors(playerEl, audioMeta, subMeta, cacheKey) {
                 el.label = meta.label || meta.lang || '';
             }
             el.setAttribute('data-cloudinator-sub', '1');
-            
-            const done = () => { 
+
+            const done = () => {
                 if (gen === _loadGen) {
                     // Remove the old track now that new one is loaded
                     if (oldTrackEl && oldTrackEl !== el) {
@@ -11174,11 +11174,11 @@ function _buildTrackSelectors(playerEl, audioMeta, subMeta, cacheKey) {
                     onReady?.();
                 }
             };
-            
+
             el.addEventListener('load', done, { once: true });
             el.addEventListener('error', done, { once: true });
             video.appendChild(el);
-            
+
             // Immediately update trackEl reference to the new element
             trackEl = el;
         }
