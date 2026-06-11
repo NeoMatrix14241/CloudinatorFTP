@@ -7863,6 +7863,45 @@ function addManualCleanupButton() {
         };
 
         controls.appendChild(cacheBtn);
+
+        // --- Clean Media Preview button ---
+        const mediaPreviewBtn = document.createElement('button');
+        mediaPreviewBtn.id = 'cleanupMediaPreviewBtn';
+        mediaPreviewBtn.className = 'btn btn-warning btn-sm manual-cleanup-btn';
+        mediaPreviewBtn.innerHTML = '<i class="fas fa-image"></i> Clear Media Preview';
+        mediaPreviewBtn.title = 'Delete the media preview cache';
+
+        mediaPreviewBtn.onclick = async function () {
+            if (!confirm(
+                'This will delete all HLS transcode and image preview cache files.\n' +
+                'Active transcodes and conversions in progress will be preserved.\n\n' +
+                'Continue?'
+            )) {
+                return;
+            }
+            try {
+                mediaPreviewBtn.disabled = true;
+                mediaPreviewBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Clearing...';
+                const response = await fetch('/admin/clear_media_preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    showUploadStatus(`🧹 ${result.message}`, 'success');
+                } else {
+                    throw new Error(result.error || 'Clear media preview failed');
+                }
+            } catch (error) {
+                showUploadStatus(`❌ Clear media preview failed: ${error.message}`, 'error');
+            } finally {
+                mediaPreviewBtn.disabled = false;
+                mediaPreviewBtn.innerHTML = '<i class="fas fa-image"></i> Clear Media Preview';
+            }
+        };
+
+        controls.appendChild(mediaPreviewBtn);
+
     }
 }
 

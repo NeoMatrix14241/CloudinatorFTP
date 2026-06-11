@@ -2011,6 +2011,112 @@ def cancel_upload():
         return jsonify({"error": f"Cancel upload error: {str(e)}"}), 500
 
 
+@app.route("/admin/clear_media_preview", methods=["POST"])
+@login_required
+def clear_media_preview():
+    """Admin endpoint to clear HLS transcode and image preview caches."""
+    try:
+        role = get_role(current_user())
+        if role != "readwrite":
+            return jsonify({"error": "Permission denied"}), 403
+
+        hls_dirs_removed = 0
+        hls_dirs_skipped = 0
+        hls_bytes_freed = 0
+
+        img_files_removed = 0
+        img_files_skipped = 0
+        img_bytes_freed = 0
+
+        # ── 1. Clear HLS transcode cache ──────────────────────────────────────
+        # Each subdirectory of hls_root is one transcode job (named by cache key).
+        # Skip any whose .status.json reports "processing" — an ffmpeg worker is
+        # actively writing segments into that directory right now.
+        hls_root = _hls_cache_root()
+        if os.path.isdir(hls_root):
+            for entry in os.scandir(hls_root):
+                if not entry.is_dir():
+                    continue
+                cache_key = entry.name
+                if _hls_read_status(cache_key).get("status") == "processing":
+                    hls_dirs_skipped += 1
+                    print(f"⏭️  Skipping active HLS transcode: {cache_key}")
+                    continue
+                try:
+                    dir_size = sum(
+                        f.stat().st_size for f in os.scandir(entry.path) if f.is_file()
+                    )
+                    shutil.rmtree(entry.path)
+                    hls_dirs_removed += 1
+                    hls_bytes_freed += dir_size
+                except Exception as ex:
+                    print(f"⚠️  Failed to remove HLS cache dir {entry.path}: {ex}")
+
+        # ── 2. Clear image preview cache ──────────────────────────────────────
+        # Flat files in img_root: {cache_key}.webp / .jpg / .png / .meta.json
+        # Snapshot active keys first (under the mutex used by the converter) so
+        # we never delete a file whose conversion thread is still writing to it.
+        with _img_events_mutex:
+            active_img_keys = set(_img_conv_events.keys())
+
+        img_root = _img_cache_root()
+        if os.path.isdir(img_root):
+            for entry in os.scandir(img_root):
+                if not entry.is_file():
+                    continue
+                # cache_key is always the first 32-char hex segment before any '.'
+                cache_key = entry.name.split(".")[0]
+                if cache_key in active_img_keys:
+                    img_files_skipped += 1
+                    print(f"⏭️  Skipping active image conversion: {cache_key}")
+                    continue
+                try:
+                    img_bytes_freed += entry.stat().st_size
+                    os.remove(entry.path)
+                    img_files_removed += 1
+                except Exception as ex:
+                    print(f"⚠️  Failed to remove image cache file {entry.path}: {ex}")
+
+        total_bytes = hls_bytes_freed + img_bytes_freed
+        total_mb = total_bytes / (1024 * 1024)
+        skipped_total = hls_dirs_skipped + img_files_skipped
+
+        print(
+            f"🧹 Media preview cache cleared: "
+            f"{hls_dirs_removed} HLS dir(s), {img_files_removed} image file(s) removed "
+            f"({total_mb:.1f} MB freed). "
+            f"Skipped: {hls_dirs_skipped} active HLS, {img_files_skipped} active image."
+        )
+
+        skipped_note = (
+            f" Skipped {skipped_total} active job(s)." if skipped_total > 0 else ""
+        )
+        return (
+            jsonify(
+                {
+                    "success": True,
+                    "message": (
+                        f"Media preview cache cleared: "
+                        f"{hls_dirs_removed} HLS transcode(s) and "
+                        f"{img_files_removed} image preview(s) removed "
+                        f"({total_mb:.1f} MB freed).{skipped_note}"
+                    ),
+                    "hls_dirs_removed": hls_dirs_removed,
+                    "hls_dirs_skipped": hls_dirs_skipped,
+                    "img_files_removed": img_files_removed,
+                    "img_files_skipped": img_files_skipped,
+                    "bytes_freed": total_bytes,
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        print(f"❌ Error clearing media preview cache: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+
 @app.route("/admin/rebuild_cache", methods=["POST"])
 @login_required
 def admin_rebuild_cache():
