@@ -2044,7 +2044,9 @@ def clear_media_preview():
                     continue
                 try:
                     dir_size = sum(
-                        f.stat().st_size for f in os.scandir(entry.path) if f.is_file()
+                        os.path.getsize(os.path.join(root, f))
+                        for root, _, files in os.walk(entry.path)
+                        for f in files
                     )
                     shutil.rmtree(entry.path)
                     hls_dirs_removed += 1
@@ -3699,6 +3701,10 @@ _HLS_HFR_PROFILES = [
 
 _HLS_SEG_DURATION = 6  # seconds per HLS segment
 
+# Suppress console windows on Windows when spawning ffmpeg/ffprobe subprocesses.
+# CREATE_NO_WINDOW is a Windows-only flag; on Linux/macOS it evaluates to 0 (no-op).
+_SUBPROCESS_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
 # HLS cache root lives in the configured cache dir, not inside ROOT_DIR
 from paths import get_hls_cache_dir as _get_hls_cache_dir
 
@@ -3781,6 +3787,7 @@ def _probe_video(file_path: str):
             capture_output=True,
             text=True,
             timeout=30,
+            creationflags=_SUBPROCESS_FLAGS,
         )
         if r.returncode != 0:
             return 0, 0, False, 0.0, 0.0
@@ -3910,6 +3917,7 @@ def _probe_streams(file_path: str):
             capture_output=True,
             text=True,
             timeout=30,
+            creationflags=_SUBPROCESS_FLAGS,
         )
         if r.returncode != 0:
             return [], []
@@ -4011,7 +4019,8 @@ def _ffmpeg_available() -> bool:
         return False
     try:
         subprocess.run(
-            [bin_path, "-version"], capture_output=True, timeout=5, check=True
+            [bin_path, "-version"], capture_output=True, timeout=5, check=True,
+            creationflags=_SUBPROCESS_FLAGS,
         )
         return True
     except Exception:
@@ -4263,6 +4272,7 @@ def _run_hls_transcode(file_path: str, cache_key: str):
             text=True,
             bufsize=1,
             cwd=output_dir,  # ffmpeg resolves "%v/init.mp4" relative to here
+            creationflags=_SUBPROCESS_FLAGS,
         )
 
         stderr_tail = []
@@ -4372,6 +4382,7 @@ def _extract_subtitles(file_path: str, output_dir: str, sub_streams: list) -> li
                 capture_output=True,
                 text=True,
                 timeout=120,
+                creationflags=_SUBPROCESS_FLAGS,
             )
             if (
                 r.returncode == 0
