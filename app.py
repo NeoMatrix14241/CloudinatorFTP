@@ -2118,7 +2118,6 @@ def clear_media_preview():
         return jsonify({"error": str(e)}), 500
 
 
-
 @app.route("/admin/rebuild_cache", methods=["POST"])
 @login_required
 def admin_rebuild_cache():
@@ -4019,7 +4018,10 @@ def _ffmpeg_available() -> bool:
         return False
     try:
         subprocess.run(
-            [bin_path, "-version"], capture_output=True, timeout=5, check=True,
+            [bin_path, "-version"],
+            capture_output=True,
+            timeout=5,
+            check=True,
             creationflags=_SUBPROCESS_FLAGS,
         )
         return True
