@@ -298,10 +298,10 @@ cmd_start() {
     local raw="${1:-}"
     if [[ -z "$raw" ]]; then
         error "Specify a server:  start server  or  start dev_server"
-        exit 1
+        return 1
     fi
     local type
-    type=$(normalize_type "$raw") || exit 1
+    type=$(normalize_type "$raw") || return 1
     
     # ── Mutual exclusion ──
     local other
@@ -337,7 +337,7 @@ cmd_start() {
             echo ""
             info "Stop it first:   ./manage.sh stop"
             info "Then run:        ./manage.sh start $(display_name_for "$type")"
-            exit 1
+            return 1
         fi
     fi
     
@@ -351,7 +351,7 @@ cmd_start() {
     
     if [[ ! -f "${SCRIPT_DIR}/${script}" ]]; then
         error "Script not found: ${SCRIPT_DIR}/${script}"
-        exit 1
+        return 1
     fi
     
     info "Starting ${BOLD}${script}${NC} in the background…"
@@ -363,7 +363,7 @@ cmd_start() {
     
     if [[ -z "$pid" ]]; then
         error "Launcher returned no PID — check ${log} for details."
-        exit 1
+        return 1
     fi
     
     echo "$pid" > "$pid_file"
@@ -383,7 +383,7 @@ cmd_start() {
     else
         rm -f "$pid_file" "$lp_file"
         error "${script} crashed immediately. Check ${log} for details."
-        exit 1
+        return 1
     fi
 }
 
@@ -434,7 +434,7 @@ cmd_restart() {
     type=$(active_server)
     if [[ -z "$type" ]]; then
         warn "No server is running. Use:  ./manage.sh start server|dev_server"
-        exit 1
+        return 1
     fi
     info "Restarting ${BOLD}$(script_for "$type")${NC}…"
     cmd_stop
@@ -501,10 +501,10 @@ cmd_logs() {
         type=$(active_server)
         if [[ -z "$type" ]]; then
             error "No server running. Specify one:  logs server|dev_server  [-f]"
-            exit 1
+            return 1
         fi
     else
-        type=$(normalize_type "$raw") || exit 1
+        type=$(normalize_type "$raw") || return 1
     fi
     
     local log
@@ -591,7 +591,7 @@ run_utility() {
     local script="$1"; shift
     if [[ ! -f "${SCRIPT_DIR}/${script}" ]]; then
         error "Script not found: ${SCRIPT_DIR}/${script}"
-        exit 1
+        return 1
     fi
     header "Running ${script}"
     divider
@@ -607,7 +607,7 @@ run_bash_script() {
     local script="$1"; shift
     if [[ ! -f "${SCRIPT_DIR}/${script}" ]]; then
         error "Script not found: ${SCRIPT_DIR}/${script}"
-        exit 1
+        return 1
     fi
     header "Running ${script}"
     divider
@@ -741,10 +741,10 @@ cmd_menu() {
         read -rp "  Choose an option: " choice
         
         case "$choice" in
-            1)  cmd_start server ;;
-            2)  cmd_start dev_server ;;
-            3)  cmd_stop ;;
-            4)  cmd_restart ;;
+            1)  cmd_start server || true ;;
+            2)  cmd_start dev_server || true ;;
+            3)  cmd_stop || true ;;
+            4)  cmd_restart || true ;;
             5)  cmd_status ;;
             6)
                 local at
@@ -753,19 +753,19 @@ cmd_menu() {
                 lt=$(display_name_for "${at:-prod}")
                 read -rp "  Follow logs? [y/N]: " fa
                 if [[ "$fa" =~ ^[Yy] ]]; then
-                    cmd_logs "$lt" -f
+                    cmd_logs "$lt" -f || true
                 else
-                    cmd_logs "$lt"
+                    cmd_logs "$lt" || true
                 fi
             ;;
             7)  cmd_clean_logs ;;
-            8)  run_utility "config.py" ;;
-            9)  run_utility "create_user.py" ;;
-            10) run_utility "debug_passwords.py" ;;
-            11) run_utility "reset_db.py" ;;
-            12) run_utility "setup_storage.py" ;;
-            13) cmd_update_modules ;;
-            14) cmd_termux_setup ;;
+            8)  run_utility "config.py" || true ;;
+            9)  run_utility "create_user.py" || true ;;
+            10) run_utility "debug_passwords.py" || true ;;
+            11) run_utility "reset_db.py" || true ;;
+            12) run_utility "setup_storage.py" || true ;;
+            13) cmd_update_modules || true ;;
+            14) cmd_termux_setup || true ;;
             q|Q) echo ""; success "Goodbye!"; exit 0 ;;
             *) warn "Invalid option: ${choice}" ;;
         esac
