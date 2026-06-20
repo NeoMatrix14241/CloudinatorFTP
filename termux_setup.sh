@@ -29,7 +29,7 @@ run_setup() {
     pkg upgrade -y && \
     pkg install -y build-essential clang make binutils llvm rust python \
     python-pip python-bcrypt python-cryptography python-pyppmd python-psutil \
-    libffi openssl libxml2 libxslt git cloudflared ffmpeg libvips || return 1
+    libffi openssl libxml2 libxslt git cloudflared ffmpeg libvips libsodium || return 1
     return 0
 }
 
