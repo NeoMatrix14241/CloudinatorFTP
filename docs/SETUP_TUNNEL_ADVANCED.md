@@ -19,6 +19,71 @@ This documentation covers the end-to-end process of setting up a Cloudflare Tunn
 
 ---
 
+## 💡 What Should I Tunnel?
+
+CloudinatorFTP runs multiple services. You choose which one to expose. Each has different trade-offs:
+
+| Service | Port | Tunnel? | Best For |
+|---------|------|---------|---------|
+| **Web UI** | 5000 | ✅ Yes | Browser access from anywhere |
+| **WebDAV HTTP** | 8080 | ✅ Yes | Remote drive mapping on Windows/macOS/Linux |
+| **WebDAV HTTPS** | 8443 | ✅ Yes (preferred) | Remote drive mapping (encrypted) |
+| **SFTP** | 2222 | ❌ No* | File transfer clients (LAN only) |
+| **FTP** | 2121 | ❌ No* | Legacy clients (LAN only) |
+
+> **Why can't SFTP/FTP be tunneled?**  
+> Cloudflare Tunnel only supports HTTP/HTTPS traffic. SFTP and FTP are raw TCP protocols. They work on your local network without a tunnel, but cannot be exposed to the internet via `cloudflared tunnel --url`. For remote SFTP/FTP access, use a VPN (WireGuard, Tailscale) or Cloudflare WARP for TCP tunneling (Teams plan required).
+
+### Quick Decision Guide
+
+```
+Want browser access from anywhere?
+  → Tunnel port 5000 (Web UI)
+
+Want to map a network drive from a remote computer?
+  → Tunnel port 8080 (WebDAV HTTP) or 8443 (WebDAV HTTPS)
+
+Want both? Use a custom domain with multiple ingress rules → see Step 7 below.
+
+SFTP/FTP from outside your LAN?
+  → Use a VPN (Tailscale recommended) instead of Cloudflare Tunnel
+```
+
+---
+
+## Quick Demo (No Domain, No Account)
+
+For a quick test without any setup:
+
+```bash
+# Tunnel just the web UI
+cloudflared tunnel --url http://localhost:5000
+
+# Or tunnel WebDAV (for remote drive mapping)
+cloudflared tunnel --url http://localhost:8080
+
+# Or tunnel WebDAV HTTPS
+cloudflared tunnel --url https://localhost:8443
+```
+
+You get a temporary public URL like:
+```
+https://random-words-12345.trycloudflare.com
+```
+
+This URL expires when you stop the command. For a permanent URL, use a custom domain (steps below).
+
+---
+
+## Prerequisites (for Custom Domain Setup)
+- Windows machine (for Linux/Mac, adjust paths accordingly)
+- Application running (choose which port to expose)
+- Admin access to your computer
+- Cloudflare account (free tier works)
+- Domain already purchased from a registrar
+
+---
+
 ## Step 1: Domain Registration
 
 Ensure you have already purchased a domain from any registrar:
@@ -196,6 +261,68 @@ ingress:
 - `%USERNAME%` with your Windows username
 - `domain.com` with your actual domain
 
+### 7.1b: Single Service (WebDAV Only)
+
+To expose WebDAV as a network drive from anywhere:
+
+```yaml
+tunnel: <tunnel-id>
+credentials-file: C:\Users\%USERNAME%\.cloudflared\<tunnel-id>.json
+
+ingress:
+  - hostname: files.domain.com
+    service: http://localhost:8080
+    originRequest:
+      noTLSVerify: true
+      disableChunkedEncoding: false
+  - service: http_status:404
+```
+
+Then map the drive remotely:
+```cmd
+net use X: https://files.domain.com/ /user:admin admin123 /persistent:yes
+```
+
+### 7.1c: Multiple Services (Web UI + WebDAV on Subdomains)
+
+To expose both services simultaneously on different subdomains:
+
+```yaml
+tunnel: <tunnel-id>
+credentials-file: C:\Users\%USERNAME%\.cloudflared\<tunnel-id>.json
+
+ingress:
+  # Web UI — for browser access
+  - hostname: domain.com
+    service: http://localhost:5000
+    originRequest:
+      noTLSVerify: true
+      httpHostHeader: domain.com
+      disableChunkedEncoding: false
+
+  # WebDAV — for remote network drive mapping
+  - hostname: files.domain.com
+    service: http://localhost:8080
+    originRequest:
+      noTLSVerify: true
+      httpHostHeader: files.domain.com
+      disableChunkedEncoding: false
+
+  # Catch-all
+  - service: http_status:404
+```
+
+Then create DNS routes for both:
+```cmd
+cloudflared tunnel route dns my-app-tunnel domain.com
+cloudflared tunnel route dns my-app-tunnel files.domain.com
+```
+
+And map the WebDAV drive:
+```cmd
+net use X: https://files.domain.com/ /user:admin admin123 /persistent:yes
+```
+
 ### 7.2 Configuration Parameters Explained
 
 | Parameter | Purpose | Development | Production |
@@ -227,6 +354,11 @@ This step creates the DNS record automatically in Cloudflare:
 ```cmd
 cloudflared tunnel route dns my-app-tunnel domain.com
 ```
+
+> **Multiple services?** If you used the 7.1c multi-service config, also run:
+> ```cmd
+> cloudflared tunnel route dns my-app-tunnel files.domain.com
+> ```
 
 **Expected output:**
 ```
@@ -344,6 +476,8 @@ cloudflared tunnel route list
 | **Certificate errors** | Authentication failed | Re-run: `cloudflared tunnel login` |
 | **Service won't start** | Service fails to start | Check Event Viewer → Windows Logs → Application |
 | **ERR_TOO_MANY_REDIRECTS** | Redirect loop | Check SSL/TLS settings in Cloudflare (use Flexible or Full) |
+| **WebDAV drive fails** | Can't map drive via tunnel URL | Import cert or use HTTP; check BasicAuthLevel |
+| **SFTP/FTP won't tunnel** | Connection refused | Expected — SFTP/FTP are TCP-only; use on LAN or VPN |
 
 ### Debug Mode
 Run with verbose logging:
@@ -425,4 +559,72 @@ Write-Host "Starting service..." -ForegroundColor Green
 Start-Service Cloudflared
 
 Write-Host "Setup complete! Your tunnel is running at https://$DOMAIN" -ForegroundColor Green
+```
+
+---
+
+## Quick Setup Script — Parameterized Port (PowerShell)
+
+Same as above, but lets you choose which local port to expose (5000 for web UI, 8080 for WebDAV HTTP, 8443 for WebDAV HTTPS) without editing the script body.
+
+Save as `setup-tunnel-port.ps1`:
+```powershell
+# Variables
+$TUNNEL_NAME = "my-app-tunnel"
+$DOMAIN = "domain.com"
+$SERVICE_PORT = 5000  # Change to 8080 for WebDAV, 8443 for WebDAV HTTPS
+
+# Install cloudflared
+Write-Host "Installing cloudflared..." -ForegroundColor Green
+winget install Cloudflare.cloudflared
+
+# Authenticate
+Write-Host "Authenticating..." -ForegroundColor Green
+cloudflared tunnel login
+
+# Create tunnel
+Write-Host "Creating tunnel..." -ForegroundColor Green
+$output = cloudflared tunnel create $TUNNEL_NAME
+$tunnel_id = ($output | Select-String -Pattern "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}").Matches[0].Value
+
+Write-Host "Tunnel ID: $tunnel_id" -ForegroundColor Yellow
+
+# Create config
+Write-Host "Creating config..." -ForegroundColor Green
+$config = @"
+tunnel: $tunnel_id
+credentials-file: C:\Users\$env:USERNAME\.cloudflared\$tunnel_id.json
+
+ingress:
+  - hostname: $DOMAIN
+    service: http://localhost:$SERVICE_PORT
+    originRequest:
+      connectTimeout: 0s
+      tlsTimeout: 0s
+      tcpKeepAlive: 0s
+      keepAliveTimeout: 0s
+      httpHostHeader: $DOMAIN
+      noTLSVerify: true
+      disableChunkedEncoding: false
+      proxyConnectTimeout: 0s
+      expectContinueTimeout: 0s
+  - service: http_status:404
+"@
+
+$config | Out-File -FilePath "$env:USERPROFILE\.cloudflared\config.yml" -Encoding UTF8
+
+# Create DNS route
+Write-Host "Creating DNS route..." -ForegroundColor Green
+cloudflared tunnel route dns $TUNNEL_NAME $DOMAIN
+
+# Install service
+Write-Host "Installing service..." -ForegroundColor Green
+cloudflared service install
+
+# Start service
+Write-Host "Starting service..." -ForegroundColor Green
+Start-Service Cloudflared
+
+Write-Host "Setup complete! Your tunnel is running at https://$DOMAIN" -ForegroundColor Green
+Write-Host "Service port: $SERVICE_PORT" -ForegroundColor Cyan
 ```

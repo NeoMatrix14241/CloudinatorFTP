@@ -9,18 +9,9 @@ import sys
 import signal
 import socket
 from datetime import timedelta
+from app import get_local_ip
 
-
-def get_local_ip() -> str:
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception:
-        return "127.0.0.1"
-
+LOCAL_IP = get_local_ip()
 
 # Add the application directory to Python path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -41,6 +32,11 @@ if _BG:
 
 # ensure_dirs() is called inside app.py before anything else loads.
 from app import app
+
+# Start WebDAV / SFTP / FTP protocol servers in background threads.
+import protocol_manager
+
+protocol_manager.start_all()
 
 if __name__ == "__main__":
 
@@ -96,7 +92,6 @@ if __name__ == "__main__":
     print(f"📋 Storage directory: {ROOT_DIR}")
     print()
 
-    LOCAL_IP = get_local_ip()
     print(f"🌐 Local network:  http://{LOCAL_IP}:5000")
     print(f"🔁 Localhost:      http://localhost:5000")
     print()

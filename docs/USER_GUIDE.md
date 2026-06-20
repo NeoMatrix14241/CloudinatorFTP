@@ -1,6 +1,6 @@
 # CloudinatorFTP User Guide
 
-**Version**: 1.0 | **Last Updated**: 2026-04-06  
+**Version**: 1.1 | **Last Updated**: 2026-06-18  
 **For**: End users accessing the web file manager
 
 Welcome to **The Cloudinator** — a lightweight, secure file sharing platform that works across Windows, Linux, and Android (Termux).
@@ -19,8 +19,9 @@ Welcome to **The Cloudinator** — a lightweight, secure file sharing platform t
 8. [File Operations](#file-operations)
 9. [Bulk Operations](#bulk-operations)
 10. [Media Preview](#media-preview)
-11. [Tips & Tricks](#tips--tricks)
-12. [Troubleshooting](#troubleshooting)
+11. [Protocol Access — FTP, SFTP, WebDAV](#protocol-access--ftp-sftp-webdav)
+12. [Tips & Tricks](#tips--tricks)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -569,6 +570,193 @@ Click the **☐** checkbox in the table header again to deselect all.
 
 ---
 
+## Protocol Access — FTP, SFTP, WebDAV
+
+In addition to the web UI, CloudinatorFTP runs three additional protocol servers. These use the **same username and password** as the web interface — no separate credentials needed.
+
+> 💡 **These are optional extras.** The web UI at `http://SERVER:5000` always works regardless of these protocols.
+
+### Port Reference
+
+| Protocol | Port | Best For |
+|----------|------|----------|
+| Web UI | 5000 | Browser access |
+| WebDAV HTTP | 8080 | Network drive mapping |
+| WebDAV HTTPS | 8443 | Network drive mapping (secure, recommended) |
+| SFTP | 2222 | WinSCP, FileZilla, command-line `sftp` |
+| FTP | 2121 | Legacy FTP clients |
+
+---
+
+### 🌐 WebDAV — Map as a Network Drive
+
+WebDAV lets you mount the server as a drive letter (Windows) or volume (macOS/Linux) so you can drag-and-drop files in File Explorer — no browser needed.
+
+#### Windows — Map as Drive Letter
+
+**First-time setup** (elevated PowerShell, once per machine):
+```powershell
+# Enable the WebClient service
+Set-Service WebClient -StartupType Automatic; Start-Service WebClient
+
+# For HTTP (port 8080): allow Basic Auth over plain HTTP
+reg add "HKLM\SYSTEM\CurrentControlSet\Services\WebClient\Parameters" /v BasicAuthLevel /t REG_DWORD /d 2 /f
+Restart-Service WebClient
+```
+
+**Map the drive**:
+```cmd
+# HTTP (after registry fix above)
+net use X: http://SERVER-IP:8080/ /user:admin admin123 /persistent:yes
+
+# HTTPS (no registry fix needed — just import the cert once first)
+net use X: https://SERVER-IP:8443/ /user:admin admin123 /persistent:yes
+```
+
+**Import HTTPS certificate (one-time, elevated PowerShell)**:
+```powershell
+# Download and import in one line — no file copying needed
+$f="$env:TEMP\c.crt"
+Invoke-WebRequest http://SERVER-IP:8080/webdav.crt -OutFile $f
+Import-Certificate $f -CertStoreLocation Cert:\LocalMachine\Root
+del $f
+```
+
+After mapping, the server appears as a drive in **This PC** — copy, paste, rename, and delete files just like a local drive.
+
+#### macOS — Mount as Volume
+
+**Finder:**
+1. Finder → Go → Connect to Server (`⌘K`)
+2. Enter: `http://SERVER-IP:8080` or `https://SERVER-IP:8443`
+3. Click Connect → enter credentials
+
+The server appears as a removable volume on the Desktop.
+
+#### Linux — Mount with davfs2
+
+```bash
+sudo apt install davfs2
+sudo mount -t davfs http://SERVER-IP:8080/ /mnt/cloudinator
+# Enter credentials when prompted
+
+# Unmount
+sudo umount /mnt/cloudinator
+```
+
+**Persistent mount** (add to `/etc/fstab`):
+```
+http://SERVER-IP:8080/ /mnt/cloudinator davfs user,auto,_netdev 0 0
+```
+
+---
+
+### 🔒 SFTP — WinSCP / FileZilla / Command Line
+
+SFTP is the most compatible protocol for file transfer clients. Credentials are the same as the web UI.
+
+#### WinSCP Setup
+
+1. Open WinSCP → click **New Session**
+2. Set:
+   - **File protocol**: SFTP
+   - **Host name**: your server IP
+   - **Port number**: `2222`
+   - **User name**: your Cloudinator username
+   - **Password**: your Cloudinator password
+3. Click **Login**
+4. **First connection**: WinSCP shows a host key warning — click **Accept** to cache it (you only see this once)
+
+#### FileZilla Setup
+
+1. File → Site Manager → New Site
+2. **Protocol**: SFTP
+3. **Host**: your server IP
+4. **Port**: `2222`
+5. **Logon Type**: Normal
+6. **User / Password**: your Cloudinator credentials
+7. Click Connect
+
+#### Command Line (Linux / macOS / Windows Terminal)
+
+```bash
+sftp -P 2222 admin@SERVER-IP
+
+# Then use standard sftp commands:
+ls          # list files
+get file    # download
+put file    # upload
+exit
+```
+
+#### sshfs — Mount as Filesystem (Linux / macOS)
+
+```bash
+# Install sshfs
+sudo apt install sshfs   # Ubuntu/Debian
+brew install macfuse     # macOS (then install sshfs)
+
+# Mount
+sshfs -p 2222 admin@SERVER-IP:/ /mnt/cloudinator
+
+# Unmount
+fusermount -u /mnt/cloudinator   # Linux
+umount /mnt/cloudinator           # macOS
+```
+
+---
+
+### 📁 FTP — Legacy FTP Clients
+
+FTP is supported for compatibility with older clients. Use SFTP or WebDAV if possible — FTP sends credentials in plaintext and should only be used on trusted local networks.
+
+> ⚠️ **Security Warning**: FTP transmits passwords in cleartext. Do not use FTP over the internet.
+
+#### WinSCP FTP Setup
+
+1. Open WinSCP → New Session
+2. Set:
+   - **File protocol**: FTP
+   - **Encryption**: No encryption
+   - **Host name**: your server IP
+   - **Port number**: `2121`
+   - **User name / Password**: your Cloudinator credentials
+3. Click Login
+
+#### FileZilla FTP Setup
+
+1. File → Site Manager → New Site
+2. **Protocol**: FTP
+3. **Host**: your server IP
+4. **Port**: `2121`
+5. **Encryption**: Use plain FTP
+6. **Logon Type**: Normal
+7. **User / Password**: credentials
+8. Connect
+
+#### Windows Firewall Note
+
+FTP requires two port ranges open:
+```powershell
+# Control channel
+New-NetFirewallRule -DisplayName "CloudinatorFTP FTP" -Direction Inbound -Protocol TCP -LocalPort 2121 -Action Allow
+# Passive data ports (required for file transfers)
+New-NetFirewallRule -DisplayName "CloudinatorFTP FTP Passive" -Direction Inbound -Protocol TCP -LocalPort 60000-60100 -Action Allow
+```
+
+---
+
+### 🔧 rclone — Advanced Sync & Mount
+
+rclone can connect to CloudinatorFTP via WebDAV, SFTP, or FTP and provides powerful sync, copy, and mount features. See `docs/RCLONE_DEPLOYMENT.md` for full setup instructions.
+
+**Quick example** (WebDAV mount):
+```bash
+rclone mount :webdav,url=http://SERVER-IP:8080/,user=admin,pass=admin123: Z: --vfs-cache-mode full
+```
+
+---
+
 ## Tips & Tricks
 
 ### 1. Keyboard Shortcuts
@@ -788,6 +976,42 @@ python create_user.py
 
 ---
 
+#### Issue: WebDAV Drive Shows "Inaccessible" on Windows
+
+**Cause**: WebClient service not started, or BasicAuthLevel not set
+
+**Solution** (elevated PowerShell):
+```powershell
+Set-Service WebClient -StartupType Automatic; Start-Service WebClient
+reg add "HKLM\SYSTEM\CurrentControlSet\Services\WebClient\Parameters" /v BasicAuthLevel /t REG_DWORD /d 2 /f
+Restart-Service WebClient
+```
+Then retry `net use`.
+
+---
+
+#### Issue: SFTP Login Fails in WinSCP
+
+**Cause**: Host key dialog was dismissed, or wrong port
+
+**Solution**:
+1. Ensure port is set to **2222** (not 22)
+2. On first connection, click **Accept** when WinSCP shows the host key warning
+3. Verify server IP with `ipconfig` on the server machine
+
+---
+
+#### Issue: FTP Connects but File Transfer Stalls
+
+**Cause**: Passive data ports (60000-60100) blocked by firewall
+
+**Solution** (elevated PowerShell):
+```powershell
+New-NetFirewallRule -DisplayName "CloudinatorFTP FTP Passive" -Direction Inbound -Protocol TCP -LocalPort 60000-60100 -Action Allow
+```
+
+---
+
 ### Self-Help Commands
 
 | Issue | Command |
@@ -800,6 +1024,7 @@ python create_user.py
 | Search slow | `file_monitor.py` tuning → adjust `RECONCILE_INTERVAL` |
 | Upload timeout | `config.py`: increase `PERMANENT_SESSION_LIFETIME` |
 | Check health | `curl http://localhost:5000/api/health_check` |
+| Regenerate WebDAV cert | `python ssl_cert.py --regenerate` |
 
 ---
 
@@ -898,6 +1123,17 @@ python setup_storage.py  # Interactive configuration
 
 > **Tip**: Backup important files before deleting!
 
+### Q: What is the difference between the web UI and FTP/SFTP/WebDAV?
+
+**A:** They all access the same files — just through different protocols:
+
+| Method | Best for |
+|--------|---------|
+| Web UI (port 5000) | Browser-based access, media preview, bulk ZIP download |
+| WebDAV (8080/8443) | Native OS drive mapping — drag & drop in File Explorer |
+| SFTP (port 2222) | Secure file transfer clients (WinSCP, FileZilla, sshfs) |
+| FTP (port 2121) | Legacy FTP clients on trusted local networks only |
+
 ---
 
 ## Monitoring & Debugging
@@ -954,6 +1190,9 @@ You now know how to:
 ✅ Use advanced search with extension filters  
 ✅ Preview media and documents  
 ✅ Perform bulk operations  
+✅ Connect via WebDAV as a mapped drive  
+✅ Connect via SFTP using WinSCP or FileZilla  
+✅ Connect via FTP for legacy clients  
 ✅ Troubleshoot common issues  
 ✅ Configure server settings  
 ✅ Monitor server health  
@@ -973,5 +1212,6 @@ You now know how to:
 - `docs/ANDROID_DEPLOYMENT.md` — Android/Termux setup
 - `docs/DEPLOY_APACHE.md` — Apache/mod_wsgi production
 - `docs/SETUP_TUNNEL_ADVANCED.md` — Cloudflare Tunnel setup
+- `docs/RCLONE_DEPLOYMENT.md` — rclone sync & mount
 
-**Last Updated**: 2026-04-06
+**Last Updated**: 2026-06-18

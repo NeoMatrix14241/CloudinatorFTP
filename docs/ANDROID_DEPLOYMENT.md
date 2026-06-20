@@ -14,9 +14,10 @@ A comprehensive guide to deploy CloudinatorFTP on Android devices using Termux, 
 8. [Launch Server](#launch-server)
 9. [Server Management Script (manage.sh)](#-server-management-script-managesh)
 10. [Updating Python Dependencies](#-updating-python-dependencies)
-11. [Network Exposure](#network-exposure)
-12. [Storage Configuration](#storage-configuration)
-13. [Troubleshooting](#troubleshooting)
+11. [Protocol Servers on Android](#protocol-servers-on-android)
+12. [Network Exposure](#network-exposure)
+13. [Storage Configuration](#storage-configuration)
+14. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -351,14 +352,63 @@ Or via `manage.sh`:
 
 ---
 
+## Protocol Servers on Android
+
+> ℹ️ **Android / Termux Note**: Protocol server availability on Android depends on the library. The web UI (port 5000) always works. For the additional servers:
+
+| Protocol | Android Support | Notes |
+|----------|----------------|-------|
+| **WebDAV HTTP** (8080) | ✅ Likely works | wsgidav + waitress |
+| **WebDAV HTTPS** (8443) | ⚠️ May vary | cheroot SSL support; try `pip install cheroot` |
+| **SFTP** (2222) | ✅ Usually works | paramiko available via pip on Termux |
+| **FTP** (2121) | ✅ Usually works | pyftpdlib available via pip |
+
+### Install Protocol Dependencies on Termux
+
+```bash
+pip install wsgidav paramiko pyftpdlib
+pip install cheroot   # optional, for HTTPS WebDAV
+```
+
+If any library fails to install on Termux, only that protocol is skipped — the main web UI continues running normally.
+
+### Android Battery & Stability Considerations
+
+Running extra protocol servers increases CPU and battery usage slightly:
+- Disable unused protocols via `python config.py` → option 13
+- Or in `server_config.json`: set `"SFTP_ENABLED": false` etc.
+- FTP is least useful on Android; recommend disabling it to save resources
+
+### Connecting to Your Android Server
+
+Once running, connect from your PC on the same WiFi:
+
+```
+Web UI:         http://ANDROID-IP:5000
+WebDAV:         http://ANDROID-IP:8080
+SFTP (WinSCP):  sftp://ANDROID-IP:2222
+```
+
+Find your Android IP in **Settings → About Phone → Status → IP address** or run `ifconfig` in Termux.
+
+---
+
 ## Network Exposure
 
 ### Step 8: Expose to the Internet
 
-Open a **NEW** Termux session (or use a tmux session) and run:
+Open a **NEW** Termux session (or use a tmux session) and choose what to expose:
+
+#### Expose Web UI (Default)
 
 ```bash
 cloudflared tunnel --url http://localhost:5000
+```
+
+#### Expose WebDAV Instead
+
+```bash
+cloudflared tunnel --url http://localhost:8080
 ```
 
 You'll receive a public URL like:
@@ -367,6 +417,13 @@ https://random-words-12345.trycloudflare.com
 ```
 
 >  ✨ You can now access your files from anywhere in the world using this URL!
+
+> 💡 **Which port to tunnel?**
+> - `5000` → web browser access (upload, preview, download via browser)
+> - `8080` → WebDAV drive mapping from remote computers
+> - Both can be tunneled simultaneously using the Advanced setup (see SETUP_TUNNEL_ADVANCED.md)
+>
+> **Note**: SFTP (2222) and FTP (2121) are TCP protocols and cannot be tunneled via Cloudflare — use them on your local WiFi only.
 
 #### Using a Custom Domain (Optional)
 
@@ -421,6 +478,16 @@ For a persistent domain setup, refer to [Advanced Cloudflared Tunneling Setup](h
 ---
 
 ## Troubleshooting
+
+### Protocol Server Issues (Android)
+
+| Issue | Solution |
+|-------|----------|
+| `wsgidav` install fails | Try `pip install wsgidav --no-build-isolation` |
+| `paramiko` install fails | Run `pkg install rust` first, then `pip install paramiko` |
+| `pyftpdlib` install fails | Run `pip install pyftpdlib --no-binary pyftpdlib` |
+| `cheroot` SSL fails | Disable HTTPS WebDAV: `"WEBDAV_HTTPS_ENABLED": false` in server_config.json |
+| Port already in use | Change port in config.py or kill conflicting process |
 
 ### Installation Issues
 
@@ -505,6 +572,7 @@ tmux attach-session -t cloudinator
 ### Battery Optimization
 
 - Use production server (`prod_server.py`) instead of development
+- Disable FTP and HTTPS WebDAV if not needed (saves resources)
 - Disable video preview HLS if not needed: set `HLS_MIN_SIZE` to very high value
 - Use WiFi instead of mobile data for stability
 - Enable battery saver mode if needed
@@ -528,6 +596,7 @@ tmux attach-session -t cloudinator
 - [Cloudflare Tunnel Docs](https://developers.cloudflare.com/cloudflare-one/connections/connect-applications/)
 - [Project GitHub](https://github.com/NeoMatrix14241/CloudinatorFTP)
 - [Advanced Tunnel Setup](https://github.com/NeoMatrix14241/CloudinatorFTP/wiki/Advanced-Cloudflare-Tunnelling-Setup)
+- [rclone Integration](./RCLONE_DEPLOYMENT.md)
 
 ---
 

@@ -19,6 +19,7 @@ A lightweight FTP-like file transfer server that runs on **Termux (Android), Lin
 
 - [📦 Dependencies / Tools](#-dependencies--tools)
 - [🚀 Quick Start](#-quick-start)
+- [🌐 Protocol Access — WebDAV, SFTP, FTP](#-protocol-access--webdav-sftp-ftp)
 - [🖥️ Server Management Script (manage.sh)](#️-server-management-script-managesh)
 - [🔄 Updating Python Dependencies](#-updating-python-dependencies)
 - [📂 Storage Configuration Guide](#-storage-configuration-guide)
@@ -39,6 +40,7 @@ Platform-specific deployment and production guides are available in the **[`docs
 | 📱 **Android (Termux)** | [ANDROID_DEPLOYMENT.md](./docs/ANDROID_DEPLOYMENT.md) | Android/Termux deployment and optimization |
 | 🪟 **Apache/WSGI** | [DEPLOY_APACHE.md](./docs/DEPLOY_APACHE.md) | Production Apache deployment with mod_wsgi |
 | 🔗 **Cloudflare Tunnel** | [SETUP_TUNNEL_ADVANCED.md](./docs/SETUP_TUNNEL_ADVANCED.md) | Advanced tunnel setup with custom domains |
+| 🔄 **rclone** | [RCLONE_DEPLOYMENT.md](./docs/RCLONE_DEPLOYMENT.md) | Mount and sync via rclone |
 
 ---
 
@@ -95,6 +97,23 @@ cd CloudinatorFTP
 pip install -r requirements.txt
 ```
 
+#### 3b. 📡 Install Protocol Server Dependencies (Optional)
+
+To enable WebDAV, SFTP, and FTP protocol access alongside the web UI:
+
+```bash
+pip install wsgidav cheroot paramiko pyftpdlib
+```
+
+| Package | Enables |
+|---------|---------|
+| `wsgidav` | WebDAV HTTP (port 8080) |
+| `cheroot` | WebDAV HTTPS (port 8443) |
+| `paramiko` | SFTP (port 2222) |
+| `pyftpdlib` | FTP (port 2121) |
+
+> **Note**: These are optional. If any are missing, only that protocol server is skipped on startup. The web UI always starts regardless.
+
 #### 4. 📂 Configure Server and Storage Location
 
 **Storage & Cache**
@@ -144,15 +163,29 @@ launch:
 - start_dev_server.bat > Flask Server (WSGI)
 ```
 
+Protocol servers (WebDAV, SFTP, FTP) start **automatically** alongside the web server — no extra command needed.
+
 #### 7. 🌍 Expose to Internet
 
-Open a new terminal session and run:
+Open a new terminal session and run — **choose what to tunnel**:
 
 ```bash
+# Tunnel the web UI (most common)
 cloudflared tunnel --url http://localhost:5000
+
+# Or tunnel WebDAV (for remote network drive mapping)
+cloudflared tunnel --url http://localhost:8080
 ```
 
 You'll receive a public URL like: `https://random-words-12345.trycloudflare.com`
+
+> **What port should I tunnel?**
+> - `5000` → Web browser access (upload, download, preview via browser)
+> - `8080` → WebDAV drive mapping from remote Windows/macOS/Linux machines
+> - `8443` → WebDAV HTTPS (use with `--url https://localhost:8443`)
+> - Only one port can be tunneled at once with the quick `--url` method. For multiple services, see the [Advanced Tunnel Setup](./docs/SETUP_TUNNEL_ADVANCED.md).
+>
+> **Note**: SFTP (2222) and FTP (2121) are raw TCP — they work on your local network but cannot be exposed via standard Cloudflare Tunnel.
 
 Or if you want to use it with domain, please refer to this [Advanced Cloudflared Tunneling Setup](https://github.com/NeoMatrix14241/CloudinatorFTP/wiki/Advanced-Cloudflare-Tunnelling-Setup) then use these configuration for config.yml of cloudflared:
 
@@ -174,6 +207,72 @@ ingress:
       expectContinueTimeout: 0s
   - service: http_status:404
 ```
+
+---
+
+## 🌐 Protocol Access — WebDAV, SFTP, FTP
+
+In addition to the web UI, CloudinatorFTP runs three additional protocol servers automatically. All use the **same credentials** as the web interface.
+
+### Port Overview
+
+| Service | Port | Best For |
+|---------|------|----------|
+| 🌐 Web UI | 5000 | Browser-based file management |
+| 📂 WebDAV HTTP | 8080 | Native drive mapping (Windows/macOS/Linux) |
+| 🔐 WebDAV HTTPS | 8443 | Native drive mapping (secure, recommended) |
+| 🔒 SFTP | 2222 | WinSCP, FileZilla, sshfs |
+| 📁 FTP | 2121 | Legacy FTP clients (LAN only) |
+
+### 🌐 WebDAV — Map as a Network Drive
+
+No browser needed — the server appears as a drive letter or volume in your file manager.
+
+**Windows (elevated PowerShell — first time only):**
+```powershell
+# One-line certificate import from server (no file copying)
+$f="$env:TEMP\c.crt"; Invoke-WebRequest http://SERVER-IP:8080/webdav.crt -OutFile $f; Import-Certificate $f -CertStoreLocation Cert:\LocalMachine\Root; del $f
+
+# Map HTTPS drive (no registry edit needed after cert import)
+net use X: https://SERVER-IP:8443/ /user:admin admin123 /persistent:yes
+```
+
+**macOS:**  Finder → Go → Connect to Server → `http://SERVER-IP:8080`
+
+**Linux:**
+```bash
+sudo apt install davfs2
+sudo mount -t davfs http://SERVER-IP:8080/ /mnt/cloudinator
+```
+
+### 🔒 SFTP — WinSCP Quick Setup
+
+- **Protocol**: SFTP  
+- **Host**: server IP  
+- **Port**: `2222`  
+- **Credentials**: same as web UI  
+- Accept the host key warning on first connect
+
+### 📁 FTP — WinSCP Quick Setup
+
+- **Protocol**: FTP  
+- **Encryption**: No encryption  
+- **Host**: server IP  
+- **Port**: `2121`  
+- **Credentials**: same as web UI
+
+> ⚠️ FTP is plaintext — use on trusted local networks only.
+
+### 🔄 rclone
+
+rclone can mount, sync, and copy via WebDAV, SFTP, or FTP. See [RCLONE_DEPLOYMENT.md](./docs/RCLONE_DEPLOYMENT.md) for full setup.
+
+```bash
+# Quick WebDAV mount (no configuration needed)
+rclone mount :webdav,url=http://SERVER-IP:8080/,user=admin,pass=admin123: Z: --vfs-cache-mode full
+```
+
+---
 
 ## 🖥️ Server Management Script (`manage.sh`)
 
@@ -310,6 +409,8 @@ After running `termux-setup-storage`, you can choose from:
 - **`readwrite`**: Can upload, download, create folders, delete files
 - **`readonly`**: Can only download files and browse folders
 
+Both roles apply equally to the web UI, WebDAV, SFTP, and FTP.
+
 ### 🛠️ Managing Users
 
 Run the user management tool:
@@ -368,6 +469,19 @@ This tool helps:
 | Looping web refresh | Run `revoke_sessions.py` |
 | Database gets corrupted | Run `reset_db.py` |
 
+### Protocol Server Issues
+
+| Issue | Solution |
+|-------|----------|
+| WebDAV not starting | `pip install wsgidav cheroot` |
+| SFTP not starting | `pip install paramiko` |
+| FTP not starting | `pip install pyftpdlib` |
+| WebDAV inaccessible (Windows HTTP) | Enable WebClient service; set `BasicAuthLevel=2` |
+| WebDAV inaccessible (Windows HTTPS) | Import `db/webdav.crt` as Trusted Root CA |
+| SFTP auth fails (WinSCP) | Accept host key warning on first connect; use port 2222 |
+| FTP stalls | Open ports 60000-60100 in firewall |
+| Ports unreachable | Add firewall rules; verify with `Test-NetConnection` |
+
 ### Server Issues
 
 | Issue | Solution |
@@ -388,17 +502,37 @@ This tool helps:
 - **HLS Forced Formats**: 3gp, avi, flv, m2ts, mkv, mov, mpeg, mpg, mts, ogv, ts, wmv
 - **Compression Thresold**: 3.0 MB (`3145728` bytes)
 - **Lossy WebP Quality**: 50
+- **WebDAV HTTP Port**: 8080
+- **WebDAV HTTPS Port**: 8443
+- **SFTP Port**: 2222
+- **FTP Port**: 2121
 
 ### Firewall Configuration (If needed)
 
 **Linux (UFW):**
 ```bash
 sudo ufw allow 80
+sudo ufw allow 5000/tcp   # Web UI
+sudo ufw allow 8080/tcp   # WebDAV HTTP
+sudo ufw allow 8443/tcp   # WebDAV HTTPS
+sudo ufw allow 2222/tcp   # SFTP
+sudo ufw allow 2121/tcp   # FTP
+sudo ufw allow 60000:60100/tcp  # FTP passive
 ```
 
 **Windows Firewall:**
 ```bash
 netsh advfirewall firewall add rule name="CloudflareFTP" dir=in action=allow protocol=TCP localport=80
+```
+
+**Windows Firewall (PowerShell, elevated) — Protocol Servers:**
+```powershell
+New-NetFirewallRule -DisplayName "CloudinatorFTP Web"           -Direction Inbound -Protocol TCP -LocalPort 5000        -Action Allow
+New-NetFirewallRule -DisplayName "CloudinatorFTP WebDAV"        -Direction Inbound -Protocol TCP -LocalPort 8080        -Action Allow
+New-NetFirewallRule -DisplayName "CloudinatorFTP WebDAV-HTTPS"  -Direction Inbound -Protocol TCP -LocalPort 8443        -Action Allow
+New-NetFirewallRule -DisplayName "CloudinatorFTP SFTP"          -Direction Inbound -Protocol TCP -LocalPort 2222        -Action Allow
+New-NetFirewallRule -DisplayName "CloudinatorFTP FTP"           -Direction Inbound -Protocol TCP -LocalPort 2121        -Action Allow
+New-NetFirewallRule -DisplayName "CloudinatorFTP FTP-Passive"   -Direction Inbound -Protocol TCP -LocalPort 60000-60100 -Action Allow
 ```
 
 ## 🤝 Contributing

@@ -15,9 +15,10 @@ A comprehensive guide to deploy CloudinatorFTP on Linux systems, enabling lightw
 9. [Server Management Script (manage.sh)](#-server-management-script-managesh)
 10. [Updating Python Dependencies](#-updating-python-dependencies)
 11. [Systemd Service Setup](#systemd-service-setup)
-12. [Network Exposure](#network-exposure)
-13. [Storage Configuration](#storage-configuration)
-14. [Troubleshooting](#troubleshooting)
+12. [Protocol Servers — WebDAV, SFTP, FTP](#protocol-servers--webdav-sftp-ftp)
+13. [Network Exposure](#network-exposure)
+14. [Storage Configuration](#storage-configuration)
+15. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -184,6 +185,23 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### Step 7.1b: Install Protocol Server Dependencies
+
+The WebDAV, SFTP, and FTP servers require additional libraries:
+
+```bash
+pip install wsgidav cheroot paramiko pyftpdlib
+```
+
+| Package | Protocol | Purpose |
+|---------|----------|---------|
+| `wsgidav` | WebDAV | WebDAV WSGI server |
+| `cheroot` | WebDAV HTTPS | WSGI server with TLS support |
+| `paramiko` | SFTP | SSH/SFTP implementation |
+| `pyftpdlib` | FTP | FTP server |
+
+> **Note**: Each is optional — if missing, that server skips with a warning. The main web UI is unaffected.
+
 ### Step 7.2: Configure Storage Location
 
 ```bash
@@ -223,6 +241,7 @@ Customize:
 - Chunk size (default: 10 MB)
 - Session lifetime (default: 1 hour)
 - HLS/compression settings
+- **Protocol server ports and enable/disable** (option 13)
 
 ---
 
@@ -287,6 +306,22 @@ Expected output:
 ```
 🧪 Starting CloudinatorFTP Production Server...
 🌐 Server running on http://localhost:5000
+```
+
+When the protocol servers also start successfully, you'll additionally see:
+```
+────────────────────────────────────────────────────────
+  CloudinatorFTP — Protocol servers
+────────────────────────────────────────────────────────
+🌐 WebDAV HTTP:  http://HOST:8080/
+🔐 WebDAV HTTPS: https://HOST:8443/
+🔒 SFTP:         sftp://HOST:2222/
+📁 FTP:          ftp://HOST:2121/
+
+  WebDAV    ✅ started
+  SFTP      ✅ started
+  FTP       ✅ started
+────────────────────────────────────────────────────────
 ```
 
 #### Development Server (Testing)
@@ -486,6 +521,150 @@ sudo journalctl -u cloudinator.service -f
 
 ---
 
+## Protocol Servers — WebDAV, SFTP, FTP
+
+Protocol servers start automatically alongside the main Flask server. They share the same user database and credentials.
+
+### Port Reference
+
+| Protocol | Port | Default State |
+|----------|------|--------------|
+| Web UI | 5000 | Always on |
+| WebDAV HTTP | 8080 | Enabled |
+| WebDAV HTTPS | 8443 | Enabled |
+| SFTP | 2222 | Enabled |
+| FTP | 2121 | Enabled |
+| FTP passive data | 60000–60100 | (used by FTP) |
+
+### Firewall Rules
+
+```bash
+# UFW (Ubuntu/Debian)
+sudo ufw allow 5000/tcp comment "CloudinatorFTP Web UI"
+sudo ufw allow 8080/tcp comment "CloudinatorFTP WebDAV HTTP"
+sudo ufw allow 8443/tcp comment "CloudinatorFTP WebDAV HTTPS"
+sudo ufw allow 2222/tcp comment "CloudinatorFTP SFTP"
+sudo ufw allow 2121/tcp comment "CloudinatorFTP FTP"
+sudo ufw allow 60000:60100/tcp comment "CloudinatorFTP FTP Passive"
+
+# Firewalld (Fedora/CentOS)
+sudo firewall-cmd --add-port=8080/tcp --permanent
+sudo firewall-cmd --add-port=8443/tcp --permanent
+sudo firewall-cmd --add-port=2222/tcp --permanent
+sudo firewall-cmd --add-port=2121/tcp --permanent
+sudo firewall-cmd --add-port=60000-60100/tcp --permanent
+sudo firewall-cmd --reload
+```
+
+### 🌐 WebDAV — Mount as Filesystem
+
+#### Option A: davfs2 (HTTP or HTTPS)
+
+```bash
+# Install davfs2
+sudo apt install davfs2   # Ubuntu/Debian
+sudo dnf install davfs2   # Fedora
+sudo pacman -S davfs2     # Arch
+
+# Mount HTTP
+sudo mount -t davfs http://SERVER-IP:8080/ /mnt/cloudinator
+
+# Mount HTTPS (import cert first)
+sudo cp db/webdav.crt /usr/local/share/ca-certificates/cloudinator.crt
+sudo update-ca-certificates
+sudo mount -t davfs https://SERVER-IP:8443/ /mnt/cloudinator
+
+# Unmount
+sudo umount /mnt/cloudinator
+```
+
+**Store credentials** (avoid interactive prompt):
+```bash
+echo "SERVER-IP:8080 admin admin123" >> ~/.davfs2/secrets
+chmod 600 ~/.davfs2/secrets
+```
+
+**Persistent mount** (`/etc/fstab`):
+```
+http://SERVER-IP:8080/ /mnt/cloudinator davfs user,auto,_netdev 0 0
+```
+
+#### Option B: GNOME Files / Nautilus
+
+Files → Other Locations → Connect to Server:
+```
+davs://SERVER-IP:8443    (HTTPS)
+dav://SERVER-IP:8080     (HTTP)
+```
+
+### 🔒 SFTP — Command Line and sshfs
+
+#### Command Line
+
+```bash
+sftp -P 2222 admin@SERVER-IP
+
+# Standard sftp commands:
+ls, get, put, exit
+```
+
+#### sshfs — Mount as Filesystem
+
+```bash
+# Install sshfs
+sudo apt install sshfs   # Ubuntu/Debian
+sudo dnf install fuse-sshfs  # Fedora
+
+# Create mount point
+mkdir -p /mnt/cloudinator
+
+# Mount
+sshfs -p 2222 admin@SERVER-IP:/ /mnt/cloudinator
+
+# Unmount
+fusermount -u /mnt/cloudinator
+```
+
+**Persistent mount** (`/etc/fstab`):
+```
+admin@SERVER-IP:/ /mnt/cloudinator fuse.sshfs port=2222,_netdev,allow_other 0 0
+```
+
+### 📁 FTP — Command Line
+
+```bash
+# Using lftp (recommended)
+lftp -u admin,admin123 -p 2121 SERVER-IP
+
+# Using ftp
+ftp SERVER-IP 2121
+```
+
+> ⚠️ FTP is plaintext. Use only on trusted networks.
+
+### Configure Protocol Servers
+
+```bash
+python config.py
+# Select option 13: Protocol Servers
+```
+
+Or edit `server_config.json`:
+```json
+{
+  "WEBDAV_ENABLED": true,
+  "WEBDAV_PORT": 8080,
+  "WEBDAV_HTTPS_ENABLED": true,
+  "WEBDAV_HTTPS_PORT": 8443,
+  "SFTP_ENABLED": true,
+  "SFTP_PORT": 2222,
+  "FTP_ENABLED": false,
+  "FTP_PORT": 2121
+}
+```
+
+---
+
 ## Network Exposure
 
 ### Step 11: Expose to the Internet
@@ -500,6 +679,21 @@ Get your public URL:
 ```
 https://random-words-12345.trycloudflare.com
 ```
+
+#### Tunnel a Specific Port (Choose What to Expose)
+
+```bash
+# Expose web UI only (default above)
+cloudflared tunnel --url http://localhost:5000
+
+# Expose WebDAV (for remote drive mapping)
+cloudflared tunnel --url http://localhost:8080
+
+# Expose WebDAV HTTPS
+cloudflared tunnel --url https://localhost:8443
+```
+
+> **Note**: SFTP (port 2222) and FTP (port 2121) are raw TCP protocols — they cannot be tunneled via Cloudflare Tunnel's standard `--url` method. Use them on your local network, or set up a VPN for remote access.
 
 #### Using Custom Domain (Advanced)
 
@@ -519,6 +713,18 @@ sudo ufw allow 5000/tcp
 # Firewalld (Fedora/CentOS)
 sudo firewall-cmd --add-port=5000/tcp --permanent
 sudo firewall-cmd --reload
+```
+
+#### Firewall Configuration for Local Network Access (Protocol Servers)
+
+```bash
+# UFW (Ubuntu)
+sudo ufw allow 5000/tcp
+sudo ufw allow 8080/tcp
+sudo ufw allow 8443/tcp
+sudo ufw allow 2222/tcp
+sudo ufw allow 2121/tcp
+sudo ufw allow 60000:60100/tcp
 ```
 
 ---
@@ -573,6 +779,18 @@ sudo chmod 755 /srv/cloudinator/files
 | `pip` command not found | Install: `sudo apt install python3-pip` |
 | Permission denied | Use `sudo` or check file permissions |
 | libvips not found | Install development headers: `sudo apt install libvips-dev` |
+
+### Protocol Server Issues
+
+| Issue | Solution |
+|-------|----------|
+| WebDAV not starting | `pip install wsgidav cheroot` |
+| SFTP not starting | `pip install paramiko` |
+| FTP not starting | `pip install pyftpdlib` |
+| davfs2 permission denied | Run `sudo mount` or add user to `davfs2` group |
+| sshfs connection refused | Verify port 2222 open: `nc -zv SERVER-IP 2222` |
+| FTP transfers stall | Open ports 60000-60100: `sudo ufw allow 60000:60100/tcp` |
+| Certificate errors (HTTPS WebDAV) | `sudo cp db/webdav.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates` |
 
 ### Virtual Environment Issues
 
@@ -709,11 +927,14 @@ lsof -p $(pgrep -f "python prod_server.py")
 ## Next Steps
 
 1. ✅ Installation complete
-2. 📤 Get your Cloudflare tunnel URL
-3. 🔐 Change default passwords
-4. 👥 Add users for team members
-5. 🌍 Share the URL
-6. 📊 Monitor performance
+2. 🌐 WebDAV accessible at port 8080/8443
+3. 🔒 SFTP accessible at port 2222
+4. 📁 FTP accessible at port 2121
+5. 📤 Get your Cloudflare tunnel URL
+6. 🔐 Change default passwords
+7. 👥 Add users for team members
+8. 🌍 Share the URL
+9. 📊 Monitor performance
 
 ---
 
@@ -722,7 +943,10 @@ lsof -p $(pgrep -f "python prod_server.py")
 - [Python Virtual Environments](https://docs.python.org/3/tutorial/venv.html)
 - [Systemd Documentation](https://systemd.io/)
 - [Cloudflare Tunnel Docs](https://developers.cloudflare.com/cloudflare-one/connections/connect-applications/)
+- [davfs2 Manual](http://savannah.nongnu.org/projects/davfs2)
+- [sshfs Documentation](https://github.com/libfuse/sshfs)
 - [Project GitHub](https://github.com/NeoMatrix14241/CloudinatorFTP)
+- [rclone Integration](./RCLONE_DEPLOYMENT.md)
 
 ---
 

@@ -17,6 +17,7 @@ A comprehensive guide to deploy CloudinatorFTP on Windows systems, enabling file
 11. [Updating Python Dependencies](#-updating-python-dependencies)
 12. [Batch Script Setup](#batch-script-setup)
 13. [Windows Service Setup](#windows-service-setup)
+14. [Protocol Servers — WebDAV, SFTP, FTP](#protocol-servers--webdav-sftp-ftp)
 12. [Cloudflare Tunnel](#cloudflare-tunnel)
 13. [Apache/WSGI Deployment](#apachewsgi-deployment-optional)
 14. [Storage Configuration](#storage-configuration)
@@ -238,6 +239,23 @@ pip install -r requirements.txt
 > pip install -r requirements.txt
 > ```
 
+### Step 7.1b: Install Protocol Server Dependencies
+
+The WebDAV, SFTP, and FTP servers require additional libraries:
+
+```cmd
+pip install wsgidav cheroot paramiko pyftpdlib
+```
+
+| Package | Protocol | Purpose |
+|---------|----------|---------|
+| `wsgidav` | WebDAV | WebDAV WSGI server |
+| `cheroot` | WebDAV HTTPS | WSGI server with TLS support |
+| `paramiko` | SFTP | SSH/SFTP implementation |
+| `pyftpdlib` | FTP | FTP server |
+
+> **Note**: These are optional. If any are missing, the corresponding server skips on startup with an install hint. The main web UI is unaffected.
+
 ### Step 7.2: Configure Storage Location
 
 ```cmd
@@ -270,6 +288,7 @@ Customize:
 - Chunk size (default: 10 MB)
 - Session lifetime (default: 1 hour)
 - HLS/compression settings
+- **Protocol server ports and enable/disable** (option 13)
 
 ---
 
@@ -335,6 +354,24 @@ start_prod_server.bat
 **Development:**
 ```cmd
 start_dev_server.bat
+```
+
+### Expected Startup Output
+
+When all protocol servers start successfully:
+```
+────────────────────────────────────────────────────────
+  CloudinatorFTP — Protocol servers
+────────────────────────────────────────────────────────
+🌐 WebDAV HTTP:  http://HOST:8080/
+🔐 WebDAV HTTPS: https://HOST:8443/
+🔒 SFTP:         sftp://HOST:2222/
+📁 FTP:          ftp://HOST:2121/
+
+  WebDAV    ✅ started
+  SFTP      ✅ started
+  FTP       ✅ started
+────────────────────────────────────────────────────────
 ```
 
 > **Keep terminal open while server is running**
@@ -534,6 +571,136 @@ nssm remove CloudinatorFTP confirm
 
 ---
 
+## Protocol Servers — WebDAV, SFTP, FTP
+
+Protocol servers start automatically when you run `prod_server.py` or `dev_server.py`. No extra commands needed. They all use the same database credentials as the web UI.
+
+### Firewall Rules (Required for Remote Access)
+
+Open an **elevated PowerShell** and run once:
+
+```powershell
+# Web UI (if not already open)
+New-NetFirewallRule -DisplayName "CloudinatorFTP Web UI"      -Direction Inbound -Protocol TCP -LocalPort 5000        -Action Allow
+
+# WebDAV HTTP
+New-NetFirewallRule -DisplayName "CloudinatorFTP WebDAV HTTP" -Direction Inbound -Protocol TCP -LocalPort 8080        -Action Allow
+
+# WebDAV HTTPS
+New-NetFirewallRule -DisplayName "CloudinatorFTP WebDAV HTTPS"-Direction Inbound -Protocol TCP -LocalPort 8443        -Action Allow
+
+# SFTP
+New-NetFirewallRule -DisplayName "CloudinatorFTP SFTP"        -Direction Inbound -Protocol TCP -LocalPort 2222        -Action Allow
+
+# FTP control channel
+New-NetFirewallRule -DisplayName "CloudinatorFTP FTP"         -Direction Inbound -Protocol TCP -LocalPort 2121        -Action Allow
+
+# FTP passive data ports (required for file transfers)
+New-NetFirewallRule -DisplayName "CloudinatorFTP FTP Passive" -Direction Inbound -Protocol TCP -LocalPort 60000-60100 -Action Allow
+```
+
+Verify connectivity from another machine:
+```powershell
+Test-NetConnection -ComputerName SERVER-IP -Port 2222
+Test-NetConnection -ComputerName SERVER-IP -Port 2121
+Test-NetConnection -ComputerName SERVER-IP -Port 8080
+```
+
+### 🌐 WebDAV — Map as Network Drive
+
+WebDAV lets you mount CloudinatorFTP as a Windows drive letter — drag and drop files in File Explorer without a browser.
+
+#### Option A: HTTPS (Recommended — No Registry Edit)
+
+**Import the certificate once** (elevated PowerShell, run on each client PC):
+```powershell
+# Downloads cert from server and imports it as Trusted Root CA
+$f="$env:TEMP\c.crt"
+Invoke-WebRequest http://SERVER-IP:8080/webdav.crt -OutFile $f
+Import-Certificate $f -CertStoreLocation Cert:\LocalMachine\Root
+del $f
+```
+
+**Map the drive:**
+```cmd
+net use X: https://SERVER-IP:8443/ /user:admin admin123 /persistent:yes
+```
+
+#### Option B: HTTP (Requires One Registry Edit)
+
+**Enable HTTP WebDAV** (elevated PowerShell, once per PC):
+```powershell
+Set-Service WebClient -StartupType Automatic; Start-Service WebClient
+reg add "HKLM\SYSTEM\CurrentControlSet\Services\WebClient\Parameters" /v BasicAuthLevel /t REG_DWORD /d 2 /f
+Restart-Service WebClient
+```
+
+**If WebClient is not installed** (Windows Server):
+```powershell
+Install-WindowsFeature WebDAV-Redirector
+Restart-Computer
+# After reboot:
+Set-Service WebClient -StartupType Automatic; Start-Service WebClient
+```
+
+**Map the drive:**
+```cmd
+net use X: http://SERVER-IP:8080/ /user:admin admin123 /persistent:yes
+```
+
+**Disconnect:**
+```cmd
+net use X: /delete
+```
+
+> ⚠️ **UAC note**: Run `net use` in a **non-elevated** terminal. If you map in an elevated window, the drive won't appear in regular File Explorer.
+
+### 🔒 SFTP — WinSCP Setup
+
+1. Open WinSCP → New Session
+2. **File protocol**: SFTP
+3. **Host name**: server IP
+4. **Port number**: `2222`
+5. **User name / Password**: your Cloudinator credentials
+6. Click **Login**
+7. **First connection**: click **Accept** when the host key warning appears
+
+### 📁 FTP — WinSCP Setup
+
+1. Open WinSCP → New Session
+2. **File protocol**: FTP
+3. **Encryption**: No encryption
+4. **Host name**: server IP
+5. **Port number**: `2121`
+6. **User name / Password**: credentials
+7. Click Login
+
+> ⚠️ FTP is plaintext. Use only on trusted local networks.
+
+### Configure / Disable Individual Protocols
+
+```cmd
+python config.py
+# Select option 13: Protocol Servers
+# Toggle each server on/off or change ports
+```
+
+Or edit `server_config.json` directly:
+```json
+{
+  "WEBDAV_ENABLED": true,
+  "WEBDAV_PORT": 8080,
+  "WEBDAV_HTTPS_ENABLED": true,
+  "WEBDAV_HTTPS_PORT": 8443,
+  "SFTP_ENABLED": true,
+  "SFTP_PORT": 2222,
+  "FTP_ENABLED": true,
+  "FTP_PORT": 2121
+}
+```
+
+---
+
 ## Cloudflare Tunnel
 
 ### Step 12: Expose to the Internet
@@ -552,6 +719,18 @@ https://random-words-12345.trycloudflare.com
 ```
 
 ✨ Access your server from anywhere!
+
+#### Tunnel a Specific Port
+
+```cmd
+# Tunnel WebDAV HTTP (for remote drive mapping)
+cloudflared tunnel --url http://localhost:8080
+
+# Tunnel WebDAV HTTPS
+cloudflared tunnel --url https://localhost:8443
+```
+
+> **Note**: Cloudflare Tunnel works with HTTP/HTTPS services only. SFTP (port 2222) and FTP (port 2121) are raw TCP protocols and cannot be tunneled with the standard `--url` method — use them on your local network or set up a VPN for remote SFTP/FTP access.
 
 #### Custom Domain (Advanced)
 
@@ -696,6 +875,16 @@ Or use Command Prompt (Admin):
 netsh advfirewall firewall add rule name="CloudinatorFTP" dir=in action=allow protocol=TCP localport=5000
 ```
 
+### Protocol Server Ports
+
+```cmd
+netsh advfirewall firewall add rule name="CloudinatorFTP-WebDAV" dir=in action=allow protocol=TCP localport=8080
+netsh advfirewall firewall add rule name="CloudinatorFTP-WebDAV-HTTPS" dir=in action=allow protocol=TCP localport=8443
+netsh advfirewall firewall add rule name="CloudinatorFTP-SFTP" dir=in action=allow protocol=TCP localport=2222
+netsh advfirewall firewall add rule name="CloudinatorFTP-FTP" dir=in action=allow protocol=TCP localport=2121
+netsh advfirewall firewall add rule name="CloudinatorFTP-FTP-Passive" dir=in action=allow protocol=TCP localport=60000-60100
+```
+
 ---
 
 ## Troubleshooting
@@ -708,6 +897,21 @@ netsh advfirewall firewall add rule name="CloudinatorFTP" dir=in action=allow pr
 | git not found | Reinstall Git, ensure PATH is updated |
 | pip fails | Update pip: `python -m pip install --upgrade pip` |
 | Permission denied | Run Command Prompt as Administrator |
+
+### Protocol Server Issues
+
+| Issue | Solution |
+|-------|----------|
+| WebDAV not starting | Run `pip install wsgidav cheroot` |
+| SFTP not starting | Run `pip install paramiko` |
+| FTP not starting | Run `pip install pyftpdlib` |
+| WebDAV "inaccessible" (HTTP) | Enable WebClient: `Start-Service WebClient`; set `BasicAuthLevel=2` |
+| WebDAV "inaccessible" (HTTPS) | Import `db\webdav.crt` as Trusted Root CA |
+| WebDAV drive not in Explorer | Run `net use` in a **non-elevated** terminal |
+| SFTP auth fails | Accept host key warning in WinSCP on first connect; verify port 2222 |
+| FTP stalls after login | Open ports 60000-60100 in firewall |
+| Ports blocked | Add firewall rules (see Firewall Configuration above) |
+| Wrong IP | Run `ipconfig` to find correct LAN IP; use that in WinSCP/net use |
 
 ### Virtual Environment Issues
 
@@ -792,11 +996,14 @@ netsh advfirewall firewall add rule name="CloudinatorFTP" dir=in action=allow pr
 ## Next Steps
 
 1. ✅ Server running on `http://localhost:5000`
-2. 📤 Get Cloudflare tunnel URL
-3. 🔐 Change default passwords
-4. 👥 Create users for team
-5. 🌍 Share the URL
-6. 📊 Monitor performance
+2. 🌐 WebDAV mapped as network drive (port 8080 or 8443)
+3. 🔒 SFTP accessible via WinSCP (port 2222)
+4. 📁 FTP accessible via WinSCP/FileZilla (port 2121)
+5. 📤 Get Cloudflare tunnel URL (optional)
+6. 🔐 Change default passwords
+7. 👥 Create users for team
+8. 🌍 Share the URL
+9. 📊 Monitor performance
 
 ---
 
@@ -809,6 +1016,7 @@ netsh advfirewall firewall add rule name="CloudinatorFTP" dir=in action=allow pr
 - [Project GitHub](https://github.com/NeoMatrix14241/CloudinatorFTP)
 - [Apache WSGI Deployment](./DEPLOY_APACHE.md)
 - [Cloudflare Tunnel Setup](./SETUP_TUNNEL_ADVANCED.md)
+- [rclone Integration](./RCLONE_DEPLOYMENT.md)
 
 ---
 

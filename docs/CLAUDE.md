@@ -1,6 +1,6 @@
 # CloudinatorFTP — Complete Codebase Reference for AI-Assisted Development
 
-**Version**: 3.1 | **Last Updated**: 2026-06-04  
+**Version**: 3.2 | **Last Updated**: 2026-06-18  
 **For**: AI assistants and developers modifying/extending CloudinatorFTP
 
 ---
@@ -22,9 +22,10 @@
 13. [Media Handling](#media-handling)
 14. [Bulk Operations](#bulk-operations)
 15. [Configuration & Deployment](#configuration--deployment)
-16. [Admin Tools & Utilities](#admin-tools--utilities)
-17. [Performance Characteristics](#performance-characteristics)
-18. [Troubleshooting & Edge Cases](#troubleshooting--edge-cases)
+16. [Protocol Servers (WebDAV / SFTP / FTP)](#protocol-servers-webdav--sftp--ftp)
+17. [Admin Tools & Utilities](#admin-tools--utilities)
+18. [Performance Characteristics](#performance-characteristics)
+19. [Troubleshooting & Edge Cases](#troubleshooting--edge-cases)
 
 ---
 
@@ -44,6 +45,11 @@
 | **file_index.py** | Large-folder caching | Indexed dir listings, instant lookups |
 | **search_index.py** | Full-text search engine | FTS5 indexing, query processing |
 | **realtime_stats.py** | Server-Sent Events | Live storage stats broadcasting |
+| **protocol_manager.py** | Protocol server launcher | Starts/stops WebDAV, SFTP, FTP in background threads |
+| **webdav_server.py** | WebDAV server | wsgidav + waitress/cheroot, HTTP+HTTPS, role enforcement |
+| **sftp_server.py** | SFTP server | Paramiko SSH/SFTP, RSA host key, chrooted to ROOT_DIR |
+| **ftp_server.py** | FTP server | pyftpdlib, custom authorizer, passive ports 60000–60100 |
+| **ssl_cert.py** | TLS certificate manager | Self-signed cert generation, SAN detection, db/ storage |
 
 ### Startup Order
 
@@ -56,6 +62,7 @@
 6. start_assembly_worker() → chunk assembly background daemon
 7. cleanup_scheduler → starts periodic cleanup
 8. Flask app ready
+9. protocol_manager.start_all() → WebDAV (8080/8443), SFTP (2222), FTP (2121) start in daemon threads
 ```
 
 ---
@@ -69,6 +76,7 @@
 - **Rich media**: HLS video streaming, WebP compression, archive preview
 - **Security**: Per-user authentication, role-based access, encrypted passwords
 - **Uploads**: Chunked resumable uploads, automatic assembly, conflict resolution
+- **Protocol Access**: WebDAV (native drive mapping), SFTP (WinSCP/sshfs), FTP (legacy clients)
 
 **Core Design Philosophy**:
 - Event-driven watchdog for instant monitoring
@@ -76,6 +84,7 @@
 - Lazy initialization (nothing created on import)
 - Modular systems (auth, storage, search, media all independent)
 - Graceful fallbacks (missing ffmpeg → raw video, no libvips → raw images)
+- Protocol servers are optional daemon threads — main Flask server unaffected if any fail
 
 ---
 
@@ -101,6 +110,12 @@ app.py (Flask entry point, routes)
 ├─→ realtime_stats.py (Server-Sent Events)
 ├─→ database.py (SQLite persistence)
 │
+├─ Protocol Layer (started from dev_server.py / prod_server.py):
+│   └─→ protocol_manager.py
+│       ├─→ webdav_server.py → wsgidav, waitress/cheroot, ssl_cert.py
+│       ├─→ sftp_server.py  → paramiko
+│       └─→ ftp_server.py   → pyftpdlib
+│
 └─ Supporting CLIs:
    ├─→ create_user.py (user management)
    ├─→ reset_db.py (database reset)
@@ -115,6 +130,7 @@ app.py (Flask entry point, routes)
 3. **Atomic Operations**: File operations use platform-specific safety (Windows readonly handling)
 4. **No Blocking I/O in HTTP**: Chunks processed, assembly backgrounded, cleanup scheduled
 5. **Event-Driven Stats**: Watchdog updates counters; reconcile corrects drift
+6. **Protocol Servers are Daemon Threads**: They die automatically when the main process exits; failures do not affect the Flask server
 
 ---
 
@@ -1432,6 +1448,103 @@ img_cache_path: /tmp/cloudinator_img     (can recreate)
 
 ---
 
+## 🔐 Protocol Servers (WebDAV / SFTP / FTP)
+
+### Overview
+
+Three additional servers start automatically alongside the Flask app. They are launched by `protocol_manager.start_all()` which is called from both `dev_server.py` and `prod_server.py` immediately after `from app import app`.
+
+All three share the same authentication database (`database.db`) and respect the same role system (`readwrite` / `readonly`).
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `protocol_manager.py` | Imports and starts all three protocol servers; prints startup summary |
+| `webdav_server.py` | wsgidav WSGI app with auth cache, role middleware, HTTP+HTTPS, cert serving |
+| `sftp_server.py` | Paramiko SSH accept loop, chrooted SFTPServerInterface |
+| `ftp_server.py` | pyftpdlib with standalone CloudinatorAuthorizer (no Windows LogonUser) |
+| `ssl_cert.py` | Self-signed RSA cert generator; embeds all local IPs as SANs |
+
+### Port Assignments
+
+| Protocol | Port | Notes |
+|----------|------|-------|
+| Flask web UI | 5000 | Existing, unchanged |
+| WebDAV HTTP | 8080 | Native drive mapping; requires `BasicAuthLevel=2` registry on Windows |
+| WebDAV HTTPS | 8443 | Preferred; no registry edit; requires importing `db/webdav.crt` once |
+| SFTP | 2222 | WinSCP / FileZilla / sshfs |
+| FTP | 2121 | Legacy clients; plaintext; LAN only |
+| FTP passive data | 60000–60100 | Must be open in firewall for FTP transfers |
+
+### WebDAV Authentication Flow
+
+```
+Request → _CertMiddleware (serves /webdav.crt unauthenticated)
+        → _RoleEnforcerMiddleware (blocks write methods for readonly users)
+        → WsgiDAVApp (handles auth via _CloudinatorDC domain controller)
+```
+
+**Auth cache** (`_AuthCache`): bcrypt runs at most once per 30 seconds per user. Subsequent requests within the TTL are verified against `sha256(password)` without hitting bcrypt. This is critical because WebDAV clients re-authenticate on every request.
+
+**`basic_auth_user` wsgidav 4.x**: Must return the **username string** on success (not `True`). Returning `True` causes wsgidav 4.x to reject the auth silently.
+
+**`is_share_anonymous`**: Takes `(share, environ=None)` — `environ` is optional because wsgidav 4.3.x dropped it from the call site.
+
+**Domain controller**: Must be passed as a **class** to `WsgiDAVApp`, not an instance. wsgidav 4.3.x checks `isinstance(dc, type)` and raises if given an instance.
+
+### SFTP Implementation Notes
+
+- **Host key**: RSA-2048, generated once and stored at `db/sftp_host.rsa`. Back this up — regeneration breaks existing WinSCP known-hosts entries.
+- **Chroot**: All SFTP paths are mapped to `ROOT_DIR`. Path traversal is prevented via `os.path.realpath()` comparison.
+- **SFTPHandle**: Uses `paramiko.SFTPHandle` with `readfile`/`writefile` attributes — paramiko's default `read()`/`write()` methods use these. Do NOT monkeypatch instance attributes onto `SFTPHandle`; paramiko does not guarantee instance-attribute method dispatch.
+- **`transport.accept(30)`**: Required after `start_server()` to acknowledge the client's session channel. Without it, SFTP subsystem activation stalls.
+
+### FTP Implementation Notes
+
+- **`CloudinatorAuthorizer`**: Does NOT inherit from `DummyAuthorizer`. On Windows, `DummyAuthorizer.impersonate_user()` calls `win32security.LogonUser()`, which fails for DB-only users and blocks all file operations post-login. The standalone class has explicit no-op `impersonate_user()` and `terminate_impersonation()` methods.
+- **Passive ports**: `60000–60100`. These must be open in the Windows Firewall for file transfers to work.
+- **Credentials**: Same as web UI. `has_user()` queries `db.user_exists()`, `validate_authentication()` calls `db.check_login()`.
+
+### SSL Certificate (ssl_cert.py)
+
+- Generated at `db/webdav.crt` + `db/webdav.key` on first HTTPS server start.
+- Self-signed, 10-year validity, RSA-2048, SHA-256.
+- SANs include `localhost` and all detected local IPv4 addresses (ensures cert matches whatever IP the client uses).
+- `CA:TRUE` in BasicConstraints so it can be imported as a Trusted Root CA.
+- Served unauthenticated at `http://HOST:8080/webdav.crt` via `_CertMiddleware`.
+- **Regenerate** after IP change: `python ssl_cert.py --regenerate`.
+
+### config.py Protocol Variables
+
+```python
+WEBDAV_ENABLED       = True   # WebDAV HTTP server
+WEBDAV_PORT          = 8080
+WEBDAV_HTTPS_ENABLED = True   # WebDAV HTTPS server (requires cheroot)
+WEBDAV_HTTPS_PORT    = 8443
+SFTP_ENABLED         = True
+SFTP_PORT            = 2222
+FTP_ENABLED          = True
+FTP_PORT             = 2121
+```
+
+All six keys are saved/loaded by `save_server_config()` / `load_server_config()` in `server_config.json`. They can also be configured interactively via `python config.py` → option 13 (Protocol Servers).
+
+### Required Dependencies (new)
+
+```
+wsgidav    — WebDAV WSGI server
+cheroot    — WSGI server with SSL support (for HTTPS WebDAV)
+paramiko   — SSH/SFTP implementation
+pyftpdlib  — FTP server
+```
+
+Install: `pip install wsgidav cheroot paramiko pyftpdlib`
+
+Each is imported lazily inside `start()`. If a library is missing, that protocol server prints a warning and skips — the main Flask server is unaffected.
+
+---
+
 ## 🛠️ Admin Tools & Utilities
 
 ### User Management (create_user.py)
@@ -1475,6 +1588,12 @@ python debug_passwords.py
 # 4. Reset to defaults
 ```
 
+**ssl_cert.py** - Certificate management:
+```bash
+python ssl_cert.py               # Show cert paths and import command
+python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
+```
+
 ### Admin Endpoints
 
 | Endpoint | Method | Purpose | Auth |
@@ -1509,6 +1628,9 @@ python debug_passwords.py
 | Reconcile walk (100k files) | O(n) | Periodic 15 min | Drift detection |
 | HLS transcode 1GB video | ~30% realtime | 1 pass @ CRF18 | ffmpeg optimized |
 | Image compress (5MB) | ~100ms | pyvips parallel | libvips speedups |
+| WebDAV auth (cache hit) | O(1) | sha256 compare | _AuthCache 30s TTL |
+| WebDAV auth (cache miss) | O(bcrypt) | ~100ms | bcrypt cost factor |
+| SFTP file transfer | O(n) | Sequential reads | paramiko transport |
 
 ---
 
@@ -1536,6 +1658,36 @@ python debug_passwords.py
 **Cause**: Browser closed tab, network dropped, or chunk assembly failed  
 **Fix**: Chunks cleanup automatically after 45 min; manual cleanup via `/admin`
 
+**Problem**: WebDAV app build failed: `Could not resolve domain controller class`  
+**Cause**: Passing a DC instance instead of the class to wsgidav  
+**Fix**: `_make_domain_controller_class()` must return the class, not `CloudinatorDC()`
+
+**Problem**: WebDAV `basic_auth_user` returns success but authentication fails  
+**Cause**: Returning `True` instead of `user_name` string (wsgidav 4.x API change)  
+**Fix**: `return user_name if role is not None else False`
+
+**Problem**: WebDAV map network drive says "inaccessible" on Windows  
+**Cause 1**: WebClient service not running → `Start-Service WebClient`  
+**Cause 2**: BasicAuthLevel not set (HTTP only) → `reg add ... BasicAuthLevel /d 2`  
+**Cause 3**: Wrong IP address in `net use` command  
+**Fix HTTPS**: Import `db/webdav.crt` as Trusted Root CA; no registry edit needed
+
+**Problem**: FTP login succeeds but file operations fail on Windows  
+**Cause**: `DummyAuthorizer.impersonate_user()` calls `win32security.LogonUser()` for non-OS users  
+**Fix**: Use `CloudinatorAuthorizer` (standalone class, not DummyAuthorizer subclass)
+
+**Problem**: SFTP "Authentication failed" in WinSCP on first connect  
+**Cause**: WinSCP host key warning dialog was dismissed instead of accepted  
+**Fix**: On first connect, click Accept/Yes to cache the host key `db/sftp_host.rsa`
+
+**Problem**: SFTP/FTP "searching for host then error"  
+**Cause**: Windows Firewall blocking ports 2222, 2121, 60000-60100  
+**Fix**: Add inbound firewall rules; verify with `Test-NetConnection -Port 2222`
+
+**Problem**: FTP file transfer starts but stalls/fails  
+**Cause**: Passive data ports (60000-60100) blocked by firewall  
+**Fix**: Add firewall rule for ports 60000-60100 TCP inbound
+
 ### Edge Cases Handled
 
 1. **Symlinks**: Followed by default (can disable with follow_symlinks=False)
@@ -1548,6 +1700,10 @@ python debug_passwords.py
 8. **Database corruption**: reset_db.py for clean slate
 9. **Power loss during assembly**: Marker files (.assembling) protect against partial writes
 10. **Deleted user mid-request**: Session invalidated, redirect to /login
+11. **Protocol server dependency missing**: Graceful skip with install hint; Flask unaffected
+12. **WebDAV client re-auth on every request**: _AuthCache prevents repeated bcrypt calls
+13. **SFTP host key regenerated**: All clients see host-key-changed warning (expected)
+14. **FTP passive port range**: Must match firewall rules; default 60000-60100
 
 ---
 
@@ -1560,6 +1716,13 @@ python debug_passwords.py
 4. Update search_index if new indexable content
 5. Add SSE event if real-time display needed
 6. Test with both ENABLE_* flags True and False
+
+**When Modifying Protocol Servers**:
+1. wsgidav domain controller must be a **class** (not instance)
+2. `basic_auth_user` must return **username string** on success in wsgidav 4.x
+3. `is_share_anonymous(self, share, environ=None)` — `environ` optional (dropped in 4.3.x)
+4. SFTP handles must use `paramiko.SFTPHandle` with `.readfile`/`.writefile` attributes
+5. FTP authorizer must NOT inherit from `DummyAuthorizer` on Windows
 
 **When Optimizing**:
 1. Profile with Python cProfile first
@@ -1575,6 +1738,9 @@ python debug_passwords.py
 4. Monitor /api/health_check endpoint
 5. Review .status.json files for transcode progress
 6. Check /api/speedtest/* for network issues
+7. For WebDAV: test `http://HOST:8080/webdav.crt` — if 404, cert not generated yet
+8. For SFTP: check `db/sftp_host.rsa` exists; verify port 2222 with `netstat -an`
+9. For FTP: check firewall for ports 2121 AND 60000-60100
 
 ---
 
@@ -1586,11 +1752,60 @@ python debug_passwords.py
 - **Android/Termux Deployment**: docs/ANDROID_DEPLOYMENT.md
 - **Apache WSGI Production**: docs/DEPLOY_APACHE.md
 - **Cloudflare Tunnel Setup**: docs/SETUP_TUNNEL_ADVANCED.md
+- **rclone Integration**: docs/RCLONE_DEPLOYMENT.md
 - **README**: README.md (quick start)
 
 ---
 
 ## 📝 Changelog
+
+### Version 3.2 (2026-06-18)
+
+#### Protocol Servers — WebDAV, SFTP, FTP
+
+- **New file: `protocol_manager.py`**
+  - `start_all()` starts WebDAV, SFTP, and FTP in background daemon threads
+  - Called from `dev_server.py` and `prod_server.py` after Flask app loads
+  - Graceful skip if any library is missing (prints install hint)
+
+- **New file: `webdav_server.py`**
+  - HTTP WebDAV on port 8080 (waitress or threaded wsgiref)
+  - HTTPS WebDAV on port 8443 (cheroot + BuiltinSSLAdapter)
+  - wsgidav 4.x domain controller (class, not instance; returns username string from `basic_auth_user`)
+  - `_AuthCache`: bcrypt runs at most once per 30 seconds per user
+  - `_RoleEnforcerMiddleware`: blocks write HTTP methods for `readonly` users before reaching wsgidav
+  - `_CertMiddleware`: serves `db/webdav.crt` at `GET /webdav.crt` without authentication
+  - Fixed `is_share_anonymous(self, share, environ=None)` — `environ` optional for wsgidav 4.3.x
+
+- **New file: `sftp_server.py`**
+  - Paramiko-based SSH/SFTP server on port 2222
+  - RSA-2048 host key auto-generated in `db/sftp_host.rsa`
+  - Full `SFTPServerInterface` implementation chrooted to `ROOT_DIR`
+  - Proper `paramiko.SFTPHandle` with `readfile`/`writefile` (not monkeypatched)
+  - Role-based access: `readonly` users blocked on all mutation operations
+
+- **New file: `ftp_server.py`**
+  - pyftpdlib FTP server on port 2121
+  - `CloudinatorAuthorizer` — standalone class, no `DummyAuthorizer` inheritance
+  - No-op `impersonate_user()` / `terminate_impersonation()` (avoids Windows `LogonUser` failure)
+  - Passive data ports: 60000–60100
+
+- **New file: `ssl_cert.py`**
+  - Generates self-signed RSA-2048 TLS cert stored in `db/webdav.crt`
+  - Detects all local IPs and embeds as Subject Alternative Names
+  - `CA:TRUE` so it can be imported as Trusted Root CA on Windows/macOS/Linux
+  - `--regenerate` flag for IP changes
+
+- **Updated: `config.py`**
+  - New variables: `WEBDAV_ENABLED`, `WEBDAV_PORT`, `WEBDAV_HTTPS_ENABLED`, `WEBDAV_HTTPS_PORT`, `SFTP_ENABLED`, `SFTP_PORT`, `FTP_ENABLED`, `FTP_PORT`
+  - All variables persist in `server_config.json` via `save_server_config()` / `load_server_config()`
+  - Interactive configuration available as option 13 in `python config.py`
+  - `ENABLE_SEARCH_INDEX` now included in save/load (was previously missing)
+  - Fixed `server_config.json` path: now anchored to `_HERE` (file directory) not CWD
+  - Added `_HERE` and `_SERVER_CONFIG_FILE` constants at module level
+
+- **Updated: `dev_server.py` and `prod_server.py`**
+  - Added `import protocol_manager; protocol_manager.start_all()` after `from app import app`
 
 ### Version 3.1 (2026-06-04)
 
@@ -1624,5 +1839,5 @@ python debug_passwords.py
 
 ---
 
-**Last Updated**: 2026-06-04  
+**Last Updated**: 2026-06-18  
 **For Questions**: Refer to source code comments marked with `###` or `# --`

@@ -4,6 +4,11 @@ import subprocess
 import json
 import time
 
+# Anchor server_config.json to the directory that contains this file,
+# not the process CWD — consistent with how paths.py handles storage_config.json.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_SERVER_CONFIG_FILE = os.path.join(_HERE, "server_config.json")
+
 # Server configuration
 PORT = 5000
 CHUNK_SIZE = 10 * 1024 * 1024  # 10 MB adjustable chunk size
@@ -50,6 +55,18 @@ ENABLE_SEARCH_INDEX = (
 IMG_COMPRESS_MIN_SIZE = 1 * 1024 * 1024  # 1 MB default
 # Quality used for lossy WebP encoding (1-100). Lower = smaller file, more artefacts.
 IMG_WEBP_QUALITY = 50  # default
+
+# Protocol servers — all loaded from / saved to server_config.json.
+# Set any ENABLED flag to False to disable that server without removing its code.
+# Ports must not conflict with the main Flask server (5000) or each other.
+WEBDAV_ENABLED = True  # http://HOST:8080/ — native drive mapping on all OSes
+WEBDAV_PORT = 8080
+WEBDAV_HTTPS_ENABLED = True  # https://HOST:8443/ — no registry edit needed
+WEBDAV_HTTPS_PORT = 8443  # cert auto-generated in db/webdav.crt on first run
+SFTP_ENABLED = True  # sftp://HOST:2222/ — WinSCP, FileZilla, sshfs
+SFTP_PORT = 2222
+FTP_ENABLED = True  # ftp://HOST:2121/  — legacy FTP clients (plaintext, LAN only)
+FTP_PORT = 2121
 
 # Path exports — create=False so importing config never creates directories.
 from paths import (
@@ -491,10 +508,11 @@ def configure_server_settings():
         )
         print(f"11. ffmpeg (HLS):  {'✅ Enabled' if ENABLE_FFMPEG else '🚫 Disabled'}")
         print(f"12. libvips (img): {'✅ Enabled' if ENABLE_LIBVIPS else '🚫 Disabled'}")
+        print(f"13. Protocol Servers (WebDAV / SFTP / FTP)")
         print("10. Save & Exit")
         print("0. Exit Without Saving")
 
-        choice = input("\nSelect option to configure (0-12): ").strip()
+        choice = input("\nSelect option to configure (0-13): ").strip()
 
         if choice == "1":
             configure_port()
@@ -518,6 +536,8 @@ def configure_server_settings():
             _toggle_ffmpeg()
         elif choice == "12":
             _toggle_libvips()
+        elif choice == "13":
+            configure_protocol_settings()
         elif choice == "10":
             save_server_config()
             print("✅ Server configuration saved!")
@@ -836,66 +856,103 @@ def _toggle_libvips():
 
 
 def save_server_config():
-    """Save server configuration to file"""
+    """Save server configuration to server_config.json (next to this file)."""
     config_data = {
+        # ── Core server ──────────────────────────────────────────────────
         "PORT": PORT,
+        "HOST": HOST,
         "CHUNK_SIZE": CHUNK_SIZE,
         "ENABLE_CHUNKED_UPLOADS": ENABLE_CHUNKED_UPLOADS,
-        "HOST": HOST,
         "MAX_CONTENT_LENGTH": MAX_CONTENT_LENGTH,
         "PERMANENT_SESSION_LIFETIME": PERMANENT_SESSION_LIFETIME,
-        "HLS_MIN_SIZE": HLS_MIN_SIZE,
-        "HLS_FORCE_FORMATS": sorted(HLS_FORCE_FORMATS),  # set → sorted list for JSON
-        "IMG_COMPRESS_MIN_SIZE": IMG_COMPRESS_MIN_SIZE,
-        "IMG_WEBP_QUALITY": IMG_WEBP_QUALITY,
+        # ── Feature toggles ───────────────────────────────────────────────
         "ENABLE_FFMPEG": ENABLE_FFMPEG,
         "ENABLE_LIBVIPS": ENABLE_LIBVIPS,
+        "ENABLE_SEARCH_INDEX": ENABLE_SEARCH_INDEX,
+        # ── HLS / video ───────────────────────────────────────────────────
+        "HLS_MIN_SIZE": HLS_MIN_SIZE,
+        "HLS_FORCE_FORMATS": sorted(HLS_FORCE_FORMATS),  # set → sorted list for JSON
+        # ── Image / WebP ──────────────────────────────────────────────────
+        "IMG_COMPRESS_MIN_SIZE": IMG_COMPRESS_MIN_SIZE,
+        "IMG_WEBP_QUALITY": IMG_WEBP_QUALITY,
+        # ── Protocol servers ──────────────────────────────────────────────
+        "WEBDAV_ENABLED": WEBDAV_ENABLED,
+        "WEBDAV_PORT": WEBDAV_PORT,
+        "WEBDAV_HTTPS_ENABLED": WEBDAV_HTTPS_ENABLED,
+        "WEBDAV_HTTPS_PORT": WEBDAV_HTTPS_PORT,
+        "SFTP_ENABLED": SFTP_ENABLED,
+        "SFTP_PORT": SFTP_PORT,
+        "FTP_ENABLED": FTP_ENABLED,
+        "FTP_PORT": FTP_PORT,
+        # ── Metadata ──────────────────────────────────────────────────────
         "configured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
     try:
-        with open("server_config.json", "w") as f:
+        with open(_SERVER_CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(config_data, f, indent=2)
-        print("✅ Server configuration saved to server_config.json")
+        print(f"✅ Server configuration saved to {_SERVER_CONFIG_FILE}")
     except Exception as e:
         print(f"❌ Error saving configuration: {e}")
 
 
 def load_server_config():
-    """Load server configuration from file"""
+    """Load server configuration from server_config.json (next to this file)."""
     global PORT, CHUNK_SIZE, ENABLE_CHUNKED_UPLOADS
     global HOST, MAX_CONTENT_LENGTH, PERMANENT_SESSION_LIFETIME
     global HLS_MIN_SIZE, HLS_FORCE_FORMATS
     global IMG_COMPRESS_MIN_SIZE, IMG_WEBP_QUALITY
-    global ENABLE_FFMPEG, ENABLE_LIBVIPS
+    global ENABLE_FFMPEG, ENABLE_LIBVIPS, ENABLE_SEARCH_INDEX
+    global WEBDAV_ENABLED, WEBDAV_PORT, WEBDAV_HTTPS_ENABLED, WEBDAV_HTTPS_PORT
+    global SFTP_ENABLED, SFTP_PORT
+    global FTP_ENABLED, FTP_PORT
 
     try:
-        if os.path.exists("server_config.json"):
-            with open("server_config.json", "r") as f:
+        if os.path.exists(_SERVER_CONFIG_FILE):
+            with open(_SERVER_CONFIG_FILE, "r", encoding="utf-8") as f:
                 config = json.load(f)
 
+            # ── Core server ───────────────────────────────────────────────
             PORT = config.get("PORT", PORT)
+            HOST = config.get("HOST", HOST)
             CHUNK_SIZE = config.get("CHUNK_SIZE", CHUNK_SIZE)
             ENABLE_CHUNKED_UPLOADS = config.get(
                 "ENABLE_CHUNKED_UPLOADS", ENABLE_CHUNKED_UPLOADS
             )
-            HOST = config.get("HOST", HOST)
             MAX_CONTENT_LENGTH = config.get("MAX_CONTENT_LENGTH", MAX_CONTENT_LENGTH)
             PERMANENT_SESSION_LIFETIME = config.get(
                 "PERMANENT_SESSION_LIFETIME", PERMANENT_SESSION_LIFETIME
             )
+
+            # ── Feature toggles ───────────────────────────────────────────
+            ENABLE_FFMPEG = config.get("ENABLE_FFMPEG", ENABLE_FFMPEG)
+            ENABLE_LIBVIPS = config.get("ENABLE_LIBVIPS", ENABLE_LIBVIPS)
+            ENABLE_SEARCH_INDEX = config.get("ENABLE_SEARCH_INDEX", ENABLE_SEARCH_INDEX)
+
+            # ── HLS / video ───────────────────────────────────────────────
             HLS_MIN_SIZE = config.get("HLS_MIN_SIZE", HLS_MIN_SIZE)
-            # Stored as a list in JSON, convert back to set
             if "HLS_FORCE_FORMATS" in config:
                 HLS_FORCE_FORMATS = set(config["HLS_FORCE_FORMATS"])
+
+            # ── Image / WebP ──────────────────────────────────────────────
             IMG_COMPRESS_MIN_SIZE = config.get(
                 "IMG_COMPRESS_MIN_SIZE", IMG_COMPRESS_MIN_SIZE
             )
             IMG_WEBP_QUALITY = config.get("IMG_WEBP_QUALITY", IMG_WEBP_QUALITY)
-            ENABLE_FFMPEG = config.get("ENABLE_FFMPEG", ENABLE_FFMPEG)
-            ENABLE_LIBVIPS = config.get("ENABLE_LIBVIPS", ENABLE_LIBVIPS)
 
-            print("✅ Server configuration loaded from server_config.json")
+            # ── Protocol servers ──────────────────────────────────────────
+            WEBDAV_ENABLED = config.get("WEBDAV_ENABLED", WEBDAV_ENABLED)
+            WEBDAV_PORT = config.get("WEBDAV_PORT", WEBDAV_PORT)
+            WEBDAV_HTTPS_ENABLED = config.get(
+                "WEBDAV_HTTPS_ENABLED", WEBDAV_HTTPS_ENABLED
+            )
+            WEBDAV_HTTPS_PORT = config.get("WEBDAV_HTTPS_PORT", WEBDAV_HTTPS_PORT)
+            SFTP_ENABLED = config.get("SFTP_ENABLED", SFTP_ENABLED)
+            SFTP_PORT = config.get("SFTP_PORT", SFTP_PORT)
+            FTP_ENABLED = config.get("FTP_ENABLED", FTP_ENABLED)
+            FTP_PORT = config.get("FTP_PORT", FTP_PORT)
+
+            print(f"✅ Server configuration loaded from {_SERVER_CONFIG_FILE}")
             return True
     except Exception as e:
         print(f"⚠️ Could not load server config: {e}")
@@ -1682,6 +1739,112 @@ def view_current_settings():
     )
     print(f"   Lossy WebP quality: {IMG_WEBP_QUALITY}  (1–100, lower = smaller file)")
     print(f"   Image Cache         : {get_img_cache_dir()}")
+
+    print(f"\n🌐 Protocol Servers:")
+    _yon = lambda v: "✅ Enabled" if v else "🚫 Disabled"
+    print(f"   WebDAV : {_yon(WEBDAV_ENABLED)}  →  http://HOST:{WEBDAV_PORT}/")
+    print(f"   SFTP   : {_yon(SFTP_ENABLED)}  →  sftp://HOST:{SFTP_PORT}/")
+    print(f"   FTP    : {_yon(FTP_ENABLED)}  →  ftp://HOST:{FTP_PORT}/  ⚠️  plaintext")
+
+
+def configure_protocol_settings():
+    """Interactive configuration for WebDAV / SFTP / FTP protocol servers."""
+    global WEBDAV_ENABLED, WEBDAV_PORT, SFTP_ENABLED, SFTP_PORT, FTP_ENABLED, FTP_PORT
+
+    print("\n🌐 Protocol Server Configuration")
+    print("=" * 50)
+
+    while True:
+        _yon = lambda v: "✅ Enabled" if v else "🚫 Disabled"
+        print(f"\nCurrent Settings:")
+        print(f"1. WebDAV  : {_yon(WEBDAV_ENABLED)}   Port: {WEBDAV_PORT}")
+        print(f"   → native drive mapping on Windows / macOS / Linux")
+        print(f"2. SFTP    : {_yon(SFTP_ENABLED)}   Port: {SFTP_PORT}")
+        print(f"   → WinSCP, FileZilla, sshfs")
+        print(f"3. FTP     : {_yon(FTP_ENABLED)}   Port: {FTP_PORT}")
+        print(f"   → legacy FTP clients  ⚠️  plaintext, LAN only")
+        print(f"4. Save & Exit")
+        print(f"5. Exit Without Saving")
+
+        choice = input("\nSelect option (1-5): ").strip()
+
+        if choice == "1":
+            _toggle_protocol("WEBDAV", "WebDAV")
+        elif choice == "2":
+            _toggle_protocol("SFTP", "SFTP")
+        elif choice == "3":
+            _toggle_protocol("FTP", "FTP")
+        elif choice == "4":
+            save_server_config()
+            print("✅ Protocol configuration saved!")
+            break
+        elif choice == "5":
+            print("↩️  Cancelled")
+            break
+        else:
+            print("❌ Invalid option")
+
+
+def _toggle_protocol(prefix: str, label: str):
+    """Toggle enable/disable and optionally change port for a protocol server."""
+    global WEBDAV_ENABLED, WEBDAV_PORT, SFTP_ENABLED, SFTP_PORT, FTP_ENABLED, FTP_PORT
+
+    enabled_var = f"{prefix}_ENABLED"
+    port_var = f"{prefix}_PORT"
+
+    # Read current values using globals()
+    g = globals()
+    current_enabled = g[enabled_var]
+    current_port = g[port_var]
+
+    _yon = "✅ Enabled" if current_enabled else "🚫 Disabled"
+    print(f"\n{label} — currently {_yon}  (port {current_port})")
+    print("1. Enable")
+    print("2. Disable")
+    print(f"3. Change port  (currently {current_port})")
+    print("4. Keep current")
+
+    choice = input("\nSelect (1-4): ").strip()
+
+    if choice == "1":
+        g[enabled_var] = True
+        print(f"✅ {label} enabled")
+    elif choice == "2":
+        g[enabled_var] = False
+        print(f"🚫 {label} disabled")
+    elif choice == "3":
+        _set_protocol_port(prefix, label, current_port)
+    elif choice == "4":
+        print("✅ Keeping current settings")
+    else:
+        print("❌ Invalid option")
+
+
+def _set_protocol_port(prefix: str, label: str, current_port: int):
+    """Prompt user for a new port number for a protocol server."""
+    reserved = {5000: "Flask main server", 8080: "WebDAV", 2222: "SFTP", 2121: "FTP"}
+
+    while True:
+        try:
+            raw = input(
+                f"Enter new {label} port (1–65535), or press Enter to keep {current_port}: "
+            ).strip()
+            if not raw:
+                break
+            p = int(raw)
+            if not (1 <= p <= 65535):
+                print("❌ Port must be between 1 and 65535")
+                continue
+            if p < 1024:
+                print(f"⚠️  Port {p} is below 1024 — may require root/admin privileges")
+            if p in reserved and reserved[p] != label:
+                print(f"⚠️  Port {p} is already used by {reserved[p]} — choose another")
+                continue
+            globals()[f"{prefix}_PORT"] = p
+            print(f"✅ {label} port set to {p}")
+            break
+        except ValueError:
+            print("❌ Please enter a valid integer")
 
 
 # Load configuration on import
