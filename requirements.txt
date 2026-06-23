@@ -19,3 +19,4 @@ pyftpdlib<3
 cheroot<12
 psutil<8
 pynacl<2
+pyppmd<2
