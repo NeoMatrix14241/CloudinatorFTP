@@ -100,19 +100,19 @@ for pkg in "${packages[@]}"; do
     # --- Exception case: Termux + this package is system-managed ---
     if [ "$IS_TERMUX" -eq 1 ] && [ -n "${SYSTEM_MANAGED[$pkg]+x}" ]; then
         termux_name="${SYSTEM_MANAGED[$pkg]}"
-
+        
         # Strip any stale direct entry from requirements.txt -- a leftover
         # version line here would force pip to manage it directly no
         # matter what constraints.txt says.
         sed -i -E "/^${pkg}([>=<~!].*)?$/d" "$REQ"
-
+        
         if [ -n "$termux_name" ]; then
             echo "[PKG] pkg upgrade -y $termux_name"
             if ! pkg upgrade -y "$termux_name" >"/tmp/pkg_${pkg}.log" 2>&1; then
                 echo "[WARN] pkg upgrade failed for $termux_name -- see /tmp/pkg_${pkg}.log, leaving existing install as-is."
             fi
         fi
-
+        
         installed=$(pip show "$pkg" 2>/dev/null | awk -F': ' '/^Version/{print $2}')
         if [ -n "$installed" ]; then
             echo "${pkg}==${installed}" >> "$CONSTRAINTS"
@@ -122,15 +122,15 @@ for pkg in "${packages[@]}"; do
         fi
         continue
     fi
-
+    
     # --- Normal path: pip manages this package directly ---
     latest=$(pip index versions "$pkg" 2>/dev/null | grep -oP "(?<=Available versions: )[\d.]+" | head -n 1)
-
+    
     if [ -z "$latest" ]; then
         echo "[WARN] Could not fetch version for $pkg, skipping..."
         continue
     fi
-
+    
     if [ -n "${COMPAT_CEILING[$pkg]}" ]; then
         constraint="${COMPAT_CEILING[$pkg]}"
         echo "[FIX] Applying known compatibility ceiling for $pkg: $constraint"
@@ -138,15 +138,15 @@ for pkg in "${packages[@]}"; do
         # Extract the major version number (e.g., "4.3.4" -> "4")
         major_version=$(echo "$latest" | cut -d. -f1)
         next_major=$((major_version + 1))
-
+        
         # Ceiling only -- not forcing ">=${latest}". Pinning the floor to
         # "newest available today" removes pip's only tool for resolving
         # a conflict: picking an older, mutually compatible version.
         constraint="<${next_major}"
     fi
-
+    
     echo "Updating $pkg to $constraint"
-
+    
     if grep -qE "^${pkg}([>=<~!]|$)" "$REQ"; then
         sed -i -E "s/^${pkg}([>=<~!].*)?/${pkg}${constraint}/" "$REQ"
     else
@@ -187,7 +187,7 @@ case "$choice" in
     y|Y )
         echo "Installing updated packages..."
         python -m pip install -r "$REQ" -c "$CONSTRAINTS" --upgrade --no-cache-dir
-
+        
         echo
         echo "==> Verifying installed environment is internally consistent..."
         if pip check; then
@@ -195,7 +195,7 @@ case "$choice" in
         else
             echo "[WARN] pip check found broken requirement sets above -- investigate before relying on this environment."
         fi
-
+        
         read -p "Press any key to exit..."
     ;;
     * )
