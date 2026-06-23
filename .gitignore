@@ -6,6 +6,7 @@ __pycache__/
 *.bak
 *.log
 .venv/
+constraints.txt
 .hintrc
 *.pid
 .manage_pids/
