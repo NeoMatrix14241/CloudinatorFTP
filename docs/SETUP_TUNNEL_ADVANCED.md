@@ -296,17 +296,29 @@ ingress:
   - hostname: domain.com
     service: http://localhost:5000
     originRequest:
-      noTLSVerify: true
+      connectTimeout: 0s
+      tlsTimeout: 0s
+      tcpKeepAlive: 0s
+      keepAliveTimeout: 0s
       httpHostHeader: domain.com
+      noTLSVerify: true
       disableChunkedEncoding: false
+      proxyConnectTimeout: 0s
+      expectContinueTimeout: 0s
 
   # WebDAV — for remote network drive mapping
   - hostname: files.domain.com
     service: http://localhost:8080
     originRequest:
+      connectTimeout: 0s
+      tlsTimeout: 0s
+      tcpKeepAlive: 0s
+      keepAliveTimeout: 0s
+      httpHostHeader: domain.com
       noTLSVerify: true
-      httpHostHeader: files.domain.com
       disableChunkedEncoding: false
+      proxyConnectTimeout: 0s
+      expectContinueTimeout: 0s
 
   # Catch-all
   - service: http_status:404
