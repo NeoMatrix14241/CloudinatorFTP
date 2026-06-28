@@ -30,6 +30,7 @@ packages=(
     paramiko
     pyftpdlib
     cheroot
+    impacket
 )
 
 # Exception case 1: Termux. Maps a pip package name -> its Termux apt

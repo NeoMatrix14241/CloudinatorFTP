@@ -99,6 +99,12 @@ if __name__ == "__main__":
 
         print("\n🛑 Stopping Flask development server…")
 
+        # Stop WebDAV / SFTP / FTP / SMB protocol servers cleanly. SMB itself
+        # never touches Windows' native file sharing (LanmanServer) — that's
+        # a separate, one-time, manually-run setup (smb_setup.py), not
+        # something tied to this server's start/stop.
+        protocol_manager.stop_all()
+
         active = [
             t for t in _t.enumerate() if t is not _t.main_thread() and t.is_alive()
         ]

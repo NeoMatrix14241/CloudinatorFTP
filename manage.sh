@@ -2,37 +2,6 @@
 # =============================================================================
 #  manage.sh — Cloudinator Server & Utility Management
 # =============================================================================
-#  Servers (background, mutually exclusive):
-#    prod_server.py   — Waitress production server
-#    dev_server.py    — Flask development server
-#
-#  Utilities (foreground — safe to run while server is up):
-#    config.py           setup_storage.py     create_user.py
-#    debug_passwords.py  reset_db.py          update_pymodules.sh
-#    termux_setup.sh     (Android / Termux only)
-#
-#  Usage:  ./manage.sh <command> [args]
-#
-#  Commands:
-#    start  server|dev_server     Start a server in the background
-#    stop                         Stop the running server
-#    restart                      Restart the currently running server
-#    status                       Show server status + recent log tail
-#    logs   [server|dev_server] [-f]
-#                                 View / follow logs (Ctrl-C detaches only tail)
-#    clean-logs                   Delete old log files (with confirmation)
-#
-#    config                       python config.py
-#    create-user                  python create_user.py
-#    debug-pw                     python debug_passwords.py
-#    reset-db                     python reset_db.py
-#    setup-storage                python setup_storage.py
-#    update-modules               bash update_pymodules.sh
-#    termux-setup                 bash termux_setup.sh  (Android/Termux only)
-#
-#    menu                         Interactive menu
-#    help                         Show this help
-# =============================================================================
 
 set -euo pipefail
 
@@ -377,7 +346,7 @@ cmd_start() {
         echo ""
         info "Logs saved to: ${DIM}${log}${NC}"
         echo ""
-        info "Utilities:   ./manage.sh config | create-user | debug-pw | reset-db"
+        info "Utilities:   ./manage.sh config | manage-users | debug-pw | reset-db"
         info "Follow logs: ./manage.sh logs $(display_name_for "$type") -f"
         info "Stop server: ./manage.sh stop"
     else
@@ -725,14 +694,16 @@ cmd_menu() {
         echo "   7) Clean log files"
         echo ""
         echo -e "  ${BOLD}Utilities${NC}"
-        echo "   8) config.py           — Edit configuration"
-        echo "   9) create_user.py      — Create a user"
-        echo "  10) debug_passwords.py  — Debug passwords"
-        echo "  11) reset_db.py         — Reset database"
-        echo "  12) setup_storage.py    — Configure storage"
-        echo "  13) update_pymodules.sh — Update Python packages"
+        echo "   8) smb_setup.py        — Configure SMB storage"
+        echo "   9) kick_sessions.py    — Force logout of all active sessions"
+        echo "  10) config.py           — Edit configuration"
+        echo "  11) manage_users.py     — Manage user credentials"
+        echo "  12) debug_passwords.py  — Debug passwords"
+        echo "  13) reset_db.py         — Reset database"
+        echo "  14) setup_storage.py    — Configure storage"
+        echo "  15) update_pymodules.sh — Update Python packages"
         if is_termux; then
-            echo "  14) termux_setup.sh    — Termux initial setup (Android only)"
+            echo "  16) termux_setup.sh    — Termux initial setup (Android only)"
         fi
         echo ""
         echo "   q) Quit"
@@ -759,13 +730,15 @@ cmd_menu() {
                 fi
             ;;
             7)  cmd_clean_logs ;;
-            8)  run_utility "config.py" || true ;;
-            9)  run_utility "create_user.py" || true ;;
-            10) run_utility "debug_passwords.py" || true ;;
-            11) run_utility "reset_db.py" || true ;;
-            12) run_utility "setup_storage.py" || true ;;
-            13) cmd_update_modules || true ;;
-            14) cmd_termux_setup || true ;;
+            8)  run_utility "smb_setup.py" || true ;;
+            9)  run_utility "kick_sessions.py" || true ;;
+            10) run_utility "config.py" || true ;;
+            11) run_utility "manage_users.py" || true ;;
+            12) run_utility "debug_passwords.py" || true ;;
+            13) run_utility "reset_db.py" || true ;;
+            14) run_utility "setup_storage.py" || true ;;
+            15) cmd_update_modules || true ;;
+            16) cmd_termux_setup || true ;;
             q|Q) echo ""; success "Goodbye!"; exit 0 ;;
             *) warn "Invalid option: ${choice}" ;;
         esac
@@ -796,8 +769,10 @@ ${BOLD}SERVER COMMANDS${NC}  (mutually exclusive — only one server at a time)
   clean-logs            List and delete old log files (with confirmation)
 
 ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
+  setup-smb             Configure SMB protocol storage (Windows/Linux)
+  kick-sessions         Force logout of all active sessions (server must be running)
   config                python config.py
-  create-user           python create_user.py
+  manage-users          python manage_users.py
   debug-pw              python debug_passwords.py
   reset-db              python reset_db.py
   setup-storage         python setup_storage.py
@@ -811,7 +786,7 @@ ${BOLD}OTHER${NC}
 ${BOLD}EXAMPLES${NC}
   ./manage.sh start server       # launch waitress server in background
   ./manage.sh start dev_server   # launch flask dev server in background
-  ./manage.sh create-user        # run tool while server is still up
+  ./manage.sh manage-users       # run tool while server is still up
   ./manage.sh logs server -f     # follow live output; Ctrl-C to detach only
   ./manage.sh clean-logs         # delete old log files
   ./manage.sh stop               # gracefully stop the server
@@ -847,8 +822,10 @@ main() {
         status)         cmd_status ;;
         logs)           cmd_logs "$@" ;;
         clean-logs)     cmd_clean_logs ;;
+        setup-smb)      run_utility "smb_setup.py" "$@" ;;
+        kick-sessions)  run_utility "kick_sessions.py" "$@" ;;
         config)         run_utility "config.py" "$@" ;;
-        create-user)    run_utility "create_user.py" "$@" ;;
+        manage-users)   run_utility "manage_users.py" "$@" ;;
         debug-pw)       run_utility "debug_passwords.py" "$@" ;;
         reset-db)       run_utility "reset_db.py" "$@" ;;
         setup-storage)  run_utility "setup_storage.py" "$@" ;;

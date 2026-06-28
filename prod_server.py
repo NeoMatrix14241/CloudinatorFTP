@@ -133,6 +133,13 @@ if __name__ == "__main__":
 
         print("\n🛑 Stopping Waitress server…")
 
+        # Stop WebDAV / SFTP / FTP / SMB protocol servers cleanly. SMB itself
+        # never touches Windows' native file sharing (LanmanServer) — that's
+        # a separate, one-time, manually-run setup (smb_setup.py), not
+        # something tied to this server's start/stop. See smb_server.py and
+        # lanman_guard.py for why that's the right model.
+        protocol_manager.stop_all()
+
         # Brief pause — lets asyncore close the listening socket
         _time.sleep(0.3)
 

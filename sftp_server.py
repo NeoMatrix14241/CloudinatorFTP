@@ -30,27 +30,30 @@ import socket
 import threading
 import time
 import logging
+from app import get_local_ip
+
+LOCAL_IP = get_local_ip()
 
 log = logging.getLogger(__name__)
 
 # ── SFTP open-flags (SSH protocol constants) ──────────────────────────────
-_FXF_READ   = 0x00000001
-_FXF_WRITE  = 0x00000002
+_FXF_READ = 0x00000001
+_FXF_WRITE = 0x00000002
 _FXF_APPEND = 0x00000004
-_FXF_CREAT  = 0x00000008
-_FXF_TRUNC  = 0x00000010
-_FXF_EXCL   = 0x00000020
+_FXF_CREAT = 0x00000008
+_FXF_TRUNC = 0x00000010
+_FXF_EXCL = 0x00000020
 
 _WRITE_FLAGS = _FXF_WRITE | _FXF_APPEND | _FXF_CREAT
 
 
 def _flags_to_mode(flags: int) -> str:
     """Convert SFTP open flags to a Python binary open-mode string."""
-    is_read  = bool(flags & _FXF_READ)
+    is_read = bool(flags & _FXF_READ)
     is_write = bool(flags & _FXF_WRITE)
     is_append = bool(flags & _FXF_APPEND)
-    is_creat  = bool(flags & _FXF_CREAT)
-    is_trunc  = bool(flags & _FXF_TRUNC)
+    is_creat = bool(flags & _FXF_CREAT)
+    is_trunc = bool(flags & _FXF_TRUNC)
 
     if is_append:
         return "a+b" if is_read else "ab"
@@ -62,6 +65,7 @@ def _flags_to_mode(flags: int) -> str:
 
 
 # ── Path helper ───────────────────────────────────────────────────────────
+
 
 def _make_realpath(root_dir: str):
     """
@@ -125,6 +129,7 @@ def _make_realpath(root_dir: str):
 # paramiko's default write() does: self.writefile.seek(offset); self.writefile.write(data)
 # We just supply a real file object and override stat()/close() only.
 
+
 def _make_sftp_handle_class():
     import paramiko
 
@@ -137,7 +142,7 @@ def _make_sftp_handle_class():
 
         def __init__(self, fobj, flags=0):
             super().__init__(flags)
-            self.readfile  = fobj
+            self.readfile = fobj
             self.writefile = fobj
 
         def stat(self):
@@ -249,6 +254,7 @@ class _CloudinatorSFTPInterface:
 
         try:
             import builtins
+
             fobj = builtins.open(real, mode)
         except FileNotFoundError:
             return self._p.SFTP_NO_SUCH_FILE
@@ -352,6 +358,7 @@ class _CloudinatorSFTPInterface:
 # Paramiko's SFTPServer calls methods on a class that inherits from
 # SFTPServerInterface.  We wrap our implementation above so we don't
 # need to import paramiko at module load time.
+
 
 def _make_sftp_interface_class(root_dir: str):
     import paramiko
@@ -461,7 +468,9 @@ def _get_host_key():
     key = paramiko.RSAKey.generate(2048)
     key.write_private_key_file(key_path)
     print(f"🔑 SFTP: Generated RSA host key → {key_path}")
-    print("   ⚠️  Back up this file — regeneration invalidates all known-hosts entries.")
+    print(
+        "   ⚠️  Back up this file — regeneration invalidates all known-hosts entries."
+    )
     return key
 
 
@@ -521,10 +530,10 @@ def _accept_loop(host_key, port: int, sftp_class, ssh_class):
         print(f"❌ SFTP: cannot bind to port {port}: {e}")
         return
 
-    print(f"🔒 SFTP:    sftp://HOST:{port}/")
-    print(f"   WinSCP  → Protocol: SFTP  Host: HOST  Port: {port}")
-    print(f"   CLI     → sftp -P {port} user@HOST")
-    print(f"   sshfs   → sshfs -p {port} user@HOST:/ /mnt/cloudinator")
+    print(f"🔒 SFTP:    sftp://{LOCAL_IP}:{port}/")
+    print(f"   WinSCP  → Protocol: SFTP  Host: {LOCAL_IP}  Port: {port}")
+    print(f"   CLI     → sftp -P {port} user@{LOCAL_IP}")
+    print(f"   sshfs   → sshfs -p {port} user@{LOCAL_IP}:/ /mnt/cloudinator")
 
     while not _stop_event.is_set():
         try:

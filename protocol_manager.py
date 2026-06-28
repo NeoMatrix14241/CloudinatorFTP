@@ -1,13 +1,13 @@
 """
-protocol_manager.py — Unified launcher for WebDAV, SFTP, and FTP servers
--------------------------------------------------------------------------
+protocol_manager.py — Unified launcher for WebDAV, SFTP, FTP, and SMB servers
+-------------------------------------------------------------------------------
 Call start_all() once at server startup (in dev_server.py / prod_server.py
 right after 'from app import app') to spin up all enabled protocol servers
 in background daemon threads.
 
 Each server is started only if:
   1. The ENABLED flag in config.py is True (or missing, defaulting to True)
-  2. The required library is installed (wsgidav / paramiko / pyftpdlib)
+  2. The required library is installed (wsgidav / paramiko / pyftpdlib / impacket)
 
 If a library is missing the server is skipped with a helpful message; the
 main Flask server is never affected.
@@ -24,6 +24,9 @@ Config keys to add to config.py (all optional — shown with defaults):
     SFTP_PORT      = 2222
     FTP_ENABLED    = True
     FTP_PORT       = 2121
+    SMB_ENABLED    = True
+    SMB_PORT       = 445
+    SMB_FALLBACK_PORT = 8445
 
 Windows WebDAV note:
     Windows requires the WebClient service to be running for HTTP WebDAV.
@@ -33,6 +36,12 @@ Windows WebDAV note:
     Then re-try mapping to http://HOST:8080/
     For HTTPS WebDAV (recommended for internet exposure), add a reverse
     proxy (nginx/caddy) with TLS in front of port 8080.
+
+SMB note:
+    Port 445 needs root/Administrator (Linux/Android) or for Windows'
+    own native file sharing (LanmanServer) to be stopped first — see
+    smb_server.py and lanman_guard.py. Falls back to SMB_FALLBACK_PORT
+    automatically when 445 isn't available.
 """
 
 import socket
@@ -121,6 +130,18 @@ def start_all():
     else:
         results["FTP"] = "— disabled"
 
+    # ── SMB ───────────────────────────────────────────────────────────────
+    if _cfg("SMB_ENABLED", True):
+        try:
+            import smb_server
+
+            ok = smb_server.start()
+            results["SMB"] = "✅ started" if ok else "⚠️  skipped (missing deps)"
+        except Exception as e:
+            results["SMB"] = f"❌ error: {e}"
+    else:
+        results["SMB"] = "— disabled"
+
     # ── Summary ───────────────────────────────────────────────────────────
     print()
     for name, status in results.items():
@@ -131,6 +152,7 @@ def start_all():
         "WebDAV": ("wsgidav", "wsgidav"),
         "SFTP": ("paramiko", "paramiko"),
         "FTP": ("pyftpdlib", "pyftpdlib"),
+        "SMB": ("impacket", "impacket"),
     }
     needed = [
         pkg
@@ -152,7 +174,7 @@ def stop_all():
     Called automatically when the process exits (daemon threads).
     You can also call this explicitly for a clean shutdown.
     """
-    for mod_name in ("webdav_server", "sftp_server", "ftp_server"):
+    for mod_name in ("webdav_server", "sftp_server", "ftp_server", "smb_server"):
         try:
             import importlib
 
@@ -187,5 +209,12 @@ def status() -> dict:
             "enabled": _cfg("FTP_ENABLED", True),
             "port": _cfg("FTP_PORT", 2121),
             "url": f"ftp://{LOCAL_IP}:{_cfg('FTP_PORT', 2121)}/",
+        },
+        "smb": {
+            "enabled": _cfg("SMB_ENABLED", True),
+            "port": _cfg("SMB_PORT", 445),
+            "fallback_port": _cfg("SMB_FALLBACK_PORT", 8445),
+            "share_name": _cfg("SMB_SHARE_NAME", "SharedFolder"),
+            "url": f"\\\\{LOCAL_IP}\\{_cfg('SMB_SHARE_NAME', 'SharedFolder')}",
         },
     }

@@ -67,6 +67,13 @@ SFTP_ENABLED = True  # sftp://HOST:2222/ — WinSCP, FileZilla, sshfs
 SFTP_PORT = 2222
 FTP_ENABLED = True  # ftp://HOST:2121/  — legacy FTP clients (plaintext, LAN only)
 FTP_PORT = 2121
+SMB_ENABLED = False  # \\HOST\ShareName — off by default even with impacket installed.
+# Unlike WebDAV/SFTP/FTP, having the library installed isn't enough to be useful —
+# port 445 needs a one-time machine setup first. Run `python smb_setup.py` (or
+# `./manage.sh smb-setup`) once, then flip this to True (it can do that for you).
+SMB_PORT = 445  # standard SMB port; see smb_setup.py for how to actually claim it
+SMB_FALLBACK_PORT = 8445  # used automatically when 445 can't be bound
+SMB_SHARE_NAME = "SharedFolder"  # the name clients see, e.g. \\HOST\SharedFolder
 
 # Path exports — create=False so importing config never creates directories.
 from paths import (
@@ -884,6 +891,10 @@ def save_server_config():
         "SFTP_PORT": SFTP_PORT,
         "FTP_ENABLED": FTP_ENABLED,
         "FTP_PORT": FTP_PORT,
+        "SMB_ENABLED": SMB_ENABLED,
+        "SMB_PORT": SMB_PORT,
+        "SMB_FALLBACK_PORT": SMB_FALLBACK_PORT,
+        "SMB_SHARE_NAME": SMB_SHARE_NAME,
         # ── Metadata ──────────────────────────────────────────────────────
         "configured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -906,6 +917,7 @@ def load_server_config():
     global WEBDAV_ENABLED, WEBDAV_PORT, WEBDAV_HTTPS_ENABLED, WEBDAV_HTTPS_PORT
     global SFTP_ENABLED, SFTP_PORT
     global FTP_ENABLED, FTP_PORT
+    global SMB_ENABLED, SMB_PORT, SMB_FALLBACK_PORT, SMB_SHARE_NAME
 
     try:
         if os.path.exists(_SERVER_CONFIG_FILE):
@@ -951,6 +963,10 @@ def load_server_config():
             SFTP_PORT = config.get("SFTP_PORT", SFTP_PORT)
             FTP_ENABLED = config.get("FTP_ENABLED", FTP_ENABLED)
             FTP_PORT = config.get("FTP_PORT", FTP_PORT)
+            SMB_ENABLED = config.get("SMB_ENABLED", SMB_ENABLED)
+            SMB_PORT = config.get("SMB_PORT", SMB_PORT)
+            SMB_FALLBACK_PORT = config.get("SMB_FALLBACK_PORT", SMB_FALLBACK_PORT)
+            SMB_SHARE_NAME = config.get("SMB_SHARE_NAME", SMB_SHARE_NAME)
 
             print(f"✅ Server configuration loaded from {_SERVER_CONFIG_FILE}")
             return True
@@ -1745,6 +1761,9 @@ def view_current_settings():
     print(f"   WebDAV : {_yon(WEBDAV_ENABLED)}  →  http://HOST:{WEBDAV_PORT}/")
     print(f"   SFTP   : {_yon(SFTP_ENABLED)}  →  sftp://HOST:{SFTP_PORT}/")
     print(f"   FTP    : {_yon(FTP_ENABLED)}  →  ftp://HOST:{FTP_PORT}/  ⚠️  plaintext")
+    print(
+        f"   SMB    : {_yon(SMB_ENABLED)}  →  \\\\HOST\\{SMB_SHARE_NAME}  (port {SMB_PORT}, fallback {SMB_FALLBACK_PORT})"
+    )
 
 
 def configure_protocol_settings():
@@ -1763,10 +1782,14 @@ def configure_protocol_settings():
         print(f"   → WinSCP, FileZilla, sshfs")
         print(f"3. FTP     : {_yon(FTP_ENABLED)}   Port: {FTP_PORT}")
         print(f"   → legacy FTP clients  ⚠️  plaintext, LAN only")
-        print(f"4. Save & Exit")
-        print(f"5. Exit Without Saving")
+        print(
+            f"4. SMB     : {_yon(SMB_ENABLED)}   Port: {SMB_PORT} (fallback {SMB_FALLBACK_PORT})"
+        )
+        print(f"   → native network drive, share name: {SMB_SHARE_NAME}")
+        print(f"5. Save & Exit")
+        print(f"6. Exit Without Saving")
 
-        choice = input("\nSelect option (1-5): ").strip()
+        choice = input("\nSelect option (1-6): ").strip()
 
         if choice == "1":
             _toggle_protocol("WEBDAV", "WebDAV")
@@ -1775,11 +1798,63 @@ def configure_protocol_settings():
         elif choice == "3":
             _toggle_protocol("FTP", "FTP")
         elif choice == "4":
+            _configure_smb()
+        elif choice == "5":
             save_server_config()
             print("✅ Protocol configuration saved!")
             break
-        elif choice == "5":
+        elif choice == "6":
             print("↩️  Cancelled")
+            break
+        else:
+            print("❌ Invalid option")
+
+
+def _configure_smb():
+    """Dedicated SMB sub-menu — has knobs the other protocols don't (share
+    name, fallback port). Port 445 itself isn't configured here — that's a
+    one-time machine setup done via smb_setup.py, not a config.py toggle."""
+    global SMB_ENABLED, SMB_PORT, SMB_FALLBACK_PORT, SMB_SHARE_NAME
+
+    while True:
+        _yon = lambda v: "✅ Enabled" if v else "🚫 Disabled"
+        print(f"\nSMB — currently {_yon(SMB_ENABLED)}")
+        print(f"1. Enable / Disable    (currently {_yon(SMB_ENABLED)})")
+        print(f"2. Preferred port       (currently {SMB_PORT})")
+        print(f"3. Fallback port        (currently {SMB_FALLBACK_PORT})")
+        print(f"4. Share name           (currently {SMB_SHARE_NAME!r})")
+        print(f"5. Back")
+        print()
+        print(
+            f"💡 Port {SMB_PORT} needs a one-time machine setup before it'll actually"
+        )
+        print(f"   bind — run `python smb_setup.py` or `./manage.sh smb-setup`.")
+        print(
+            f"   Until then, SMB automatically falls back to port {SMB_FALLBACK_PORT}."
+        )
+
+        choice = input("\nSelect (1-5): ").strip()
+
+        if choice == "1":
+            SMB_ENABLED = not SMB_ENABLED
+            print(f"{'✅ Enabled' if SMB_ENABLED else '🚫 Disabled'}")
+        elif choice == "2":
+            _set_protocol_port("SMB", "SMB", SMB_PORT)
+        elif choice == "3":
+            raw = input(
+                f"Enter fallback port (currently {SMB_FALLBACK_PORT}): "
+            ).strip()
+            if raw.isdigit() and 1 <= int(raw) <= 65535:
+                SMB_FALLBACK_PORT = int(raw)
+                print(f"✅ Fallback port set to {SMB_FALLBACK_PORT}")
+            elif raw:
+                print("❌ Invalid port")
+        elif choice == "4":
+            raw = input(f"Enter share name (currently {SMB_SHARE_NAME!r}): ").strip()
+            if raw:
+                SMB_SHARE_NAME = raw
+                print(f"✅ Share name set to {SMB_SHARE_NAME!r}")
+        elif choice == "5":
             break
         else:
             print("❌ Invalid option")
@@ -1822,7 +1897,13 @@ def _toggle_protocol(prefix: str, label: str):
 
 def _set_protocol_port(prefix: str, label: str, current_port: int):
     """Prompt user for a new port number for a protocol server."""
-    reserved = {5000: "Flask main server", 8080: "WebDAV", 2222: "SFTP", 2121: "FTP"}
+    reserved = {
+        5000: "Flask main server",
+        8080: "WebDAV",
+        2222: "SFTP",
+        2121: "FTP",
+        445: "SMB",
+    }
 
     while True:
         try:
