@@ -95,14 +95,15 @@ if [ "$IS_TERMUX" -eq 0 ]; then
         echo "✅ Running with Administrator privileges."
         echo "==> Verifying Defender exclusions..."
         
-        # Dynamically locate the current user's Python Scripts directory
-        PYTHON_SCRIPTS_DIR=$(python -c "import os, sys; print(os.path.join(os.path.dirname(sys.executable), 'Scripts'))")
+        # Dynamically locate the ROOT Python installation directory (e.g., C:\Users\helpdesk\AppData\Local\Programs\Python\Python312)
+        # by looking at the directory containing the python executable.
+        PYTHON_ROOT_DIR=$(python -c "import os, sys; print(os.path.join(os.path.dirname(sys.executable)))")
         
-        if [ -d "$PYTHON_SCRIPTS_DIR" ]; then
-            echo "[INFO] Targeting scripts directory: $PYTHON_SCRIPTS_DIR"
-            echo "[DEFENDER] Ensuring exclusion path is set to prevent pip install blocks..."
-            powershell.exe -NoProfile -NonInteractive -Command "Add-MpPreference -ExclusionPath '$PYTHON_SCRIPTS_DIR' -ErrorAction SilentlyContinue"
-            echo "✅ Exclusion path verified/added."
+        if [ -d "$PYTHON_ROOT_DIR" ]; then
+            echo "[INFO] Targeting entire Python directory: $PYTHON_ROOT_DIR"
+            echo "[DEFENDER] Ensuring root exclusion path is set to protect site-packages..."
+            powershell.exe -NoProfile -NonInteractive -Command "Add-MpPreference -ExclusionPath '$PYTHON_ROOT_DIR' -ErrorAction SilentlyContinue"
+            echo "✅ Root exclusion path verified/added."
         fi
     fi
 fi
