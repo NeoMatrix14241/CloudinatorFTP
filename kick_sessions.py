@@ -4,11 +4,25 @@ kick_sessions.py — Revoke a user's access across all protocols, fast
 ------------------------------------------------------------------------
 Standalone tool, run manually — like create_user.py or reset_db.py.
 
+WHY THIS EXISTS, GIVEN create_user.py ALREADY HAS PASSWORD/DELETE OPTIONS:
+This consolidates the "something's wrong, lock this person out NOW" workflow
+into one clear command, with an honest, TESTED breakdown of exactly when
+each protocol actually notices — rather than navigating create_user.py's
+general-purpose menu and guessing at timing.
+
 TIMING, PER PROTOCOL (measured directly against the real libraries):
+  Web UI       Genuinely INSTANT — see logout_web() below. This is the one
+               real exception: a session cookie is a separate secret from
+               the password, so it can be invalidated independently and
+               immediately, with nobody's password changing at all.
   SFTP / FTP   Immediate. Every connection re-validates live against the
                database with no caching at all — confirmed by reading
                both modules' auth functions directly.
   WebDAV       Within ~30 seconds (_AuthCache's TTL in webdav_server.py).
+               NOTE: belongs with SFTP/FTP/SMB below, not with the Web UI
+               above — Basic Auth has no separate session secret to
+               invalidate. Only an actual password change revokes
+               anything here; the cache just adds latency on top of that.
   SMB          Within ~30 seconds (the credential-refresh background
                thread in smb_server.py). Confirmed directly: deleting a
                user and forcing an immediate reload correctly blocked
@@ -143,9 +157,10 @@ def _interactive_menu():
         print("3. Delete a user")
         print("4. Kick ALL users (rotate everyone except admin)")
         print("5. Kick ALL users, including admin")
-        print("6. Exit")
+        print("6. Log out everyone from the Web UI ONLY (genuinely instant)")
+        print("7. Exit")
 
-        choice = input("\nSelect (1-6): ").strip()
+        choice = input("\nSelect (1-7): ").strip()
 
         if choice == "1":
             list_users()
@@ -166,6 +181,8 @@ def _interactive_menu():
         elif choice == "5":
             kick_all(include_admins=True)
         elif choice == "6":
+            logout_web()
+        elif choice == "7":
             break
         else:
             print("❌ Invalid option")
@@ -180,7 +197,20 @@ def _print_help():
     print("  python kick_sessions.py rotate <username>")
     print("  python kick_sessions.py delete <username>")
     print("  python kick_sessions.py kick-all [--include-admins]")
+    print("  python kick_sessions.py logout-web        instant, web UI only")
     print("  python kick_sessions.py --help")
+
+
+def logout_web():
+    """
+    Instantly logs out every web UI session, everywhere — genuinely
+    immediate, not subject to any of the timing caveats above.
+    """
+    new_token = db.rotate_server_token()
+    print(f"✅ Web UI: every session logged out instantly, everywhere.")
+    print(f"   Nobody's password changed — they can log back in immediately")
+    print(f"   with their existing credentials, they just have to log in again.")
+    return new_token
 
 
 def main():
@@ -208,6 +238,8 @@ def main():
     elif action == "kick-all":
         include_admins = "--include-admins" in args
         kick_all(include_admins=include_admins)
+    elif action == "logout-web":
+        logout_web()
     else:
         print(f"Unknown command: {' '.join(args)}")
         print("Run with no arguments for the interactive menu, or --help for usage.")
