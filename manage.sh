@@ -829,7 +829,7 @@ main() {
         debug-pw)       run_utility "debug_passwords.py" "$@" ;;
         reset-db)       run_utility "reset_db.py" "$@" ;;
         setup-storage)  run_utility "setup_storage.py" "$@" ;;
-        update-modules) cmd_setup_modules ;;
+        setup-modules) cmd_setup_modules ;;
         termux-setup)   cmd_termux_setup ;;
         menu)           cmd_menu ;;
         dashboard)      cmd_dashboard ;;
