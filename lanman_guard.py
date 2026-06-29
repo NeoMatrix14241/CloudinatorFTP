@@ -18,35 +18,46 @@ _PS_TIMEOUT = 15  # seconds — generous; PowerShell cold-start can be slow
 
 
 def run_ps(cmd: str) -> str:
-    """Run a PowerShell command using an absolute path to bypass environment truncation."""
-    # Build an explicit, absolute path to the native 64-bit PowerShell executable
-    system_root = os.environ.get("SystemRoot") or os.environ.get("windir") or "C:\\Windows"
-    ps_exe = os.path.join(system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-    
-    # Fall back to standard lookup if the absolute path somehow doesn't exist
+    """Run a PowerShell command and return stdout. Raises on non-zero exit or stderr output."""
+    import os
+
+    # Ensure absolute path targeting to rule out any path lookup issues in the UAC context
+    system_root = os.environ.get("SystemRoot") or "C:\\Windows"
+    ps_exe = os.path.join(
+        system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"
+    )
     if not os.path.exists(ps_exe):
         ps_exe = "powershell"
 
-    # Add -InputFormat None to prevent hanging on empty standard input streams
     result = subprocess.run(
         [
             ps_exe,
             "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-InputFormat", "None",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-InputFormat",
+            "None",
             "-NonInteractive",
-            "-Command", cmd
+            "-Command",
+            cmd,
         ],
         capture_output=True,
         text=True,
         timeout=_PS_TIMEOUT,
     )
-    
-    if result.returncode != 0:
-        # Pull both streams so we don't swallow the real error
-        err_details = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(f"PowerShell failed (Code {result.returncode}): {err_details}")
-        
+
+    # Catch hidden errors: PowerShell sometimes reports exit code 0 even when commands fail
+    stderr_clean = result.stderr.strip() if result.stderr else ""
+    if result.returncode != 0 or (
+        "Error" in stderr_clean and not result.stdout.strip()
+    ):
+        raise RuntimeError(
+            f"PowerShell failed!\n"
+            f"Exit Code: {result.returncode}\n"
+            f"STDOUT: {result.stdout.strip()}\n"
+            f"STDERR: {stderr_clean}"
+        )
+
     return result.stdout.strip()
 
 
