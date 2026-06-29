@@ -85,11 +85,11 @@ if [ "$IS_TERMUX" -eq 0 ]; then
         if [ "$IS_ADMIN" != "True" ]; then
             echo "[UAC] Not running as Administrator. Requesting elevation..."
             
-            # Use EXEPATH to find the absolute physical path of git-bash.exe to preserve /usr/bin environment paths
+            # Use EXEPATH to find the absolute physical path of bash.exe to preserve /usr/bin environment paths
             if [ -n "$EXEPATH" ] && [ -f "$EXEPATH" ]; then
                 GIT_BASH_BIN="$EXEPATH"
             else
-                GIT_BASH_BIN="git-bash.exe"
+                GIT_BASH_BIN="bash.exe"
             fi
             
             powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process '$GIT_BASH_BIN' -ArgumentList '--cd-to-home', 'bash', '-c', '\"$0\"' -Verb RunAs"
@@ -97,7 +97,7 @@ if [ "$IS_TERMUX" -eq 0 ]; then
             echo "[UAC] Relaunched in elevated Git Bash window. Exiting this session."
             exit 0
         fi
-
+        
         echo "✅ Running with Administrator privileges."
         echo "==> Verifying Defender exclusions..."
         
