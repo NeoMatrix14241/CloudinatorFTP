@@ -73,7 +73,7 @@ else
 fi
 
 # We handle the Windows Auto-Elevation step BEFORE we try to call 'touch' or anything else,
-# ensuring the environment variables are correctly inherited under the full Git Bash subsystem.
+# ensuring the environment variables are correctly inherited under the full login shell profile.
 if [ "$IS_TERMUX" -eq 0 ]; then
     # --- Windows Defender & Auto-Elevation Handler ---
     if [ "$(uname -o 2>/dev/null)" == "Msys" ] || [[ "$OSTYPE" == "msys" ]]; then
@@ -85,16 +85,10 @@ if [ "$IS_TERMUX" -eq 0 ]; then
         if [ "$IS_ADMIN" != "True" ]; then
             echo "[UAC] Not running as Administrator. Requesting elevation..."
             
-            # Use EXEPATH to find the absolute physical path of bash.exe to preserve /usr/bin environment paths
-            if [ -n "$EXEPATH" ] && [ -f "$EXEPATH" ]; then
-                GIT_BASH_BIN="$EXEPATH"
-            else
-                GIT_BASH_BIN="bash.exe"
-            fi
+            # Use PowerShell to relaunch raw bash with login path parsing (--login) and interactivity (-i)
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process bash -ArgumentList '--login', '-i', '-c', '\"$0\"' -Verb RunAs"
             
-            powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process '$GIT_BASH_BIN' -ArgumentList '--cd-to-home', 'bash', '-c', '\"$0\"' -Verb RunAs"
-            
-            echo "[UAC] Relaunched in elevated Git Bash window. Exiting this session."
+            echo "[UAC] Relaunched in elevated interactive window. Exiting this session."
             exit 0
         fi
         
