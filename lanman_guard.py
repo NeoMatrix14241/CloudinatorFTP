@@ -18,16 +18,21 @@ _PS_TIMEOUT = 15  # seconds — generous; PowerShell cold-start can be slow
 
 
 def run_ps(cmd: str) -> str:
-    """Run a PowerShell command and return stdout. Raises on non-zero exit or stderr output."""
+    """Run an absolute PowerShell command and force terminating errors."""
     import os
 
-    # Ensure absolute path targeting to rule out any path lookup issues in the UAC context
+    # Force absolute system targeting to bypass UAC token environment gaps
     system_root = os.environ.get("SystemRoot") or "C:\\Windows"
     ps_exe = os.path.join(
         system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"
     )
     if not os.path.exists(ps_exe):
         ps_exe = "powershell"
+
+    # Prepend $ErrorActionPreference = 'Stop' to the command.
+    # This forces PowerShell to treat ANY service denial or dependency block as a hard
+    # process termination, passing the true error back to Python instead of hiding it.
+    hardened_cmd = f"$ErrorActionPreference = 'Stop'; {cmd}"
 
     result = subprocess.run(
         [
@@ -36,27 +41,20 @@ def run_ps(cmd: str) -> str:
             "-ExecutionPolicy",
             "Bypass",
             "-InputFormat",
-            "None",
+            "None",  # Prevents background stream lockups
             "-NonInteractive",
             "-Command",
-            cmd,
+            hardened_cmd,
         ],
         capture_output=True,
         text=True,
         timeout=_PS_TIMEOUT,
     )
 
-    # Catch hidden errors: PowerShell sometimes reports exit code 0 even when commands fail
-    stderr_clean = result.stderr.strip() if result.stderr else ""
-    if result.returncode != 0 or (
-        "Error" in stderr_clean and not result.stdout.strip()
-    ):
-        raise RuntimeError(
-            f"PowerShell failed!\n"
-            f"Exit Code: {result.returncode}\n"
-            f"STDOUT: {result.stdout.strip()}\n"
-            f"STDERR: {stderr_clean}"
-        )
+    # Catch both standard error and silent structural failures
+    if result.returncode != 0 or (result.stderr and not result.stdout):
+        err_msg = (result.stderr or result.stdout or "Unknown Execution Block").strip()
+        raise RuntimeError(f"PowerShell Execution Failed:\n{err_msg}")
 
     return result.stdout.strip()
 
