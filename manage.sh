@@ -608,9 +608,9 @@ cmd_termux_setup() {
     run_bash_script "termux_setup.sh"
 }
 
-# ── cmd_update_modules ────────────────────────────────────────────────────────
-cmd_update_modules() {
-    run_bash_script "update_pymodules.sh"
+# ── cmd_setup_modules ────────────────────────────────────────────────────────
+cmd_setup_modules() {
+    run_bash_script "setup_pymodules.sh"
 }
 
 # ── cmd_dashboard ─────────────────────────────────────────────────────────────
@@ -701,7 +701,7 @@ cmd_menu() {
         echo "  12) debug_passwords.py  — Debug passwords"
         echo "  13) reset_db.py         — Reset database"
         echo "  14) setup_storage.py    — Configure storage"
-        echo "  15) update_pymodules.sh — Update Python packages"
+        echo "  15) setup_pymodules.sh — Setup and Update Python packages"
         if is_termux; then
             echo "  16) termux_setup.sh    — Termux initial setup (Android only)"
         fi
@@ -737,7 +737,7 @@ cmd_menu() {
             12) run_utility "debug_passwords.py" || true ;;
             13) run_utility "reset_db.py" || true ;;
             14) run_utility "setup_storage.py" || true ;;
-            15) cmd_update_modules || true ;;
+            15) cmd_setup_modules || true ;;
             16) cmd_termux_setup || true ;;
             q|Q) echo ""; success "Goodbye!"; exit 0 ;;
             *) warn "Invalid option: ${choice}" ;;
@@ -776,7 +776,7 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
   debug-pw              python debug_passwords.py
   reset-db              python reset_db.py
   setup-storage         python setup_storage.py
-  update-modules        bash update_pymodules.sh
+  update-modules        bash setup_pymodules.sh
   termux-setup          bash termux_setup.sh  (Android/Termux only)
 
 ${BOLD}OTHER${NC}
@@ -829,7 +829,7 @@ main() {
         debug-pw)       run_utility "debug_passwords.py" "$@" ;;
         reset-db)       run_utility "reset_db.py" "$@" ;;
         setup-storage)  run_utility "setup_storage.py" "$@" ;;
-        update-modules) cmd_update_modules ;;
+        update-modules) cmd_setup_modules ;;
         termux-setup)   cmd_termux_setup ;;
         menu)           cmd_menu ;;
         dashboard)      cmd_dashboard ;;
