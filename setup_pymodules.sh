@@ -94,6 +94,31 @@ if [ "$IS_TERMUX" -eq 1 ]; then
     pkg update -y >/dev/null 2>&1
 else
     echo "==> Not running in Termux -- every package below is pip-managed normally."
+    
+    # --- Windows Defender Auto-Exclusion Handler ---
+    if [ "$(uname -o 2>/dev/null)" == "Msys" ] || [[ "$OSTYPE" == "msys" ]]; then
+        echo "==> Windows environment detected. Verifying Defender exclusions..."
+        
+        # Dynamically locate the current user's Python Scripts directory
+        PYTHON_SCRIPTS_DIR=$(python -c "import os, sys; print(os.path.join(os.path.dirname(sys.executable), 'Scripts'))")
+        
+        if [ -d "$PYTHON_SCRIPTS_DIR" ]; then
+            echo "[INFO] Targeting scripts directory: $PYTHON_SCRIPTS_DIR"
+            
+            # Check if running with Administrative rights via native PowerShell token inspection
+            IS_ADMIN=$(powershell.exe -NoProfile -NonInteractive -Command "([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)")
+            
+            if [ "$IS_ADMIN" == "True" ]; then
+                echo "[DEFENDER] Adding exclusion path to prevent false positives during pip install..."
+                powershell.exe -NoProfile -NonInteractive -Command "Add-MpPreference -ExclusionPath '$PYTHON_SCRIPTS_DIR' -ErrorAction SilentlyContinue"
+                echo "✅ Exclusion path verified/added."
+            else
+                echo "[WARN] Script is not running as Administrator."
+                echo "       If Defender blocks packages like 'impacket', relaunch Git Bash as Administrator"
+                echo "       once to allow this script to apply the folder exclusion."
+            fi
+        fi
+    fi
 fi
 echo
 
