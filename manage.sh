@@ -701,7 +701,7 @@ cmd_menu() {
         echo "  12) debug_passwords.py  — Debug passwords"
         echo "  13) reset_db.py         — Reset database"
         echo "  14) setup_storage.py    — Configure storage"
-        echo "  15) setup_pymodules.sh — Setup and Update Python packages"
+        echo "  15) setup_pymodules.sh  — Setup and Update Python packages"
         if is_termux; then
             echo "  16) termux_setup.sh    — Termux initial setup (Android only)"
         fi
