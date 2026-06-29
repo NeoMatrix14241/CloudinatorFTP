@@ -71,19 +71,16 @@ def is_elevated() -> bool:
 
 def get_lanman_state() -> dict:
     """Query LanmanServer's current Status and StartType via PowerShell."""
+    # Force the properties to string representations before converting to JSON
     out = run_ps(
-        "Get-Service LanmanServer | Select-Object Status,StartType | ConvertTo-Json -Compress"
+        "Get-Service LanmanServer | "
+        "Select-Object @{Name='Status';Expression={$_.Status.ToString()}}, "
+        "@{Name='StartType';Expression={$_.StartType.ToString()}} | "
+        "ConvertTo-Json -Compress"
     )
     data = json.loads(out)
 
-    # PowerShell serializes enums as either a plain string or
-    # {"value":N,"Value":"Name"} depending on version — normalize both.
-    def _norm(v):
-        if isinstance(v, dict):
-            return v.get("Value") or v.get("value") or str(v)
-        return str(v)
-
-    return {"status": _norm(data["Status"]), "start_type": _norm(data["StartType"])}
+    return {"status": str(data["Status"]), "start_type": str(data["StartType"])}
 
 
 def can_bind_445() -> bool:
