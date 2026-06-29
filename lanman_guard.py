@@ -18,15 +18,35 @@ _PS_TIMEOUT = 15  # seconds — generous; PowerShell cold-start can be slow
 
 
 def run_ps(cmd: str) -> str:
-    """Run a PowerShell command and return stdout. Raises on non-zero exit."""
+    """Run a PowerShell command using an absolute path to bypass environment truncation."""
+    # Build an explicit, absolute path to the native 64-bit PowerShell executable
+    system_root = os.environ.get("SystemRoot") or os.environ.get("windir") or "C:\\Windows"
+    ps_exe = os.path.join(system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    
+    # Fall back to standard lookup if the absolute path somehow doesn't exist
+    if not os.path.exists(ps_exe):
+        ps_exe = "powershell"
+
+    # Add -InputFormat None to prevent hanging on empty standard input streams
     result = subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
+        [
+            ps_exe,
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-InputFormat", "None",
+            "-NonInteractive",
+            "-Command", cmd
+        ],
         capture_output=True,
         text=True,
         timeout=_PS_TIMEOUT,
     )
+    
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "powershell command failed")
+        # Pull both streams so we don't swallow the real error
+        err_details = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"PowerShell failed (Code {result.returncode}): {err_details}")
+        
     return result.stdout.strip()
 
 
