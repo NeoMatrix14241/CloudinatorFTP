@@ -17,7 +17,7 @@ A comprehensive guide to deploy CloudinatorFTP on Windows systems, enabling file
 11. [Updating Python Dependencies](#-updating-python-dependencies)
 12. [Batch Script Setup](#batch-script-setup)
 13. [Windows Service Setup](#windows-service-setup)
-14. [Protocol Servers — WebDAV, SFTP, FTP](#protocol-servers--webdav-sftp-ftp)
+14. [Protocol Servers — WebDAV, SFTP, FTP, SMB](#protocol-servers--webdav-sftp-ftp)
 12. [Cloudflare Tunnel](#cloudflare-tunnel)
 13. [Apache/WSGI Deployment](#apachewsgi-deployment-optional)
 14. [Storage Configuration](#storage-configuration)
@@ -241,10 +241,10 @@ pip install -r requirements.txt
 
 ### Step 7.1b: Install Protocol Server Dependencies
 
-The WebDAV, SFTP, and FTP servers require additional libraries:
+The WebDAV, SFTP, FTP, and SMB servers require additional libraries:
 
 ```cmd
-pip install wsgidav cheroot paramiko pyftpdlib
+pip install wsgidav cheroot paramiko pyftpdlib impacket
 ```
 
 | Package | Protocol | Purpose |
@@ -253,8 +253,11 @@ pip install wsgidav cheroot paramiko pyftpdlib
 | `cheroot` | WebDAV HTTPS | WSGI server with TLS support |
 | `paramiko` | SFTP | SSH/SFTP implementation |
 | `pyftpdlib` | FTP | FTP server |
+| `impacket` | SMB | SMB server (the only pure-Python option that exists) |
 
 > **Note**: These are optional. If any are missing, the corresponding server skips on startup with an install hint. The main web UI is unaffected.
+
+> ⚠️ **`impacket` and antivirus**: Windows Defender commonly flags parts of `impacket` heuristically (it's also a component of some pentesting toolkits — `impacket.smbserver` itself does nothing malicious). You'll likely see an error like `[Errno 22] Invalid argument: '...impacket\dcerpc\v5\epm.py'` on first run. Fix: add a Defender exclusion for impacket's install folder, then `pip install impacket --no-cache-dir` if files were already quarantined. Full details: [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md).
 
 ### Step 7.2: Configure Storage Location
 
@@ -324,6 +327,14 @@ python create_user.py
 python debug_passwords.py
 ```
 
+#### Revoke Access Quickly (Security Incident)
+
+```cmd
+python kick_sessions.py
+```
+
+Interactive tool for "something's wrong, lock this person out now" situations — rotate a password, delete a user, or log everyone out of the web UI instantly. See [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md) for the timing breakdown per protocol (some are instant, some take up to ~30 seconds, none can forcibly close a connection that's already open).
+
 ---
 
 ## Launch Server
@@ -367,10 +378,12 @@ When all protocol servers start successfully:
 🔐 WebDAV HTTPS: https://HOST:8443/
 🔒 SFTP:         sftp://HOST:2222/
 📁 FTP:          ftp://HOST:2121/
+📡 SMB:          \\HOST\SharedFolder  (port 8445 fallback until smb_setup.py has been run)
 
   WebDAV    ✅ started
   SFTP      ✅ started
   FTP       ✅ started
+  SMB       — disabled by default; see SMB_PROTOCOL_DEPLOYMENT.md
 ────────────────────────────────────────────────────────
 ```
 
@@ -571,9 +584,9 @@ nssm remove CloudinatorFTP confirm
 
 ---
 
-## Protocol Servers — WebDAV, SFTP, FTP
+## Protocol Servers — WebDAV, SFTP, FTP, SMB
 
-Protocol servers start automatically when you run `prod_server.py` or `dev_server.py`. No extra commands needed. They all use the same database credentials as the web UI.
+Protocol servers start automatically when you run `prod_server.py` or `dev_server.py`. No extra commands needed. They all use the same database credentials as the web UI. SMB is the one exception — it's disabled by default until a one-time setup is run; see its own subsection below.
 
 ### Firewall Rules (Required for Remote Access)
 
@@ -597,6 +610,10 @@ New-NetFirewallRule -DisplayName "CloudinatorFTP FTP"         -Direction Inbound
 
 # FTP passive data ports (required for file transfers)
 New-NetFirewallRule -DisplayName "CloudinatorFTP FTP Passive" -Direction Inbound -Protocol TCP -LocalPort 60000-60100 -Action Allow
+
+# SMB (445 only usable after smb_setup.py — see its subsection below; 8445 fallback works either way)
+New-NetFirewallRule -DisplayName "CloudinatorFTP SMB"         -Direction Inbound -Protocol TCP -LocalPort 445         -Action Allow
+New-NetFirewallRule -DisplayName "CloudinatorFTP SMB Fallback"-Direction Inbound -Protocol TCP -LocalPort 8445        -Action Allow
 ```
 
 Verify connectivity from another machine:
@@ -677,6 +694,28 @@ net use X: /delete
 
 > ⚠️ FTP is plaintext. Use only on trusted local networks.
 
+### 📡 SMB — Native Network Drive
+
+Unlike WebDAV/SFTP/FTP, SMB needs a **one-time machine setup** before it's usable — port 445 is normally occupied by Windows' own file-sharing service. Until that setup is done, SMB automatically falls back to port 8445.
+
+**One-time setup:**
+```cmd
+python smb_setup.py
+```
+Confirms, requests elevation (one UAC prompt), stops Windows' native file sharing, and tells you to restart — it never reboots the machine for you. Full walkthrough, including the antivirus exclusion and per-platform details: [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md).
+
+**After setup + restart, map the drive:**
+```cmd
+net use X: \\SERVER-IP\SharedFolder /persistent:yes
+```
+
+**Before setup (port 8445 fallback)** — only Windows 11 24H2+ / Server 2025+ can map a non-445 SMB share natively:
+```cmd
+net use X: \\SERVER-IP\SharedFolder /TCPPORT:8445 /persistent:yes
+```
+
+> ⚠️ **Existing users need a one-time password reset** before SMB accepts their login — SMB uses NTLM, which needs a special hash of the password that can only be captured the moment it's set. New users created after `impacket` was installed don't need this.
+
 ### Configure / Disable Individual Protocols
 
 ```cmd
@@ -695,7 +734,11 @@ Or edit `server_config.json` directly:
   "SFTP_ENABLED": true,
   "SFTP_PORT": 2222,
   "FTP_ENABLED": true,
-  "FTP_PORT": 2121
+  "FTP_PORT": 2121,
+  "SMB_ENABLED": false,
+  "SMB_PORT": 445,
+  "SMB_FALLBACK_PORT": 8445,
+  "SMB_SHARE_NAME": "SharedFolder"
 }
 ```
 
@@ -883,6 +926,8 @@ netsh advfirewall firewall add rule name="CloudinatorFTP-WebDAV-HTTPS" dir=in ac
 netsh advfirewall firewall add rule name="CloudinatorFTP-SFTP" dir=in action=allow protocol=TCP localport=2222
 netsh advfirewall firewall add rule name="CloudinatorFTP-FTP" dir=in action=allow protocol=TCP localport=2121
 netsh advfirewall firewall add rule name="CloudinatorFTP-FTP-Passive" dir=in action=allow protocol=TCP localport=60000-60100
+netsh advfirewall firewall add rule name="CloudinatorFTP-SMB" dir=in action=allow protocol=TCP localport=445
+netsh advfirewall firewall add rule name="CloudinatorFTP-SMB-Fallback" dir=in action=allow protocol=TCP localport=8445
 ```
 
 ---
@@ -912,6 +957,10 @@ netsh advfirewall firewall add rule name="CloudinatorFTP-FTP-Passive" dir=in act
 | FTP stalls after login | Open ports 60000-60100 in firewall |
 | Ports blocked | Add firewall rules (see Firewall Configuration above) |
 | Wrong IP | Run `ipconfig` to find correct LAN IP; use that in WinSCP/net use |
+| SMB `[Errno 22] Invalid argument` on import | Windows Defender quarantined `impacket` — add an exclusion, then reinstall with `--no-cache-dir` |
+| SMB stuck on port 8445 | Run `python smb_setup.py` once, then **restart** (not Shut Down) the machine |
+| SMB login fails for an existing user | Reset their password once — NTLM needs a fresh hash, see [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md) |
+| SMB "Ctrl+S" errors in Office | Update to the latest `smb_server.py` — this is a known Windows file-locking issue with fixes already applied |
 
 ### Virtual Environment Issues
 
@@ -999,11 +1048,12 @@ netsh advfirewall firewall add rule name="CloudinatorFTP-FTP-Passive" dir=in act
 2. 🌐 WebDAV mapped as network drive (port 8080 or 8443)
 3. 🔒 SFTP accessible via WinSCP (port 2222)
 4. 📁 FTP accessible via WinSCP/FileZilla (port 2121)
-5. 📤 Get Cloudflare tunnel URL (optional)
-6. 🔐 Change default passwords
-7. 👥 Create users for team
-8. 🌍 Share the URL
-9. 📊 Monitor performance
+5. 📡 SMB — run `python smb_setup.py` if you want native port 445 mapping (optional)
+6. 📤 Get Cloudflare tunnel URL (optional)
+7. 🔐 Change default passwords
+8. 👥 Create users for team
+9. 🌍 Share the URL
+10. 📊 Monitor performance
 
 ---
 
@@ -1017,6 +1067,7 @@ netsh advfirewall firewall add rule name="CloudinatorFTP-FTP-Passive" dir=in act
 - [Apache WSGI Deployment](./DEPLOY_APACHE.md)
 - [Cloudflare Tunnel Setup](./SETUP_TUNNEL_ADVANCED.md)
 - [rclone Integration](./RCLONE_DEPLOYMENT.md)
+- [SMB Protocol Setup](./SMB_PROTOCOL_DEPLOYMENT.md)
 
 ---
 

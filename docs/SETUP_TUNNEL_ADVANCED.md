@@ -30,9 +30,10 @@ CloudinatorFTP runs multiple services. You choose which one to expose. Each has 
 | **WebDAV HTTPS** | 8443 | ✅ Yes (preferred) | Remote drive mapping (encrypted) |
 | **SFTP** | 2222 | ❌ No* | File transfer clients (LAN only) |
 | **FTP** | 2121 | ❌ No* | Legacy clients (LAN only) |
+| **SMB** | 445 / 8445 | ❌ No* | Native network drive (LAN only) |
 
-> **Why can't SFTP/FTP be tunneled?**  
-> Cloudflare Tunnel only supports HTTP/HTTPS traffic. SFTP and FTP are raw TCP protocols. They work on your local network without a tunnel, but cannot be exposed to the internet via `cloudflared tunnel --url`. For remote SFTP/FTP access, use a VPN (WireGuard, Tailscale) or Cloudflare WARP for TCP tunneling (Teams plan required).
+> **Why can't SFTP/FTP/SMB be tunneled?**  
+> Cloudflare Tunnel only supports HTTP/HTTPS traffic. SFTP, FTP, and SMB are all raw TCP protocols. They work on your local network without a tunnel, but cannot be exposed to the internet via `cloudflared tunnel --url`. For remote access to any of these, use a VPN (WireGuard, Tailscale) or Cloudflare WARP for TCP tunneling (Teams plan required). If a mapped network drive is what you're after, WebDAV over the tunnel gives a very similar experience with none of this limitation.
 
 ### Quick Decision Guide
 
@@ -45,7 +46,7 @@ Want to map a network drive from a remote computer?
 
 Want both? Use a custom domain with multiple ingress rules → see Step 7 below.
 
-SFTP/FTP from outside your LAN?
+SFTP/FTP/SMB from outside your LAN?
   → Use a VPN (Tailscale recommended) instead of Cloudflare Tunnel
 ```
 
@@ -490,6 +491,7 @@ cloudflared tunnel route list
 | **ERR_TOO_MANY_REDIRECTS** | Redirect loop | Check SSL/TLS settings in Cloudflare (use Flexible or Full) |
 | **WebDAV drive fails** | Can't map drive via tunnel URL | Import cert or use HTTP; check BasicAuthLevel |
 | **SFTP/FTP won't tunnel** | Connection refused | Expected — SFTP/FTP are TCP-only; use on LAN or VPN |
+| **SMB won't tunnel** | Connection refused | Expected — SMB is TCP-only, same as SFTP/FTP; use on LAN or VPN, or tunnel WebDAV instead for a similar mapped-drive experience |
 
 ### Debug Mode
 Run with verbose logging:

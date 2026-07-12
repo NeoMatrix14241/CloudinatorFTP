@@ -221,6 +221,14 @@ This tool allows you to:
 - Reset passwords
 - Debug login failures
 
+#### Revoke Access Quickly (Security Incident)
+
+```bash
+python kick_sessions.py
+```
+
+Interactive tool for "lock this person out now" situations — rotate a password, delete a user, or instantly log everyone out of the web UI. See [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md) for the per-protocol timing breakdown.
+
 ---
 
 ## Launch Server
@@ -362,15 +370,36 @@ Or via `manage.sh`:
 | **WebDAV HTTPS** (8443) | ⚠️ May vary | cheroot SSL support; try `pip install cheroot` |
 | **SFTP** (2222) | ✅ Usually works | paramiko available via pip on Termux |
 | **FTP** (2121) | ✅ Usually works | pyftpdlib available via pip |
+| **SMB** (445/8445) | ⚠️ Root-dependent | See dedicated note below — different from the other protocols |
 
 ### Install Protocol Dependencies on Termux
 
 ```bash
-pip install wsgidav paramiko pyftpdlib
+pip install wsgidav paramiko pyftpdlib impacket
 pip install cheroot   # optional, for HTTPS WebDAV
 ```
 
 If any library fails to install on Termux, only that protocol is skipped — the main web UI continues running normally.
+
+### SMB on Android — Root Required for Port 445
+
+SMB is disabled by default even with `impacket` installed — port 445 needs root. Run the setup helper to check:
+
+```bash
+python smb_setup.py
+```
+
+**Rooted devices**: rather than granting a capability via `setcap` (its behavior on Android is unpredictable — SELinux policy varies significantly across devices and rooting methods, and a granted capability can silently fail to apply at runtime), the reliable option is running the server itself as root:
+```bash
+su -c 'python prod_server.py'
+# or with tsu:
+tsu
+python prod_server.py
+```
+
+**Non-rooted devices**: there's no path to port 445 at all. CloudinatorFTP automatically falls back to port 8445 — nothing further to do, the rest of the server works normally.
+
+> ⚠️ **Existing users need a one-time password reset** before SMB accepts their login — SMB uses NTLM, which needs a hash of the password only capturable the moment it's set. Full details: [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md).
 
 ### Android Battery & Stability Considerations
 
@@ -378,6 +407,7 @@ Running extra protocol servers increases CPU and battery usage slightly:
 - Disable unused protocols via `python config.py` → option 13
 - Or in `server_config.json`: set `"SFTP_ENABLED": false` etc.
 - FTP is least useful on Android; recommend disabling it to save resources
+- SMB is disabled by default already — leave it off unless you specifically need it
 
 ### Connecting to Your Android Server
 
@@ -387,6 +417,7 @@ Once running, connect from your PC on the same WiFi:
 Web UI:         http://ANDROID-IP:5000
 WebDAV:         http://ANDROID-IP:8080
 SFTP (WinSCP):  sftp://ANDROID-IP:2222
+SMB:            \\ANDROID-IP\SharedFolder  (rooted) or port 8445 (not rooted)
 ```
 
 Find your Android IP in **Settings → About Phone → Status → IP address** or run `ifconfig` in Termux.
@@ -525,6 +556,7 @@ For a persistent domain setup, refer to [Advanced Cloudflared Tunneling Setup](h
 | Server won't start | Check: `python debug_passwords.py` |
 | Cloudflare tunnel fails | Restart Termux, check internet connection |
 | High CPU/Battery drain | Reduce HLS settings in `config.py` |
+| SMB won't bind port 445 | Expected on non-rooted devices — falls back to 8445 automatically. Rooted? Run server via `su -c` or `tsu` |
 
 ### Network Issues
 
@@ -573,6 +605,7 @@ tmux attach-session -t cloudinator
 
 - Use production server (`prod_server.py`) instead of development
 - Disable FTP and HTTPS WebDAV if not needed (saves resources)
+- SMB is disabled by default already; leave it off unless you specifically need root-only port 445
 - Disable video preview HLS if not needed: set `HLS_MIN_SIZE` to very high value
 - Use WiFi instead of mobile data for stability
 - Enable battery saver mode if needed
@@ -582,11 +615,12 @@ tmux attach-session -t cloudinator
 ## Next Steps
 
 1. ✅ Server is running!
-2. 📤 Get your Cloudflare tunnel URL
-3. 🔐 Change default passwords
-4. 👥 Add more users with specific roles
-5. 🌍 Share your URL with others
-6. 📊 Monitor storage and performance
+2. 📡 SMB — rooted device? Run via `su -c` for port 445; otherwise 8445 works automatically
+3. 📤 Get your Cloudflare tunnel URL
+4. 🔐 Change default passwords
+5. 👥 Add more users with specific roles
+6. 🌍 Share your URL with others
+7. 📊 Monitor storage and performance
 
 ---
 
@@ -597,6 +631,7 @@ tmux attach-session -t cloudinator
 - [Project GitHub](https://github.com/NeoMatrix14241/CloudinatorFTP)
 - [Advanced Tunnel Setup](https://github.com/NeoMatrix14241/CloudinatorFTP/wiki/Advanced-Cloudflare-Tunnelling-Setup)
 - [rclone Integration](./RCLONE_DEPLOYMENT.md)
+- [SMB Protocol Setup](./SMB_PROTOCOL_DEPLOYMENT.md)
 
 ---
 

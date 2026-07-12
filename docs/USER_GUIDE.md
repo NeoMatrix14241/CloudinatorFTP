@@ -19,7 +19,7 @@ Welcome to **The Cloudinator** — a lightweight, secure file sharing platform t
 8. [File Operations](#file-operations)
 9. [Bulk Operations](#bulk-operations)
 10. [Media Preview](#media-preview)
-11. [Protocol Access — FTP, SFTP, WebDAV](#protocol-access--ftp-sftp-webdav)
+11. [Protocol Access — FTP, SFTP, WebDAV, SMB](#protocol-access--ftp-sftp-webdav)
 12. [Tips & Tricks](#tips--tricks)
 13. [Troubleshooting](#troubleshooting)
 
@@ -570,9 +570,9 @@ Click the **☐** checkbox in the table header again to deselect all.
 
 ---
 
-## Protocol Access — FTP, SFTP, WebDAV
+## Protocol Access — FTP, SFTP, WebDAV, SMB
 
-In addition to the web UI, CloudinatorFTP runs three additional protocol servers. These use the **same username and password** as the web interface — no separate credentials needed.
+In addition to the web UI, CloudinatorFTP runs four additional protocol servers. These use the **same username and password** as the web interface — no separate credentials needed. SMB is the one exception — it's off by default until a one-time setup is run (see below).
 
 > 💡 **These are optional extras.** The web UI at `http://SERVER:5000` always works regardless of these protocols.
 
@@ -585,6 +585,7 @@ In addition to the web UI, CloudinatorFTP runs three additional protocol servers
 | WebDAV HTTPS | 8443 | Network drive mapping (secure, recommended) |
 | SFTP | 2222 | WinSCP, FileZilla, command-line `sftp` |
 | FTP | 2121 | Legacy FTP clients |
+| SMB | 445 (8445 fallback) | Native network drive, `\\HOST\SharedFolder` |
 
 ---
 
@@ -743,6 +744,39 @@ New-NetFirewallRule -DisplayName "CloudinatorFTP FTP" -Direction Inbound -Protoc
 # Passive data ports (required for file transfers)
 New-NetFirewallRule -DisplayName "CloudinatorFTP FTP Passive" -Direction Inbound -Protocol TCP -LocalPort 60000-60100 -Action Allow
 ```
+
+---
+
+### 📡 SMB — Native Network Drive
+
+SMB gives you the most "just works" experience — `\\HOST\SharedFolder` shows up like any other network drive, no client software needed on Windows. The trade-off: unlike WebDAV/SFTP/FTP, it needs a **one-time machine setup** before it's usable (port 445 is normally taken by Windows' own file sharing), and it's **off by default** until that's done.
+
+> 💡 If you'd rather skip the setup step entirely, WebDAV gives a very similar mapped-drive experience with zero extra configuration — see above.
+
+**One-time setup** (run once, on the server):
+```bash
+python smb_setup.py
+```
+Walks you through it per platform — Windows needs a restart afterward (never done automatically, only requested), Linux takes effect immediately, Android needs root. Full details: `docs/SMB_PROTOCOL_DEPLOYMENT.md`.
+
+**After setup, map the drive (Windows):**
+```cmd
+net use X: \\SERVER-IP\SharedFolder /persistent:yes
+```
+
+**macOS:** Finder → Go → Connect to Server → `smb://SERVER-IP/SharedFolder`
+
+**Linux:**
+```bash
+sudo mount -t cifs //SERVER-IP/SharedFolder /mnt/cloudinator -o username=admin,password=admin123
+```
+
+**Before setup is done (port 8445 fallback)** — only Windows 11 24H2+ / Server 2025+ can map a non-445 SMB share natively:
+```cmd
+net use X: \\SERVER-IP\SharedFolder /TCPPORT:8445 /persistent:yes
+```
+
+> ⚠️ **If your account existed before SMB support was added**, you'll need to reset your password once (even to the same value) before SMB accepts your login — this is a requirement of how SMB authentication works, not something specific to CloudinatorFTP.
 
 ---
 
@@ -1012,6 +1046,26 @@ New-NetFirewallRule -DisplayName "CloudinatorFTP FTP Passive" -Direction Inbound
 
 ---
 
+#### Issue: SMB Stuck on Port 8445 / Won't Use Port 445
+
+**Cause**: The one-time setup hasn't been run yet, or Windows hasn't been restarted since it was
+
+**Solution**:
+```bash
+python smb_setup.py
+```
+On Windows, restart the machine afterward (use **Restart**, not Shut Down) — port 445 only releases on a true reboot.
+
+---
+
+#### Issue: SMB Login Fails Even With the Correct Password
+
+**Cause**: Your account existed before SMB support was added — SMB needs a special hash of your password that can only be captured the moment it's set
+
+**Solution**: Reset your password once (even to the same value) via `create_user.py` or the web UI
+
+---
+
 ### Self-Help Commands
 
 | Issue | Command |
@@ -1025,6 +1079,8 @@ New-NetFirewallRule -DisplayName "CloudinatorFTP FTP Passive" -Direction Inbound
 | Upload timeout | `config.py`: increase `PERMANENT_SESSION_LIFETIME` |
 | Check health | `curl http://localhost:5000/api/health_check` |
 | Regenerate WebDAV cert | `python ssl_cert.py --regenerate` |
+| Set up SMB (port 445) | `python smb_setup.py` |
+| Lock someone out quickly | `python kick_sessions.py` |
 
 ---
 
@@ -1123,7 +1179,7 @@ python setup_storage.py  # Interactive configuration
 
 > **Tip**: Backup important files before deleting!
 
-### Q: What is the difference between the web UI and FTP/SFTP/WebDAV?
+### Q: What is the difference between the web UI and FTP/SFTP/WebDAV/SMB?
 
 **A:** They all access the same files — just through different protocols:
 
@@ -1133,6 +1189,7 @@ python setup_storage.py  # Interactive configuration
 | WebDAV (8080/8443) | Native OS drive mapping — drag & drop in File Explorer |
 | SFTP (port 2222) | Secure file transfer clients (WinSCP, FileZilla, sshfs) |
 | FTP (port 2121) | Legacy FTP clients on trusted local networks only |
+| SMB (445/8445) | Native network drive, `\\HOST\SharedFolder` — needs one-time setup (`python smb_setup.py`) |
 
 ---
 
@@ -1193,6 +1250,7 @@ You now know how to:
 ✅ Connect via WebDAV as a mapped drive  
 ✅ Connect via SFTP using WinSCP or FileZilla  
 ✅ Connect via FTP for legacy clients  
+✅ Connect via SMB as a native network drive  
 ✅ Troubleshoot common issues  
 ✅ Configure server settings  
 ✅ Monitor server health  
@@ -1213,5 +1271,6 @@ You now know how to:
 - `docs/DEPLOY_APACHE.md` — Apache/mod_wsgi production
 - `docs/SETUP_TUNNEL_ADVANCED.md` — Cloudflare Tunnel setup
 - `docs/RCLONE_DEPLOYMENT.md` — rclone sync & mount
+- `docs/SMB_PROTOCOL_DEPLOYMENT.md` — SMB one-time setup, per platform
 
 **Last Updated**: 2026-06-18

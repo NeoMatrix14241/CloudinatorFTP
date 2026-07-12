@@ -113,6 +113,12 @@ rclone copy /local/folder :sftp,host=SERVER-IP,port=2222,user=admin,pass=admin12
 rclone ls :ftp,host=SERVER-IP,port=2121,user=admin,pass=admin123:
 ```
 
+### SMB
+
+```bash
+rclone ls :smb,host=SERVER-IP,port=445,user=admin,pass=admin123:
+```
+
 ---
 
 ## Named Remotes (Persistent Config)
@@ -180,6 +186,19 @@ user = admin
 pass = ENCRYPTED_PASSWORD
 explicit_tls = false
 ```
+
+#### SMB Remote
+
+```ini
+[cloudinator-smb]
+type = smb
+host = SERVER-IP
+port = 445
+user = admin
+pass = ENCRYPTED_PASSWORD
+```
+
+> ⚠️ rclone's SMB backend is client-only (rclone can't *serve* SMB — CloudinatorFTP's own SMB server, via `smb_server.py`, is a separate thing). Requires the one-time `python smb_setup.py` setup on the server before port 445 works — see `docs/SMB_PROTOCOL_DEPLOYMENT.md`. Before that setup, use `port = 8445` instead. rclone's own maintainers describe the SMB backend as newer and less battle-tested than WebDAV/SFTP/FTP — for anything mission-critical, those three remain the more proven choice.
 
 #### Via Cloudflare Tunnel Domain
 
@@ -471,6 +490,8 @@ rclone copy ~/storage/dcim cloudinator:phone-backup --progress
 | SFTP key warning | Run `ssh -p 2222 admin@SERVER-IP` once to accept host key |
 | FTP transfers stall | Open ports 60000-60100 in firewall; try `--ftp-disable-epsv` |
 | Windows drive not visible in Explorer | Use `--network-mode` flag; or press F5 in Explorer |
+| SMB `connection refused` | Port 445 needs one-time setup (`python smb_setup.py` on the server) — use `port = 8445` until that's done |
+| SMB login fails for an existing user | Reset their password once on the server — see `docs/SMB_PROTOCOL_DEPLOYMENT.md` |
 
 ### Debug Mode
 
@@ -500,6 +521,8 @@ rclone ls cloudinator: -vv 2>&1 | head -50
 - [rclone WebDAV Backend](https://rclone.org/webdav/)
 - [rclone SFTP Backend](https://rclone.org/sftp/)
 - [rclone FTP Backend](https://rclone.org/ftp/)
+- [rclone SMB Backend](https://rclone.org/smb/)
 - [rclone Mount](https://rclone.org/commands/rclone_mount/)
 - [WinFsp (Windows FUSE)](https://winfsp.dev/)
 - [macFUSE](https://osxfuse.github.io/)
+- [CloudinatorFTP SMB Setup](./SMB_PROTOCOL_DEPLOYMENT.md)

@@ -15,7 +15,7 @@ A comprehensive guide to deploy CloudinatorFTP on Linux systems, enabling lightw
 9. [Server Management Script (manage.sh)](#-server-management-script-managesh)
 10. [Updating Python Dependencies](#-updating-python-dependencies)
 11. [Systemd Service Setup](#systemd-service-setup)
-12. [Protocol Servers — WebDAV, SFTP, FTP](#protocol-servers--webdav-sftp-ftp)
+12. [Protocol Servers — WebDAV, SFTP, FTP, SMB](#protocol-servers--webdav-sftp-ftp)
 13. [Network Exposure](#network-exposure)
 14. [Storage Configuration](#storage-configuration)
 15. [Troubleshooting](#troubleshooting)
@@ -187,10 +187,10 @@ pip install -r requirements.txt
 
 ### Step 7.1b: Install Protocol Server Dependencies
 
-The WebDAV, SFTP, and FTP servers require additional libraries:
+The WebDAV, SFTP, FTP, and SMB servers require additional libraries:
 
 ```bash
-pip install wsgidav cheroot paramiko pyftpdlib
+pip install wsgidav cheroot paramiko pyftpdlib impacket
 ```
 
 | Package | Protocol | Purpose |
@@ -199,6 +199,7 @@ pip install wsgidav cheroot paramiko pyftpdlib
 | `cheroot` | WebDAV HTTPS | WSGI server with TLS support |
 | `paramiko` | SFTP | SSH/SFTP implementation |
 | `pyftpdlib` | FTP | FTP server |
+| `impacket` | SMB | SMB server (the only pure-Python option that exists) |
 
 > **Note**: Each is optional — if missing, that server skips with a warning. The main web UI is unaffected.
 
@@ -288,6 +289,14 @@ python create_user.py
 ```bash
 python debug_passwords.py
 ```
+
+#### Revoke Access Quickly (Security Incident)
+
+```bash
+python kick_sessions.py
+```
+
+Interactive tool for "lock this person out now" situations — rotate a password, delete a user, or instantly log everyone out of the web UI. See [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md) for the per-protocol timing breakdown.
 
 ---
 
@@ -521,7 +530,7 @@ sudo journalctl -u cloudinator.service -f
 
 ---
 
-## Protocol Servers — WebDAV, SFTP, FTP
+## Protocol Servers — WebDAV, SFTP, FTP, SMB
 
 Protocol servers start automatically alongside the main Flask server. They share the same user database and credentials.
 
@@ -535,6 +544,7 @@ Protocol servers start automatically alongside the main Flask server. They share
 | SFTP | 2222 | Enabled |
 | FTP | 2121 | Enabled |
 | FTP passive data | 60000–60100 | (used by FTP) |
+| SMB | 445 (8445 fallback) | Disabled until `python smb_setup.py` is run once |
 
 ### Firewall Rules
 
@@ -546,6 +556,8 @@ sudo ufw allow 8443/tcp comment "CloudinatorFTP WebDAV HTTPS"
 sudo ufw allow 2222/tcp comment "CloudinatorFTP SFTP"
 sudo ufw allow 2121/tcp comment "CloudinatorFTP FTP"
 sudo ufw allow 60000:60100/tcp comment "CloudinatorFTP FTP Passive"
+sudo ufw allow 445/tcp comment "CloudinatorFTP SMB"
+sudo ufw allow 8445/tcp comment "CloudinatorFTP SMB Fallback"
 
 # Firewalld (Fedora/CentOS)
 sudo firewall-cmd --add-port=8080/tcp --permanent
@@ -553,6 +565,8 @@ sudo firewall-cmd --add-port=8443/tcp --permanent
 sudo firewall-cmd --add-port=2222/tcp --permanent
 sudo firewall-cmd --add-port=2121/tcp --permanent
 sudo firewall-cmd --add-port=60000-60100/tcp --permanent
+sudo firewall-cmd --add-port=445/tcp --permanent
+sudo firewall-cmd --add-port=8445/tcp --permanent
 sudo firewall-cmd --reload
 ```
 
@@ -642,6 +656,33 @@ ftp SERVER-IP 2121
 
 > ⚠️ FTP is plaintext. Use only on trusted networks.
 
+### 📡 SMB — Native Network Drive
+
+Port 445 needs root (a privileged port), so it's disabled by default even with `impacket` installed. Unlike Windows, this is a one-time, **immediate, no-reboot** fix on Linux:
+
+```bash
+python smb_setup.py
+```
+
+Detects it isn't root, prints the exact command to run:
+```bash
+sudo setcap cap_net_bind_service=+ep $(readlink -f $(which python3))
+```
+Run that once — port 445 works immediately afterward, every future run, no root needed again. If your virtualenv/interpreter path ever changes, re-run it for the new path.
+
+**Mount with cifs-utils:**
+```bash
+sudo apt install cifs-utils
+sudo mount -t cifs //SERVER-IP/SharedFolder /mnt/cloudinator -o username=admin,password=admin123
+```
+
+**Before running `smb_setup.py` (port 8445 fallback):**
+```bash
+sudo mount -t cifs //SERVER-IP/SharedFolder /mnt/cloudinator -o username=admin,password=admin123,port=8445
+```
+
+> ⚠️ **Existing users need a one-time password reset** before SMB accepts their login — SMB uses NTLM, which needs a hash of the password that can only be captured the moment it's set. Full details: [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md).
+
 ### Configure Protocol Servers
 
 ```bash
@@ -659,7 +700,11 @@ Or edit `server_config.json`:
   "SFTP_ENABLED": true,
   "SFTP_PORT": 2222,
   "FTP_ENABLED": false,
-  "FTP_PORT": 2121
+  "FTP_PORT": 2121,
+  "SMB_ENABLED": false,
+  "SMB_PORT": 445,
+  "SMB_FALLBACK_PORT": 8445,
+  "SMB_SHARE_NAME": "SharedFolder"
 }
 ```
 
@@ -725,6 +770,8 @@ sudo ufw allow 8443/tcp
 sudo ufw allow 2222/tcp
 sudo ufw allow 2121/tcp
 sudo ufw allow 60000:60100/tcp
+sudo ufw allow 445/tcp
+sudo ufw allow 8445/tcp
 ```
 
 ---
@@ -791,6 +838,9 @@ sudo chmod 755 /srv/cloudinator/files
 | sshfs connection refused | Verify port 2222 open: `nc -zv SERVER-IP 2222` |
 | FTP transfers stall | Open ports 60000-60100: `sudo ufw allow 60000:60100/tcp` |
 | Certificate errors (HTTPS WebDAV) | `sudo cp db/webdav.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates` |
+| SMB won't bind port 445 | Run `python smb_setup.py` once, then `sudo setcap cap_net_bind_service=+ep $(readlink -f $(which python3))` if it printed that command |
+| SMB login fails for an existing user | Reset their password once — see [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md) |
+| `setcap` command not found | `sudo apt install libcap2-bin` |
 
 ### Virtual Environment Issues
 
@@ -930,11 +980,12 @@ lsof -p $(pgrep -f "python prod_server.py")
 2. 🌐 WebDAV accessible at port 8080/8443
 3. 🔒 SFTP accessible at port 2222
 4. 📁 FTP accessible at port 2121
-5. 📤 Get your Cloudflare tunnel URL
-6. 🔐 Change default passwords
-7. 👥 Add users for team members
-8. 🌍 Share the URL
-9. 📊 Monitor performance
+5. 📡 SMB — run `python smb_setup.py` if you want native port 445 mapping (optional)
+6. 📤 Get your Cloudflare tunnel URL
+7. 🔐 Change default passwords
+8. 👥 Add users for team members
+9. 🌍 Share the URL
+10. 📊 Monitor performance
 
 ---
 
@@ -947,6 +998,7 @@ lsof -p $(pgrep -f "python prod_server.py")
 - [sshfs Documentation](https://github.com/libfuse/sshfs)
 - [Project GitHub](https://github.com/NeoMatrix14241/CloudinatorFTP)
 - [rclone Integration](./RCLONE_DEPLOYMENT.md)
+- [SMB Protocol Setup](./SMB_PROTOCOL_DEPLOYMENT.md)
 
 ---
 

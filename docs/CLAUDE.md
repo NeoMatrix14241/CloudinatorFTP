@@ -1,6 +1,6 @@
 # CloudinatorFTP — Complete Codebase Reference for AI-Assisted Development
 
-**Version**: 3.2 | **Last Updated**: 2026-06-18  
+**Version**: 3.3 | **Last Updated**: 2026-07-10  
 **For**: AI assistants and developers modifying/extending CloudinatorFTP
 
 ---
@@ -22,7 +22,7 @@
 13. [Media Handling](#media-handling)
 14. [Bulk Operations](#bulk-operations)
 15. [Configuration & Deployment](#configuration--deployment)
-16. [Protocol Servers (WebDAV / SFTP / FTP)](#protocol-servers-webdav--sftp--ftp)
+16. [Protocol Servers (WebDAV / SFTP / FTP / SMB)](#protocol-servers-webdav--sftp--ftp)
 17. [Admin Tools & Utilities](#admin-tools--utilities)
 18. [Performance Characteristics](#performance-characteristics)
 19. [Troubleshooting & Edge Cases](#troubleshooting--edge-cases)
@@ -45,9 +45,13 @@
 | **file_index.py** | Large-folder caching | Indexed dir listings, instant lookups |
 | **search_index.py** | Full-text search engine | FTS5 indexing, query processing |
 | **realtime_stats.py** | Server-Sent Events | Live storage stats broadcasting |
-| **protocol_manager.py** | Protocol server launcher | Starts/stops WebDAV, SFTP, FTP in background threads |
+| **protocol_manager.py** | Protocol server launcher | Starts/stops WebDAV, SFTP, FTP, SMB in background threads |
 | **webdav_server.py** | WebDAV server | wsgidav + waitress/cheroot, HTTP+HTTPS, role enforcement |
 | **sftp_server.py** | SFTP server | Paramiko SSH/SFTP, RSA host key, chrooted to ROOT_DIR |
+| **smb_server.py** | SMB server | impacket SimpleSMBServer, Tree Connect role enforcement, Windows file-locking fixes |
+| **smb_setup.py** | SMB one-time setup | Standalone tool — Windows LanmanServer, Linux setcap, Android root check |
+| **lanman_guard.py** | SMB Windows state tracker | Passive pending-setup state file, read by smb_server.py, written by smb_setup.py |
+| **kick_sessions.py** | Access revocation tool | Rotate/delete a user, or instantly log out the web UI, for security incidents |
 | **ftp_server.py** | FTP server | pyftpdlib, custom authorizer, passive ports 60000–60100 |
 | **ssl_cert.py** | TLS certificate manager | Self-signed cert generation, SAN detection, db/ storage |
 
@@ -62,7 +66,7 @@
 6. start_assembly_worker() → chunk assembly background daemon
 7. cleanup_scheduler → starts periodic cleanup
 8. Flask app ready
-9. protocol_manager.start_all() → WebDAV (8080/8443), SFTP (2222), FTP (2121) start in daemon threads
+9. protocol_manager.start_all() → WebDAV (8080/8443), SFTP (2222), FTP (2121) start in daemon threads; SMB (445/8445) starts too if SMB_ENABLED
 ```
 
 ---
@@ -76,7 +80,7 @@
 - **Rich media**: HLS video streaming, WebP compression, archive preview
 - **Security**: Per-user authentication, role-based access, encrypted passwords
 - **Uploads**: Chunked resumable uploads, automatic assembly, conflict resolution
-- **Protocol Access**: WebDAV (native drive mapping), SFTP (WinSCP/sshfs), FTP (legacy clients)
+- **Protocol Access**: WebDAV (native drive mapping), SFTP (WinSCP/sshfs), FTP (legacy clients), SMB (native network drive, one-time setup)
 
 **Core Design Philosophy**:
 - Event-driven watchdog for instant monitoring
@@ -1448,23 +1452,27 @@ img_cache_path: /tmp/cloudinator_img     (can recreate)
 
 ---
 
-## 🔐 Protocol Servers (WebDAV / SFTP / FTP)
+## 🔐 Protocol Servers (WebDAV / SFTP / FTP / SMB)
 
 ### Overview
 
-Three additional servers start automatically alongside the Flask app. They are launched by `protocol_manager.start_all()` which is called from both `dev_server.py` and `prod_server.py` immediately after `from app import app`.
+Four additional servers start alongside the Flask app, launched by `protocol_manager.start_all()` (called from both `dev_server.py` and `prod_server.py` after `from app import app`). All four share the same authentication database (`database.db`) and role system (`readwrite` / `readonly`).
 
-All three share the same authentication database (`database.db`) and respect the same role system (`readwrite` / `readonly`).
+SMB is architecturally different from the other three: it defaults to **disabled** (`SMB_ENABLED = False`) even with `impacket` installed, because port 445 needs a one-time, human-run machine setup (`smb_setup.py`) before it's actually usable — see its own section below.
 
 ### New Files
 
 | File | Purpose |
 |------|---------|
-| `protocol_manager.py` | Imports and starts all three protocol servers; prints startup summary |
+| `protocol_manager.py` | Imports and starts all four protocol servers; prints startup summary |
 | `webdav_server.py` | wsgidav WSGI app with auth cache, role middleware, HTTP+HTTPS, cert serving |
 | `sftp_server.py` | Paramiko SSH accept loop, chrooted SFTPServerInterface |
 | `ftp_server.py` | pyftpdlib with standalone CloudinatorAuthorizer (no Windows LogonUser) |
 | `ssl_cert.py` | Self-signed RSA cert generator; embeds all local IPs as SANs |
+| `smb_server.py` | impacket SimpleSMBServer — auth, Tree Connect role enforcement, Windows file-locking fixes |
+| `smb_setup.py` | Standalone one-time setup tool (never auto-run) — Windows/Linux/Android, per-platform |
+| `lanman_guard.py` | Small state-tracking library shared by smb_setup.py (writer) and smb_server.py (reader) |
+| `kick_sessions.py` | Standalone access-revocation tool for security incidents |
 
 ### Port Assignments
 
@@ -1476,6 +1484,8 @@ All three share the same authentication database (`database.db`) and respect the
 | SFTP | 2222 | WinSCP / FileZilla / sshfs |
 | FTP | 2121 | Legacy clients; plaintext; LAN only |
 | FTP passive data | 60000–60100 | Must be open in firewall for FTP transfers |
+| SMB | 445 | Disabled by default; needs `smb_setup.py` — Windows steals the port by default |
+| SMB fallback | 8445 | Used automatically until port 445 setup is done |
 
 ### WebDAV Authentication Flow
 
@@ -1506,6 +1516,32 @@ Request → _CertMiddleware (serves /webdav.crt unauthenticated)
 - **Passive ports**: `60000–60100`. These must be open in the Windows Firewall for file transfers to work.
 - **Credentials**: Same as web UI. `has_user()` queries `db.user_exists()`, `validate_authentication()` calls `db.check_login()`.
 
+### SMB Implementation Notes
+
+**Library choice**: `impacket.smbserver.SimpleSMBServer` is the only practical pure-Python SMB *server* library — `smbprotocol` and `pysmb` are both client-only (confirmed against their own docs; `pysmb`'s literally says "this is only a client library, it does not share files"). `impacket` is also a pentesting-toolkit component, which causes real, expected friction: Windows Defender commonly quarantines parts of it on install (`[Errno 22] Invalid argument` on `epm.py` is the signature) — needs an AV exclusion, documented in `SMB_PROTOCOL_DEPLOYMENT.md`.
+
+**Auth — NTLM, not check_login()**: SMB uses NTLM challenge-response; the plaintext password never crosses the wire, so `db.check_login()` can't be used the way the other three protocols use it. `database.py` captures each user's NT hash (raw MD4 of the password) at `add_user()`/`update_password()` time, stored in a new `nt_hash` column, encrypted with the same Fernet key as the bcrypt hash. Users predating this feature have `nt_hash IS NULL` — `db.users_missing_nt_hash()` lists them; they need one password reset (even to the same value) before SMB accepts their login.
+
+**Per-user read/write — Tree Connect hook, not per-share flag**: impacket's `addShare()` only supports one static read-only flag per *share*, not per-user. Fix: hook `SMB2_TREE_CONNECT` (and the SMB1 equivalent) to call impacket's real handler first, then override `connData['ConnectedShares'][tid]["read only"]` for that specific connection based on `db.get_role()`. Every existing write-check in impacket then respects it automatically — no duplicated access-control logic. Fails safe: any lookup error leaves the share read-only. Does NOT apply retroactively to an already-open Tree Connect — a role change takes effect on the next reconnect, same characteristic as a password change.
+
+**Credential refresh — diffed, not rebuilt**: `_load_credentials()` diffs against impacket's live in-memory table every 30s rather than clearing and rebuilding it. Rebuilding wholesale would reassign every user a new UID every cycle for no reason; diffing also closed a real gap where a *deleted* user's old credential lingered forever (impacket's `addCredential()` only adds/overwrites, has no remove). All comparisons are lowercase, matching impacket's own internal key normalization (`addCredential` stores `name.lower()`) — comparing against original-case usernames silently broke the diff for any mixed-case name; found and fixed.
+
+**Shutdown — `block_on_close` / `daemon_threads` timing matters**: `SimpleSMBServer.stop()` only calls `server_close()`, never `shutdown()` — and `server_close()` (via `socketserver.ThreadingMixIn`) joins every per-connection thread by default. A single abandoned connection (client disconnects right after a failed login) leaves its handler thread blocked forever in `socket.recv()`, hanging `stop()` indefinitely. Fix: `inner.block_on_close = False` and `inner.daemon_threads = True`, set **before** the server starts accepting connections (both are only read at the moment a connection is handled — setting them later, e.g. inside `stop()`, is too late for anything already in progress). `stop()` itself calls `shutdown()` then `server_close()` directly, bypassing `SimpleSMBServer.stop()` entirely.
+
+**`NetBIOSTimeout` traceback suppression**: impacket's hardcoded 5-minute idle timeout fires on any connection left open and idle — completely normal, not an error — but the default `handle_error` prints a full traceback for it. `_quiet_handle_error` overrides `handle_error` to log this one specific exception quietly; anything else still gets the full traceback.
+
+**Windows file-locking fixes (the deep one)**: MS Office's atomic save (write `.tmp`, rename over the open `.docx`) collides with two separate Windows limitations:
+1. `os.rename()`/`os.remove()` raise `WinError 32` (`ERROR_SHARING_VIOLATION`) when the destination is open — impacket catches this and maps it to `STATUS_ACCESS_DENIED`, which Windows shows the user as a permissions error. Fix: patch `impacket.smbserver.os.rename`/`os.remove` to retry via `os.replace()` (rename) or a short backoff (delete, no atomic alternative exists) — **only** on `winerror==32**`; any other error (e.g. `WinError 183`, destination already exists) is re-raised untouched, so `app.py`'s own rename endpoint is unaffected.
+2. Deeper cause: `os.open()` on Windows never requests `FILE_SHARE_DELETE` (confirmed via CPython's own bug tracker, `bpo-15244`, open since 2012 — an MSVC runtime limitation). Any file the server opens, even briefly, can't be renamed/deleted by anyone — including the server itself — while that handle stays open, which is exactly what breaks Office's "rename the original file to a backup" save step. Fix: replace `os.open()` inside impacket's `SMB2_CREATE` handler with `_winapi.CreateFile()` + `msvcrt.open_osfhandle()` (stdlib, no new dependency), explicitly requesting `FILE_SHARE_DELETE`. Deliberately **not** `win32file.CreateFile()` (pywin32) — that wraps its return in a `PyHANDLE` that auto-closes on garbage collection, a documented cause of random "bad file descriptor" errors under concurrent use; `_winapi.CreateFile()` returns a plain int, no such wrapper. Scoped as a **temporary swap** around the single synchronous `os.open()` call inside the CREATE hook (not a permanent patch like rename/remove) — `os.open()` is used far more pervasively by unrelated code than rename/remove, so a permanent global replacement risked misbehaving for some flag combination not audited here. One gap found and fixed in the underlying official recipe: no mapping for "no creation flags at all" (just opening an existing file) — the single most common case for a file server, apparently untested by the recipe's own author.
+
+**Command safety net**: impacket's top-level SMB2 dispatch logs and **re-raises** any exception a command handler doesn't catch itself, which kills that connection's thread — a silent "network disconnect" from the client's side, distinct from a clean "permission error" response. Fix: wrap every registered SMB2 command so an uncaught exception is logged in full and returns `STATUS_UNSUCCESSFUL` instead of propagating. Installed **last** in the hook chain so it's outermost and also catches bugs in the other hooks above it (found genuinely useful during development — it caught two real bugs in this exact hook-wiring pattern before they shipped, see below).
+
+**Hook-wiring gotcha (found twice, worth documenting so it isn't reintroduced)**: `SMB2_NEGOTIATE`'s legacy SMB1-upgrade call path invokes its handler with **4** positional args, not the usual 3 — a fixed-arity hook signature silently breaks on that call. All hooks in this file use `(*args, **kwargs)`, never a fixed positional signature. Relatedly: stashing the "original handler" in a mutable default argument and later overwriting it via `hook.__defaults__ = (...)` breaks silently the moment a hook signature has `*args` followed by any keyword-only parameter — `__defaults__` only ever updates positional-or-keyword defaults, never keyword-only ones. Every hook here uses a plain single-element holder list (`orig_holder = [None]`, set directly at the call site) instead — no function-default mutation at all.
+
+**Diagnostics, both opt-in via env var, never on by default**:
+- `SMB_DEBUG_SIGNING=1` — traces Negotiate/Session Setup/`signSMBv2`/`signSMBv1` calls, built to confirm Windows 11 24H2's mandatory-signing requirement against impacket's (already-present, just unadvertised) signing support.
+- `SMB_DEBUG_FILES=1` — logs every SMB2 CLOSE with its fd and file path, for investigating reports like `SMB2_READ: [Errno 9] Bad file descriptor` during large/server-to-server copies (impacket already catches this per-request internally and doesn't corrupt data or drop the connection — this exists to get hard evidence on the mechanism rather than guess further).
+
 ### SSL Certificate (ssl_cert.py)
 
 - Generated at `db/webdav.crt` + `db/webdav.key` on first HTTPS server start.
@@ -1526,9 +1562,13 @@ SFTP_ENABLED         = True
 SFTP_PORT            = 2222
 FTP_ENABLED          = True
 FTP_PORT             = 2121
+SMB_ENABLED          = False  # off by default — needs smb_setup.py first, unlike the other three
+SMB_PORT             = 445
+SMB_FALLBACK_PORT    = 8445
+SMB_SHARE_NAME        = "SharedFolder"
 ```
 
-All six keys are saved/loaded by `save_server_config()` / `load_server_config()` in `server_config.json`. They can also be configured interactively via `python config.py` → option 13 (Protocol Servers).
+All keys are saved/loaded by `save_server_config()` / `load_server_config()` in `server_config.json`. Configurable interactively via `python config.py` → option 13 (Protocol Servers); SMB has its own sub-menu there. No `SMB_AUTO_MANAGE_LANMAN` toggle exists — an earlier design auto-stopped/restored Windows' LanmanServer on every server start/stop, but this was the wrong model: disabling LanmanServer to free port 445 doesn't take effect until an actual machine restart (a kernel driver binding, not just a service flag), so it was never a per-session toggle to begin with. Replaced with `smb_setup.py`, a rare, human-run, one-time setup — see below.
 
 ### Required Dependencies (new)
 
@@ -1537,9 +1577,10 @@ wsgidav    — WebDAV WSGI server
 cheroot    — WSGI server with SSL support (for HTTPS WebDAV)
 paramiko   — SSH/SFTP implementation
 pyftpdlib  — FTP server
+impacket   — SMB server
 ```
 
-Install: `pip install wsgidav cheroot paramiko pyftpdlib`
+Install: `pip install wsgidav cheroot paramiko pyftpdlib impacket`
 
 Each is imported lazily inside `start()`. If a library is missing, that protocol server prints a warning and skips — the main Flask server is unaffected.
 
@@ -1631,6 +1672,7 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 | WebDAV auth (cache hit) | O(1) | sha256 compare | _AuthCache 30s TTL |
 | WebDAV auth (cache miss) | O(bcrypt) | ~100ms | bcrypt cost factor |
 | SFTP file transfer | O(n) | Sequential reads | paramiko transport |
+| SMB credential refresh | O(n) diff | ~every 30s | Skips unchanged users, no UID churn |
 
 ---
 
@@ -1688,6 +1730,26 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 **Cause**: Passive data ports (60000-60100) blocked by firewall  
 **Fix**: Add firewall rule for ports 60000-60100 TCP inbound
 
+**Problem**: SMB `[Errno 22] Invalid argument` on import (Windows)  
+**Cause**: Windows Defender quarantined part of `impacket` (heuristic flag — it's also a pentesting-toolkit component)  
+**Fix**: Add a Defender exclusion for impacket's install folder, then `pip install impacket --no-cache-dir`
+
+**Problem**: SMB stuck on port 8445, won't use 445  
+**Cause**: `smb_setup.py` hasn't been run, or Windows hasn't been restarted since it was  
+**Fix**: Run `python smb_setup.py`; on Windows, **Restart** (not Shut Down — Fast Startup can skip re-applying the change)
+
+**Problem**: SMB login fails despite a correct password  
+**Cause**: Account predates SMB support — `nt_hash` is `NULL`, NTLM has nothing to verify against  
+**Fix**: Reset the password once (even to the same value); check who's affected via `db.users_missing_nt_hash()`
+
+**Problem**: `NetBIOSTimeout` traceback in the console  
+**Cause**: impacket's normal 5-minute idle timeout — expected, not an error  
+**Fix**: Confirm the deployed `smb_server.py` has `_quiet_handle_error` wired in (`inner.handle_error = _quiet_handle_error` in `start()`) — if it's still printing, the file is stale, not a Python-version issue
+
+**Problem**: MS Office "Ctrl+S" throws a permission error, or the SMB connection drops during a large copy  
+**Cause**: Windows file-locking limitations (`WinError 32`) or an unhandled exception in a rarely-hit SMB2 code path  
+**Fix**: Update to the latest `smb_server.py` — three layered fixes already applied (rename/delete retry, `FILE_SHARE_DELETE` on open, command safety net); if it recurs, set `SMB_DEBUG_FILES=1` for file-lifecycle logging
+
 ### Edge Cases Handled
 
 1. **Symlinks**: Followed by default (can disable with follow_symlinks=False)
@@ -1704,8 +1766,32 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 12. **WebDAV client re-auth on every request**: _AuthCache prevents repeated bcrypt calls
 13. **SFTP host key regenerated**: All clients see host-key-changed warning (expected)
 14. **FTP passive port range**: Must match firewall rules; default 60000-60100
+15. **SMB user deleted while a session is open**: Existing connection keeps working (SMB doesn't re-auth mid-session); only the next new connection attempt is blocked
+16. **SMB mixed-case usernames**: Credential diff normalizes to lowercase, matching impacket's own internal key storage
+17. **SMB abandoned connection after a failed login**: `block_on_close=False` + `daemon_threads=True` (set before accepting connections) prevent `stop()` from hanging forever
 
 ---
+
+### SMB One-Time Setup (smb_setup.py) and lanman_guard.py
+
+Standalone tool, run manually like `create_user.py`/`reset_db.py` — **never** auto-invoked by `prod_server.py`/`dev_server.py`. Detects platform and branches:
+
+- **Windows**: confirm → request elevation (one UAC prompt, script relaunches itself elevated and continues automatically) → `Set-Service`/`Stop-Service` on `LanmanServer` → prints "restart now" and stops — **never executes a restart itself, under any circumstance**. A matching restore action, same shape, in reverse.
+- **Linux**: `setcap cap_net_bind_service=+ep` on the Python binary — immediate, no restart, verified directly (created a genuinely non-root user, confirmed it could bind port 445 right after).
+- **Android**: root check only. Rooted → points at running the server via `su -c`/`tsu`, deliberately **not** `setcap` (its behavior on Android is unpredictable across devices due to SELinux policy variance — a granted capability can silently fail to apply at runtime). Not rooted → no path to 445, falls back to 8445 automatically.
+
+`lanman_guard.py` is a small, passive state-tracking library shared between the two: `smb_setup.py` writes a pending-state file after disabling LanmanServer; `smb_server.py` reads it at startup purely to give accurate fallback messaging ("looks like you haven't restarted yet" vs "nothing's been set up"). No watchdog, no auto-restore, no force-kill survival logic — that entire apparatus (originally built, then removed) was solving a problem that doesn't exist once "this needs a reboot" is understood: it's a rare, deliberate, human-driven change, not a per-session toggle.
+
+### Access Revocation (kick_sessions.py)
+
+Standalone tool, `python kick_sessions.py` with no args launches an interactive menu (same convention as `smb_setup.py`); CLI args (`list`, `rotate <user>`, `delete <user>`, `kick-all [--include-admins]`, `logout-web`) still work for scripting.
+
+Works at the database level only — it's a separate process, same constraint `create_user.py` always had, can't reach into a running server's memory. Real, verified timing per protocol:
+- **SFTP/FTP**: instant — both re-validate against the database on every connection, no caching.
+- **WebDAV**: ~30s (`_AuthCache` TTL).
+- **SMB**: ~30s (credential refresh cycle).
+- **None** can forcibly close a connection that's already open — confirmed directly: revoked a user mid-session, their open connection kept working normally; only the *next* connection attempt was blocked.
+- **Exception — `logout-web`**: genuinely instant, because a web session cookie is a separate secret from the password (`db.rotate_server_token()`) — rotating it invalidates every existing cookie immediately while leaving passwords untouched. WebDAV's cache doesn't get this same treatment even though it's also HTTP: Basic Auth resends the actual password on every request, so there's no separate session secret to invalidate — only a real password change revokes anything there.
 
 ## 🔗 Key Decision Points for Modifications
 
@@ -1723,6 +1809,8 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 3. `is_share_anonymous(self, share, environ=None)` — `environ` optional (dropped in 4.3.x)
 4. SFTP handles must use `paramiko.SFTPHandle` with `.readfile`/`.writefile` attributes
 5. FTP authorizer must NOT inherit from `DummyAuthorizer` on Windows
+6. SMB hooks must use `(*args, **kwargs)`, never a fixed positional signature — `SMB2_NEGOTIATE`'s legacy call path uses 4 args, not the usual 3
+7. SMB hooks must stash the original handler in a plain holder list (`[None]`), never a mutable default argument patched via `__defaults__` — breaks silently once `*args` is involved
 
 **When Optimizing**:
 1. Profile with Python cProfile first
@@ -1741,6 +1829,7 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 7. For WebDAV: test `http://HOST:8080/webdav.crt` — if 404, cert not generated yet
 8. For SFTP: check `db/sftp_host.rsa` exists; verify port 2222 with `netstat -an`
 9. For FTP: check firewall for ports 2121 AND 60000-60100
+10. For SMB: `SMB_DEBUG_SIGNING=1` for Negotiate/Session Setup tracing; `SMB_DEBUG_FILES=1` for file open/close lifecycle; check `db.users_missing_nt_hash()` for auth issues
 
 ---
 
@@ -1753,11 +1842,52 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 - **Apache WSGI Production**: docs/DEPLOY_APACHE.md
 - **Cloudflare Tunnel Setup**: docs/SETUP_TUNNEL_ADVANCED.md
 - **rclone Integration**: docs/RCLONE_DEPLOYMENT.md
+- **SMB Protocol Setup**: docs/SMB_PROTOCOL_DEPLOYMENT.md
 - **README**: README.md (quick start)
 
 ---
 
 ## 📝 Changelog
+
+### Version 3.3 (2026-07-10)
+
+#### SMB Protocol Server
+
+- **New file: `smb_server.py`**
+  - `impacket.smbserver.SimpleSMBServer` — the only practical pure-Python SMB server library (confirmed: `smbprotocol`/`pysmb` are client-only)
+  - NTLM auth via NT hashes captured at password-set time (`database.py`'s new `nt_hash` column) — plaintext never crosses the wire, so `db.check_login()` can't be used the way other protocols use it
+  - Per-user read/write via a Tree Connect hook overriding `connData['ConnectedShares'][tid]["read only"]` per connection, since impacket only supports one static flag per share
+  - Diffed credential refresh (not clear-and-rebuild) every 30s, with stable per-user UIDs and lowercase-normalized comparisons matching impacket's own internal key storage
+  - `block_on_close=False` / `daemon_threads=True`, set before accepting connections — fixes `stop()` hanging forever on an abandoned connection
+  - `_quiet_handle_error` suppresses impacket's normal 5-minute idle-timeout traceback
+  - Three layered Windows file-locking fixes for MS Office's atomic save colliding with `WinError 32`: retry-via-`os.replace()` for rename, backoff retry for delete, and a `FILE_SHARE_DELETE`-aware `os.open()` replacement (via stdlib `_winapi`/`msvcrt`, following CPython's own `bpo-15244` recipe, with a gap in that recipe found and fixed)
+  - Command safety net wrapping every SMB2 command — impacket's own dispatch loop re-raises uncaught exceptions, silently dropping the connection; the wrapper turns that into a logged error with the client receiving a clean response instead
+  - Opt-in diagnostics: `SMB_DEBUG_SIGNING=1` (Windows 11 24H2 signing investigation), `SMB_DEBUG_FILES=1` (file lifecycle logging)
+
+- **New file: `smb_setup.py`**
+  - Standalone, human-run, one-time tool — never auto-invoked by the servers
+  - Windows: confirm → elevate → stop `LanmanServer` → instructs a restart, never executes one
+  - Linux: `setcap cap_net_bind_service=+ep`, immediate, no restart
+  - Android: root check only — points rooted users at `su -c`/`tsu` rather than `setcap` (unreliable on Android's SELinux); non-rooted falls back to 8445 automatically
+
+- **New file: `lanman_guard.py`**
+  - Small, passive state-tracking library shared between `smb_setup.py` (writer) and `smb_server.py` (reader) — no watchdog, no auto-restore; replaced an earlier, more complex design once "this needs a machine restart" made clear it was never a per-session concern
+
+- **New file: `kick_sessions.py`**
+  - Standalone access-revocation tool (interactive menu + CLI) for security incidents: rotate a password, delete a user, kick everyone, or instantly log out the web UI (`logout-web` — genuinely instant, since a session cookie is a separate secret from the password, unlike every other protocol here)
+
+- **Updated: `database.py`**
+  - New `nt_hash` column (nullable, migrated in automatically) for SMB/NTLM auth
+  - `add_user()`/`update_password()` now also compute and store the NT hash
+  - New `get_smb_credentials()` and `users_missing_nt_hash()` methods
+
+- **Updated: `config.py`**
+  - New variables: `SMB_ENABLED` (defaults `False`, unlike the other three protocols — installing `impacket` alone isn't enough to be useful without the one-time setup), `SMB_PORT`, `SMB_FALLBACK_PORT`, `SMB_SHARE_NAME`
+  - New SMB sub-menu under protocol server configuration (option 13)
+
+- **Updated: `protocol_manager.py`, `prod_server.py`, `dev_server.py`**
+  - SMB wired in alongside the other three protocols
+  - Also closed a pre-existing gap: `protocol_manager.stop_all()` was never actually being called on graceful shutdown for any of the four protocols — now is
 
 ### Version 3.2 (2026-06-18)
 
@@ -1839,5 +1969,5 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 
 ---
 
-**Last Updated**: 2026-06-18  
+**Last Updated**: 2026-07-10  
 **For Questions**: Refer to source code comments marked with `###` or `# --`

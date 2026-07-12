@@ -48,6 +48,8 @@ SQLite Database + File Storage
 | **WSGI File** | Entry point exposing Flask to Apache |
 | **Flask App** | CloudinatorFTP application |
 
+> ⚠️ **Scope note**: this guide covers the **web UI only** (port 5000 → Apache on port 80). The optional protocol servers — WebDAV, SFTP, FTP, SMB — are started by `protocol_manager.start_all()`, which lives in `prod_server.py`/`dev_server.py`, **not** `app.py`. Since `myflaskapp.wsgi` imports `app.py` directly, deploying via Apache/mod_wsgi as described here does **not** start any protocol server. If you want them running alongside an Apache-served web UI, run `python prod_server.py` as a separate background process (e.g. via `manage.sh` or a Windows service) — it'll bind its own protocol ports independently of Apache. See `docs/SMB_PROTOCOL_DEPLOYMENT.md` for SMB's additional one-time setup step.
+
 ---
 
 ## Prerequisites
@@ -432,6 +434,7 @@ MAX_CONTENT_LENGTH=None
 - [Flask Production Deployment](https://flask.palletsprojects.com/en/latest/deploying/)
 - [XAMPP Documentation](https://www.apachefriends.org/)
 - [Windows Deployment Guide](./WINDOWS_DEPLOYMENT.md)
+- [SMB Protocol Setup](./SMB_PROTOCOL_DEPLOYMENT.md) (if running protocol servers alongside Apache)
 
 ---
 
