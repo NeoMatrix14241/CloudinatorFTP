@@ -650,12 +650,14 @@ def _select_port(preferred: int, fallback: int, state_path: str) -> int:
 
 def _quiet_handle_error(request, client_address):
     """
-    Overrides socketserver's default handle_error (full traceback to
-    stderr for ANY exception) so NetBIOSTimeout — impacket's normal
-    5-minute idle timeout, hit by any connection left open and idle —
-    gets a quiet debug log instead of a scary traceback. Anything else
-    still gets the full traceback; only this one specific, expected
-    exception is silenced.
+    Defense-in-depth only — see _install_quiet_netbios_timeout() below for
+    the fix that actually matters. Confirmed directly (triggered a real
+    NetBIOSTimeout, tracked whether this ever gets called): it does NOT.
+    impacket's own SMBSERVERHandler.handle() catches NetBIOSTimeout
+    internally, prints its own traceback, and returns normally — the
+    exception never escapes far enough to reach socketserver's
+    handle_error at all. Kept anyway in case a future impacket version
+    changes that internal handling and lets it escape.
     """
     import sys
 
@@ -679,6 +681,102 @@ def _quiet_handle_error(request, client_address):
 
     traceback.print_exc()
     print("-" * 40, file=sys.stderr)
+
+
+def _install_quiet_netbios_timeout():
+    """
+    The actual fix for the NetBIOSTimeout traceback (handle_error above
+    is not it — confirmed empirically it's never called for this case).
+
+    Root cause: SMBSERVERHandler.handle() wraps its whole per-connection
+    loop in its own try/except that catches NetBIOSTimeout, calls
+    traceback.print_exc() directly, and returns normally — fully
+    internal to impacket, never reaching socketserver's handle_error.
+
+    Fix: monkey-patch SMBSERVERHandler.handle itself — impacket exposes
+    no hook for this control flow, unlike SMB2 commands. This is a
+    faithful reproduction of the original method (confirmed against
+    impacket 0.13.1's source) with one change: NetBIOSTimeout gets a
+    quiet log instead of a printed traceback. Any other exception still
+    prints in full, unchanged. Uses the real name-mangled attribute
+    names (self._SMBSERVERHandler__SMB etc.) since double-underscore
+    mangling is based on where code is textually defined, not what
+    class it's attached to at runtime — verified directly, a naive
+    `self.__SMB` reference here would not resolve correctly.
+
+    Risk, stated plainly: this duplicates an impacket-internal method
+    rather than hooking a stable public API, so it could drift silently
+    if a future impacket version changes handle()'s logic. Verified
+    against 0.13.1 with real connections (login, Tree Connect, file
+    read, multiple sequential connections) confirming no regression,
+    plus a real triggered timeout confirming the traceback is actually
+    suppressed.
+    """
+    import impacket.smbserver as _smbserver_module
+    from impacket import nmb
+
+    def _quiet_handle(self):
+        h = self._SMBSERVERHandler__SMB
+        h.log(
+            "Incoming connection (%s,%d)"
+            % (self._SMBSERVERHandler__ip, self._SMBSERVERHandler__port)
+        )
+        h.addConnection(
+            self._SMBSERVERHandler__connId,
+            self._SMBSERVERHandler__ip,
+            self._SMBSERVERHandler__port,
+        )
+        while True:
+            try:
+                session = nmb.NetBIOSTCPSession(
+                    h.getServerName(),
+                    "HOST",
+                    self._SMBSERVERHandler__ip,
+                    sess_port=self._SMBSERVERHandler__port,
+                    sock=self._SMBSERVERHandler__request,
+                    select_poll=self._SMBSERVERHandler__select_poll,
+                )
+                try:
+                    p = session.recv_packet(self._SMBSERVERHandler__timeOut)
+                except nmb.NetBIOSTimeout:
+                    raise
+                except nmb.NetBIOSError:
+                    break
+
+                if p.get_type() == nmb.NETBIOS_SESSION_REQUEST:
+                    _, rn, my = p.get_trailer().split(b" ")
+                    remote_name = nmb.decode_name(b"\x20" + rn)
+                    myname = nmb.decode_name(b"\x20" + my)
+                    h.log(
+                        "NetBIOS Session request (%s,%s,%s)"
+                        % (
+                            self._SMBSERVERHandler__ip,
+                            remote_name[1].strip(),
+                            myname[1],
+                        )
+                    )
+                    r = nmb.NetBIOSSessionPacket()
+                    r.set_type(nmb.NETBIOS_SESSION_POSITIVE_RESPONSE)
+                    r.set_trailer(p.get_trailer())
+                    self._SMBSERVERHandler__request.send(r.rawData())
+                else:
+                    resp = h.processRequest(
+                        self._SMBSERVERHandler__connId, p.get_trailer()
+                    )
+                    for i in resp:
+                        session.send_packet(i.getData() if hasattr(i, "getData") else i)
+            except nmb.NetBIOSTimeout:
+                h.log("Connection idle-timed-out (normal)")
+                break
+            except Exception as e:
+                h.log("Handle: %s" % e)
+                import traceback
+
+                traceback.print_exc()
+                break
+
+    _smbserver_module.SMBSERVERHandler.handle = _quiet_handle
+    log.info("SMB: NetBIOSTimeout traceback suppression applied")
 
 
 def start() -> bool:
@@ -729,6 +827,7 @@ def start() -> bool:
         _install_setinfo_rename_fix()
         _install_setdelete_retry_fix()
         _install_create_share_delete_fix(server)
+        _install_quiet_netbios_timeout()
         _install_role_enforcement(server)
 
         if os.environ.get("SMB_DEBUG_SIGNING") == "1":
