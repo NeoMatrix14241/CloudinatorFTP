@@ -31,6 +31,9 @@ import logging
 import os
 import platform
 import threading
+from app import get_local_ip
+
+LOCAL_IP = get_local_ip()
 
 log = logging.getLogger(__name__)
 
@@ -642,7 +645,7 @@ def _select_port(preferred: int, fallback: int, state_path: str) -> int:
     print(f"   Falling back to port {fallback}.")
     if _IS_WINDOWS and fallback >= 1024:
         print(
-            f"   Map with:  net use X: \\\\HOST\\SHARE /TCPPORT:{fallback}  (Windows 11 24H2+ / Server 2025+ only)"
+            f"   Map with:  net use X: \\\\{LOCAL_IP}\\SHARE /TCPPORT:{fallback}  (Windows 11 24H2+ / Server 2025+ only)"
         )
         print(f"   Older Windows clients cannot map a non-445 SMB share natively.")
     return fallback
@@ -875,12 +878,12 @@ def start() -> bool:
     _refresh_thread.start()
 
     print(
-        f"📡 SMB:     \\\\HOST:{port}\\{SMB_SHARE_NAME}"
+        f"📡 SMB:     \\\\{LOCAL_IP}:{port}\\{SMB_SHARE_NAME}"
         if port != 445
-        else f"📡 SMB:     \\\\HOST\\{SMB_SHARE_NAME}"
+        else f"📡 SMB:     \\\\{LOCAL_IP}\\{SMB_SHARE_NAME}"
     )
     print(
-        f"   Windows → Map Network Drive → \\\\HOST\\{SMB_SHARE_NAME}"
+        f"   Windows → Map Network Drive → \\\\{LOCAL_IP}\\{SMB_SHARE_NAME}"
         + (f" /TCPPORT:{port}" if port != 445 else "")
     )
     return True

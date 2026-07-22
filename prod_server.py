@@ -76,7 +76,7 @@ if __name__ == "__main__":
 
     # ── Startup banner ───────────────────────────────────────────────────────
     print("🧪 Starting CloudinatorFTP Production Server...")
-    print("🌐 Server running on http://localhost:5000")
+    print(f"🌐 Server running on http://{LOCAL_IP}:5000")
     if _BG:
         print("🔒 Background service mode (managed by manage.sh)")
         print("   • Ctrl+C disabled — use './manage.sh stop' to stop")
