@@ -3222,10 +3222,23 @@ function updateProgressSummary() {
     const overallProgressFill = document.getElementById('overallProgressFill');
 
     if (isUploading) {
-        const live = uploadQueue.reduce((s, i) => s + (i.size || 0), 0)
-            + [...folderGroups.values()]
-                .filter(g => g.status === 'scanning' || g.status === 'pending' || g.status === 'uploading')
-                .reduce((s, g) => s + (g.totalSize || 0), 0);
+        // FIX: files that belong to a folder group (item._groupId) are already
+        // counted inside that group's totalSize, since group.totalSize is never
+        // decremented as its files complete. Including them again here double-
+        // counts every in-flight file, and because the line below only ever
+        // ratchets the total UP (never back down), each double-count becomes a
+        // permanent inflation — over a folder with 100+ large files this is what
+        // makes "Total" appear to keep climbing/multiplying during the upload.
+        const nonGroupQueueBytes = uploadQueue
+            .filter(i => !i._groupId)
+            .reduce((s, i) => s + (i.size || 0), 0);
+        const groupBytes = [...folderGroups.values()]
+            .filter(g => g.status === 'scanning' || g.status === 'pending' || g.status === 'uploading')
+            .reduce((s, g) => s + (g.totalSize || 0), 0);
+        const live = nonGroupQueueBytes + groupBytes;
+        // Ratchet is intentionally kept: once a group finishes it's excluded from
+        // groupBytes above, and we don't want totalBytesToUpload to shrink below
+        // bytes already uploaded — it should only grow as scanning discovers more.
         if (live > totalBytesToUpload) totalBytesToUpload = live;
     }
     if (totalBytesToUpload === 0) return;
@@ -4791,15 +4804,31 @@ function _recordSpeedSample(bytes) {
     const now = Date.now();
     _speedSamples.push({ t: now, b: bytes });
     const cutoff = now - 5000;
-    while (_speedSamples.length > 1 && _speedSamples[0].t < cutoff) _speedSamples.shift();
+    // FIX: must keep at least 2 samples, not 1. With only 1 sample left,
+    // _rollingSpeed() can never compute a rate (needs an oldest+newest pair),
+    // so it returns 0 forever. That happens any time two progress events are
+    // more than 5s apart — e.g. a 10MB chunk taking >5s on a slower upload
+    // link — which permanently blanks Speed/ETA even while bytes keep moving.
+    // Keeping 2 lets the average gracefully widen instead of going blank.
+    while (_speedSamples.length > 2 && _speedSamples[0].t < cutoff) _speedSamples.shift();
 }
 function _rollingSpeed() {
     if (_speedSamples.length < 2) return 0;
     const oldest = _speedSamples[0];
     const newest = _speedSamples[_speedSamples.length - 1];
-    const dt = (newest.t - oldest.t) / 1000;
+    // Use "now" (not newest.t) as the window end. This makes speed/ETA decay
+    // honestly in real time when the gap since the last chunk grows, instead
+    // of freezing at whatever value was true as of the last progress event.
+    const now = Date.now();
+    const dt = (now - oldest.t) / 1000;
     return dt > 0 ? (newest.b - oldest.b) / dt : 0;
 }
+
+// Refresh the progress panel every second so Speed/ETA visibly tick between
+// chunk completions, instead of only updating when a chunk/file finishes.
+setInterval(() => {
+    if (isUploading) updateProgressSummary();
+}, 1000);
 
 function updateItemProgress(fileId, progress, uploadedBytes = 0) {
     const item = uploadQueue.find(item => item.id === fileId);
@@ -6159,6 +6188,54 @@ async function startSequentialUploads(pendingFiles) {
     }
 }
 
+// Real, browser-verified upload progress. fetch() has no upload-progress API —
+// with fetch, a chunk (or a whole small file) only reports progress once, when
+// the entire request finishes. XMLHttpRequest's xhr.upload 'progress' event
+// fires as the browser's network stack actually hands bytes to the wire, so
+// this gives true sub-chunk, real-time progress instead of jumps only at
+// 10MB/file boundaries — and critically, if sending genuinely stalls, these
+// events simply stop firing (nothing is faked/interpolated), so _rollingSpeed's
+// time-decay does the honest thing and speed/ETA taper toward 0 on their own.
+function xhrUpload(url, formData, { signal, onProgress } = {}) {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new DOMException('The user aborted a request.', 'AbortError'));
+            return;
+        }
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+
+        let abortHandler;
+        if (signal) {
+            abortHandler = () => xhr.abort();
+            signal.addEventListener('abort', abortHandler);
+        }
+        const cleanup = () => { if (signal && abortHandler) signal.removeEventListener('abort', abortHandler); };
+
+        if (onProgress) {
+            xhr.upload.addEventListener('progress', e => {
+                if (e.lengthComputable) onProgress(e.loaded, e.total);
+            });
+        }
+
+        xhr.addEventListener('load', () => {
+            cleanup();
+            resolve({
+                status: xhr.status,
+                ok: xhr.status >= 200 && xhr.status < 300,
+                text: async () => xhr.responseText,
+                json: async () => JSON.parse(xhr.responseText),
+                body: { cancel: () => {} } // no streaming body with XHR; kept so call sites don't need to change
+            });
+        });
+        xhr.addEventListener('error', () => { cleanup(); reject(new TypeError('Failed to fetch')); });
+        xhr.addEventListener('abort', () => { cleanup(); reject(new DOMException('The user aborted a request.', 'AbortError')); });
+
+        xhr.send(formData);
+    });
+}
+
 async function uploadSingleFile(item) {
     if (cancelledUploads.has(item.id)) {
         throw new Error('Upload cancelled by user');
@@ -6167,6 +6244,18 @@ async function uploadSingleFile(item) {
     const file = item.file;
     const destPath = item.destinationPath || document.getElementById('destPath').value || '';
 
+    // Reports real, cumulative bytes-sent-so-far for this file as XHR confirms them.
+    const onFileProgress = (loaded, total) => {
+        updateItemProgress(item.id, Math.round((loaded / total) * 100), loaded);
+    };
+    // Reports real, cumulative bytes across a chunked file: bytes from fully-sent
+    // prior chunks (chunkStart) plus bytes actually confirmed sent within the
+    // chunk currently in flight (loaded).
+    const onChunkProgress = (chunkStart, fileSize) => (loaded) => {
+        const cumulative = chunkStart + loaded;
+        updateItemProgress(item.id, Math.round((cumulative / fileSize) * 100), cumulative);
+    };
+
     try {
         if (file.size <= CHUNK_SIZE) {
             const formData = new FormData();
@@ -6174,10 +6263,9 @@ async function uploadSingleFile(item) {
             formData.append('dest_path', destPath);
             formData.append('file', file);
 
-            let response = await fetch(UPLOAD_URL, {
-                method: 'POST',
-                body: formData,
-                signal: item._abortSignal || null
+            let response = await xhrUpload(UPLOAD_URL, formData, {
+                signal: item._abortSignal || null,
+                onProgress: onFileProgress
             });
 
             // Handle file-already-exists: ask user what to do
@@ -6210,10 +6298,9 @@ async function uploadSingleFile(item) {
                     renameForm.append('filename', freeName);
                     renameForm.append('dest_path', destPath);
                     renameForm.append('file', file);
-                    response = await fetch(UPLOAD_URL, {
-                        method: 'POST',
-                        body: renameForm,
-                        signal: item._abortSignal || null
+                    response = await xhrUpload(UPLOAD_URL, renameForm, {
+                        signal: item._abortSignal || null,
+                        onProgress: onFileProgress
                     });
                 } else if (shouldOverwrite) {
                     const retryForm = new FormData();
@@ -6221,10 +6308,9 @@ async function uploadSingleFile(item) {
                     retryForm.append('dest_path', destPath);
                     retryForm.append('file', file);
                     retryForm.append('overwrite', '1');
-                    response = await fetch(UPLOAD_URL, {
-                        method: 'POST',
-                        body: retryForm,
-                        signal: item._abortSignal || null
+                    response = await xhrUpload(UPLOAD_URL, retryForm, {
+                        signal: item._abortSignal || null,
+                        onProgress: onFileProgress
                     });
                 }
             }
@@ -6267,10 +6353,9 @@ async function uploadSingleFile(item) {
                     throw new Error('Upload cancelled by user');
                 }
 
-                const response = await fetch(UPLOAD_URL, {
-                    method: 'POST',
-                    body: formData,
-                    signal: item._abortSignal || null
+                const response = await xhrUpload(UPLOAD_URL, formData, {
+                    signal: item._abortSignal || null,
+                    onProgress: onChunkProgress(start, file.size)
                 });
 
                 if (!response.ok) {
@@ -6298,7 +6383,8 @@ async function uploadSingleFile(item) {
                         updateItemProgress(item.id, 100, file.size);
                     }
                 } else {
-                    // Intermediate chunk — consume/cancel body to release the ReadableStream
+                    // Intermediate chunk — final settle in case the last progress
+                    // event didn't land exactly on the chunk boundary.
                     response.body?.cancel();
                     const progress = Math.round(((i + 1) / totalChunks) * 100);
                     updateItemProgress(item.id, progress, end);
