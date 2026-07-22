@@ -109,7 +109,7 @@ if __name__ == "__main__":
             app,
             host="0.0.0.0",
             port=5000,
-            threads=24,
+            threads=1024,
             connection_limit=500,
             channel_timeout=30,
             cleanup_interval=5,
