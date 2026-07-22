@@ -5997,9 +5997,11 @@ async function startBatchUpload() {
 
 function _startSessionKeepAlive() {
     if (_sessionKeepAliveInterval) return;
-    _sessionKeepAliveInterval = setInterval(async () => {
+    // FIX: was setInterval — see startAssemblyPolling for why that stacks
+    // overlapping requests during a server slowdown. Only one keepalive at a
+    // time, and it never queues the next one until the current one settles.
+    const tick = async () => {
         if (!isUploading) {
-            clearInterval(_sessionKeepAliveInterval);
             _sessionKeepAliveInterval = null;
             return;
         }
@@ -6008,11 +6010,12 @@ function _startSessionKeepAlive() {
                 method: 'GET', cache: 'no-cache',
                 headers: { 'Cache-Control': 'no-cache' }
             });
-
         } catch (e) {
             console.warn('⚠️ Session keepalive failed (non-fatal):', e.message);
         }
-    }, 30000); // Every 30s — browsers throttle background tabs; 30s gives safety margin
+        _sessionKeepAliveInterval = isUploading ? setTimeout(tick, 30000) : null;
+    };
+    _sessionKeepAliveInterval = setTimeout(tick, 30000); // Every 30s — browsers throttle background tabs; 30s gives safety margin
 }
 
 function _resumeStalledUploads() {
@@ -8992,26 +8995,31 @@ function updateConnectionStatus() {
 window.addEventListener('online', updateConnectionStatus);
 window.addEventListener('offline', updateConnectionStatus);
 
-// Ping server periodically to detect connection issues
-setInterval(async () => {
-    if (isUploading) {
-        try {
-            const response = await fetch('/admin/chunk_stats', {
-                method: 'GET',
-                cache: 'no-cache'
-            });
+// Ping server periodically to detect connection issues.
+// FIX: was setInterval — see startAssemblyPolling for why that stacks
+// overlapping requests during a server slowdown.
+(function scheduleConnectionPing() {
+    setTimeout(async () => {
+        if (isUploading) {
+            try {
+                const response = await fetch('/admin/chunk_stats', {
+                    method: 'GET',
+                    cache: 'no-cache'
+                });
 
-            if (!response.ok && isOnline) {
-                console.warn('⚠️ Server connection issues detected');
-                showUploadStatus('⚠️ Server connection unstable', 'error');
-            }
-        } catch (error) {
-            if (isOnline) {
-                console.warn('⚠️ Network connectivity issues:', error);
+                if (!response.ok && isOnline) {
+                    console.warn('⚠️ Server connection issues detected');
+                    showUploadStatus('⚠️ Server connection unstable', 'error');
+                }
+            } catch (error) {
+                if (isOnline) {
+                    console.warn('⚠️ Network connectivity issues:', error);
+                }
             }
         }
-    }
-}, 30000); // Check every 30 seconds during upload
+        scheduleConnectionPing();
+    }, 30000); // Check every 30 seconds during upload
+})();
 
 // Global error handler for unhandled promise rejections
 window.addEventListener('unhandledrejection', function (event) {
@@ -9099,23 +9107,39 @@ function executeConfirmedAction() {
 }
 
 // Assembly Status Tracking
-const assemblyPollers = new Map(); // file_id -> interval_id
+const assemblyPollers = new Map(); // file_id -> timeout_id
 
 function startAssemblyPolling(fileId) {
     // Clear any existing poller for this file
     if (assemblyPollers.has(fileId)) {
-        clearInterval(assemblyPollers.get(fileId));
+        clearTimeout(assemblyPollers.get(fileId));
     }
 
     console.log(`🔄 Starting assembly status polling for ${fileId}`);
 
-    const pollInterval = setInterval(async () => {
+    // FIX: this used to be setInterval(async () => {...}, 2000). setInterval
+    // fires on a fixed clock regardless of whether the previous callback's
+    // fetch has resolved — so if /api/assembly_status ever takes longer than
+    // 2s to respond (e.g. the server is briefly under load), a second
+    // overlapping request for the SAME file fires on top of it, then a third,
+    // etc. With up to ~100 of these pollers running at once for a big folder,
+    // that pileup snowballs: more stacked requests make the server slower,
+    // which makes more requests stack, without bound — which is exactly what
+    // ran the Waitress queue up regardless of thread count. A self-
+    // rescheduling setTimeout only queues the NEXT poll once the current one
+    // has actually finished, so it can never stack and naturally backs off
+    // instead of piling on during a slowdown.
+    const scheduleNext = () => {
+        const timeoutId = setTimeout(pollOnce, 2000);
+        assemblyPollers.set(fileId, timeoutId);
+    };
+
+    const pollOnce = async () => {
         try {
             const response = await fetch(`/api/assembly_status/${fileId}`);
 
             if (!response.ok) {
                 console.error(`❌ Assembly status check failed for ${fileId}`);
-                clearInterval(pollInterval);
                 assemblyPollers.delete(fileId);
                 updateItemStatus(fileId, 'error', 'Assembly status check failed');
                 return;
@@ -9127,7 +9151,6 @@ function startAssemblyPolling(fileId) {
             if (status.status === 'completed') {
                 console.log(`✅ Assembly completed for ${status.filename}`);
                 updateItemStatus(fileId, 'completed', 'File ready!');
-                clearInterval(pollInterval);
                 assemblyPollers.delete(fileId);
 
                 // Update cleanup button availability when assembly completes
@@ -9159,20 +9182,20 @@ function startAssemblyPolling(fileId) {
             } else if (status.status === 'error') {
                 console.error(`❌ Assembly failed for ${status.filename}: ${status.error_message}`);
                 updateItemStatus(fileId, 'error', `Assembly failed: ${status.error_message}`);
-                clearInterval(pollInterval);
                 assemblyPollers.delete(fileId);
+            } else {
+                // Keep polling if status is 'pending' or 'processing'
+                scheduleNext();
             }
-            // Keep polling if status is 'pending' or 'processing'
 
         } catch (error) {
             console.error(`❌ Assembly polling error for ${fileId}:`, error);
-            clearInterval(pollInterval);
             assemblyPollers.delete(fileId);
             updateItemStatus(fileId, 'error', 'Connection error during assembly');
         }
-    }, 2000); // Poll every 2 seconds
+    };
 
-    assemblyPollers.set(fileId, pollInterval);
+    scheduleNext();
 }
 
 async function checkExistingAssemblies() {
