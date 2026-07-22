@@ -6229,7 +6229,7 @@ function xhrUpload(url, formData, { signal, onProgress } = {}) {
                 ok: xhr.status >= 200 && xhr.status < 300,
                 text: async () => xhr.responseText,
                 json: async () => JSON.parse(xhr.responseText),
-                body: { cancel: () => {} } // no streaming body with XHR; kept so call sites don't need to change
+                body: { cancel: () => { } } // no streaming body with XHR; kept so call sites don't need to change
             });
         });
         xhr.addEventListener('error', () => { cleanup(); reject(new TypeError('Failed to fetch')); });
