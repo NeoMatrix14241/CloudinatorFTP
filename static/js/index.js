@@ -4832,6 +4832,8 @@ setInterval(() => {
     if (isUploading) updateProgressSummary();
 }, 1000);
 
+const PROGRESS_DOM_THROTTLE_MS = 120;
+
 function updateItemProgress(fileId, progress, uploadedBytes = 0) {
     const item = uploadQueue.find(item => item.id === fileId);
     if (item) {
@@ -4843,6 +4845,21 @@ function updateItemProgress(fileId, progress, uploadedBytes = 0) {
         }
         item.progress = progress;
         item.uploadedBytes = uploadedBytes;
+
+        // Throttle the DOM writes, not the data. xhr.upload's 'progress' event
+        // fires as fast as the network stack hands off bytes — often dozens of
+        // times per second per connection. With several parallel uploads that's
+        // 100+ DOM writes/sec (per-item bar + full stats panel), which the
+        // browser can't always paint cleanly in one frame — that's the brief
+        // flicker/tearing across this area. Byte totals/speed samples above
+        // still update every tick so numbers stay accurate; only how often we
+        // actually touch the DOM is capped. progress===100 always goes through
+        // so items never visually get stuck short of "done".
+        const now = Date.now();
+        if (progress < 100 && item._lastDomUpdate && now - item._lastDomUpdate < PROGRESS_DOM_THROTTLE_MS) {
+            return;
+        }
+        item._lastDomUpdate = now;
 
         const element = document.querySelector(`[data-file-id="${fileId}"]`);
         if (element) {
