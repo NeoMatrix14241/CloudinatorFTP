@@ -2403,7 +2403,7 @@ function _addFolderFilesToQueue(files) {
             pendingFiles: groupFiles,
             totalCount: groupFiles.length,
             scanned: groupFiles.length,
-            completed: 0, errors: 0,
+            completed: 0, errors: 0, assembling: 0,
             totalSize: 0,
             status: 'pending',
             scanComplete: true,
@@ -2446,7 +2446,7 @@ function _registerFolderGroup(fileArray, mobilePrefix) {
         mobilePrefix,
         totalCount: fileArray.length,
         scanned: fileArray.length,
-        completed: 0, errors: 0,
+        completed: 0, errors: 0, assembling: 0,
         totalSize: 0,    // Filled progressively by _scanSizeChunked in background
         status: 'pending',
         scanComplete: true,  // webkitdirectory already enumerated everything before change fired
@@ -2573,7 +2573,17 @@ async function _uploadFolderGroupLazy(group, startFrom = 0) {
 
             try {
                 await uploadSingleFile(queueItem);
-                if (!group.cancelled) {
+                // uploadSingleFile() resolves as soon as the last chunk is SENT,
+                // not once the backend has finished reassembling it — for large
+                // files it flips the item to 'assembling' and starts polling
+                // /api/assembly_status in the background before returning here.
+                // Overwriting that back to 'completed' unconditionally (as this
+                // used to do) is what caused a folder to show "Done" while its
+                // last big file was still being rebuilt server-side. Only mark
+                // it completed here if it ISN'T mid-assembly; if it is, leave it
+                // alone — startAssemblyPolling() will call updateItemStatus()
+                // itself once the backend confirms the file is actually ready.
+                if (!group.cancelled && queueItem.status !== 'assembling') {
                     updateItemStatus(queueItem.id, 'completed');
                     lazyBytesUploaded += file.size;
                     _recordSpeedSample(totalBytesUploaded);
@@ -2614,8 +2624,15 @@ async function _uploadFolderGroupLazy(group, startFrom = 0) {
                 if (group._activeControllers) group._activeControllers.delete(ac);
             }
 
-            const idx = uploadQueue.findIndex(q => q.id === queueItem.id);
-            if (idx !== -1) uploadQueue.splice(idx, 1);
+            // Items still 'assembling' MUST stay in uploadQueue — updateItemStatus()
+            // looks the item up by id when the assembly poller later reports
+            // 'completed'/'error', and needs to find it to update group counters
+            // and remove it. updateItemStatus() itself splices it out once it
+            // actually leaves the 'assembling' state (see the group-sync block).
+            if (queueItem.status !== 'assembling') {
+                const idx = uploadQueue.findIndex(q => q.id === queueItem.id);
+                if (idx !== -1) uploadQueue.splice(idx, 1);
+            }
 
             if (usePendingFiles && source[i]) {
                 source[i] = null;
@@ -2640,15 +2657,44 @@ async function _uploadFolderGroupLazy(group, startFrom = 0) {
     }
 
     const finalStatus = group.cancelled ? 'cancelled' : (group.errors > 0 ? 'done with errors' : 'done');
-    console.log(`📁 "${group.rootName}" finished: ${group.completed.toLocaleString()} uploaded, ${group.errors} errors — ${finalStatus}`);
+    console.log(`📁 "${group.rootName}" finished sending: ${group.completed.toLocaleString()} uploaded, ${group.errors} errors, ${group.assembling} still processing — ${finalStatus}`);
 
-    group.status = group.cancelled ? 'error' : (group.errors > 0 ? 'error' : 'done');
-    if (group._activeControllers) group._activeControllers.clear();
-    group._activeControllers = null;
     group.pendingFiles = null;
     group.pendingEntries = null;
+    // _maybeFinalizeGroup only actually sets group.status + runs cleanup if
+    // nothing is still being reassembled server-side (group.assembling === 0).
+    // If files are still assembling, this is a no-op here — the group-sync
+    // block in updateItemStatus() calls it again itself each time an assembly
+    // job resolves, and finalizes the group once the last one is done.
+    _maybeFinalizeGroup(group);
     _updateGroupRowInPlace(group);
     updateOverallProgress();
+}
+
+/**
+ * Decide whether a folder group has nothing left in flight — every file has
+ * either completed, errored, or (if the group was cancelled) been abandoned —
+ * AND no file is still being reassembled server-side. If so, sets the group's
+ * final status and runs its one-time cleanup. Safe to call repeatedly and
+ * from multiple places (the upload loop's own exit, and updateItemStatus()
+ * whenever an async assembly job resolves) — it only acts once per group.
+ */
+function _maybeFinalizeGroup(group) {
+    if (group.status === 'done' || group.status === 'error') { _finalizeGroupCleanup(group); return; }
+    const groupTotal = group.totalCount || group.scanned;
+    const allAttempted = groupTotal > 0 && (group.completed + group.errors >= groupTotal);
+    if (!(allAttempted || group.cancelled)) return; // still files left to upload
+    if (group.assembling > 0) return; // still waiting on a backend rebuild
+    group.status = group.cancelled ? 'error' : (group.errors > 0 ? 'error' : 'done');
+    _finalizeGroupCleanup(group);
+}
+
+/** One-time cleanup once a group's final status is set — safe to call more than once. */
+function _finalizeGroupCleanup(group) {
+    if (group._finalized) return;
+    group._finalized = true;
+    if (group._activeControllers) group._activeControllers.clear();
+    group._activeControllers = null;
 
     // Each folder removes itself 2s after finishing — independent of other folders.
     if (group.status === 'done') {
@@ -3018,6 +3064,16 @@ function _folderRowContent(group) {
         done: `Done — ${total.toLocaleString()} files`,
         error: `${group.errors} failed of ${total.toLocaleString()}`
     };
+    // All files have been sent but the server is still rebuilding one or more
+    // of them from chunks — without this, the row just sits at N-1/N with a
+    // plain spinner and looks stuck, instead of showing the same "Processing"
+    // gear a single chunked file gets outside of a folder.
+    if (group.status === 'uploading' && group.assembling > 0) {
+        icons.uploading = 'fas fa-cog fa-spin';
+        labels.uploading = group.assembling === 1
+            ? `${group.completed.toLocaleString()} / ${total.toLocaleString()} — processing 1 file…`
+            : `${group.completed.toLocaleString()} / ${total.toLocaleString()} — processing ${group.assembling.toLocaleString()} files…`;
+    }
     const sc = group.status === 'done' ? 'completed' : group.status;
     return { total, pct, sizeStr, icons, labels, sc };
 }
@@ -4892,19 +4948,38 @@ function updateItemStatus(fileId, status, error = null) {
         const group = folderGroups.get(item._groupId);
         if (group) {
             if (status === 'uploading' && group.status === 'pending') group.status = 'uploading';
+
+            // group.assembling tracks files whose bytes are all sent but whose
+            // backend chunk-reassembly hasn't been confirmed yet — see the note
+            // in _uploadFolderGroupLazy for why this gap used to be invisible.
+            if (status === 'assembling' && prevStatus !== 'assembling') group.assembling++;
+            if (prevStatus === 'assembling' && status !== 'assembling') group.assembling = Math.max(0, group.assembling - 1);
+
             if (status === 'completed' && prevStatus !== 'completed') group.completed++;
             if (status === 'error' && prevStatus !== 'error') group.errors++;
-            const groupTotal = group.totalCount || group.scanned;
-            if (group.completed + group.errors >= groupTotal && groupTotal > 0)
-                group.status = group.errors > 0 ? 'error' : 'done';
+
+            // An item that just left 'assembling' (resolved by the poller, likely
+            // well after _uploadFolderGroupLazy's loop already moved on) is truly
+            // done now — the loop intentionally left it in uploadQueue for this
+            // moment (see _uploadFolderGroupLazy), so remove it here instead.
+            if (prevStatus === 'assembling' && (status === 'completed' || status === 'error' || status === 'cancelled')) {
+                const idx = uploadQueue.findIndex(q => q.id === item.id);
+                if (idx !== -1) uploadQueue.splice(idx, 1);
+                _lastUploadActivity = Date.now(); // reset stall heartbeat after a long backend rebuild
+            }
+
+            _maybeFinalizeGroup(group);
         }
         // FIX: Folder group items are transient — pushed, uploaded, then spliced out
-        // of uploadQueue in the same loop iteration. They never appear as individual
+        // of uploadQueue once they truly finish. They never appear as individual
         // rows in the UI (updateQueueDisplay filters them out via !item._groupId).
         // Calling updateQueueDisplay() here caused a full innerHTML wipe + DOM rebuild
         // on EVERY file — 2 rebuilds × 10 parallel workers = 20 full DOM destructions
         // per batch. Over 16k files this caused Chrome's DOM GC to crash the renderer.
-        // The group row is managed by _updateGroupRowInPlace (throttled inside the loop).
+        // _updateGroupRowInPlace is the cheap, safe-per-file alternative — it's
+        // already called every file from the upload loop, and is called here too
+        // so an out-of-band assembling→completed transition also updates the row.
+        if (group) _updateGroupRowInPlace(group);
         return;
     }
 
@@ -6216,8 +6291,17 @@ async function startSequentialUploads(pendingFiles) {
         try {
             console.log(`📤 Starting upload for: ${item.name}`);
             await uploadSingleFile(item);
-            console.log(`✅ Upload completed for: ${item.name}`);
-            updateItemStatus(item.id, 'completed');
+            // Same guard as startParallelUploads: uploadSingleFile() resolves once
+            // the last chunk is sent, not once the backend confirms reassembly —
+            // don't stomp an 'assembling' item back to 'completed' here; the
+            // assembly poller it started will mark it completed once ready.
+            const currentItem = uploadQueue.find(q => q.id === item.id);
+            if (!(currentItem && currentItem.status === 'assembling')) {
+                console.log(`✅ Upload completed for: ${item.name}`);
+                updateItemStatus(item.id, 'completed');
+            } else {
+                console.log(`⏳ "${item.name}" sent — backend still processing it`);
+            }
             currentUploadingFile = null;
             cancelledUploads.delete(item.id);
 
@@ -8425,7 +8509,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const group = {
             id: groupId, rootName,
             basePath: currentPath || '',   // frozen at queue time — never changes when user browses
-            scanned: 0, completed: 0, errors: 0,
+            scanned: 0, completed: 0, errors: 0, assembling: 0,
             totalSize: 0,
             status: 'scanning',
             scanComplete: false,   // set true when tree walk finishes; upload loop uses this, not status
@@ -8738,7 +8822,7 @@ async function _registerDirEntryLazy(dirEntry) {
     const group = {
         id: groupId, rootName,
         basePath: currentPath || '',
-        scanned: 0, completed: 0, errors: 0,
+        scanned: 0, completed: 0, errors: 0, assembling: 0,
         totalSize: 0,
         status: 'scanning',
         scanComplete: false,   // set true when tree walk finishes; upload loop uses this, not status
@@ -9217,7 +9301,7 @@ function startAssemblyPolling(fileId) {
                 setTimeout(() => {
                     console.log(`🧹 Auto-clearing completed assembly item: ${fileId}`);
                     const queueContainer = document.getElementById('uploadQueue');
-                    const item = document.querySelector(`[data-upload-id="${fileId}"]`);
+                    const item = document.querySelector(`[data-file-id="${fileId}"]`);
                     if (item && queueContainer) {
                         item.remove();
                         if (queueContainer.children.length === 0) {
