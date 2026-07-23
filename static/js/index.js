@@ -5652,11 +5652,45 @@ async function _runFileWorker() {
             PARALLEL_UPLOAD_CONFIG.completedUploads.add(item.id);
             cancelledUploads.delete(item.id);
         } catch (error) {
-            console.error(`❌ Upload failed: ${item.name}`, error.message);
-            updateItemStatus(item.id, 'error', error.message);
             PARALLEL_UPLOAD_CONFIG.activeUploads.delete(item.id);
-            cancelledUploads.delete(item.id);
-            showUploadStatus(`❌ Failed: "${item.name}" - ${error.message}`, 'error');
+
+            // Same network-error detection _uploadFolderGroupLazy already uses,
+            // so root-level files get the same resilience folder files do.
+            const userCancelled = cancelledUploads.has(item.id)
+                || error.message === 'Upload cancelled by user';
+            const unexpectedAbort = !userCancelled && error.name === 'AbortError';
+            const isNetworkError = unexpectedAbort || (!userCancelled && (
+                error.message.includes('Failed to fetch') ||
+                error.message.includes('NetworkError') ||
+                error.message.includes('net::ERR_') ||
+                error.name === 'TypeError'
+            ));
+
+            const MAX_FILE_RETRIES = 5;
+            item._retryCount = (item._retryCount || 0) + 1;
+
+            if (userCancelled) {
+                updateItemStatus(item.id, 'cancelled', 'Stopped');
+                cancelledUploads.delete(item.id);
+            } else if (isNetworkError && isUploading && item._retryCount <= MAX_FILE_RETRIES) {
+                console.warn(`🔄 Network error on "${item.name}" — retry ${item._retryCount}/${MAX_FILE_RETRIES} in 1.5s…`, error.message);
+                updateItemStatus(item.id, 'pending', 'Waiting to retry…');
+                if (document.hidden) {
+                    await new Promise(resolve => {
+                        const handler = () => { document.removeEventListener('visibilitychange', handler); resolve(); };
+                        document.addEventListener('visibilitychange', handler);
+                    });
+                }
+                await new Promise(r => setTimeout(r, 1500));
+                item.status = 'pending'; // re-queue — this or another worker will pick it up
+                cancelledUploads.delete(item.id);
+                continue;
+            } else {
+                console.error(`❌ Upload failed: ${item.name}`, error.message);
+                updateItemStatus(item.id, 'error', error.message);
+                cancelledUploads.delete(item.id);
+                showUploadStatus(`❌ Failed: "${item.name}" - ${error.message}`, 'error');
+            }
         }
     }
 }

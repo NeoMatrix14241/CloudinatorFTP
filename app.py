@@ -433,7 +433,9 @@ def timestamp_to_date_filter(timestamp):
 class ChunkTracker:
     def __init__(self):
         self.active_uploads = {}  # session_id -> set of file_ids
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()  # RLock: cleanup_interrupted_uploads() holds
+        # this lock and calls untrack_upload(), which re-acquires it on the same
+        # thread. A plain Lock() deadlocks there; RLock() allows re-entry.
         self.upload_timestamps = {}  # file_id -> timestamp
 
     def track_upload(self, session_id, file_id):
