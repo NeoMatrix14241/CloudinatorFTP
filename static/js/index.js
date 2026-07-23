@@ -3004,7 +3004,7 @@ function _folderRowContent(group) {
     const total = group.totalCount || group.scanned;
     const pct = total > 0 ? Math.round((group.completed / total) * 100) : 0;
     const sizeStr = group.status === 'scanning'
-        ? 'computing…'
+        ? 'computing'
         : (group.totalSize > 0 ? formatFileSize(group.totalSize) : '0 bytes');
     const icons = {
         scanning: 'fas fa-circle-notch fa-spin', pending: 'fas fa-clock',
@@ -3012,7 +3012,7 @@ function _folderRowContent(group) {
         error: 'fas fa-exclamation-circle'
     };
     const labels = {
-        scanning: `Scanning… ${group.scanned.toLocaleString()} files`,
+        scanning: `Scanning ${group.scanned.toLocaleString()} files`,
         pending: `Queued — ${total.toLocaleString()} files`,
         uploading: `${group.completed.toLocaleString()} / ${total.toLocaleString()} (${pct}%)`,
         done: `Done — ${total.toLocaleString()} files`,
@@ -3218,6 +3218,7 @@ function updateProgressSummary() {
     const uploadedSizeElement = document.getElementById('uploadedSize');
     const uploadSpeedElement = document.getElementById('uploadSpeed');
     const etaElement = document.getElementById('eta');
+    const elapsedElement = document.getElementById('elapsedTime');
     const overallPercentageElement = document.getElementById('overallPercentage');
     const overallProgressFill = document.getElementById('overallProgressFill');
 
@@ -3250,8 +3251,9 @@ function updateProgressSummary() {
 
     if (totalSizeElement) totalSizeElement.textContent = formatFileSize(totalBytesToUpload);
     if (uploadedSizeElement) uploadedSizeElement.textContent = formatFileSize(totalBytesUploaded);
-    if (uploadSpeedElement) uploadSpeedElement.textContent = uploadSpeed > 0 ? formatFileSize(uploadSpeed) + '/s' : '...';
+    if (uploadSpeedElement) uploadSpeedElement.textContent = formatFileSize(uploadSpeed) + '/s';
     if (etaElement) etaElement.textContent = formatTime(eta);
+    if (elapsedElement) elapsedElement.textContent = uploadStartTime ? formatTime((Date.now() - uploadStartTime) / 1000) : '0:00';
     if (overallPercentageElement) overallPercentageElement.textContent = Math.round(overallProgress) + '%';
     if (overallProgressFill) overallProgressFill.style.width = overallProgress + '%';
 }
@@ -5921,7 +5923,7 @@ async function startBatchUpload() {
         uploadBtn.disabled = true;
         const mode = PARALLEL_UPLOAD_CONFIG.enableParallelUploads ? 'Parallel' : 'Sequential';
         const concurrent = PARALLEL_UPLOAD_CONFIG.enableParallelUploads ? ` (${PARALLEL_UPLOAD_CONFIG.maxConcurrentUploads} concurrent)` : '';
-        uploadBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${mode} Upload${concurrent}...`;
+        uploadBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${mode} Upload${concurrent}`;
     }
     if (clearBtn) clearBtn.disabled = true;
 
@@ -7285,6 +7287,10 @@ async function performSingleDelete(itemPath, itemName) {
 
         if (result.success || result.deleted_count > 0) {
             showUploadStatus(`✅ Successfully deleted "${itemName}"`, 'success');
+            // Deleting via the row action button doesn't go through bulkDelete(),
+            // so selectedItems/bulkActions were never cleared even when the
+            // deleted item was checked — clear it here so the bulk bar hides.
+            clearSelection();
             await refreshFileTable();
             // Refresh storage stats after delete (file count and size changed)
             refreshStorageStats('delete operation');
