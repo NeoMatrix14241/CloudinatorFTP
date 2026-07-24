@@ -276,10 +276,10 @@
 
         <!-- Breadcrumb -->
         <div class="breadcrumb">
-            <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
                 <h3><i class="fas fa-folder-open"></i> /{{ 'Root/' + path if path else 'Root/' }}</h3>
                 {% if path and path != '' %}
-                <div class="btn-group" style="display: flex; gap: 5px;">
+                <div class="btn-group" style="display: flex; gap: 5px; flex-shrink: 0;">
                     <!-- Root button with home icon -->
                     <a href="#" onclick="navigateToFolder(''); return false;" class="btn btn-outline btn-sm"
                         style="color: white; border-color: rgba(255,255,255,0.4);" title="Go to root folder">

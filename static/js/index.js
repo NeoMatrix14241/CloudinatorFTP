@@ -3264,7 +3264,7 @@ function createQueueItemElement(item) {
                             ${escapeHtml(item.displayName || item.name)}
                         </div>
                         <div class="file-info-dest" title="Uploading to: ${_formatDisplayPath(item.destinationPath)}">
-                            <i class="fas fa-folder"></i> ${_formatDisplayPath(item.destinationPath)}
+                            <i class="fas fa-folder"></i><span class="file-info-dest-text">${_formatDisplayPath(item.destinationPath)}</span>
                         </div>
                         <div class="file-info-meta">
                             <span><i class="fas fa-weight-hanging"></i> ${formatFileSize(item.size)}</span>

@@ -123,6 +123,10 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 /* Controls section - Updated desktop spacing */
@@ -954,17 +958,28 @@ i.fa-file {
     font-size: 11.5px;
     color: rgba(255, 255, 255, 0.55);
     margin-bottom: 3px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 4px;
+    min-width: 0;
+    max-width: 100%;
 }
 
 .file-info-dest i {
     font-size: 10px;
     opacity: 0.9;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+/* Wraps across lines instead of truncating with an ellipsis, so the whole
+   path stays visible for very deep folder structures. */
+.file-info-dest-text {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    min-width: 0;
+    flex: 1 1 auto;
 }
 
 .file-info-meta {
