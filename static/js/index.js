@@ -6414,7 +6414,7 @@ async function uploadSingleFile(item) {
     }
 
     const file = item.file;
-    const destPath = item.destinationPath || document.getElementById('destPath').value || '';
+    const destPath = item.destinationPath !== undefined ? item.destinationPath : (document.getElementById('destPath').value || '');
 
     // Reports real, cumulative bytes-sent-so-far for this file as XHR confirms them.
     const onFileProgress = (loaded, total) => {
