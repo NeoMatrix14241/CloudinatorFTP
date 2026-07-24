@@ -2375,6 +2375,15 @@ function addFilesToQueue(files) {
 }
 
 /**
+ * Formats a backend-relative path the same way the breadcrumb does, so a
+ * destination shown anywhere in the upload queue reads identically to how
+ * the person would navigate to it — "" -> "/Root/", "Documents" -> "/Root/Documents".
+ */
+function _formatDisplayPath(path) {
+    return path ? `/Root/${path}` : '/Root/';
+}
+
+/**
  * True if a folder with this name is already actively queued/uploading to
  * this exact destination. Deliberately ignores groups that have already
  * finished — done or errored — so those never block a fresh drop of the
@@ -3107,6 +3116,9 @@ function _createFolderGroupRow(group) {
             <i class="fas fa-folder" style="color:#f39c12;font-size:20px;margin-right:8px;flex-shrink:0;"></i>
             <div class="file-info-details">
                 <div class="file-info-name" title="${escapeHtml(group.rootName)}">📁 ${escapeHtml(group.rootName)}</div>
+                <div class="file-info-dest" title="Uploading to: ${_formatDisplayPath(group.basePath)}">
+                    <i class="fas fa-folder"></i> ${_formatDisplayPath(group.basePath)}
+                </div>
                 <div class="file-info-meta">
                     <span class="fg-count"><i class="fas fa-file"></i> ${total.toLocaleString()} files</span>
                     <span class="fg-size"><i class="fas fa-weight-hanging"></i> ${sizeStr}</span>
@@ -3251,12 +3263,12 @@ function createQueueItemElement(item) {
                         <div class="file-info-name" title="${item.displayName || item.name}">
                             ${escapeHtml(item.displayName || item.name)}
                         </div>
+                        <div class="file-info-dest" title="Uploading to: ${_formatDisplayPath(item.destinationPath)}">
+                            <i class="fas fa-folder"></i> ${_formatDisplayPath(item.destinationPath)}
+                        </div>
                         <div class="file-info-meta">
                             <span><i class="fas fa-weight-hanging"></i> ${formatFileSize(item.size)}</span>
                             <span><i class="fas fa-clock"></i> ${ageDisplay}</span>
-                            ${item.destinationPath && item.destinationPath !== currentPath ?
-            `<span><i class="fas fa-folder"></i> ${item.destinationPath}</span>` : ''
-        }
                             ${item.status === 'uploading' ? `<span><i class="fas fa-percentage"></i> ${item.progress}%</span>` : ''}
                             ${item.status === 'assembling' ? `<span><i class="fas fa-cog"></i> Processing</span>` : ''}
                             ${item.error ? `<span><i class="fas fa-exclamation"></i> ${item.error}</span>` : ''}
@@ -5525,7 +5537,7 @@ function _buildConflictDialog(opts) {
  * Prompt the user when a file already exists on the server.
  * Returns one of: 'overwrite-all' | 'overwrite-one' | 'skip-all' | 'skip-one'
  */
-async function _promptOverwrite(filename) {
+async function _promptOverwrite(filename, destPath) {
     const safeName = filename.replace(/</g, '&lt;').replace(/>/g, '&gt;');
     return _buildConflictDialog({
         icon: 'fa-file-alt',
@@ -5537,8 +5549,9 @@ async function _promptOverwrite(filename) {
                        ${safeName}
                    </span>
                </div>
-               <div style="color:#566573">
-                   A file with this name already exists on the server.
+               <div style="color:#566573;margin-bottom:8px">
+                   A file with this name already exists at
+                   <strong style="color:#2c3e50">${_formatDisplayPath(destPath)}</strong>.
                    Choose how to handle this and any further conflicts.
                </div>`,
         buttons: [
@@ -5580,7 +5593,7 @@ async function _promptOverwrite(filename) {
  * Prompt the user when a folder being uploaded already exists on the server.
  * Returns one of: 'merge' | 'rename' | 'skip' | 'cancel'
  */
-async function _promptFolderConflict(folderName) {
+async function _promptFolderConflict(folderName, destPath) {
     const safeName = folderName.replace(/</g, '&lt;').replace(/>/g, '&gt;');
     return _buildConflictDialog({
         icon: 'fa-folder-open',
@@ -5594,7 +5607,7 @@ async function _promptFolderConflict(folderName) {
                </div>
                <div style="color:#566573">
                    A folder named <strong style="color:#2c3e50">${safeName}</strong> already exists
-                   at this location. What would you like to do?
+                   at <strong style="color:#2c3e50">${_formatDisplayPath(destPath)}</strong>. What would you like to do?
                </div>`,
         buttons: [
             {
@@ -5844,7 +5857,7 @@ async function _runFolderWorker() {
                 const checkData = await checkResp.json();
                 if (checkData.exists && checkData.is_dir) {
                     _updateGroupRowInPlace(group); // show 'uploading' indicator while dialog shown
-                    const choice = await _promptFolderConflict(group.rootName);
+                    const choice = await _promptFolderConflict(group.rootName, group.basePath);
                     if (choice === 'cancel') {
                         // Cancel the entire upload session
                         group.cancelled = true;
@@ -6434,7 +6447,7 @@ async function uploadSingleFile(item) {
                 let action = groupDecision || 'ask';
 
                 if (action === 'ask') {
-                    action = await _promptOverwrite(item.displayName || file.name);
+                    action = await _promptOverwrite(item.displayName || file.name, destPath);
                     if (item._groupId) {
                         if (action === 'overwrite-all') _overwriteDecisions.set(item._groupId, 'overwrite');
                         if (action === 'skip-all') _overwriteDecisions.set(item._groupId, 'skip');
