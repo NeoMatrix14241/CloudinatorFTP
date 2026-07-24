@@ -2375,6 +2375,29 @@ function addFilesToQueue(files) {
 }
 
 /**
+ * True if a folder with this name is already actively queued/uploading to
+ * this exact destination. Deliberately ignores groups that have already
+ * finished — done or errored — so those never block a fresh drop of the
+ * same name, and ignores groups headed to a DIFFERENT destination, so
+ * dropping "folder1" at two different locations is never conflated into
+ * one. Previously this only compared rootName, so re-dropping a same-named
+ * folder anywhere silently no-op'd against whatever group (active or long
+ * since finished/errored) happened to share that name, regardless of where
+ * either one was actually headed.
+ */
+function _isFolderAlreadyQueued(rootName, destPath) {
+    const dest = destPath || '';
+    for (const g of folderGroups.values()) {
+        if (g.rootName === rootName
+            && (g.basePath || '') === dest
+            && g.status !== 'done' && g.status !== 'error') {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
  * Called from drag-drop path — groups files by root folder, registers lazily.
  * Does NOT push into uploadQueue upfront (avoids memory spike).
  * Files are iterated one-at-a-time when upload actually starts.
@@ -2390,11 +2413,9 @@ function _addFolderFilesToQueue(files) {
     }
 
     byRoot.forEach((groupFiles, rootName) => {
-        for (const g of folderGroups.values()) {
-            if (g.rootName === rootName) {
-                showUploadStatus(`📁 "${rootName}" is already in the queue`, 'info');
-                return;
-            }
+        if (_isFolderAlreadyQueued(rootName, currentPath)) {
+            showUploadStatus(`📁 "${rootName}" is already uploading to this location`, 'info');
+            return;
         }
         const groupId = `fg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
         const group = {
@@ -2430,11 +2451,9 @@ function _registerFolderGroup(fileArray, mobilePrefix) {
         || (fileArray[0].webkitRelativePath || '').split('/')[0]
         || 'Upload';
 
-    for (const g of folderGroups.values()) {
-        if (g.rootName === rootName) {
-            showUploadStatus(`📁 "${rootName}" is already in the queue`, 'info');
-            return;
-        }
+    if (_isFolderAlreadyQueued(rootName, currentPath)) {
+        showUploadStatus(`📁 "${rootName}" is already uploading to this location`, 'info');
+        return;
     }
 
     const groupId = `fg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -8500,8 +8519,11 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         const rootName = dirHandle.name;
-        if (folderGroups.has(rootName)) {
-            showUploadStatus(`📁 "${rootName}" is already in the queue`, 'info');
+        // NOTE: this used to be `folderGroups.has(rootName)`, but folderGroups
+        // is keyed by generated groupId, never by rootName — that check could
+        // never actually match anything, so duplicate picks were never caught.
+        if (_isFolderAlreadyQueued(rootName, currentPath)) {
+            showUploadStatus(`📁 "${rootName}" is already uploading to this location`, 'info');
             return;
         }
 
@@ -8811,11 +8833,9 @@ async function handleDrop(e) {
 async function _registerDirEntryLazy(dirEntry) {
     const rootName = dirEntry.name;
 
-    for (const g of folderGroups.values()) {
-        if (g.rootName === rootName) {
-            showUploadStatus(`📁 "${rootName}" is already in the queue`, 'info');
-            return;
-        }
+    if (_isFolderAlreadyQueued(rootName, currentPath)) {
+        showUploadStatus(`📁 "${rootName}" is already uploading to this location`, 'info');
+        return;
     }
 
     const groupId = `fg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -9250,7 +9270,16 @@ function executeConfirmedAction() {
 // Assembly Status Tracking
 const assemblyPollers = new Map(); // file_id -> timeout_id
 
-function startAssemblyPolling(fileId) {
+// If a backend assembly job never resolves (worker crashed, job orphaned,
+// etc.) there was previously nothing to stop startAssemblyPolling from
+// polling every 2s forever — a silent zombie that kept its item (and, for
+// a folder file, the whole folder group) permanently stuck in-flight, with
+// nothing to hide the queue container and nothing for "Clear Completed" to
+// act on. After this long without a real answer from the backend, give up
+// and report it as a normal, dismissable error instead.
+const ASSEMBLY_POLL_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+
+function startAssemblyPolling(fileId, startedAt = Date.now()) {
     // Clear any existing poller for this file
     if (assemblyPollers.has(fileId)) {
         clearTimeout(assemblyPollers.get(fileId));
@@ -9297,17 +9326,29 @@ function startAssemblyPolling(fileId) {
                 // Update cleanup button availability when assembly completes
                 updateManualCleanupButton();
 
-                // Auto-clear the completed item after a short delay
+                // Auto-clear the completed item after a short delay so the
+                // user briefly sees the "completed" state before it disappears.
                 setTimeout(() => {
+                    // FIX: this used to grab the DOM node directly and call
+                    // .remove() on it without touching the uploadQueue array,
+                    // then check queueContainer.children.length (queueContainer
+                    // is the WHOLE panel — header, buttons, progress summary —
+                    // which always has children) to decide whether to hide the
+                    // container. That check could never be true, and the
+                    // array/DOM state fell out of sync: the row visually
+                    // vanished but the item was still sitting in uploadQueue as
+                    // 'completed', so the panel just sat there looking empty
+                    // until autoCleanupCompletedItems happened to catch up —
+                    // the "queue looks clear but the panel won't go away"
+                    // symptom. Removing it from the array and letting
+                    // updateQueueDisplay() rebuild + decide visibility is the
+                    // same path every other completion goes through, so it
+                    // can't drift out of sync with what's actually still
+                    // in flight (including any folder groups).
                     console.log(`🧹 Auto-clearing completed assembly item: ${fileId}`);
-                    const queueContainer = document.getElementById('uploadQueue');
-                    const item = document.querySelector(`[data-file-id="${fileId}"]`);
-                    if (item && queueContainer) {
-                        item.remove();
-                        if (queueContainer.children.length === 0) {
-                            queueContainer.style.display = 'none';
-                        }
-                    }
+                    const idx = uploadQueue.findIndex(q => q.id === fileId);
+                    if (idx !== -1) uploadQueue.splice(idx, 1);
+                    updateQueueDisplay();
                 }, 3000); // Clear after 3 seconds
 
                 // Also trigger the general auto-cleanup function
@@ -9324,6 +9365,10 @@ function startAssemblyPolling(fileId) {
                 console.error(`❌ Assembly failed for ${status.filename}: ${status.error_message}`);
                 updateItemStatus(fileId, 'error', `Assembly failed: ${status.error_message}`);
                 assemblyPollers.delete(fileId);
+            } else if (Date.now() - startedAt > ASSEMBLY_POLL_TIMEOUT_MS) {
+                console.error(`⏱️ Assembly timed out for ${fileId} after ${Math.round(ASSEMBLY_POLL_TIMEOUT_MS / 60000)} minutes with no resolution`);
+                assemblyPollers.delete(fileId);
+                updateItemStatus(fileId, 'error', 'Server is taking too long to process this file — please check server status or try again');
             } else {
                 // Keep polling if status is 'pending' or 'processing'
                 scheduleNext();
@@ -9377,8 +9422,14 @@ async function checkExistingAssemblies() {
                     size: 0 // Unknown size for resumed uploads
                 });
 
-                // Start polling for this job
-                startAssemblyPolling(job.file_id);
+                // Start polling for this job — pass the job's real backend age
+                // (created_at, seconds since epoch) rather than defaulting to
+                // "now": otherwise a job that was already stuck for an hour
+                // before this refresh would get a brand new 15-minute grace
+                // period every single time the page reloads, and could never
+                // actually hit the staleness timeout.
+                const jobStartedAt = job.created_at ? job.created_at * 1000 : Date.now();
+                startAssemblyPolling(job.file_id, jobStartedAt);
 
                 // Update cleanup button to disable it during assembly
                 updateManualCleanupButton();
