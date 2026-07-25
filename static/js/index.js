@@ -2772,8 +2772,15 @@ function _stopFolderGroup(groupId) {
         group._activeController = null;
     }
 
-    // Mark any items in the queue so chunked loops exit at next check
-    uploadQueue.filter(item => item._groupId === groupId).forEach(item => {
+    // Mark any items in the queue so chunked loops exit at next check.
+    // Items already 'assembling' are left alone: their bytes are already
+    // fully on the server and the backend is already reassembling them —
+    // abort() has no effect on work that already finished sending, and
+    // stomping the status to 'cancelled' here (bypassing updateItemStatus)
+    // would desync group.assembling forever, since nothing would ever see
+    // it "leave" the assembling state. It'll resolve normally via
+    // startAssemblyPolling() like any other assembling file.
+    uploadQueue.filter(item => item._groupId === groupId && item.status !== 'assembling').forEach(item => {
         cancelledUploads.add(item.id);
         item.status = 'cancelled';
     });
@@ -2820,6 +2827,22 @@ function removeFromQueue(fileId) {
         if (item.status === 'uploading') {
             showUploadStatus('❌ Cannot remove file currently being uploaded', 'error');
             return;
+        }
+        if (item.status === 'assembling') {
+            // Bytes are already fully on the server and being reassembled —
+            // removing the row here would just orphan it: the backend keeps
+            // working regardless, but nothing would be left to receive the
+            // eventual completed/error result from startAssemblyPolling().
+            showUploadStatus('❌ Cannot remove file currently being processed on the server', 'error');
+            return;
+        }
+        // This function only ever removed from uploadQueue and never touched
+        // folderGroups — fine for ungrouped items, but a grouped item reaching
+        // here (it shouldn't; updateItemStatus() splices those out itself)
+        // would desync the group's completed/errors counters silently. Warn
+        // instead of failing quietly.
+        if (item._groupId) {
+            console.warn(`⚠️ removeFromQueue() called on grouped item ${fileId} (group ${item._groupId}) — this shouldn't normally happen`);
         }
 
         uploadQueue.splice(index, 1);
@@ -2947,6 +2970,13 @@ function clearCompletedItems() {
 
     let groupsCleared = 0;
     folderGroups.forEach((group, id) => {
+        // Never delete a group while one of its files is still being
+        // reassembled server-side — doing so orphans that queue item: it
+        // stays counted in the header totals (uploadQueue.length / size)
+        // but never renders again, since its folder row is gone and it's
+        // filtered out of the plain file list for still having a _groupId.
+        // That's the "queue container stays, list goes empty" bug.
+        if (group.assembling > 0) return;
         if (group.status === 'done' || group.status === 'error' || group.status === 'cancelled' || group.cancelled) {
             _freeSeen(group); // Release dedup keys so same folder can be re-queued
             folderGroups.delete(id);
@@ -3069,8 +3099,14 @@ function updateQueueDisplay() {
         queueElement.innerHTML = '';
         // One row per folder group
         folderGroups.forEach(group => queueElement.appendChild(_createFolderGroupRow(group)));
-        // Individual rows only for non-folder files
-        uploadQueue.filter(item => !item._groupId).forEach(item => queueElement.appendChild(createQueueItemElement(item)));
+        // Individual rows for non-folder files, PLUS any orphaned item whose
+        // folder group no longer exists (shouldn't happen — see the
+        // assembling>0 guards on every folderGroups.delete() call — but if
+        // it ever does, falling back to a normal row here means the item
+        // stays visible and removable instead of silently vanishing while
+        // still counted in the header stats).
+        uploadQueue.filter(item => !item._groupId || !folderGroups.has(item._groupId))
+            .forEach(item => queueElement.appendChild(createQueueItemElement(item)));
     }
 }
 
@@ -6119,8 +6155,13 @@ async function startBatchUpload() {
                 removeFromQueue(item.id);
             });
 
-            // Clear completed folder groups too
+            // Clear completed folder groups too — but never one that's still
+            // waiting on a backend reassembly (see the matching guard in
+            // clearCompletedItems() for why: deleting the group would orphan
+            // that still-assembling item, leaving it invisible forever while
+            // still counted in the queue header's totals).
             folderGroups.forEach((group, id) => {
+                if (group.assembling > 0) return;
                 if (group.status === 'done' || group.status === 'error') folderGroups.delete(id);
             });
 
