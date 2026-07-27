@@ -10,10 +10,10 @@ A lightweight FTP-like file transfer server that runs on **Termux (Android), Lin
 <img width="1794" height="893" alt="image" src="https://github.com/user-attachments/assets/083a1054-b1bd-446b-946c-a3dda29b459b" />
 
 ## 📷 Guest (READONLY)
-<img width="1794" height="1201" alt="image" src="https://github.com/user-attachments/assets/b619e8a8-40b7-424d-9628-0c4648e33ed6" />
+<img width="1794" height="1318" alt="image" src="https://github.com/user-attachments/assets/79fa8549-e69a-42df-a76f-c9fa612576a0" />
 
 ## 📷 Admin (READWRITE)
-<img width="1794" height="1531" alt="image" src="https://github.com/user-attachments/assets/b7167c30-0590-4c23-a391-2022f630e6bb" />
+<img width="1794" height="1648" alt="image" src="https://github.com/user-attachments/assets/d2fc0541-9004-4896-9693-ac67bf2a7b3f" />
 
 ## 📋 Table of Contents
 
