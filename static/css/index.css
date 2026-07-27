@@ -176,6 +176,41 @@ body {
     display: none !important;
 }
 
+/* ── Admin action buttons (Cleanup Chunk / Rebuild Cache / Clear Media
+   Preview) — grouped in their own row so they wrap together as one unit
+   instead of each button wrapping independently against the create-folder
+   form. This is what keeps the tablet width (~769–1024px) from splitting
+   the buttons across misaligned rows, and keeps mobile from stretching
+   each button to a full-width bar. ─────────────────────────────────────── */
+.admin-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.admin-actions .manual-cleanup-btn {
+    margin-left: 0;
+}
+
+/* On full-sized desktop, size the admin action buttons (Cleanup Chunk /
+   Rebuild Cache / Clear Media Preview) to match the Create Folder button
+   (.btn base size) instead of the smaller .btn-sm sizing used elsewhere. */
+@media (min-width: 1025px) {
+    .admin-actions .btn-sm {
+        padding: 10px 20px;
+        font-size: 14px;
+        border-radius: 8px;
+        min-width: auto;
+        width: auto;
+        height: auto;
+    }
+
+    .admin-actions .btn-sm i {
+        font-size: 14px;
+    }
+}
+
 /* Bulk Actions */
 .bulk-actions {
     background: rgba(255, 255, 255, 0.1);
@@ -1726,6 +1761,13 @@ td .fa-file {
         padding: 12px;
     }
 
+    /* Admin buttons stay in one horizontal row on their own line, instead
+       of each stretching to a full-width bar (which .controls'
+       flex-direction: column above would otherwise cause via stretch). */
+    .admin-actions {
+        width: 100%;
+    }
+
     .create-folder-form input[type="text"] {
         min-width: auto;
         width: 100%;
@@ -2383,6 +2425,24 @@ td .fa-file {
         overflow-x: auto;
     }
 
+    /* The actual scrollable element is the inner #tableScrollWrapper, not
+       .file-table itself. Make sure it always scrolls horizontally here —
+       otherwise the Actions column (last child) can end up clipped by
+       .file-table's overflow:hidden instead of reachable via scroll. */
+    .table-scroll-wrapper {
+        overflow-x: auto !important;
+        overflow-y: auto !important;
+    }
+
+    /* Let the table grow to fit its content (checkbox + name + size + type
+       + modified + actions) rather than being squeezed into 100% width,
+       so the extra width is scrollable instead of the last column shrinking
+       and clipping its buttons. */
+    .table {
+        width: max-content;
+        min-width: 100%;
+    }
+
     /* Tablet-specific actions column */
     .table th:last-child,
     .table td:last-child {
@@ -2392,6 +2452,7 @@ td .fa-file {
 
     .actions {
         gap: 4px;
+        flex-wrap: nowrap;
     }
 
     .actions .btn-sm {

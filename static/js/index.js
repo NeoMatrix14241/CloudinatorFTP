@@ -150,7 +150,13 @@ function smartTableColumnizer() {
         const sizeW = isTablet ? 110 : 200;
         const typeW = isTablet ? 110 : 125;
         const modW = 140;
-        const actW = isTablet ? 155 : 172;
+        // Actions column must fit the icon buttons (28px each + 3px gaps)
+        // without shrinking below their combined footprint — a too-small
+        // actW here is what causes the last button (Delete) to render
+        // partially clipped. Read-write rows show 5 buttons (download,
+        // move, copy, rename, delete); read-only rows show 1 (download).
+        const isReadWrite = (typeof USER_ROLE !== 'undefined' && USER_ROLE === 'readwrite');
+        const actW = isReadWrite ? 190 : 70;
 
         const showMod = !isTablet && !isMobile;
         const fixedTotal = cbW + sizeW + typeW + (showMod ? modW : 0) + actW;
@@ -270,8 +276,18 @@ function smartTableColumnizer() {
                     _set(td, 'white-space', 'normal');
                     _set(td, 'word-break', 'break-word');
                     _set(td, 'text-overflow', 'unset');
+                } else if (i === colDefs.length - 1) {
+                    // Actions: icon buttons must never be clipped. Use tight
+                    // horizontal padding (reclaims space vs. the 13px used by
+                    // Type/Modified) and overflow:visible as a safety net —
+                    // this is the last column, so nothing else is to its
+                    // right for it to overlap.
+                    _set(td, 'white-space', 'nowrap');
+                    _set(td, 'overflow', 'visible');
+                    _set(td, 'padding', (isMobile ? '6px' : '11px') + ' 6px');
+                    _set(td, 'vertical-align', 'middle');
                 } else {
-                    // All other cells (type, modified, actions): single line, ellipsis, centred vertically
+                    // Type / Modified: single line, ellipsis, centred vertically
                     _set(td, 'white-space', 'nowrap');
                     _set(td, 'text-overflow', 'ellipsis');
                     _set(td, 'vertical-align', 'middle');
@@ -286,7 +302,9 @@ function smartTableColumnizer() {
         const W = wrapper.clientWidth || wrapper.offsetWidth || 800;
         const isMobile = W < 600;
         const isTablet = W >= 600 && W < 900;
-        const cbW = 36, sizeW = isTablet ? 110 : 200, typeW = isTablet ? 110 : 125, modW = 140, actW = isTablet ? 155 : 172;
+        const cbW = 36, sizeW = isTablet ? 110 : 200, typeW = isTablet ? 110 : 125, modW = 140;
+        const isReadWrite = (typeof USER_ROLE !== 'undefined' && USER_ROLE === 'readwrite');
+        const actW = isReadWrite ? 190 : 70;
         const showMod = !isTablet && !isMobile;
         const fixedTotal = cbW + sizeW + typeW + (showMod ? modW : 0) + actW;
         const nameFloor = isMobile ? 250 : isTablet ? 100 : 160;
@@ -8088,6 +8106,18 @@ function addManualCleanupButton() {
     const controls = document.querySelector('.controls');
     if (controls && USER_ROLE === 'readwrite') {
 
+        // Group the admin buttons in their own wrapper so they wrap as a
+        // single unit (stay in one row together, drop to a new line as a
+        // group) instead of each button wrapping independently next to the
+        // create-folder form. Fixes misalignment on tablet widths and the
+        // "one giant full-width button per row" look on mobile.
+        let adminActions = controls.querySelector('.admin-actions');
+        if (!adminActions) {
+            adminActions = document.createElement('div');
+            adminActions.className = 'admin-actions';
+            controls.appendChild(adminActions);
+        }
+
         // --- Cleanup Chunk button ---
         const cleanupBtn = document.createElement('button');
         cleanupBtn.id = 'manualCleanupBtn';
@@ -8131,7 +8161,7 @@ function addManualCleanupButton() {
             }
         };
 
-        controls.appendChild(cleanupBtn);
+        adminActions.appendChild(cleanupBtn);
 
         // --- Rebuild Cache button ---
         const cacheBtn = document.createElement('button');
@@ -8165,7 +8195,7 @@ function addManualCleanupButton() {
             }
         };
 
-        controls.appendChild(cacheBtn);
+        adminActions.appendChild(cacheBtn);
 
         // --- Clean Media Preview button ---
         const mediaPreviewBtn = document.createElement('button');
@@ -8203,7 +8233,7 @@ function addManualCleanupButton() {
             }
         };
 
-        controls.appendChild(mediaPreviewBtn);
+        adminActions.appendChild(mediaPreviewBtn);
 
     }
 }
