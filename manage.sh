@@ -564,8 +564,10 @@ run_utility() {
     fi
     header "Running ${script}"
     divider
+    trap '' INT    # shell ignores Ctrl-C so manage.sh itself doesn't exit
     "$PYTHON" "${SCRIPT_DIR}/${script}" "$@"
     local ec=$?
+    trap - INT     # restore default signal handling
     divider
     (( ec == 0 )) && success "${script%.py} finished." \
     || error  "${script%.py} exited with code ${ec}."
@@ -580,8 +582,10 @@ run_bash_script() {
     fi
     header "Running ${script}"
     divider
+    trap '' INT    # shell ignores Ctrl-C so manage.sh itself doesn't exit
     bash "${SCRIPT_DIR}/${script}" "$@"
     local ec=$?
+    trap - INT     # restore default signal handling
     divider
     (( ec == 0 )) && success "${script} finished." \
     || error  "${script} exited with code ${ec}."

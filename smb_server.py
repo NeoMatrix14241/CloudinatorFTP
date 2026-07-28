@@ -85,9 +85,15 @@ def _make_tree_connect_hooks():
                 role = db.get_role(username)
             except Exception as e:
                 log.warning(f"SMB: role lookup failed for {username!r}: {e}")
-        connData["ConnectedShares"][tid]["read only"] = (
-            "no" if role == "readwrite" else "yes"
-        )
+        readonly_value = "no" if role == "readwrite" else "yes"
+        connData["ConnectedShares"][tid]["read only"] = readonly_value
+        if os.environ.get("SMB_DEBUG_ROLE") == "1":
+            print(
+                f"SMB-ROLE: tid={tid} user={username!r} role={role!r} "
+                f"-> read_only={readonly_value!r} "
+                f"all_tids={list(connData.get('ConnectedShares', {}).keys())}",
+                flush=True,
+            )
 
     smb1_orig_holder = [None]
     smb2_orig_holder = [None]
@@ -160,13 +166,30 @@ def _install_setinfo_rename_fix():
 
     import impacket.smbserver as _smbserver_module
 
+    import re
+
     _original_rename = _smbserver_module.os.rename
+
+    # Office/WordPad's own disposable backup-temp naming (e.g.
+    # 'Note.docx~RF64e8c3.TMP', '~WRD0001.tmp'). Office creates and
+    # deletes these itself as part of its save sequence — never
+    # something app.py's own rename endpoint would target — so it's
+    # safe to overwrite a stale leftover one instead of blocking the
+    # save.
+    _OFFICE_TEMP_PATTERN = re.compile(r"~(RF|WRD)[0-9A-Fa-f]+\.tmp$", re.IGNORECASE)
 
     def _windows_safe_rename(src, dst):
         try:
             _original_rename(src, dst)
         except OSError as e:
-            if getattr(e, "winerror", None) == 32:
+            winerror = getattr(e, "winerror", None)
+            if winerror == 32:
+                _smbserver_module.os.replace(src, dst)
+            elif winerror == 183 and _OFFICE_TEMP_PATTERN.search(os.path.basename(dst)):
+                log.info(
+                    f"SMB: stale Office backup-temp {dst!r} already existed — "
+                    f"replacing it rather than blocking the save"
+                )
                 _smbserver_module.os.replace(src, dst)
             else:
                 raise
