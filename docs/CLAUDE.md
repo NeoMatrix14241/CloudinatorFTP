@@ -1,7 +1,13 @@
 # CloudinatorFTP — Complete Codebase Reference for AI-Assisted Development
 
-**Version**: 3.3 | **Last Updated**: 2026-07-10  
+**Version**: 3.4 | **Last Updated**: 2026-07-28  
 **For**: AI assistants and developers modifying/extending CloudinatorFTP
+
+**Recent updates (2026-07-28)**:
+- The web UI now uses a client-side logout entrypoint that still routes through the server-side `/logout` handler for session cleanup and cookie invalidation.
+- Real-time storage stats now use the authenticated SSE endpoint `/api/storage_stats_stream`, with `/api/storage_stats_poll` available as a fallback when the stream is unavailable.
+- The management shell now suppresses Ctrl-C while launching nested utility scripts so `manage.sh` remains in control and the underlying script can exit normally.
+- SMB server hardening now includes additional Windows-specific save/delete compatibility fixes for Office-style file writes and transient lock handling.
 
 ---
 
@@ -68,6 +74,30 @@
 8. Flask app ready
 9. protocol_manager.start_all() → WebDAV (8080/8443), SFTP (2222), FTP (2121) start in daemon threads; SMB (445/8445) starts too if SMB_ENABLED
 ```
+
+---
+
+## 🔧 Key Functions & Entry Points
+
+### Python modules
+
+- **app.py**: `get_local_ip()`, `RateLimiter`, `AssemblyQueue`, `validate_session()`, `login()`, `logout()`, `index()`, `download()`, `view_file()`, `pdf_viewer()`, `office_preview()`, `archive_preview()`, and `storage_stats_stream()`.
+- **auth.py**: `check_login()`, `get_role()`, `login_user()`, `logout_user()`, `current_user()`, and `is_logged_in()`.
+- **config.py**: `detect_platform()`, `get_windows_documents_path()`, `get_accessible_storage_path()`, `setup_storage_directory()`, and the configuration helpers such as `configure_server_settings()`, `configure_port()`, `configure_chunk_size()`, and `configure_session_timeout()`.
+- **database.py**: `_connect()`, `_bootstrap()`, `add_user()`, `update_password()`, `check_login()`, `get_role()`, `get_server_token()`, `rotate_server_token()`, `get_smb_credentials()`, and `users_missing_nt_hash()`.
+- **storage.py**: `list_dir()`, `count_directory_items()`, `save_chunk()`, `verify_chunks_complete()`, `assemble_chunks()`, and `cleanup_chunks()`.
+- **file_monitor.py**: `InstantFileEventHandler.on_created()`, `on_deleted()`, `on_moved()`, `on_modified()`, plus `FileSystemMonitor.start()`, `stop()`, and `reconcile()`.
+- **file_index.py**: `_scan_folder_entries()` and `FileIndexManager.load()`, `save()`, `cache_folder()`, `get_entries()`, and `is_cached()`.
+- **search_index.py**: `SearchIndexManager.add()`, `remove()`, `rename()`, `query()`, and the background indexing workflow.
+- **webdav_server.py**, **sftp_server.py**, **ftp_server.py**, and **smb_server.py**: their protocol-specific startup and auth hooks, including the middleware and role enforcement entry points used by each server.
+
+### JavaScript modules
+
+- **static/js/index.js**: `initTapTooltips()`, `lockTableColumnWidths()`, `smartTableColumnizer()`, `searchTable()`, `performDeepSearch()`, `navigateToFolder()`, `loadStorageStats()`, `updateStorageDisplay()`, `addToUploadQueue()`, `cancelUpload()`, `openFileViewer()`, and `closeFileViewer()`.
+- **static/js/login.js**: `isComingFromLogout()`, `checkAuthenticationStatus()`, and `checkAndRedirectIfLoggedIn()`.
+- **static/js/404.js**: the redirect countdown logic used by the custom 404 page.
+
+This section is intentionally high-level: the detailed route behavior, storage logic, and protocol-specific implementation notes are covered elsewhere in this guide.
 
 ---
 
@@ -438,7 +468,9 @@ GET /api/search?q=mountain&ext=csv,txt&offset=0&limit=50
 
 | Route | Method | Auth | Response |
 |-------|--------|------|----------|
-| `/api/storage_stats` | GET | Required | SSE stream: real-time stats |
+| `/api/storage_stats_stream` | GET | Required | SSE stream: real-time stats |
+| `/api/storage_stats_poll` | GET | Required | Polling fallback for storage stats |
+| `/api/storage_stats_debug` | GET | None | Debug view of storage stats (no auth) |
 | `/api/dir_info/<path:path>` | GET | Required | Instant dir counters |
 | `/api/monitoring_status` | GET | Required | Watchdog + reconcile status |
 
@@ -1536,6 +1568,8 @@ Request → _CertMiddleware (serves /webdav.crt unauthenticated)
 
 **Command safety net**: impacket's top-level SMB2 dispatch logs and **re-raises** any exception a command handler doesn't catch itself, which kills that connection's thread — a silent "network disconnect" from the client's side, distinct from a clean "permission error" response. Fix: wrap every registered SMB2 command so an uncaught exception is logged in full and returns `STATUS_UNSUCCESSFUL` instead of propagating. Installed **last** in the hook chain so it's outermost and also catches bugs in the other hooks above it (found genuinely useful during development — it caught two real bugs in this exact hook-wiring pattern before they shipped, see below).
 
+**Recent hardening note**: the latest SMB revision adds Windows-specific retry behavior for delete/rename collisions and a safer file-open path for transient lock windows during Office-style save sequences. These changes are intentionally narrow and only affect the specific error class that was causing false permission reports or interrupted saves.
+
 **Hook-wiring gotcha (found twice, worth documenting so it isn't reintroduced)**: `SMB2_NEGOTIATE`'s legacy SMB1-upgrade call path invokes its handler with **4** positional args, not the usual 3 — a fixed-arity hook signature silently breaks on that call. All hooks in this file use `(*args, **kwargs)`, never a fixed positional signature. Relatedly: stashing the "original handler" in a mutable default argument and later overwriting it via `hook.__defaults__ = (...)` breaks silently the moment a hook signature has `*args` followed by any keyword-only parameter — `__defaults__` only ever updates positional-or-keyword defaults, never keyword-only ones. Every hook here uses a plain single-element holder list (`orig_holder = [None]`, set directly at the call site) instead — no function-default mutation at all.
 
 **Diagnostics, both opt-in via env var, never on by default**:
@@ -1587,6 +1621,8 @@ Each is imported lazily inside `start()`. If a library is missing, that protocol
 ---
 
 ## 🛠️ Admin Tools & Utilities
+
+`manage.sh` remains the primary launcher for the server and utility commands. Recent updates also made it more resilient when running nested helpers, because it now suppresses Ctrl-C while a utility script is executing so the shell wrapper does not exit prematurely.
 
 ### User Management (create_user.py)
 
