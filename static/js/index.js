@@ -7151,13 +7151,16 @@ async function createNewFolderInBrowser() {
     try {
         const newFolderPath = browserCurrentPath ? `${browserCurrentPath}/${folderName.trim()}` : folderName.trim();
 
-        // Create the folder using existing API
-        const response = await fetch('/create_folder', {
+        // Create the folder using the real mkdir endpoint.
+        // NOTE: this used to POST to a nonexistent '/create_folder' endpoint
+        // with a 'folder_name' field — always 404'd. The real route is
+        // '/mkdir' and expects 'foldername' (no underscore) + 'path'.
+        const response = await fetch('/mkdir', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
             },
-            body: `folder_name=${encodeURIComponent(folderName.trim())}&path=${encodeURIComponent(browserCurrentPath)}`
+            body: `foldername=${encodeURIComponent(folderName.trim())}&path=${encodeURIComponent(browserCurrentPath)}`
         });
 
         if (!response.ok) {
@@ -7767,72 +7770,6 @@ async function performBulkZipDownload(paths) {
         }, 2000);
 
         showUploadStatus('✅ Large file ZIP download started', 'success');
-        clearSelection();
-        return; // Exit early with form method
-
-        const response = await fetch('/bulk-download', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                paths: paths
-            })
-        });
-
-        if (!response.ok) {
-            let errorMessage = 'Download failed';
-            try {
-                const errorData = await response.json();
-                errorMessage = errorData.error || errorMessage;
-            } catch (e) {
-                errorMessage = `Server error: ${response.status} ${response.statusText}`;
-            }
-            throw new Error(errorMessage);
-        }
-
-        // Get the filename from the Content-Disposition header
-        const contentDisposition = response.headers.get('Content-Disposition');
-        let filename = 'download.zip';
-        if (contentDisposition) {
-            const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(contentDisposition);
-            if (matches != null && matches[1]) {
-                filename = matches[1].replace(/['"]/g, '');
-            }
-        }
-
-        console.log('� ZIP stream response received, filename:', filename);
-        showUploadStatus('📥 Processing download...', 'info');
-
-        // Create the blob from the stream
-        const blob = await response.blob();
-        console.log(`📦 Created blob: ${blob.size} bytes, type: ${blob.type}`);
-
-        if (blob.size === 0) {
-            throw new Error('Received empty file from server');
-        }
-
-        // Create object URL for download (same approach as single files)
-        const url = window.URL.createObjectURL(blob);
-
-        // Create hidden link element
-        const downloadLink = document.createElement('a');
-        downloadLink.href = url;
-        downloadLink.download = filename;
-        downloadLink.style.display = 'none';
-
-        // Add to DOM, click, then remove (instant download, no new tab)
-        document.body.appendChild(downloadLink);
-        downloadLink.click();
-        document.body.removeChild(downloadLink);
-
-        // Clean up the object URL
-        window.URL.revokeObjectURL(url);
-
-        console.log('✅ ZIP download completed via AJAX method');
-        showUploadStatus(`✅ ZIP download started: ${filename}`, 'success');
-
-        // Clear selection after successful download
         clearSelection();
 
     } catch (error) {
