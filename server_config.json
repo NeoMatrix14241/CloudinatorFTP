@@ -37,5 +37,5 @@
   "SMB_PORT": 445,
   "SMB_FALLBACK_PORT": 8445,
   "SMB_SHARE_NAME": "SharedFolder",
-  "configured_at": "2026-06-27 20:04:40"
+  "configured_at": "2026-07-27 18:27:33"
 }

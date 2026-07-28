@@ -15,8 +15,15 @@ CHUNK_SIZE = 10 * 1024 * 1024  # 10 MB adjustable chunk size
 ENABLE_CHUNKED_UPLOADS = True
 HOST = "0.0.0.0"  # Listen on all interfaces
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024 * 1024  # 16GB max file size
-ALLOWED_EXTENSIONS = None  # None = allow all file types
-PERMANENT_SESSION_LIFETIME = 3600  # 1 hour session timeout
+ALLOWED_EXTENSIONS = None  # None = allow all file types.
+# To restrict uploads, set a lowercase set/list of extensions WITHOUT dots,
+# e.g. {"jpg", "jpeg", "png", "mp4", "pdf"}. Now enforced in app.py's upload()
+# route (previously imported nowhere and never checked).
+PERMANENT_SESSION_LIFETIME = 31536000  # 365 days — effectively no idle timeout.
+# NOTE: this value is now actually wired into app.py's Flask session config
+# (it previously wasn't — app.py hardcoded its own 86400s and ignored this).
+# Change this via the setup wizard (configure_session_timeout) if you want a
+# real timeout back; whatever you set here is now what actually applies.
 
 # HLS streaming configuration
 # Files smaller than HLS_MIN_SIZE skip HLS for web-native formats (play raw instead)

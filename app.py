@@ -73,9 +73,13 @@ import zipstream
 from datetime import datetime
 from config import (
     PORT,
+    HOST,
     ROOT_DIR,
     CHUNK_SIZE,
     ENABLE_CHUNKED_UPLOADS,
+    MAX_CONTENT_LENGTH,
+    ALLOWED_EXTENSIONS,
+    PERMANENT_SESSION_LIFETIME,
     HLS_MIN_SIZE,
     HLS_FORCE_FORMATS,
     IMG_COMPRESS_MIN_SIZE,
@@ -304,12 +308,16 @@ app = Flask(__name__)
 CORS(app)
 app.secret_key = SESSION_SECRET
 
-# Configure session handling
+# Configure session handling.
+# PERMANENT_SESSION_LIFETIME now comes from config.py (single source of truth —
+# previously app.py hardcoded its own 86400s value and ignored config.py entirely,
+# so the setup wizard's "session timeout" prompt didn't actually do anything).
 app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
-    PERMANENT_SESSION_LIFETIME=86400,  # 24 hours
-    SESSION_REFRESH_EACH_REQUEST=True,
+    PERMANENT_SESSION_LIFETIME=PERMANENT_SESSION_LIFETIME,
+    SESSION_REFRESH_EACH_REQUEST=True,  # cookie expiry slides forward on every request
     SESSION_COOKIE_NAME="cloudinator_session",
+    MAX_CONTENT_LENGTH=MAX_CONTENT_LENGTH,  # now actually enforced by Flask, was previously unset
 )
 
 
@@ -1710,6 +1718,17 @@ def upload():
         # Remove all sanitization, only check for empty and slashes
         if "/" in filename or "\\" in filename:
             return "Invalid filename", 400
+
+        # Enforce configured file-type allowlist, if one is set.
+        # ALLOWED_EXTENSIONS = None means "allow all" (config.py default).
+        if ALLOWED_EXTENSIONS is not None:
+            ext = os.path.splitext(filename)[1].lower().lstrip(".")
+            if ext not in ALLOWED_EXTENSIONS:
+                return (
+                    f"File type '.{ext}' not allowed. Allowed types: "
+                    f"{', '.join(sorted(ALLOWED_EXTENSIONS))}",
+                    400,
+                )
 
         # Security check: ensure destination path is safe
         if dest_path and not storage.is_safe_path(dest_path):
@@ -5279,4 +5298,19 @@ if __name__ == "__main__":
     print(f"🌐 Local network:  http://{LOCAL_IP}:{PORT}")
     print(f"🔁 Localhost:      http://localhost:{PORT}")
 
-    app.run(host="0.0.0.0", port=PORT, debug=False)
+    # Start the alternate-protocol servers (WebDAV, SFTP, FTP, SMB) via the
+    # shared protocol_manager module — same mechanism dev_server.py and
+    # prod_server.py use. NOTE: in normal operation this __main__ block never
+    # runs, since app.py is imported (not executed directly) by those two
+    # launcher scripts, and they call protocol_manager.start_all() themselves
+    # right after importing `app`. This call only matters if you run
+    # `python app.py` directly. protocol_manager.start_all() is idempotent
+    # (guarded by an internal _started flag), so this is safe even if it
+    # somehow already ran earlier in the same process.
+    import atexit
+    import protocol_manager
+
+    protocol_manager.start_all()
+    atexit.register(protocol_manager.stop_all)
+
+    app.run(host=HOST, port=PORT, debug=False)

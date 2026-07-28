@@ -9,7 +9,6 @@ import os
 import sys
 import signal
 import socket
-from datetime import timedelta
 from app import get_local_ip
 
 LOCAL_IP = get_local_ip()
@@ -43,10 +42,17 @@ protocol_manager.start_all()
 
 if __name__ == "__main__":
 
+    from config import ROOT_DIR, HOST, PORT, PERMANENT_SESSION_LIFETIME
+
     # ── Flask / app config ───────────────────────────────────────────────────
     app.config.update(
-        MAX_CONTENT_LENGTH=None,
-        PERMANENT_SESSION_LIFETIME=timedelta(hours=1),
+        MAX_CONTENT_LENGTH=None,  # intentionally unlimited — chunked uploads
+        # bypass this anyway (each chunk is well under any reasonable cap),
+        # and the person building this app decided unlimited total upload
+        # size is fine. Overrides config.py's MAX_CONTENT_LENGTH on purpose.
+        PERMANENT_SESSION_LIFETIME=PERMANENT_SESSION_LIFETIME,  # from config.py —
+        # was hardcoded to timedelta(hours=1) here, silently undoing whatever
+        # session lifetime was configured/persisted elsewhere. Now single-sourced.
         SEND_FILE_MAX_AGE_DEFAULT=0,
         TESTING=False,
         DEBUG=True,
@@ -60,7 +66,7 @@ if __name__ == "__main__":
     # ── Startup banner ───────────────────────────────────────────────────────
     print("🧪 Starting CloudinatorFTP Development Server...")
     print("⚠️  WARNING: This is for DEVELOPMENT/TESTING only!")
-    print(f"🌐 Server running on http://{LOCAL_IP}:5000")
+    print(f"🌐 Server running on http://{LOCAL_IP}:{PORT}")
     if _BG:
         print("🔒 Background service mode (managed by manage.sh)")
         print("   • Ctrl+C disabled — use './manage.sh stop' to stop")
@@ -72,20 +78,18 @@ if __name__ == "__main__":
         print("📁 Press Ctrl+C to stop the server")
     print()
 
-    from config import ROOT_DIR
-
     print(f"📋 Storage directory: {ROOT_DIR}")
     print()
 
-    print(f"🌐 Local network:  http://{LOCAL_IP}:5000")
-    print(f"🔁 Localhost:      http://localhost:5000")
+    print(f"🌐 Local network:  http://{LOCAL_IP}:{PORT}")
+    print(f"🔁 Localhost:      http://localhost:{PORT}")
     print()
 
     # ── Serve ────────────────────────────────────────────────────────────────
     try:
         app.run(
-            host="0.0.0.0",
-            port=5000,
+            host=HOST,
+            port=PORT,
             debug=True,
             threaded=True,
             # Reloader spawns a watchdog subprocess with its own signal wiring.

@@ -403,41 +403,39 @@ function cleanupAuthenticationHistory() {
         });
     }
 
-    // Add periodic authentication check
-    setInterval(checkAuthenticationStatus, 1000); // Check every 1 second
+    // Removed: periodic 1s authentication polling loop.
+    // It fired even in background tabs, where browsers throttle/freeze timers
+    // and network sockets — causing bursts of false "auth failed" results that
+    // forced a hard redirect to /login (the "gray screen") even though the
+    // real server-side session was still valid. The server already enforces
+    // the actual session lifetime on every real request via @app.before_request,
+    // so this client-side watchdog wasn't needed for security — only for a
+    // marginally faster redirect on genuine logout, at the cost of false positives.
+    //
+    // If you want SOME client-side check, re-enable checkAuthenticationStatus()
+    // below, but only run it when the tab regains visibility, never on an interval.
+    // document.addEventListener('visibilitychange', () => {
+    //     if (document.visibilityState === 'visible') checkAuthenticationStatus();
+    // });
 }
 
-// FIX: Track consecutive auth failures — transient network blips must not kill active uploads
-let _authFailCount = 0;
-const _AUTH_FAIL_THRESHOLD = 3;
-
 async function checkAuthenticationStatus() {
-    // Always ping the server — this refreshes the session cookie even on background tabs.
-    // Never skip the fetch during upload; only skip the *redirect* so uploads aren't interrupted.
+    // Kept for optional manual/visibility-triggered use (see comment above).
+    // No longer runs on an interval, so no failure-counting/backoff is needed.
+    if (document.hidden) return; // never evaluate while backgrounded
     try {
         const response = await fetch('/check_session', {
             method: 'GET',
             cache: 'no-cache',
             headers: { 'Cache-Control': 'no-cache' }
         });
-
-        if (!response.ok || response.url.includes('/login')) {
-            _authFailCount++;
-            console.log(`🔒 Auth check failed (${_authFailCount}/${_AUTH_FAIL_THRESHOLD})`);
-            if (_authFailCount >= _AUTH_FAIL_THRESHOLD && !isUploading) {
-                console.log('🔒 Session expired, redirecting to login...');
-                window.location.replace('/login');
-            }
-        } else {
-            _authFailCount = 0;
-        }
-    } catch (error) {
-        _authFailCount++;
-        console.log(`🔒 Auth check error (${_authFailCount}/${_AUTH_FAIL_THRESHOLD}):`, error.message);
-        if (_authFailCount >= _AUTH_FAIL_THRESHOLD && !isUploading) {
-            console.log('🔒 Repeated auth errors, redirecting to login...');
+        if ((!response.ok || response.url.includes('/login')) && !isUploading) {
+            console.log('🔒 Session expired, redirecting to login...');
             window.location.replace('/login');
         }
+    } catch (error) {
+        // Network hiccup — ignore silently, don't redirect on a single failed ping.
+        console.log('🔒 Auth check error (ignored):', error.message);
     }
 }
 
