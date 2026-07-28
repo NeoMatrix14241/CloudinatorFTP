@@ -36,7 +36,7 @@
                 <span>{{ session.username }}</span>
                 <span class="role-badge role-{{ role }}">{{ role }}</span>
             </div>
-            <a href="{{ url_for('logout') }}" class="logout-btn">
+            <a href="{{ url_for('logout') }}" class="logout-btn" onclick="event.preventDefault(); logout();">
                 <i class="fas fa-sign-out-alt"></i> Logout
             </a>
         </div>
@@ -276,7 +276,8 @@
 
         <!-- Breadcrumb -->
         <div class="breadcrumb">
-            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+            <div
+                style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
                 <h3><i class="fas fa-folder-open"></i> /{{ 'Root/' + path if path else 'Root/' }}</h3>
                 {% if path and path != '' %}
                 <div class="btn-group" style="display: flex; gap: 5px; flex-shrink: 0;">
@@ -598,7 +599,8 @@
 
     <!-- Store Flask template values in HTML data attributes for JavaScript access -->
     <div id="flask-config" data-chunk-size="{{ CHUNK_SIZE }}" data-upload-url="{{ url_for('upload') }}"
-        data-current-path="{{ path }}" data-user-role="{{ role }}" style="display: none;"></div>
+        data-current-path="{{ path }}" data-user-role="{{ role }}" data-logout-url="{{ url_for('logout') }}"
+        style="display: none;"></div>
 
     <!-- Initial file listing JSON for virtual scroll seeding (avoids rendering 50k DOM rows) -->
     <script id="initialFilesData" type="application/json">{{ items | tojson if items else '[]' }}</script>

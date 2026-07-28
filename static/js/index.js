@@ -2,6 +2,7 @@
 const configElement = document.getElementById('flask-config');
 const CHUNK_SIZE = parseInt(configElement.dataset.chunkSize) || 10485760; // 10MB fallback
 const UPLOAD_URL = configElement.dataset.uploadUrl || "/upload";
+const LOGOUT_URL = configElement.dataset.logoutUrl || "/logout";
 const CURRENT_PATH = configElement.dataset.currentPath || "";
 const USER_ROLE = configElement.dataset.userRole || "readonly";
 
@@ -479,29 +480,6 @@ let originalRowOrder = []; // Store original order for reset functionality
 let searchTimeout = null;
 
 // Search functionality
-function searchTable(searchTerm) {
-    clearTimeout(searchTimeout);
-
-    // Show/hide clear button
-    const clearButton = document.getElementById('clearSearch');
-    if (searchTerm.trim()) {
-        clearButton.style.display = 'block';
-    } else {
-        clearButton.style.display = 'none';
-    }
-
-    // Debounce search to avoid too many API calls
-    searchTimeout = setTimeout(() => {
-        if (searchTerm.trim().length > 0) {
-            // Always use deep search for any non-empty query (no local-only shortcut)
-            performDeepSearch(searchTerm.trim());
-        } else {
-            // Empty query — clear deep search and reset VT view
-            hideDeepSearchResults();
-            VT.applyFilter('');
-        }
-    }, 500); // Increased debounce for API calls
-}
 
 function performLocalSearch(searchTerm) {
     // Hide any deep search results overlay first
@@ -643,6 +621,31 @@ function _parseSearchQuery(rawTerm) {
     return { query, exts };
 }
 
+// Debounced search trigger, wired from the search input's onkeyup in index.html
+function searchTable(searchTerm) {
+    clearTimeout(searchTimeout);
+
+    // Show/hide clear button
+    const clearButton = document.getElementById('clearSearch');
+    if (searchTerm.trim()) {
+        clearButton.style.display = 'block';
+    } else {
+        clearButton.style.display = 'none';
+    }
+
+    // Debounce search to avoid too many API calls
+    searchTimeout = setTimeout(() => {
+        if (searchTerm.trim().length > 0) {
+            // Always use deep search for any non-empty query (no local-only shortcut)
+            performDeepSearch(searchTerm.trim());
+        } else {
+            // Empty query — clear deep search and reset VT view
+            hideDeepSearchResults();
+            VT.applyFilter('');
+        }
+    }, 500); // Increased debounce for API calls
+}
+
 // Deep search using API to scan nested folders
 function performDeepSearch(rawTerm) {
     const { query, exts } = _parseSearchQuery(rawTerm);
@@ -707,12 +710,6 @@ function highlightSearchTerm(row, term) {
     }
 }
 
-function removeHighlights(row) {
-    const highlights = row.querySelectorAll('.search-highlight');
-    highlights.forEach(highlight => {
-        highlight.outerHTML = highlight.textContent;
-    });
-}
 
 function displayDeepSearchResults(data, searchTerm, exts) {
     if (!data.results || data.results.length === 0) {
@@ -796,38 +793,6 @@ function createSearchResultsHeaderDiv(data, exts) {
     return headerDiv;
 }
 
-function createSearchResultsHeader(data) {
-    const row = document.createElement('tr');
-    row.className = 'search-results-header';
-    // Add inline styles to force visibility on mobile
-    row.style.display = 'table-row';
-    row.style.visibility = 'visible';
-    row.style.opacity = '1';
-    row.style.minHeight = '50px';
-
-    // Detect mobile screen size
-    const isMobile = window.innerWidth <= 480;
-
-    row.innerHTML = `
-        <td colspan="6" class="search-header-cell" style="display: table-cell !important; visibility: visible !important; width: 100% !important; ${isMobile ? 'font-size: 12px !important; padding: 10px !important;' : ''}">
-            <div class="search-header-content" style="display: flex !important; visibility: visible !important; padding: ${isMobile ? '10px' : '12px 15px'}; ${isMobile ? 'flex-direction: column; gap: 8px; min-height: 40px;' : ''}">
-                <div class="search-header-main" style="display: flex !important; visibility: visible !important; align-items: center; gap: 12px; flex-wrap: wrap; ${isMobile ? 'font-size: 12px;' : ''}">
-                    <i class="fas fa-search-plus" style="${isMobile ? 'font-size: 14px;' : ''}"></i>
-                    <span class="search-title" style="display: inline-block !important; visibility: visible !important; ${isMobile ? 'font-size: 12px !important; font-weight: bold !important;' : ''}">Deep Search Results</span>
-                    <span class="search-count" style="${isMobile ? 'font-size: 10px; padding: 2px 6px;' : ''}">${data.total_found} items found</span>
-                    ${data.truncated ? '<span class="search-truncated">(showing first 100)</span>' : ''}
-                </div>
-                <div class="search-header-meta" style="display: flex !important; gap: 10px; align-items: center; ${isMobile ? 'justify-content: space-between; width: 100%;' : ''}">
-                    <span class="search-time" style="${isMobile ? 'font-size: 10px;' : ''}">Search time: ${data.search_time}s</span>
-                    <button onclick="clearSearch()" class="btn-close-search" style="${isMobile ? 'font-size: 10px; padding: 4px 8px;' : ''}">
-                        <i class="fas fa-times"></i> Close Results
-                    </button>
-                </div>
-            </div>
-        </td>
-    `;
-    return row;
-}
 
 function createSearchResultRow(result, searchTerm) {
     const row = document.createElement('tr');
@@ -983,13 +948,6 @@ function updateVisibleCount(count) {
     }
 }
 
-function formatFileSize(bytes) {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
 
 // Open file location function for search results
 function openFileLocation(folderPath) {
@@ -1050,58 +1008,7 @@ function sortTable(column, forceDirection) {
     console.log(`📊 Sorted by ${column} (${currentSort.direction})`);
 }
 
-function getSortValue(row, column) {
-    switch (column) {
-        case 'name':
-            const nameCell = row.querySelector('td:nth-child(2)');
-            if (!nameCell) return '';
 
-            // For folders, get text from the link
-            const folderLink = nameCell.querySelector('.folder-link');
-            if (folderLink) {
-                return folderLink.textContent.trim();
-            }
-
-            // For files, get text content but exclude icon text
-            const fileDiv = nameCell.querySelector('.file-name');
-            if (fileDiv) {
-                // Clone the div and remove icon elements to get clean text
-                const clone = fileDiv.cloneNode(true);
-                const icons = clone.querySelectorAll('i');
-                icons.forEach(icon => icon.remove());
-                return clone.textContent.trim();
-            }
-
-            // Fallback to full text content
-            return nameCell.textContent.trim();
-        case 'size':
-            const sizeCell = row.querySelector('td:nth-child(3)');
-            if (!sizeCell) return '';
-
-            // For folders with dir-info-cell, extract size from <small> tag
-            const dirInfoCell = sizeCell.querySelector('.dir-info-cell small');
-            if (dirInfoCell) {
-                return dirInfoCell.textContent.trim();
-            }
-
-            // For regular files or folders without size info yet
-            return sizeCell.textContent.trim();
-        case 'type':
-            const typeCell = row.querySelector('td:nth-child(4)');
-            return typeCell ? typeCell.textContent.trim() : '';
-        case 'modified':
-            const modifiedCell = row.querySelector('td:nth-child(5)');
-            return modifiedCell ? modifiedCell.textContent.trim() : '';
-        default:
-            return '';
-    }
-}
-
-function compareSizes(a, b) {
-    const aBytes = parseSize(a);
-    const bBytes = parseSize(b);
-    return aBytes - bBytes;
-}
 
 function parseSize(sizeStr) {
     if (!sizeStr || sizeStr === '--') {
@@ -1124,14 +1031,6 @@ function parseSize(sizeStr) {
     }
 }
 
-function compareDates(a, b) {
-    if (a === '--' && b === '--') return 0;
-    if (a === '--') return -1;
-    if (b === '--') return 1;
-
-    // Simple string comparison should work for ISO dates
-    return a.localeCompare(b);
-}
 
 
 
@@ -1205,7 +1104,7 @@ function updateSortInfo(column, direction) {
     }
 }
 
-// Reset sorting to default state
+// Reset sorting to default state, wired from the resetSort button's onclick in index.html
 function resetSorting() {
     console.log('🔄 Resetting table sorting to default');
 
@@ -2327,17 +2226,36 @@ document.addEventListener('visibilitychange', function () {
     }
 });
 
-// Better connection handling
+// Better connection handling.
+// isOnline/connectionLostTime track outage duration for the restored-after-Ns
+// message below. (Previously lived in a second, dead updateConnectionStatus()
+// function of the same name as the SSE-status one further down — that name
+// collision meant this outage-duration behavior silently never ran. Merged
+// here into the listeners that actually fire, instead of registering a
+// second competing "connection restored" toast.)
+let isOnline = navigator.onLine;
+let connectionLostTime = null;
+
 window.addEventListener('online', function () {
     console.log('🌐 Connection restored');
+    isOnline = true;
+    let restoredMsg = '🌐 Connection restored';
+    if (connectionLostTime) {
+        const outageTime = Math.round((Date.now() - connectionLostTime) / 1000);
+        restoredMsg += ` after ${outageTime}s outage`;
+        connectionLostTime = null;
+    }
     const failedItems = uploadQueue.filter(item => item.status === 'error');
     if (failedItems.length > 0) {
-        showUploadStatus(`🌐 Connection restored. ${failedItems.length} failed upload(s) can be retried.`, 'info');
+        restoredMsg += `. ${failedItems.length} failed upload(s) can be retried.`;
     }
+    showUploadStatus(restoredMsg, 'success');
 });
 
 window.addEventListener('offline', function () {
     console.log('📡 Connection lost');
+    isOnline = false;
+    connectionLostTime = Date.now();
     showUploadStatus('📡 Connection lost. Uploads will fail until connection is restored.', 'error');
 });
 
@@ -4396,29 +4314,8 @@ function _pdfZoomLabel() {
     if (el) el.textContent = Math.round((_pdfState.scale / _pdfState.baseScale) * 100) + '%';
 }
 
-function pdfZoomIn() {
-    const pagesEl = document.getElementById('pdf-pages');
-    const ratio = pagesEl && pagesEl.scrollHeight > 0 ? pagesEl.scrollTop / pagesEl.scrollHeight : 0;
-    _pdfState.scale = Math.min(_pdfState.baseScale * 4, _pdfState.scale * 1.25);
-    _pdfZoomLabel();
-    _renderAllPages(ratio);
-}
 
-function pdfZoomOut() {
-    const pagesEl = document.getElementById('pdf-pages');
-    const ratio = pagesEl && pagesEl.scrollHeight > 0 ? pagesEl.scrollTop / pagesEl.scrollHeight : 0;
-    _pdfState.scale = Math.max(_pdfState.baseScale * 0.5, _pdfState.scale / 1.25);
-    _pdfZoomLabel();
-    _renderAllPages(ratio);
-}
 
-function pdfZoomReset() {
-    const pagesEl = document.getElementById('pdf-pages');
-    const ratio = pagesEl && pagesEl.scrollHeight > 0 ? pagesEl.scrollTop / pagesEl.scrollHeight : 0;
-    _pdfState.scale = _pdfState.baseScale;
-    _pdfZoomLabel();
-    _renderAllPages(ratio);
-}
 
 /**
  * Intercepts native pinch-to-zoom on the PDF pages container.
@@ -5139,317 +5036,6 @@ async function refreshFileTable() {
 }
 
 // Function to update file table content
-function updateFileTableContent(files) {
-    const tbody = document.querySelector('.table tbody');
-    if (!tbody) {
-        console.error('❌ File table tbody not found');
-        return;
-    }
-
-    // Clear existing content
-    tbody.innerHTML = '';
-
-    // Only wipe selection on actual navigation, NOT background SSE refresh
-    const _incomingPath = currentPath || '';
-    const _isNavigating = (typeof _lastRenderedPath !== 'undefined') && _lastRenderedPath !== _incomingPath;
-    if (_isNavigating || typeof _lastRenderedPath === 'undefined') {
-        selectedItems.clear();
-        const selectAllCheckbox = document.getElementById('selectAll');
-        if (selectAllCheckbox) {
-            selectAllCheckbox.checked = false;
-            selectAllCheckbox.indeterminate = false;
-        }
-        const bulkActions = document.getElementById('bulkActions');
-        if (bulkActions) bulkActions.classList.remove('show');
-    }
-    _lastRenderedPath = _incomingPath;
-
-    // Use currentPath from navigation state, not CURRENT_PATH from page load
-    const pathToUse = currentPath || '';
-    console.log(`📁 updateFileTableContent using path: "${pathToUse}"`);
-
-    // Add "Go Up" row if we're not at root
-    if (pathToUse) {
-        const parentPath = pathToUse.includes('/')
-            ? pathToUse.split('/').slice(0, -1).join('/')
-            : '';
-
-        const goUpRow = document.createElement('tr');
-        goUpRow.className = 'parent-dir-sticky';
-        goUpRow.innerHTML = `
-            <td></td>
-            <td>
-                <div class="file-name">
-                    <i class="fas fa-level-up-alt file-icon folder-icon"></i>
-                    <a href="#" data-action="navigate" data-path="${parentPath}" class="folder-link">
-                        .. (Parent Directory)
-                    </a>
-                </div>
-            </td>
-            <td class="size-cell">
-                <span style="color: white; font-size: 13px;">--</span>
-            </td>
-            <td class="type-cell">
-                <span style="color: white; font-size: 13px;">Folder</span>
-            </td>
-            <td class="date-cell">
-                <span style="color: white; font-size: 13px;">--</span>
-            </td>
-            <td></td>
-        `;
-        tbody.appendChild(goUpRow);
-        requestAnimationFrame(() => {
-            const thead = document.querySelector('#filesTable thead');
-            const wrapper = document.getElementById('tableScrollWrapper');
-            if (thead && wrapper) wrapper.style.setProperty('--table-thead-h', thead.offsetHeight + 'px');
-        });
-    }
-
-    if (files.length === 0) {
-        // Show empty state
-        const colspan = '6'; // Always 6 columns for consistent layout
-        tbody.innerHTML += `
-            <tr>
-                <td colspan="${colspan}" style="text-align: center; padding: 40px 20px; vertical-align: middle;">
-                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 120px;">
-                        <i class="fas fa-folder-open" style="font-size: 36px; color: white; margin-bottom: 15px; opacity: 0.7;"></i>
-                        <div style="color: white; font-weight: 500; margin-bottom: 8px; font-size: 18px;">This folder is empty</div>
-                        <div style="color: white; font-size: 14px; text-align: center; max-width: 300px;">
-                            ${USER_ROLE === 'readwrite' ? 'Upload files or create folders to get started' : 'No files available'}
-                        </div>
-                    </div>
-                </td>
-            </tr>
-        `;
-        return;
-    }
-
-    // Add files to table
-    files.forEach(file => {
-        const row = document.createElement('tr');
-        row.className = 'file-row';
-        row.setAttribute('data-path', pathToUse ? `${pathToUse}/${file.name}` : file.name);
-
-        let iconHtml, sizeHtml, typeHtml, actionsHtml;
-        const itemPath = pathToUse ? `${pathToUse}/${file.name}` : file.name;
-
-        if (file.is_dir || file.type === 'dir') {
-            // Directory
-            iconHtml = `<i class="fas fa-folder file-icon folder-icon"></i>
-                <a href="#" data-action="navigate" data-path="${itemPath}">${file.name}</a>`;
-
-            sizeHtml = `<span class="dir-info-cell" data-dir-path="${itemPath}" style="color: white; font-size: 13px;">
-                <i class="fas fa-spinner fa-spin" style="opacity: 0.4; font-size: 11px;"></i>
-            </span>`;
-
-            typeHtml = '<span class="file-type"><i class="fas fa-folder folder-icon file-icon"></i> Folder</span>';
-
-            actionsHtml = `
-                <button type="button" class="btn btn-outline btn-sm" 
-                        data-action="download-folder"
-                        data-item-path="${itemPath}"
-                        data-item-name="${file.name}"
-                        data-label="Download ZIP"
-                        title="Download folder as ZIP">
-                    <i class="fas fa-download"></i>
-                </button>
-                
-                ${USER_ROLE === 'readwrite' ? `
-                <button type="button" class="btn btn-warning btn-sm" 
-                        data-action="move"
-                        data-item-name="${file.name}"
-                        data-item-path="${itemPath}"
-                        data-label="Move"
-                        title="Move">
-                    <i class="fas fa-cut"></i>
-                </button>
-                
-                <button type="button" class="btn btn-success btn-sm" 
-                        data-action="copy"
-                        data-item-name="${file.name}"
-                        data-item-path="${itemPath}"
-                        data-label="Copy"
-                        title="Copy">
-                    <i class="fas fa-copy"></i>
-                </button>
-                
-                <button type="button" class="btn btn-primary btn-sm" 
-                        data-action="rename"
-                        data-item-name="${file.name}"
-                        data-item-path="${itemPath}"
-                        data-label="Rename"
-                        title="Rename">
-                    <i class="fas fa-edit"></i>
-                </button>
-                
-                <button type="button" class="btn btn-danger btn-sm" 
-                        data-action="delete"
-                        data-item-name="${file.name}"
-                        data-item-path="${itemPath}"
-                        data-label="Delete"
-                        title="Delete">
-                    <i class="fas fa-trash"></i>
-                </button>
-                ` : ''}
-            `;
-        } else {
-            // File - USE getFileIcon and getFileColor functions
-            const fileIcon = getFileIcon(file.name);
-            const fileColor = getFileColor(file.name);
-            const fileType = typeof getFileType === 'function' ? getFileType(file.name) : 'File';
-
-            // Only apply color to the icon in the name column, not the text
-            iconHtml = `<i class="${fileIcon} file-icon file-icon-default" style="color: ${fileColor};"></i>${file.name}`;
-            sizeHtml = `<span style="color: white; font-weight: 500;">${formatFileSize(file.size)}</span>`;
-
-            // Type cell icon should NOT have color applied
-            typeHtml = `<span class="file-type"><i class="${fileIcon} file-icon file-icon-default"></i> ${fileType}</span>`;
-
-            actionsHtml = `
-                <button type="button" class="btn btn-outline btn-sm" 
-                        data-action="download"
-                        data-item-path="${itemPath}"
-                        data-label="Download"
-                        title="Download file">
-                    <i class="fas fa-download"></i>
-                </button>
-                ${USER_ROLE === 'readwrite' ? `
-                    <button type="button" class="btn btn-warning btn-sm" 
-                            data-action="move"
-                            data-item-name="${file.name}"
-                            data-item-path="${itemPath}"
-                            data-label="Move"
-                            title="Move">
-                        <i class="fas fa-cut"></i>
-                    </button>
-                    
-                    <button type="button" class="btn btn-success btn-sm" 
-                            data-action="copy"
-                            data-item-name="${file.name}"
-                            data-item-path="${itemPath}"
-                            data-label="Copy"
-                            title="Copy">
-                        <i class="fas fa-copy"></i>
-                    </button>
-                    
-                    <button type="button" class="btn btn-primary btn-sm" 
-                            data-action="rename"
-                            data-item-name="${file.name}"
-                            data-item-path="${itemPath}"
-                            data-label="Rename"
-                            title="Rename">
-                        <i class="fas fa-edit"></i>
-                    </button>
-                    
-                    <button type="button" class="btn btn-danger btn-sm" 
-                            data-action="delete"
-                            data-item-name="${file.name}"
-                            data-item-path="${itemPath}"
-                            data-label="Delete"
-                            title="Delete">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                ` : ''}
-            `;
-        }
-
-        row.innerHTML = `
-            <td>
-                ${USER_ROLE === 'readwrite' ? `
-                    <input type="checkbox" class="file-checkbox item-checkbox" 
-                           data-path="${itemPath}" 
-                           data-name="${file.name}" 
-                           data-is-dir="${file.is_dir || file.type === 'dir' ? 'true' : 'false'}" 
-                           onchange="updateSelection()" ${selectedItems.has(itemPath) ? 'checked' : ''}>
-                ` : ''}
-            </td>
-            <td class="name-cell">
-                <div class="file-name">
-                    ${iconHtml}
-                </div>
-            </td>
-            <td class="size-cell">${sizeHtml}</td>
-            <td class="type-cell">${typeHtml}</td>
-            <td class="date-cell">
-                ${file.modified ?
-                `<span style="color: white; font-size: 13px;">${formatTimestamp(file.modified)}</span>` :
-                `<span style="color: white; font-size: 13px;">--</span>`
-            }
-            </td>
-            <td class="actions-cell">
-                <div class="actions" style="display:flex;flex-wrap:nowrap;gap:3px;align-items:center;">
-                    ${actionsHtml}
-                </div>
-            </td>
-        `;
-
-        applyColumnWidths(row);
-        tbody.appendChild(row);
-    });
-
-    // ===== EVENT DELEGATION - Handle all button clicks =====
-    // Remove old listener if exists
-    const oldListener = tbody._actionListener;
-    if (oldListener) {
-        tbody.removeEventListener('click', oldListener);
-    }
-
-    // Create new listener
-    const actionListener = function (e) {
-        // Handle navigation links
-        const navLink = e.target.closest('a[data-action="navigate"]');
-        if (navLink) {
-            e.preventDefault();
-            const path = navLink.getAttribute('data-path');
-            navigateToFolder(path);
-            return;
-        }
-
-        // Handle action buttons
-        const button = e.target.closest('button[data-action]');
-        if (!button) return;
-
-        const action = button.getAttribute('data-action');
-        const itemPath = button.getAttribute('data-item-path');
-        const itemName = button.getAttribute('data-item-name');
-
-        console.log(`🔘 Action: ${action}, Path: ${itemPath}, Name: ${itemName}`);
-
-        switch (action) {
-            case 'download':
-                downloadItem(itemPath);
-                break;
-            case 'download-folder':
-                downloadFolderAsZip(itemPath, itemName);
-                break;
-            case 'move':
-                showSingleMoveModal(itemPath, itemName);
-                break;
-            case 'copy':
-                showSingleCopyModal(itemPath, itemName);
-                break;
-            case 'rename':
-                showSingleRenameModal(itemPath, itemName);
-                break;
-            case 'delete':
-                showSingleDeleteModal(itemPath, itemName);
-                break;
-        }
-    };
-
-    // Store reference and add listener
-    tbody._actionListener = actionListener;
-    tbody.addEventListener('click', actionListener);
-
-    // Update selection state to ensure UI is in sync
-    updateSelection();
-
-    // Reinitialize search and sort controls
-    reinitializeTableControls(files.length);
-
-    // Lazy-load folder sizes after table is rendered
-    loadDirInfoCells();
-}
 
 // Handle delete button clicks
 function handleDeleteClick(event) {
@@ -5461,10 +5047,6 @@ function handleDeleteClick(event) {
 }
 
 // Helper function to get file extension
-function getFileExtension(filename) {
-    const ext = filename.split('.').pop().toLowerCase();
-    return ext !== filename ? ext : 'file';
-}
 
 // Helper function to format file size
 function formatFileSize(bytes) {
@@ -7916,62 +7498,6 @@ async function deleteItem(itemPath, itemName) {
 }
 
 // Add manual cleanup button for debugging/admin use
-function addManualCleanupButton() {
-    const controls = document.querySelector('.controls');
-    if (controls && USER_ROLE === 'readwrite') {
-        const cleanupBtn = document.createElement('button');
-        cleanupBtn.id = 'manualCleanupBtn';
-        cleanupBtn.className = 'btn btn-warning btn-sm manual-cleanup-btn';
-        cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Chunk';
-
-        // Hide button by default - only show after status check confirms it's safe
-        cleanupBtn.style.display = 'none';
-        cleanupBtn.title = 'Checking safety status...';
-
-        cleanupBtn.onclick = async function () {
-            try {
-                // Double-check for active assembly jobs before proceeding
-                const assemblyResponse = await fetch('/api/assembly_status');
-                if (assemblyResponse.ok) {
-                    const assemblyStatus = await assemblyResponse.json();
-                    const activeJobs = assemblyStatus.jobs || [];
-                    const hasActiveAssembly = activeJobs.some(job =>
-                        job.status === 'pending' || job.status === 'processing'
-                    );
-
-                    if (hasActiveAssembly) {
-                        showUploadStatus('❌ Cannot cleanup - files are currently being processed/assembled', 'error');
-                        console.log('🔐 Manual cleanup blocked - active assembly jobs detected');
-                        return;
-                    }
-                }
-
-                cleanupBtn.disabled = true;
-                cleanupBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Cleaning...';
-
-                const response = await fetch('/admin/cleanup_chunks', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-
-                const result = await response.json();
-                if (response.ok) {
-                    showUploadStatus('🧹 Manual cleanup completed successfully', 'success');
-                    console.log('Cleanup stats:', result);
-                } else {
-                    throw new Error(result.error || 'Cleanup failed');
-                }
-            } catch (error) {
-                showUploadStatus(`❌ Manual cleanup failed: ${error.message}`, 'error');
-            } finally {
-                cleanupBtn.disabled = false;
-                cleanupBtn.innerHTML = '<i class="fas fa-broom"></i> Cleanup Chunk';
-            }
-        };
-
-        controls.appendChild(cleanupBtn);
-    }
-}
 
 // Function to update manual cleanup button visibility
 async function updateManualCleanupButton() {
@@ -8953,66 +8479,6 @@ async function _registerDirEntryLazy(dirEntry) {
 }
 
 // Recursively read directory contents
-async function readDirectory(directoryEntry) {
-    const files = [];
-
-    return new Promise((resolve, reject) => {
-        const directoryReader = directoryEntry.createReader();
-
-        function readEntries() {
-            directoryReader.readEntries(async (entries) => {
-                if (entries.length === 0) {
-                    // No more entries, we're done
-                    resolve(files);
-                    return;
-                }
-
-                try {
-                    // Process all entries in parallel
-                    const entryPromises = entries.map(async (entry) => {
-                        if (entry.isFile) {
-                            const file = await getFileFromEntry(entry);
-                            if (file) {
-                                // Preserve folder structure in file path
-                                file.relativePath = entry.fullPath;
-                                return file;
-                            }
-                        } else if (entry.isDirectory) {
-                            // Recursively read subdirectory
-                            const subFiles = await readDirectory(entry);
-                            return subFiles;
-                        }
-                        return null;
-                    });
-
-                    const results = await Promise.all(entryPromises);
-
-                    // Add all files to our collection
-                    results.forEach(result => {
-                        if (result) {
-                            if (Array.isArray(result)) {
-                                files.push(...result); // Subdirectory files
-                            } else {
-                                files.push(result); // Single file
-                            }
-                        }
-                    });
-
-                    // Continue reading (directories might have many entries)
-                    readEntries();
-                } catch (error) {
-                    console.error('Error processing directory entries:', error);
-                    reject(error);
-                }
-            }, (error) => {
-                console.error('Error reading directory:', error);
-                reject(error);
-            });
-        }
-
-        readEntries();
-    });
-}
 
 // Convert FileEntry to File object
 function getFileFromEntry(fileEntry) {
@@ -9148,28 +8614,9 @@ setInterval(() => {
 }, 5000);
 
 // Enhanced connection monitoring
-let isOnline = navigator.onLine;
-let connectionLostTime = null;
-
-function updateConnectionStatus() {
-    const wasOnline = isOnline;
-    isOnline = navigator.onLine;
-
-    if (!wasOnline && isOnline) {
-        // Connection restored
-        console.log('🌐 Connection restored');
-        if (connectionLostTime) {
-            const outageTime = Math.round((Date.now() - connectionLostTime) / 1000);
-            showUploadStatus(`🌐 Connection restored after ${outageTime}s outage`, 'success');
-            connectionLostTime = null;
-        }
-    } else if (wasOnline && !isOnline) {
-        // Connection lost
-        console.log('📡 Connection lost');
-        connectionLostTime = Date.now();
-        showUploadStatus('📡 Connection lost - uploads will fail', 'error');
-    }
-}
+// (isOnline / connectionLostTime tracking + the restored/lost notifications
+// now live earlier in the file, merged into the real 'online'/'offline'
+// event listeners — see the comment there for why.)
 
 // Monitor connection changes
 window.addEventListener('online', updateConnectionStatus);
@@ -9216,7 +8663,7 @@ window.addEventListener('unhandledrejection', function (event) {
 function logout() {
     // Cleanup before logout
     cleanupUnfinishedChunks().finally(() => {
-        window.location.href = "{{ url_for('logout') }}";
+        window.location.href = LOGOUT_URL;
     });
 }
 
@@ -9650,22 +9097,6 @@ function handleStatsUpdate(data) {
     updateStorageDisplay(data);
 }
 
-function activateEventDrivenUpdates() {
-    console.log('🚀 Activating event-driven storage updates (no polling)...');
-
-    // Clear any existing polling
-    if (window.realtimePollingInterval) {
-        clearInterval(window.realtimePollingInterval);
-        window.realtimePollingInterval = null;
-    }
-
-    // Set connection status to active
-    document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
-    connectionStatus = 'connected';
-    window.storageStatsInitialized = true;
-
-    console.log('✅ Event-driven updates active - storage stats will update only when files change');
-}
 
 // Function to manually refresh storage stats when file operations occur
 async function refreshStorageStats(reason = 'manual') {
@@ -9692,69 +9123,6 @@ async function refreshStorageStats(reason = 'manual') {
     }
 }
 
-function setupFallbackPolling() {
-    let sseFailureCount = 0;
-    let fallbackPollingInterval = null;
-
-    // Only activate fallback if SSE consistently fails
-    const checkSSEHealth = () => {
-        if (!storageEventSource || storageEventSource.readyState === EventSource.CLOSED) {
-            sseFailureCount++;
-            console.warn(`⚠️ SSE connection issue detected (${sseFailureCount}/1)`);
-
-            if (sseFailureCount >= 1 && !fallbackPollingInterval) {
-                console.log('🔄 SSE failed - using event-driven updates instead of polling...');
-                // Instead of polling, use event-driven updates
-                activateEventDrivenUpdates();
-
-                // Optional: Very infrequent fallback check (every 5 minutes) only for connection health
-                fallbackPollingInterval = setInterval(async () => {
-                    try {
-                        const response = await fetch('/api/storage_stats');
-                        if (response.ok) {
-                            const contentType = response.headers.get('content-type');
-                            if (contentType && contentType.includes('application/json')) {
-                                const data = await response.json();
-                                // Only update if there are significant changes
-                                if (data.file_count !== undefined && data.dir_count !== undefined) {
-                                    if (lastKnownFileCount !== null && lastKnownDirCount !== null) {
-                                        if (Math.abs(data.file_count - lastKnownFileCount) > 5 ||
-                                            Math.abs(data.dir_count - lastKnownDirCount) > 2) {
-                                            console.log(`🔄 Health check detected significant changes: ${lastKnownFileCount}→${data.file_count} files, ${lastKnownDirCount}→${data.dir_count} dirs`);
-                                            await refreshFileTable();
-                                            updateStorageDisplay(data);
-                                        }
-                                    }
-                                    lastKnownFileCount = data.file_count;
-                                    lastKnownDirCount = data.dir_count;
-                                }
-                            } else {
-                                console.warn(`⚠️ Health check API returned HTML instead of JSON (status ${response.status})`);
-                            }
-                        } else {
-                            throw new Error(`API error: ${response.status} ${response.statusText}`);
-                        }
-                    } catch (error) {
-                        console.warn('⚠️ Health check failed:', error);
-                    }
-                }, 300000); // Very infrequent - 5 minutes instead of 3 seconds
-            }
-        } else if (storageEventSource && storageEventSource.readyState === EventSource.OPEN) {
-            // SSE is working, reset failure count and clear fallback if active
-            if (sseFailureCount > 0) {
-                console.log('✅ SSE connection restored, disabling fallback polling');
-                sseFailureCount = 0;
-                if (fallbackPollingInterval) {
-                    clearInterval(fallbackPollingInterval);
-                    fallbackPollingInterval = null;
-                }
-            }
-        }
-    };
-
-    // Check SSE health every 15 seconds
-    setInterval(checkSSEHealth, 15000);
-}
 
 function connectToStorageStream() {
     try {
