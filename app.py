@@ -336,6 +336,25 @@ CORS(
 
 app.secret_key = SESSION_SECRET
 
+
+def _request_is_secure() -> bool:
+    """
+    True if this specific request reached us over HTTPS — either directly
+    (request.is_secure, e.g. if Flask itself is TLS-terminated) or via a
+    reverse proxy/tunnel that terminates TLS and forwards the original
+    scheme in X-Forwarded-Proto (this is what Cloudflare Tunnel does: the
+    browser-to-Cloudflare leg is HTTPS, but cloudflared then talks to this
+    Flask process over plain HTTP, so request.is_secure alone is always
+    False for tunnel traffic without this check).
+
+    LAN/localhost requests won't have this header at all, so they correctly
+    fall through to False here — same as before.
+    """
+    if request.is_secure:
+        return True
+    return request.headers.get("X-Forwarded-Proto", "").lower() == "https"
+
+
 # ---------------------------------------------------------------------------
 # Dynamic "Secure" cookie flag — works over plain HTTP on localhost/LAN AND
 # over HTTPS on the public domain, from the same running server.
@@ -345,15 +364,16 @@ app.secret_key = SESSION_SECRET
 # over LAN http://, and False would leave it sendable over http on the public
 # domain. Overriding get_cookie_secure() makes the flag follow each request:
 # secure when the browser actually connected over HTTPS, not secure when it
-# didn't (LAN/localhost). request.is_secure also respects X-Forwarded-Proto
-# when running behind a proxy/tunnel that sets it.
+# didn't (LAN/localhost). Uses _request_is_secure() so it also works when
+# reached through a TLS-terminating tunnel/proxy — see that function's
+# docstring.
 # ---------------------------------------------------------------------------
 from flask.sessions import SecureCookieSessionInterface
 
 
 class _DynamicSecureSessionInterface(SecureCookieSessionInterface):
     def get_cookie_secure(self, app):
-        return request.is_secure
+        return _request_is_secure()
 
 
 app.session_interface = _DynamicSecureSessionInterface()
@@ -878,6 +898,8 @@ def after_request(response):
         "media-src 'self' blob:; "
         "connect-src 'self'; "
         "font-src 'self'; "
+        "object-src 'none'; "
+        "form-action 'self'; "
         "frame-ancestors 'none'; "
         "base-uri 'self'"
     )
@@ -885,7 +907,10 @@ def after_request(response):
     # HSTS only makes sense once a browser has actually reached us over
     # HTTPS — sending it over plain http (LAN/localhost) is a no-op per spec,
     # but we gate it explicitly so it's never sent on an insecure connection.
-    if request.is_secure:
+    # Uses _request_is_secure() so this also fires correctly behind the
+    # Cloudflare tunnel, which terminates TLS and talks to Flask over plain
+    # HTTP — request.is_secure alone is always False in that setup.
+    if _request_is_secure():
         response.headers["Strict-Transport-Security"] = (
             "max-age=31536000; includeSubDomains"
         )
