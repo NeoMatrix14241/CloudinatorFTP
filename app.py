@@ -1058,6 +1058,14 @@ def after_request(response):
     response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
     response.headers["X-DNS-Prefetch-Control"] = "off"
 
+    # Document-Policy: disable legacy document.write() and synchronous XHR.
+    # Neither pattern is used anywhere in this app's JS (everything here is
+    # fetch()-based), so this has no functional effect other than blocking
+    # those calls if they're ever introduced (e.g. by a future third-party
+    # embed script). A blocked call just becomes a silent no-op — it doesn't
+    # break the rest of the page.
+    response.headers["Document-Policy"] = "document-write=?0, sync-xhr=?0"
+
     # These directives/headers only make sense — and are only spec-compliant
     # — once a browser has actually reached us over HTTPS:
     #   • "upgrade-insecure-requests" tells the browser to rewrite every
