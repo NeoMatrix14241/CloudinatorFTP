@@ -42,6 +42,81 @@
     };
 })();
 
+// ---------------------------------------------------------------------------
+// Delegated action dispatcher — replaces inline onclick/onchange/onkeyup/
+// onerror="..." attributes so the Content-Security-Policy no longer needs
+// 'unsafe-inline' in script-src. Any element (static or built via
+// innerHTML/template literals) can opt in with:
+//   data-fn="funcName"            -> called on click
+//   data-args='["a","b"]'         -> JSON array of arguments (use dataArgs())
+//   data-prevent="1"              -> e.preventDefault() before calling
+//   data-stop="1"                 -> e.stopPropagation() before calling
+//   data-fn-change="funcName"     -> called on change, with data-args-change
+//   data-fn-keyup="funcName"      -> called on keyup with the element's value
+//   data-fn-error="funcName"      -> called on error (e.g. broken <img>)
+// ---------------------------------------------------------------------------
+function escAttr(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+// Build an HTML-attribute-safe, JSON-encoded argument list for data-args=""
+function dataArgs(args) {
+    return escAttr(JSON.stringify(args));
+}
+
+function _invoke(fnName, args, thisArg) {
+    const target = window[fnName];
+    if (typeof target === 'function') {
+        return target.apply(thisArg, args || []);
+    }
+    console.warn('dispatchAction: no such function on window:', fnName);
+}
+
+document.addEventListener('click', function (e) {
+    const el = e.target.closest('[data-fn]');
+    if (!el) return;
+    if (el.dataset.stop === '1') e.stopPropagation();
+    if (el.dataset.prevent === '1') e.preventDefault();
+    const args = el.dataset.args ? JSON.parse(el.dataset.args) : [];
+    _invoke(el.dataset.fn, args, el);
+});
+
+document.addEventListener('change', function (e) {
+    const el = e.target.closest('[data-fn-change]');
+    if (!el) return;
+    const args = el.dataset.argsChange ? JSON.parse(el.dataset.argsChange) : [];
+    _invoke(el.dataset.fnChange, args, el);
+});
+
+document.addEventListener('keyup', function (e) {
+    const el = e.target.closest('[data-fn-keyup]');
+    if (!el) return;
+    _invoke(el.dataset.fnKeyup, [el.value], el);
+});
+
+// 'error' events on elements like <img> don't bubble, so this listener
+// must use the capture phase to see them via delegation.
+document.addEventListener('error', function (e) {
+    const el = e.target;
+    if (el && el.dataset && el.dataset.fnError) {
+        _invoke(el.dataset.fnError, [], el);
+    }
+}, true);
+
+// Handles a failed load of the image preview in the file viewer (was
+// previously an inline onerror="..." attribute on the <img> element).
+function _handleImgConvError() {
+    const label = document.getElementById('img-conv-label');
+    if (label) label.textContent = '';
+    this.style.display = 'none';
+    const spinner = document.getElementById('img-conv-spinner');
+    if (spinner) spinner.innerHTML = '<p class="viewer-error">Could not load image.</p>';
+}
+
 // Read Flask configuration from HTML data attributes (avoids VS Code parsing issues)
 const configElement = document.getElementById('flask-config');
 const CHUNK_SIZE = parseInt(configElement.dataset.chunkSize) || 10485760; // 10MB fallback
@@ -827,7 +902,7 @@ function createSearchResultsHeaderDiv(data, exts) {
             </div>
             <div class="search-header-meta">
                 <span class="search-time">Search time: ${data.search_time}s</span>
-                <button onclick="clearSearch()" class="btn-close-search">
+                <button data-fn="clearSearch" class="btn-close-search">
                     <i class="fas fa-times"></i> Close Results
                 </button>
             </div>
@@ -860,7 +935,7 @@ function createSearchResultRow(result, searchTerm) {
             </div>
             <div class="search-result-details">
                 <div class="search-result-title">
-                    <a href="#" onclick="navigateToFolder('${escapeHtml(result.path)}'); return false;" 
+                    <a href="#" data-fn="navigateToFolder" data-args="${dataArgs([result.path])}" data-prevent="1"
                        class="search-folder-link">
                         ${highlightText(escapeHtml(result.name), searchTerm)}
                     </a>
@@ -895,21 +970,21 @@ function createSearchResultRow(result, searchTerm) {
 
     const actionsHtml = result.is_dir ?
         `<div class="search-result-actions">
-            <button class="btn btn-sm btn-primary" onclick="navigateToFolder('${result.path}')" title="Open folder">
+            <button class="btn btn-sm btn-primary" data-fn="navigateToFolder" data-args="${dataArgs([result.path])}" title="Open folder">
                 <i class="fas fa-folder-open"></i>
             </button>
-            <button class="btn btn-sm btn-success" onclick="downloadFolderAsZip('${result.path}', '${result.name}')" title="Download folder as ZIP">
+            <button class="btn btn-sm btn-success" data-fn="downloadFolderAsZip" data-args="${dataArgs([result.path, result.name])}" title="Download folder as ZIP">
                 <i class="fas fa-download"></i>
             </button>
-            <button class="btn btn-sm btn-outline" onclick="openFileLocation('${folderPath}')" title="Open file location">
+            <button class="btn btn-sm btn-outline" data-fn="openFileLocation" data-args="${dataArgs([folderPath])}" title="Open file location">
                 <i class="fas fa-level-up-alt"></i>
             </button>
         </div>` :
         `<div class="search-result-actions">
-            <button class="btn btn-sm btn-success" onclick="downloadItem('${result.path}')" title="Download file">
+            <button class="btn btn-sm btn-success" data-fn="downloadItem" data-args="${dataArgs([result.path])}" title="Download file">
                 <i class="fas fa-download"></i>
             </button>
-            <button class="btn btn-sm btn-outline" onclick="openFileLocation('${folderPath}')" title="Open file location">
+            <button class="btn btn-sm btn-outline" data-fn="openFileLocation" data-args="${dataArgs([folderPath])}" title="Open file location">
                 <i class="fas fa-folder-open"></i>
             </button>
         </div>`;
@@ -920,7 +995,7 @@ function createSearchResultRow(result, searchTerm) {
                    data-path="${result.path}"
                    data-name="${result.name}"
                    data-is-dir="${result.is_dir}"
-                   onchange="updateSelection()">
+                   data-fn-change="updateSelection">
         </td>
         <td class="search-name-cell">${nameHtml}</td>
         <td class="search-size-cell">${sizeDisplay}</td>
@@ -1614,7 +1689,7 @@ const VT = (() => {
                 <td></td>
                 <td><div class="file-name">
                     <i class="fas fa-level-up-alt file-icon folder-icon"></i>
-                    <a href="#" onclick="navigateToFolder('${parentPath}'); return false;" class="folder-link">
+                    <a href="#" data-fn="navigateToFolder" data-args="${dataArgs([parentPath])}" data-prevent="1" class="folder-link">
                         .. (Parent Directory)
                     </a>
                 </div></td>
@@ -1802,18 +1877,18 @@ function createFileTableRow(item, currentPath) {
                    data-path="${itemPath}" 
                    data-name="${item.name}"
                    data-is-dir="${item.is_dir ? 'true' : 'false'}"
-                   onchange="updateSelection()" ${selectedItems.has(itemPath) ? 'checked' : ''}>
+                   data-fn-change="updateSelection" ${selectedItems.has(itemPath) ? 'checked' : ''}>
         </td>
         <td class="name-cell">
             <div class="file-name">
                 ${item.is_dir ?
             `<i class="fas fa-folder file-icon folder-icon"></i>
-                     <a href="#" onclick="navigateToFolder('${escapeHtml(itemPath)}'); return false;" 
+                     <a href="#" data-fn="navigateToFolder" data-args="${dataArgs([itemPath])}" data-prevent="1"
                         data-folder-path="${escapeHtml(itemPath)}" class="folder-link">
                          ${safeName}
                      </a>` :
             `<i class="${itemIcon} file-icon file-icon-default" style="color: ${getFileColor(item.name)}"></i>
-                     ${safeName}${getViewerType(item.name) ? ` <button type="button" class="btn-eye-view" onclick="event.stopPropagation();openFileViewer('${escapeHtml(itemPath)}','${escapeHtml(item.name)}')" title="Preview"><i class="fas fa-eye"></i></button>` : ''}`
+                     ${safeName}${getViewerType(item.name) ? ` <button type="button" class="btn-eye-view" data-fn="openFileViewer" data-args="${dataArgs([itemPath, item.name])}" data-stop="1" title="Preview"><i class="fas fa-eye"></i></button>` : ''}`
         }
             </div>
         </td>
@@ -1840,14 +1915,14 @@ function createFileTableRow(item, currentPath) {
             `<button type="button" class="btn btn-outline btn-sm download-btn" 
                              data-item-path="${itemPath}"
                              data-label="Download"
-                             onclick="downloadItem('${itemPath}')"
+                             data-fn="downloadItem" data-args="${dataArgs([itemPath])}"
                              title="Download file">
                          <i class="fas fa-download"></i>
                      </button>` :
             `<button type="button" class="btn btn-outline btn-sm download-btn" 
                              data-item-path="${itemPath}"
                              data-label="Download ZIP"
-                             onclick="downloadFolderAsZip('${itemPath}', '${item.name}')"
+                             data-fn="downloadFolderAsZip" data-args="${dataArgs([itemPath, item.name])}"
                              title="Download folder as ZIP">
                          <i class="fas fa-download"></i>
                      </button>`
@@ -1858,7 +1933,7 @@ function createFileTableRow(item, currentPath) {
                         data-item-name="${item.name}"
                         data-item-path="${itemPath}"
                         data-label="Move"
-                        onclick="showSingleMoveModal('${itemPath}', '${item.name}')"
+                        data-fn="showSingleMoveModal" data-args="${dataArgs([itemPath, item.name])}"
                         title="Move">
                     <i class="fas fa-cut"></i>
                 </button>
@@ -1867,7 +1942,7 @@ function createFileTableRow(item, currentPath) {
                         data-item-name="${item.name}"
                         data-item-path="${itemPath}"
                         data-label="Copy"
-                        onclick="showSingleCopyModal('${itemPath}', '${item.name}')"
+                        data-fn="showSingleCopyModal" data-args="${dataArgs([itemPath, item.name])}"
                         title="Copy">
                     <i class="fas fa-copy"></i>
                 </button>
@@ -1876,7 +1951,7 @@ function createFileTableRow(item, currentPath) {
                         data-item-name="${item.name}"
                         data-item-path="${itemPath}"
                         data-label="Rename"
-                        onclick="showSingleRenameModal('${itemPath}', '${item.name}')"
+                        data-fn="showSingleRenameModal" data-args="${dataArgs([itemPath, item.name])}"
                         title="Rename">
                     <i class="fas fa-edit"></i>
                 </button>
@@ -1885,7 +1960,7 @@ function createFileTableRow(item, currentPath) {
                         data-item-name="${item.name}"
                         data-item-path="${itemPath}"
                         data-label="Delete"
-                        onclick="showSingleDeleteModal('${itemPath}', '${item.name}')"
+                        data-fn="showSingleDeleteModal" data-args="${dataArgs([itemPath, item.name])}"
                         title="Delete">
                     <i class="fas fa-trash"></i>
                 </button>
@@ -1981,7 +2056,7 @@ function updateBreadcrumb(path) {
 
         // Root button
         flexHTML += `
-            <a href="#" onclick="navigateToFolder(''); return false;" 
+            <a href="#" data-fn="navigateToFolder" data-args="${dataArgs([''])}" data-prevent="1"
                class="btn btn-outline btn-sm"
                style="color: white; border-color: rgba(255,255,255,0.4);" 
                title="Go to root folder">
@@ -1996,15 +2071,12 @@ function updateBreadcrumb(path) {
             parentPath = pathParts.join('/');
         }
 
-        // Escape single quotes in parentPath for onclick
-        const escapedParentPath = parentPath.replace(/'/g, "\\'");
-
         // Up button
         flexHTML += `
-            <a href="#" onclick="navigateToFolder('${escapedParentPath}'); return false;"
+            <a href="#" data-fn="navigateToFolder" data-args="${dataArgs([parentPath])}" data-prevent="1"
                class="btn btn-outline btn-sm"
                style="color: white; border-color: rgba(255,255,255,0.4);"
-               title="Go up one level to: ${parentPath || 'Root'}">
+               title="Go up one level to: ${escapeHtml(parentPath) || 'Root'}">
                 <i class="fas fa-level-up-alt"></i> Up
             </a>`;
 
@@ -3150,7 +3222,7 @@ function _createFolderGroupRow(group) {
                 <i class="${icons[group.status] || 'fas fa-folder'}"></i> ${labels[group.status] || group.status}
             </span>
             ${(group.status === 'pending' || group.status === 'scanning') ? `
-                <button class="remove-btn" onclick="_cancelFolderGroup('${group.id}')" title="Remove folder">
+                <button class="remove-btn" data-fn="_cancelFolderGroup" data-args="${dataArgs([group.id])}" title="Remove folder">
                     <i class="fas fa-times"></i>
                 </button>` : ''}
             ${group.status === 'uploading' ? `
@@ -3299,12 +3371,12 @@ function createQueueItemElement(item) {
                         <i class="${statusIcon}"></i> ${statusLabel}
                     </span>
                     ${item.status === 'pending' || item.status === 'error' || item.status === 'cancelled' ? `
-                        <button class="remove-btn" onclick="removeFromQueue('${item.id}')" title="Remove from queue">
+                        <button class="remove-btn" data-fn="removeFromQueue" data-args="${dataArgs([item.id])}" title="Remove from queue">
                             <i class="fas fa-times"></i>
                         </button>
                     ` : ''}
                     ${item.status === 'uploading' ? `
-                        <button class="remove-btn cancel-btn" onclick="cancelUpload('${item.id}')" title="Cancel upload">
+                        <button class="remove-btn cancel-btn" data-fn="cancelUpload" data-args="${dataArgs([item.id])}" title="Cancel upload">
                             <i class="fas fa-ban"></i>
                         </button>
                     ` : ''}
@@ -3526,9 +3598,7 @@ function openFileViewer(itemPath, filename) {
                         <img id="img-conv-result" class="viewer-img"
                              alt="${escapeHtml(filename)}"
                              style="display:none;max-width:100%;max-height:100%;object-fit:contain;transform-origin:center center;"
-                             onerror="document.getElementById('img-conv-label') && (document.getElementById('img-conv-label').textContent='');
-                                      this.style.display='none';
-                                      document.getElementById('img-conv-spinner').innerHTML='<p class=viewer-error>Could not load image.</p>';">
+                             data-fn-error="_handleImgConvError">
                     </div>
                 </div>`;
             _imgStartPreview(itemPath, filename);

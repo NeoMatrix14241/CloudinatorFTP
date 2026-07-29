@@ -37,7 +37,7 @@
                 <span>{{ session.username }}</span>
                 <span class="role-badge role-{{ role }}">{{ role }}</span>
             </div>
-            <a href="{{ url_for('logout') }}" class="logout-btn" onclick="event.preventDefault(); logout();">
+            <a href="{{ url_for('logout') }}" class="logout-btn" data-fn="logout" data-prevent="1">
                 <i class="fas fa-sign-out-alt"></i> Logout
             </a>
         </div>
@@ -49,7 +49,7 @@
         <div class="storage-stats">
             <h4>
                 <i class="fas fa-chart-pie"></i> Storage Information
-                <button id="retryStorageStats" onclick="retryStorageStats()" style="
+                <button id="retryStorageStats" data-fn="retryStorageStats" style="
                     background: rgba(255,255,255,0.1); 
                     border: 1px solid rgba(255,255,255,0.2); 
                     color: white; 
@@ -242,24 +242,24 @@
                 <span id="selectedCount">0</span> item(s) selected
             </div>
             <div class="bulk-buttons">
-                <button class="btn btn-primary btn-sm" id="bulkDownloadBtn" onclick="bulkDownload()">
+                <button class="btn btn-primary btn-sm" id="bulkDownloadBtn" data-fn="bulkDownload">
                     <i class="fas fa-download"></i> Download
                 </button>
                 {% if role == 'readwrite' %}
-                <button class="btn btn-warning btn-sm" onclick="showMoveModal()">
+                <button class="btn btn-warning btn-sm" data-fn="showMoveModal">
                     <i class="fas fa-cut"></i> Move
                 </button>
-                <button class="btn btn-success btn-sm" onclick="showCopyModal()">
+                <button class="btn btn-success btn-sm" data-fn="showCopyModal">
                     <i class="fas fa-copy"></i> Copy
                 </button>
-                <button class="btn btn-primary btn-sm" onclick="showRenameModal()">
+                <button class="btn btn-primary btn-sm" data-fn="showRenameModal">
                     <i class="fas fa-edit"></i> Rename
                 </button>
-                <button class="btn btn-danger btn-sm" onclick="bulkDelete()">
+                <button class="btn btn-danger btn-sm" data-fn="bulkDelete">
                     <i class="fas fa-trash"></i> Delete
                 </button>
                 {% endif %}
-                <button class="btn btn-outline btn-sm" onclick="clearSelection()"
+                <button class="btn btn-outline btn-sm" data-fn="clearSelection"
                     style="color: white; border-color: rgba(255,255,255,0.4);">
                     <i class="fas fa-times"></i> Clear
                 </button>
@@ -283,7 +283,7 @@
                 {% if path and path != '' %}
                 <div class="btn-group" style="display: flex; gap: 5px; flex-shrink: 0;">
                     <!-- Root button with home icon -->
-                    <a href="#" onclick="navigateToFolder(''); return false;" class="btn btn-outline btn-sm"
+                    <a href="#" data-fn="navigateToFolder" data-args='[""]' data-prevent="1" class="btn btn-outline btn-sm"
                         style="color: white; border-color: rgba(255,255,255,0.4);" title="Go to root folder">
                         <i class="fas fa-home"></i> Root
                     </a>
@@ -291,14 +291,14 @@
                     <!-- Up button with level-up icon -->
                     {% if '/' in path %}
                     {% set parent_path = '/'.join(path.split('/')[:-1]) %}
-                    <a href="#" onclick="navigateToFolder('{{ parent_path }}'); return false;"
+                    <a href="#" data-fn="navigateToFolder" data-args='{{ [parent_path] | tojson }}' data-prevent="1"
                         class="btn btn-outline btn-sm" style="color: white; border-color: rgba(255,255,255,0.4);"
                         title="Go up one level to: {{ parent_path or 'Root' }}">
                         <i class="fas fa-level-up-alt"></i> Up
                     </a>
                     {% else %}
                     <!-- If we're only one level deep, up button also goes to root -->
-                    <a href="#" onclick="navigateToFolder(''); return false;" class="btn btn-outline btn-sm"
+                    <a href="#" data-fn="navigateToFolder" data-args='[""]' data-prevent="1" class="btn btn-outline btn-sm"
                         style="color: white; border-color: rgba(255,255,255,0.4);" title="Go up to root folder">
                         <i class="fas fa-level-up-alt"></i> Up
                     </a>
@@ -328,15 +328,15 @@
                         style="position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: rgba(255,255,255,0.6); z-index: 2;"></i>
                     <input type="text" id="tableSearch"
                         placeholder="🔍 Search files and folders (2+ chars for deep search)..."
-                        onkeyup="searchTable(this.value)"
+                        data-fn-keyup="searchTable"
                         title="Type 2 or more characters to search through all nested folders" />
-                    <button id="clearSearch" onclick="clearSearch()"
+                    <button id="clearSearch" data-fn="clearSearch"
                         style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: rgba(255,255,255,0.6); cursor: pointer; display: none;">
                         <i class="fas fa-times"></i>
                     </button>
                 </div>
                 <div class="sort-controls" style="display: flex; gap: 10px; align-items: center;">
-                    <button id="resetSort" onclick="resetSorting()" class="btn btn-outline btn-sm"
+                    <button id="resetSort" data-fn="resetSorting" class="btn btn-outline btn-sm"
                         style="color: white; border-color: rgba(255,255,255,0.4); display: none;"
                         title="Reset sorting to default">
                         <i class="fas fa-undo"></i> Reset Sort
@@ -357,7 +357,7 @@
                     <thead>
                         <tr>
                             <th style="width: 50px;">
-                                <input type="checkbox" id="selectAll" class="file-checkbox" onchange="toggleSelectAll()"
+                                <input type="checkbox" id="selectAll" class="file-checkbox" data-fn-change="toggleSelectAll"
                                     {% if role !='readwrite' and role !='readonly' %} style="visibility:hidden;" {%
                                     endif %}>
                             </th>
@@ -402,7 +402,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h3 class="modal-title" id="modalTitle">Move Items</h3>
-                <button class="modal-close" onclick="closeModal()">&times;</button>
+                <button class="modal-close" data-fn="closeModal">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="form-group">
@@ -421,15 +421,15 @@
                         <!-- Quick Actions -->
                         <div class="browser-actions"
                             style="padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.1);">
-                            <button type="button" class="btn btn-sm btn-outline" onclick="goToRoot()"
+                            <button type="button" class="btn btn-sm btn-outline" data-fn="goToRoot"
                                 style="font-size: 11px; padding: 4px 8px;">
                                 <i class="fas fa-home"></i> Root
                             </button>
-                            <button type="button" class="btn btn-sm btn-outline" onclick="goUpOneLevel()" id="upButton"
+                            <button type="button" class="btn btn-sm btn-outline" data-fn="goUpOneLevel" id="upButton"
                                 style="font-size: 11px; padding: 4px 8px; margin-left: 8px;" disabled>
                                 <i class="fas fa-level-up-alt"></i> Up
                             </button>
-                            <button type="button" class="btn btn-sm btn-success" onclick="createNewFolderInBrowser()"
+                            <button type="button" class="btn btn-sm btn-success" data-fn="createNewFolderInBrowser"
                                 style="font-size: 11px; padding: 4px 8px; margin-left: 8px;">
                                 <i class="fas fa-plus"></i> New Folder
                             </button>
@@ -468,8 +468,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-                <button class="btn btn-primary" id="confirmAction" onclick="confirmMoveOrCopy()">Move</button>
+                <button class="btn btn-outline" data-fn="closeModal">Cancel</button>
+                <button class="btn btn-primary" id="confirmAction" data-fn="confirmMoveOrCopy">Move</button>
             </div>
         </div>
     </div>
@@ -481,7 +481,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h3 class="modal-title">Rename Item</h3>
-                <button class="modal-close" onclick="closeRenameModal()">&times;</button>
+                <button class="modal-close" data-fn="closeRenameModal">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="form-group">
@@ -499,8 +499,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeRenameModal()">Cancel</button>
-                <button class="btn btn-primary" id="confirmRename" onclick="confirmRename()">Rename</button>
+                <button class="btn btn-outline" data-fn="closeRenameModal">Cancel</button>
+                <button class="btn btn-primary" id="confirmRename" data-fn="confirmRename">Rename</button>
             </div>
         </div>
     </div>
@@ -511,14 +511,14 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h3 class="modal-title">Confirm Delete</h3>
-                <button class="modal-close" onclick="closeDeleteModal()">&times;</button>
+                <button class="modal-close" data-fn="closeDeleteModal">&times;</button>
             </div>
             <div class="modal-body">
                 <p id="deleteMessage">Are you sure you want to delete this item?</p>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeDeleteModal()">Cancel</button>
-                <button class="btn btn-danger" id="confirmDelete" onclick="confirmDelete()">Delete</button>
+                <button class="btn btn-outline" data-fn="closeDeleteModal">Cancel</button>
+                <button class="btn btn-danger" id="confirmDelete" data-fn="confirmDelete">Delete</button>
             </div>
         </div>
     </div>
@@ -528,13 +528,13 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h3 class="modal-title" id="notificationTitle">Notification</h3>
-                <button class="modal-close" onclick="closeNotificationModal()">&times;</button>
+                <button class="modal-close" data-fn="closeNotificationModal">&times;</button>
             </div>
             <div class="modal-body">
                 <p id="notificationMessage">Operation completed.</p>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-primary" onclick="closeNotificationModal()">OK</button>
+                <button class="btn btn-primary" data-fn="closeNotificationModal">OK</button>
             </div>
         </div>
     </div>
@@ -544,13 +544,13 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h3 class="modal-title">Connection Speed Test</h3>
-                <button class="modal-close" onclick="closeSpeedTestModal()">&times;</button>
+                <button class="modal-close" data-fn="closeSpeedTestModal">&times;</button>
             </div>
             <div class="modal-body" id="speedTestResults">
                 <p>Testing connection...</p>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeSpeedTestModal()">Close</button>
+                <button class="btn btn-outline" data-fn="closeSpeedTestModal">Close</button>
             </div>
         </div>
     </div>
@@ -560,7 +560,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h2 id="confirmationTitle">Confirm Action</h2>
-                <span class="close" onclick="closeConfirmationModal()">&times;</span>
+                <span class="close" data-fn="closeConfirmationModal">&times;</span>
             </div>
             <div class="modal-body">
                 <div class="confirmation-content">
@@ -573,9 +573,9 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeConfirmationModal()">Cancel</button>
+                <button class="btn btn-outline" data-fn="closeConfirmationModal">Cancel</button>
                 <button id="confirmationConfirmBtn" class="btn btn-primary"
-                    onclick="executeConfirmedAction()">Confirm</button>
+                    data-fn="executeConfirmedAction">Confirm</button>
             </div>
         </div>
     </div>
@@ -591,7 +591,7 @@
                         style="color:white;border-color:rgba(255,255,255,.4);">
                         <i class="fas fa-download"></i>
                     </a>
-                    <button class="modal-close" onclick="closeFileViewer()" title="Close (Esc)">&times;</button>
+                    <button class="modal-close" data-fn="closeFileViewer" title="Close (Esc)">&times;</button>
                 </div>
             </div>
             <div class="modal-body file-viewer-body" id="fileViewerBody"></div>

@@ -914,19 +914,21 @@ def after_request(response):
         "accelerometer=(), fullscreen=(self)"
     )
 
-    # NOTE: index.js currently relies on inline event handler attributes
-    # (onclick=, onerror=, etc.), which need 'unsafe-inline' in script-src to
-    # keep working. This still blocks 3rd-party/injected <script> tags and is
-    # a real improvement over no CSP at all — tightening it further (moving
-    # to addEventListener + a nonce-based CSP) is a good follow-up, not a
-    # blocker for shipping this now.
+    # index.js/index.html no longer use inline event handler attributes
+    # (onclick=, onerror=, etc.) — all of them were converted to a delegated
+    # addEventListener-based dispatcher (see the "data-fn" pattern at the top
+    # of index.js), so 'unsafe-inline' is no longer needed in script-src.
+    # style-src still allows 'unsafe-inline' because a large number of
+    # elements use inline style="..." attributes for one-off layout tweaks;
+    # migrating those to CSS classes is a good follow-up but isn't a
+    # script-execution risk the way 'unsafe-inline' in script-src is.
     # If you disable Cloudflare Web Analytics/RUM in the dashboard (Analytics
     # & Logs → Web Analytics), you can drop the cloudflareinsights.com entry
     # below — it's only here because Cloudflare auto-injects that beacon
     # script into proxied HTML when Web Analytics is turned on.
-    response.headers["Content-Security-Policy"] = (
+    csp = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; "
+        "script-src 'self' https://static.cloudflareinsights.com; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; "
         "media-src 'self' blob:; "
@@ -937,6 +939,44 @@ def after_request(response):
         "frame-ancestors 'none'; "
         "base-uri 'self'"
     )
+
+    # Cross-origin resource-sharing headers that are safe on both HTTP and
+    # HTTPS (they don't force any protocol upgrade). COEP is set to
+    # "credentialless" rather than "require-corp": the app loads a
+    # cross-origin Cloudflare Insights beacon script that doesn't send a
+    # Cross-Origin-Resource-Policy header, so "require-corp" would silently
+    # block it; "credentialless" still isolates the page (strips credentials
+    # from that cross-origin request) without breaking it.
+    response.headers["Cross-Origin-Embedder-Policy"] = "credentialless"
+    response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
+    response.headers["X-DNS-Prefetch-Control"] = "off"
+
+    # These directives/headers only make sense — and are only spec-compliant
+    # — once a browser has actually reached us over HTTPS:
+    #   • "upgrade-insecure-requests" tells the browser to rewrite every
+    #     request (including page navigation) to https://. Sending this on
+    #     a plain-HTTP LAN/localhost connection is actively harmful: the
+    #     browser tries to re-fetch everything as https:// on a port with
+    #     no TLS listener and every asset times out — this is exactly what
+    #     broke direct LAN access. It must only go out on a connection
+    #     that's already HTTPS.
+    #   • Cross-Origin-Opener-Policy is ignored by browsers on insecure
+    #     origins anyway (console warning, harmless), but there's no reason
+    #     to send it there.
+    #   • Origin-Agent-Cluster likewise only makes sense once; toggling it
+    #     on/off across HTTP vs HTTPS visits to the same origin is what
+    #     produced the "previously placed in a site-keyed agent cluster"
+    #     warning — only ever send it on HTTPS so it's consistent.
+    # Uses _request_is_secure() so this also fires correctly behind the
+    # Cloudflare tunnel, which terminates TLS and talks to Flask over plain
+    # HTTP — request.is_secure alone is always False in that setup.
+    if _request_is_secure():
+        csp += "; upgrade-insecure-requests"
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Origin-Agent-Cluster"] = "?1"
+
+    response.headers["Content-Security-Policy"] = csp
 
     # HSTS only makes sense once a browser has actually reached us over
     # HTTPS — sending it over plain http (LAN/localhost) is a no-op per spec,
@@ -1034,6 +1074,11 @@ def logout():
                 "Expires": "0",
             }
         )
+
+        # Tell the browser to wipe cookies/cache/storage for this origin now
+        # that the session is gone, rather than relying solely on cookie
+        # expiry — helps on shared/public machines.
+        response.headers["Clear-Site-Data"] = '"cache", "cookies", "storage"'
 
         return response
     except Exception as e:
