@@ -926,8 +926,13 @@ def after_request(response):
     # & Logs → Web Analytics), you can drop the cloudflareinsights.com entry
     # below — it's only here because Cloudflare auto-injects that beacon
     # script into proxied HTML when Web Analytics is turned on.
+    # default-src 'none' — deny-by-default. Every resource type this app
+    # actually loads is given its own explicit directive below, so nothing
+    # falls back to default-src; anything NOT listed (workers, frames,
+    # manifests, etc.) is now correctly blocked instead of silently
+    # inheriting 'self' from the old default-src 'self'.
     csp = (
-        "default-src 'self'; "
+        "default-src 'none'; "
         "script-src 'self' https://static.cloudflareinsights.com; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; "
@@ -937,6 +942,9 @@ def after_request(response):
         "object-src 'none'; "
         "form-action 'self'; "
         "frame-ancestors 'none'; "
+        "frame-src 'none'; "
+        "worker-src 'none'; "
+        "manifest-src 'none'; "
         "base-uri 'self'"
     )
 
