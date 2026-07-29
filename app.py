@@ -1066,6 +1066,35 @@ def after_request(response):
     # break the rest of the page.
     response.headers["Document-Policy"] = "document-write=?0, sync-xhr=?0"
 
+    # X-XSS-Protection is deprecated (removed from Chrome, never in Firefox)
+    # and superseded by CSP — but explicitly setting it to "0" is still
+    # recommended best practice: it tells any browser that still has the
+    # legacy heuristic XSS auditor to never enable it, closing a known
+    # side-channel some old browsers had where the auditor's own behavior
+    # could leak page content. This is a no-op on modern browsers.
+    response.headers["X-XSS-Protection"] = "0"
+
+    # Integrity-Policy, REPORT-ONLY for now. This does not block anything —
+    # it only reports (via a ReportingObserver in-page, or a Reporting-
+    # Endpoints server if configured) which <script src="..."> tags are
+    # missing a Subresource Integrity `integrity` attribute.
+    #
+    # login.js and 404.js already have integrity attributes (added in
+    # login.html / 404.html). video.js, index.js, and viewer.mjs do NOT yet
+    # — until hashes are added for those three, switching this to the
+    # enforcing "Integrity-Policy" header (not report-only) would block them
+    # from loading and break the main dashboard, video playback, and file
+    # viewer. Do not flip this to enforcing mode until all first-party
+    # <script src> tags across index.html/viewer.html have integrity
+    # attributes computed from the actual deployed file bytes.
+    #
+    # Note: Cloudflare's auto-injected Web Analytics beacon script (see the
+    # script-src CSP comment above) is inserted by Cloudflare's edge after
+    # this response leaves the origin, so it can never carry an integrity
+    # attribute we control — enforcing this policy will always block that
+    # beacon specifically (harmless: it only loses the analytics ping).
+    response.headers["Integrity-Policy-Report-Only"] = "blocked-destinations=(script)"
+
     # These directives/headers only make sense — and are only spec-compliant
     # — once a browser has actually reached us over HTTPS:
     #   • "upgrade-insecure-requests" tells the browser to rewrite every
