@@ -920,9 +920,13 @@ def after_request(response):
     # a real improvement over no CSP at all — tightening it further (moving
     # to addEventListener + a nonce-based CSP) is a good follow-up, not a
     # blocker for shipping this now.
+    # If you disable Cloudflare Web Analytics/RUM in the dashboard (Analytics
+    # & Logs → Web Analytics), you can drop the cloudflareinsights.com entry
+    # below — it's only here because Cloudflare auto-injects that beacon
+    # script into proxied HTML when Web Analytics is turned on.
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; "
         "media-src 'self' blob:; "
