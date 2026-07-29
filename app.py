@@ -342,17 +342,34 @@ def _request_is_secure() -> bool:
     True if this specific request reached us over HTTPS — either directly
     (request.is_secure, e.g. if Flask itself is TLS-terminated) or via a
     reverse proxy/tunnel that terminates TLS and forwards the original
-    scheme in X-Forwarded-Proto (this is what Cloudflare Tunnel does: the
-    browser-to-Cloudflare leg is HTTPS, but cloudflared then talks to this
-    Flask process over plain HTTP, so request.is_secure alone is always
-    False for tunnel traffic without this check).
+    scheme.
 
-    LAN/localhost requests won't have this header at all, so they correctly
+    Two headers are checked because cloudflared (Cloudflare Tunnel) has a
+    known gap where it doesn't reliably set X-Forwarded-Proto when relaying
+    an HTTPS request to a plain http:// local service — but it does
+    consistently send the older CF-Visitor header (JSON, e.g.
+    '{"scheme":"https"}') on every proxied request, tunnel or not. Checking
+    both covers a standard reverse proxy (X-Forwarded-Proto) and Cloudflare
+    specifically (CF-Visitor), whichever is actually present.
+
+    LAN/localhost requests won't carry either header, so they correctly
     fall through to False here — same as before.
     """
     if request.is_secure:
         return True
-    return request.headers.get("X-Forwarded-Proto", "").lower() == "https"
+
+    if request.headers.get("X-Forwarded-Proto", "").lower() == "https":
+        return True
+
+    cf_visitor = request.headers.get("CF-Visitor", "")
+    if cf_visitor:
+        try:
+            if json.loads(cf_visitor).get("scheme") == "https":
+                return True
+        except (ValueError, AttributeError):
+            pass
+
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -884,6 +901,19 @@ def after_request(response):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers.setdefault("Referrer-Policy", "same-origin")
 
+    # Permissions-Policy — deny browser features this app doesn't use.
+    # fullscreen=(self) is kept because the video player (video.js) calls
+    # requestFullscreen(); everything else here (camera, mic, geolocation,
+    # USB, etc.) isn't referenced anywhere in index.js, so it's safe to lock
+    # down. If you add a feature that needs one of these later, it'll be
+    # silently blocked until you add it back here — check this line first
+    # if some future browser API mysteriously stops working.
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=(), "
+        "bluetooth=(), midi=(), magnetometer=(), gyroscope=(), "
+        "accelerometer=(), fullscreen=(self)"
+    )
+
     # NOTE: index.js currently relies on inline event handler attributes
     # (onclick=, onerror=, etc.), which need 'unsafe-inline' in script-src to
     # keep working. This still blocks 3rd-party/injected <script> tags and is
@@ -916,6 +946,16 @@ def after_request(response):
         )
 
     return response
+
+
+@app.route("/debug/headers")
+def _debug_headers():
+    """
+    TEMPORARY — remove after diagnosing the HSTS/X-Forwarded-Proto issue.
+    Shows exactly what headers reached Flask, so we can see what the
+    Cloudflare tunnel actually forwards instead of guessing.
+    """
+    return jsonify(dict(request.headers))
 
 
 @app.route("/login", methods=["GET", "POST"])
