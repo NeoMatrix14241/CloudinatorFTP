@@ -304,6 +304,94 @@ import mimetypes
 mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("text/javascript", ".mjs")
 
+# ---------------------------------------------------------------------------
+# CSP: SHA-256 hashes of every static inline style="..." attribute value used
+# in index.html / viewer.html. These let the CSP allow exactly these inline
+# styles via style-src-attr 'unsafe-hashes' instead of a blanket
+# style-src 'unsafe-inline', which would let an attacker inject arbitrary
+# styles anywhere on the page.
+#
+# All 64 inline style="..." occurrences (54 unique values) in this project
+# are static markup — none are built from Jinja variables — so a fixed hash
+# list is safe and won't go stale from templating. If you add a NEW inline
+# style="..." attribute to index.html or viewer.html later, that new value's
+# hash won't be in this list and the browser will silently drop that one
+# style (console will show a CSP violation) until you regenerate this list:
+#
+#   python3 -c "
+#   import re, hashlib, base64, html
+#   values = set()
+#   for f in ['templates/index.html', 'templates/viewer.html']:
+#       content = open(f, encoding='utf-8').read()
+#       for m in re.finditer(r'style=\"([^\"]*)\"', content):
+#           values.add(html.unescape(m.group(1)))
+#   for v in sorted(values):
+#       print(f\"'sha256-{base64.b64encode(hashlib.sha256(v.encode()).digest()).decode()}'\")"
+#
+# Caveat: style-src-attr / 'unsafe-hashes' is CSP Level 3. Safari does not
+# support it (as of this writing), so Safari visitors will lose the styling
+# from these specific inline style="..." attributes (external stylesheets
+# and JS-driven element.style.x = ... assignments are unaffected — those
+# aren't governed by style-src at all). If Safari support matters for your
+# users, keeping 'unsafe-inline' in style-src is the safer tradeoff; this
+# hash-based approach was chosen to satisfy stricter CSP scanners instead.
+_INLINE_STYLE_HASHES = (
+    "'sha256-r25i9SQ35Us6nTLoruoxJdALlPTTv/IeeORrrrUzRK0=' "
+    "'sha256-7qyL3LD+dxC9gI5qIgfX5v6DokFCI42AWnxZkoBGoT8=' "
+    "'sha256-lcVB6kHisHNwCdUxsNEKDJjPp8hGNXNYnL20Eae5DE8=' "
+    "'sha256-WZdhx2SzCX7zHovuZ2+a+y8sBj45N4TBgSfQl4A1nv4=' "
+    "'sha256-+AaOZzK2E+0J9BbQSRH8mwtk1I5TAc2NnSTpTzZflJc=' "
+    "'sha256-LcyIb7dElRXQXxwxDtvfz0XyjJ6U40EGOE9MBj5ibbk=' "
+    "'sha256-/I1tLJ54rW9hhBM7nVdm/+4XIUvJo9X00wYfoJpcF70=' "
+    "'sha256-KQf6ggmn2qCLLXaSRHavuYMzHWy2sEXNC7KomW10Xmg=' "
+    "'sha256-F9baujUqeoDKfQ2dnPlvbJpJVJjDkNv1WipKtex8yow=' "
+    "'sha256-oUGuUZBJIQ6iW5Js4a/fNu+hp3aMVpsZ6jIlzeAWEhA=' "
+    "'sha256-TyteffVsWq8HgF3YOUegwJYLyMFy9X0pRNsweUCPsf8=' "
+    "'sha256-b0KlPu3vzU/LeqsQ2vQlpPHnvV8e7DPtVmI9IppmnNI=' "
+    "'sha256-8BWaAeutIg45vhjU2Q8adJtqk9zxc15uJTfhv0NbgmE=' "
+    "'sha256-eccAHNSQBqfYKUDNYg+py0npHiEOfCamlATU/WMib7g=' "
+    "'sha256-svGi/Rg7zp3nJoJ4EAur17MxP9/qV5MVttrA45GLwoA=' "
+    "'sha256-2AwsEeLaV/IHpjORhXy1GnsX6OpjpfE9PlICcaDnj4o=' "
+    "'sha256-Jr2IPEfvhF4Z7LjqMw2sFBG2/BwyPNgH8hS4j0Kze5I=' "
+    "'sha256-fA+Gq1RWMzVOfRLxqhYDHEkv5mTE5Id9hCuHr3/ce8A=' "
+    "'sha256-WmToIF8dN+S5QYolwfgz3rotAhNTqLEmasXInTk6yUU=' "
+    "'sha256-5ERFXPrSxchg3KuJXIpJTfCwXYp8Udn8uBU0sVZlBEg=' "
+    "'sha256-zAU6mrv49LKwzXbaX+F7ErY4UEN2/ilHbUI4KQIlJdU=' "
+    "'sha256-3r77NK4Z6ydai56SDVy2UjE8tYqRtg3Y8PXTgBXBxLc=' "
+    "'sha256-WsTfWDCxyLzkwCtut0G153S6hCsL0+VfSoP1Yy5y8gc=' "
+    "'sha256-biLFinpqYMtWHmXfkA1BPeCY0/fNt46SAZ+BBk5YUog=' "
+    "'sha256-Ir6vChCKDg9/KP2U0WQWMrI4gEO4309XI0EaCayJ4pQ=' "
+    "'sha256-d9z+KPOVMxq/Q8Z6EynnUHayoo0Sgsl++YwXz2m9fhE=' "
+    "'sha256-BZI1PyuIrR4tIdThQfv9GHre/Yb+0/R8G1eOMAY8vMA=' "
+    "'sha256-ptz686Se/XUHh8rTUDuU0PKUL0yRbmldDI8LOodc+wI=' "
+    "'sha256-EZPzprA/HrmKtEbD+m6ZBGfpZbBDUwGAJh40N1DipZQ=' "
+    "'sha256-ftJpBGmPKfbqF83L7HADfWrZMnpFDzdrY1ghf43/aRU=' "
+    "'sha256-TLgbjUSdbVy121inPSsUxeepzRSqJfJOYQ0P9OLjteI=' "
+    "'sha256-9ieazHMmP+99mDOeave9ALQe2O8uPGlsKcqlRN1xtOE=' "
+    "'sha256-Mt3avz3KEd+SxFidm0UOgsfssJDbaOujfkFMq66pNqc=' "
+    "'sha256-vbLE+aj1FSX0spELBkZ2qQ94bfBF3zBm75zeVBRN7+8=' "
+    "'sha256-mv2rrMvJiTh0L/lqG+mZqvQZ2GgpXYbGy9jzuKMDNTo=' "
+    "'sha256-aTdbQRvGP3e1XeBg8FHyuGxs78AI4gRBrp4RCtQpQfY=' "
+    "'sha256-z46HxwBCCFGlAwyXLabnKjm6W3M7UDQA5YHmTx0uquQ=' "
+    "'sha256-XIqgIHk7Mx0cuILsJ4+dn+7fegyo4mTxteDunEm4OWQ=' "
+    "'sha256-HySlaiiEGO7UC7rouq09dSadbB3Pg5auhHorOP7OMLE=' "
+    "'sha256-t010gU9hvVxsqH9ewxs6l8tQm5Ez5ZlhBmSv99ZfNjA=' "
+    "'sha256-IiOeKVA1QyGLALmp1a5dbKwoEyk7LHAmM5+L4p42aig=' "
+    "'sha256-lvfRQFIMq67Ovx/BSkYt8qws5JmtbECZNtU4PUq4h4k=' "
+    "'sha256-4u26w655+v9v24iVFEIM1kaU764K4ku3lzXesOCCJ7I=' "
+    "'sha256-vkCRP7LPuAarIz51OTF9l5kYQMqDY7AFk8PeF46IRCQ=' "
+    "'sha256-qQUBUjasnJdhrNlgzajDJnnOf9HGERy1tkajP7dru0c=' "
+    "'sha256-UC/rPT8ePS0krShMIz91SpGDtU2xAAufG2ZQqsj3KmI=' "
+    "'sha256-zdQPf5K78OGn8y4CK9yFtqUgByZwmgIRi9mvc6tb49I=' "
+    "'sha256-wCFZAa1dZsiggSbcMIW5aFunC9l1v0s7qIGBHUVldWs=' "
+    "'sha256-CQ7MRS85HJMXW3YxOGAZvjnkdGZwr8MGmR6V1pjpQDM=' "
+    "'sha256-PH0DEd1b/ScTdFgwQurj1qsz8izmFSVJPv7y3x4fIzE=' "
+    "'sha256-MFnzbRN2ummEtLbjqVmAx9EZ36GDgHykzBkkjODUur8=' "
+    "'sha256-tLhJLdhP/19dgmpWYiz9xIF+DCqxjOgU8dXIGTdF3Wg=' "
+    "'sha256-NjYDAvf3Yswi9GqXn8q5mE3okYa3Q4PuzJ0DkAhe4yQ=' "
+    "'sha256-r+kKTo91UeZ8VS1VQWyNsdB9Zi5TaQKG9Dg7TBeSY/w='"
+)
+
 app = Flask(__name__)
 
 # ---------------------------------------------------------------------------
@@ -918,10 +1006,9 @@ def after_request(response):
     # (onclick=, onerror=, etc.) — all of them were converted to a delegated
     # addEventListener-based dispatcher (see the "data-fn" pattern at the top
     # of index.js), so 'unsafe-inline' is no longer needed in script-src.
-    # style-src still allows 'unsafe-inline' because a large number of
-    # elements use inline style="..." attributes for one-off layout tweaks;
-    # migrating those to CSS classes is a good follow-up but isn't a
-    # script-execution risk the way 'unsafe-inline' in script-src is.
+    # style-src no longer uses 'unsafe-inline' either — see
+    # _INLINE_STYLE_HASHES above for the hash-based allow-list approach and
+    # its Safari caveat.
     # If you disable Cloudflare Web Analytics/RUM in the dashboard (Analytics
     # & Logs → Web Analytics), you can drop the cloudflareinsights.com entry
     # below — it's only here because Cloudflare auto-injects that beacon
@@ -934,7 +1021,18 @@ def after_request(response):
     csp = (
         "default-src 'none'; "
         "script-src 'self' https://static.cloudflareinsights.com; "
-        "style-src 'self' 'unsafe-inline'; "
+        # style-src is the fallback for browsers that don't understand
+        # style-src-elem/style-src-attr (CSP3). No 'unsafe-inline' here —
+        # those older browsers will load external stylesheets fine but will
+        # NOT apply the inline style="..." attributes below.
+        "style-src 'self'; "
+        # <link rel="stylesheet"> / <style> elements — just 'self', no
+        # inline <style> blocks exist in this project.
+        "style-src-elem 'self'; "
+        # Exact allow-list of this project's static inline style="..."
+        # attribute values (see _INLINE_STYLE_HASHES above for regeneration
+        # instructions and the Safari-support caveat).
+        f"style-src-attr 'unsafe-hashes' {_INLINE_STYLE_HASHES}; "
         "img-src 'self' data: blob:; "
         "media-src 'self' blob:; "
         "connect-src 'self'; "
