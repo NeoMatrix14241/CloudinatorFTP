@@ -21,3 +21,4 @@ psutil<8
 pynacl<2
 pyppmd<2
 impacket<1
+flask-wtf<2

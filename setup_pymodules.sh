@@ -10,6 +10,7 @@ CONSTRAINTS="constraints.txt"
 packages=(
     Flask
     flask-cors
+    flask-wtf
     bcrypt
     zipstream-new
     Werkzeug

@@ -305,8 +305,58 @@ mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("text/javascript", ".mjs")
 
 app = Flask(__name__)
-CORS(app)
+
+# ---------------------------------------------------------------------------
+# CORS allowlist — localhost, any private LAN address, and your public domain.
+# Wildcard "*" (the old `CORS(app)` default) let ANY website read responses
+# from your unauthenticated endpoints. This regex instead only allows origins
+# that are actually you: localhost/127.0.0.1 (any port), RFC1918 LAN ranges
+# (any port), and CLOUDINATOR_PUBLIC_DOMAIN if you set that env var.
+#
+# Set CLOUDINATOR_PUBLIC_DOMAIN=cloudinator.site (no scheme) if you serve
+# through a domain/tunnel. Leave unset and only localhost/LAN are allowed.
+# ---------------------------------------------------------------------------
+_PUBLIC_DOMAIN = os.environ.get("CLOUDINATOR_PUBLIC_DOMAIN", "").strip()
+
+_CORS_ORIGIN_PATTERNS = [
+    r"^https?://localhost(:\d+)?$",
+    r"^https?://127\.0\.0\.1(:\d+)?$",
+    r"^https?://10(\.\d{1,3}){3}(:\d+)?$",
+    r"^https?://172\.(1[6-9]|2\d|3[0-1])(\.\d{1,3}){2}(:\d+)?$",
+    r"^https?://192\.168(\.\d{1,3}){2}(:\d+)?$",
+]
+if _PUBLIC_DOMAIN:
+    _CORS_ORIGIN_PATTERNS.append(rf"^https://{re.escape(_PUBLIC_DOMAIN)}$")
+
+CORS(
+    app,
+    resources={r"/*": {"origins": [re.compile(p) for p in _CORS_ORIGIN_PATTERNS]}},
+    supports_credentials=True,
+)
+
 app.secret_key = SESSION_SECRET
+
+# ---------------------------------------------------------------------------
+# Dynamic "Secure" cookie flag — works over plain HTTP on localhost/LAN AND
+# over HTTPS on the public domain, from the same running server.
+#
+# Flask's SESSION_COOKIE_SECURE is normally a static True/False, which can't
+# satisfy both cases at once: True would stop the cookie being sent at all
+# over LAN http://, and False would leave it sendable over http on the public
+# domain. Overriding get_cookie_secure() makes the flag follow each request:
+# secure when the browser actually connected over HTTPS, not secure when it
+# didn't (LAN/localhost). request.is_secure also respects X-Forwarded-Proto
+# when running behind a proxy/tunnel that sets it.
+# ---------------------------------------------------------------------------
+from flask.sessions import SecureCookieSessionInterface
+
+
+class _DynamicSecureSessionInterface(SecureCookieSessionInterface):
+    def get_cookie_secure(self, app):
+        return request.is_secure
+
+
+app.session_interface = _DynamicSecureSessionInterface()
 
 # Configure session handling.
 # PERMANENT_SESSION_LIFETIME now comes from config.py (single source of truth —
@@ -314,11 +364,21 @@ app.secret_key = SESSION_SECRET
 # so the setup wizard's "session timeout" prompt didn't actually do anything).
 app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_HTTPONLY=True,  # explicit; JS never needs to read this cookie
     PERMANENT_SESSION_LIFETIME=PERMANENT_SESSION_LIFETIME,
     SESSION_REFRESH_EACH_REQUEST=True,  # cookie expiry slides forward on every request
     SESSION_COOKIE_NAME="cloudinator_session",
     MAX_CONTENT_LENGTH=MAX_CONTENT_LENGTH,  # now actually enforced by Flask, was previously unset
+    WTF_CSRF_HEADERS=["X-CSRFToken", "X-CSRF-Token"],
+    WTF_CSRF_TIME_LIMIT=None,  # tied to session lifetime instead of its own expiry
 )
+
+# CSRF protection for every state-changing request (POST/PUT/PATCH/DELETE).
+# The frontend needs to send the token as either a hidden form field
+# ("csrf_token") or the "X-CSRFToken" header — see index.js/login.html patches.
+from flask_wtf import CSRFProtect
+
+csrf = CSRFProtect(app)
 
 
 def _trigger_reconcile(settle=False):
@@ -393,7 +453,17 @@ def validate_session():
 
     # Check if user is logged in
     if not session.get("logged_in"):
-        session.clear()
+        # Only clear if the session is carrying stale auth remnants
+        # (e.g. a half-expired login). Don't clear a genuinely anonymous
+        # session just because it's anonymous — it may hold nothing but a
+        # freshly-issued CSRF token for a login page open in another
+        # request/tab. Clearing it here deletes/regenerates that cookie,
+        # which then no longer matches the token baked into the login
+        # form the user is about to submit ("CSRF tokens do not match")
+        # — triggered by something as innocuous as the browser's automatic
+        # /favicon.ico request racing the login page load.
+        if session.get("username") or session.get("server_token"):
+            session.clear()
         return redirect(url_for("login"))
 
     # Verify the account still exists in users.json.
@@ -764,7 +834,7 @@ def before_request():
 def after_request(response):
     """Add security headers to all responses"""
     # Add cache control headers to authenticated pages
-    if request.endpoint and request.endpoint not in ["login", "static"]:
+    if request.endpoint and request.endpoint not in ["static"]:
         # Check if this is an authenticated route
         if is_logged_in() or request.endpoint in [
             "index",
@@ -775,6 +845,50 @@ def after_request(response):
             response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
+
+        # /login always gets no-store too, even though it's pre-auth: the
+        # page embeds a per-session CSRF token, so any CDN/proxy/browser
+        # cache serving back a stale copy hands out a token that no longer
+        # matches the visitor's actual session — causing exactly the
+        # "CSRF tokens do not match" error, not a security hole by itself,
+        # but a confusing false failure for real users.
+        if request.endpoint == "login":
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+
+    # ── Security headers — applied to every response, on localhost, LAN, ──
+    # and the public domain alike. These are all response headers Flask
+    # controls directly, so they work no matter how the request reached us.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+
+    # NOTE: index.js currently relies on inline event handler attributes
+    # (onclick=, onerror=, etc.), which need 'unsafe-inline' in script-src to
+    # keep working. This still blocks 3rd-party/injected <script> tags and is
+    # a real improvement over no CSP at all — tightening it further (moving
+    # to addEventListener + a nonce-based CSP) is a good follow-up, not a
+    # blocker for shipping this now.
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; "
+        "media-src 'self' blob:; "
+        "connect-src 'self'; "
+        "font-src 'self'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'"
+    )
+
+    # HSTS only makes sense once a browser has actually reached us over
+    # HTTPS — sending it over plain http (LAN/localhost) is a no-op per spec,
+    # but we gate it explicitly so it's never sent on an insecure connection.
+    if request.is_secure:
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
 
     return response
 

@@ -1,3 +1,47 @@
+// ---------------------------------------------------------------------------
+// CSRF token injection for every fetch() call in this file.
+// Rather than touching all 50+ call sites individually, wrap window.fetch
+// once: any same-origin request using a state-changing method (POST, PUT,
+// PATCH, DELETE) automatically gets the X-CSRFToken header attached, read
+// from the <meta name="csrf-token"> tag Flask renders into the page.
+// GET/HEAD requests and cross-origin requests are left untouched.
+// ---------------------------------------------------------------------------
+(function () {
+    const _origFetch = window.fetch.bind(window);
+    const STATE_CHANGING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+    function getCsrfToken() {
+        const meta = document.querySelector('meta[name="csrf-token"]');
+        return meta ? meta.getAttribute('content') : null;
+    }
+
+    function isSameOrigin(url) {
+        try {
+            return new URL(url, window.location.href).origin === window.location.origin;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    window.fetch = function (input, init) {
+        init = init || {};
+        const method = (init.method || (input && input.method) || 'GET').toUpperCase();
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+
+        if (STATE_CHANGING.has(method) && isSameOrigin(url)) {
+            const token = getCsrfToken();
+            if (token) {
+                const headers = new Headers(init.headers || (input && input.headers) || {});
+                if (!headers.has('X-CSRFToken')) {
+                    headers.set('X-CSRFToken', token);
+                }
+                init = Object.assign({}, init, { headers });
+            }
+        }
+        return _origFetch(input, init);
+    };
+})();
+
 // Read Flask configuration from HTML data attributes (avoids VS Code parsing issues)
 const configElement = document.getElementById('flask-config');
 const CHUNK_SIZE = parseInt(configElement.dataset.chunkSize) || 10485760; // 10MB fallback
@@ -6016,6 +6060,8 @@ function xhrUpload(url, formData, { signal, onProgress } = {}) {
 
         const xhr = new XMLHttpRequest();
         xhr.open('POST', url);
+        const _csrfMeta = document.querySelector('meta[name="csrf-token"]');
+        if (_csrfMeta) xhr.setRequestHeader('X-CSRFToken', _csrfMeta.getAttribute('content'));
 
         let abortHandler;
         if (signal) {
