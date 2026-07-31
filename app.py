@@ -1169,7 +1169,7 @@ def after_request(response):
     # inheriting 'self' from the old default-src 'self'.
     csp = (
         "default-src 'none'; "
-        "script-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; "
         # style-src is the fallback for browsers that don't understand
         # style-src-elem/style-src-attr (CSP3). No 'unsafe-inline' here —
         # those older browsers will load external stylesheets fine but will
