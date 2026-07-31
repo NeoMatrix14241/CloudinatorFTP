@@ -1332,6 +1332,124 @@ i.fa-file {
     margin-top: 4px;
 }
 
+/* ------------------------------------------------------------------ */
+/* Share links — per-item share modal + admin "revoke all" confirmation */
+/* ------------------------------------------------------------------ */
+
+.share-bulk-controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.share-item-row {
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.share-item-row:last-child {
+    margin-bottom: 0;
+}
+
+.share-item-row-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.share-item-name {
+    color: #fff;
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.share-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 13px;
+    flex-shrink: 0;
+    cursor: pointer;
+    user-select: none;
+}
+
+.share-toggle input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.share-link-row {
+    display: none;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.share-modal-hint {
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 12px;
+    margin-top: 10px;
+    display: block;
+}
+
+.revoke-all-count-text {
+    color: #fff;
+}
+
+.revoke-all-subtext {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.revoke-all-error {
+    color: #e74c3c;
+    font-size: 13px;
+    display: none;
+}
+
+.share-link-input {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    font-family: 'Courier New', monospace;
+    padding: 7px 10px;
+}
+
+.share-status-loading {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.55);
+    margin-top: 6px;
+}
+
+.confirm-code-display {
+    font-family: 'Courier New', monospace;
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: 6px;
+    text-align: center;
+    color: #fff;
+    background: rgba(231, 76, 60, 0.15);
+    border: 1px solid rgba(231, 76, 60, 0.4);
+    border-radius: 8px;
+    padding: 14px 10px;
+    margin: 14px 0;
+    user-select: all;
+}
+
+#revokeAllSharesInput {
+    font-family: 'Courier New', monospace;
+    letter-spacing: 2px;
+}
+
 /* Folder Browser Styles */
 .folder-browser {
     background: rgba(255, 255, 255, 0.07);
@@ -3742,6 +3860,34 @@ td .fa-file {
     background: rgba(255, 255, 255, 0.02) !important;
 }
 
+.empty-folder-cell {
+    text-align: center;
+    padding: 40px 20px;
+    color: white;
+}
+
+.empty-folder-content {
+    opacity: 0.6;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.empty-folder-icon {
+    font-size: 48px;
+    margin-bottom: 15px;
+}
+
+.empty-folder-title {
+    font-size: 16px;
+    font-weight: 500;
+    margin-bottom: 5px;
+}
+
+.empty-folder-subtitle {
+    font-size: 13px;
+}
+
 /* Search input styling */
 #tableSearch {
     width: 100% !important;
@@ -4595,6 +4741,50 @@ td .fa-file {
     margin: 0;
 }
 
+.pptx-indent-1 {
+    padding-left: 22px;
+}
+
+.pptx-indent-2 {
+    padding-left: 44px;
+}
+
+.pptx-indent-3 {
+    padding-left: 66px;
+}
+
+.pptx-indent-4 {
+    padding-left: 88px;
+}
+
+.pptx-indent-5 {
+    padding-left: 110px;
+}
+
+.pptx-indent-6 {
+    padding-left: 132px;
+}
+
+.pptx-indent-7 {
+    padding-left: 154px;
+}
+
+.pptx-indent-8 {
+    padding-left: 176px;
+}
+
+.conflict-icon-dir {
+    color: #f39c12;
+    font-size: 0.9em;
+    flex-shrink: 0;
+}
+
+.conflict-icon-file {
+    color: #3498db;
+    font-size: 0.9em;
+    flex-shrink: 0;
+}
+
 .pptx-empty {
     text-align: center;
     color: #aaa;
@@ -4685,6 +4875,26 @@ td .fa-file {
     letter-spacing: 0.06em;
     color: #fff;
     text-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+}
+
+.archive-type-badge-zip {
+    background: #e67e22;
+}
+
+.archive-type-badge-rar {
+    background: #8e44ad;
+}
+
+.archive-type-badge-7z {
+    background: #2980b9;
+}
+
+.archive-type-badge-tar {
+    background: #27ae60;
+}
+
+.archive-type-badge-default {
+    background: #555;
 }
 
 .archive-stat {

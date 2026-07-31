@@ -1,0 +1,102 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    color: #fff;
+    padding: 20px;
+}
+
+.card {
+    width: 100%;
+    max-width: 440px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 16px;
+    padding: 36px 30px;
+    text-align: center;
+    backdrop-filter: blur(10px);
+}
+
+.icon-circle {
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
+    background: rgba(52, 152, 219, 0.18);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 20px;
+    font-size: 32px;
+    color: #3498db;
+}
+
+.icon-circle.error {
+    background: rgba(231, 76, 60, 0.18);
+    color: #e74c3c;
+}
+
+h1 {
+    font-size: 19px;
+    font-weight: 600;
+    margin: 0 0 6px;
+    word-break: break-word;
+}
+
+.meta {
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 13px;
+    margin: 0 0 26px;
+}
+
+p.desc {
+    color: rgba(255, 255, 255, 0.65);
+    font-size: 14px;
+    line-height: 1.6;
+    margin: 0 0 24px;
+}
+
+.btn-download {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 13px 20px;
+    border-radius: 10px;
+    background: #3498db;
+    color: #fff;
+    text-decoration: none;
+    font-size: 15px;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.btn-download:hover {
+    background: #2f87c4;
+}
+
+.btn-download i {
+    font-size: 15px;
+}
+
+.footer-note {
+    margin-top: 24px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.35);
+}
+
+.truncated-note {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.4);
+    margin-top: 10px;
+}

@@ -706,8 +706,9 @@ cmd_menu() {
         echo "  13) reset_db.py         — Reset database"
         echo "  14) setup_storage.py    — Configure storage"
         echo "  15) setup_pymodules.sh  — Setup and Update Python packages"
+        echo "  16) revoke_sharing.py   — List/revoke share links"
         if is_termux; then
-            echo "  16) termux_setup.sh    — Termux initial setup (Android only)"
+            echo "  17) termux_setup.sh    — Termux initial setup (Android only)"
         fi
         echo ""
         echo "   q) Quit"
@@ -742,7 +743,8 @@ cmd_menu() {
             13) run_utility "reset_db.py" || true ;;
             14) run_utility "setup_storage.py" || true ;;
             15) cmd_setup_modules || true ;;
-            16) cmd_termux_setup || true ;;
+            16) run_utility "revoke_sharing.py" || true ;;
+            17) cmd_termux_setup || true ;;
             q|Q) echo ""; success "Goodbye!"; exit 0 ;;
             *) warn "Invalid option: ${choice}" ;;
         esac
@@ -781,6 +783,7 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
   reset-db              python reset_db.py
   setup-storage         python setup_storage.py
   update-modules        bash setup_pymodules.sh
+  revoke-shares          python revoke_sharing.py [list|revoke <token>|revoke-path <path>|revoke-all]
   termux-setup          bash termux_setup.sh  (Android/Termux only)
 
 ${BOLD}OTHER${NC}
@@ -793,6 +796,7 @@ ${BOLD}EXAMPLES${NC}
   ./manage.sh manage-users       # run tool while server is still up
   ./manage.sh logs server -f     # follow live output; Ctrl-C to detach only
   ./manage.sh clean-logs         # delete old log files
+  ./manage.sh revoke-shares list # list active share links
   ./manage.sh stop               # gracefully stop the server
   ./manage.sh menu               # interactive mode
 
@@ -834,6 +838,7 @@ main() {
         reset-db)       run_utility "reset_db.py" "$@" ;;
         setup-storage)  run_utility "setup_storage.py" "$@" ;;
         setup-modules) cmd_setup_modules ;;
+        revoke-shares)  run_utility "revoke_sharing.py" "$@" ;;
         termux-setup)   cmd_termux_setup ;;
         menu)           cmd_menu ;;
         dashboard)      cmd_dashboard ;;

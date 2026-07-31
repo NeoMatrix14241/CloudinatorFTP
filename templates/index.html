@@ -258,6 +258,9 @@
                 <button class="btn btn-danger btn-sm" data-fn="bulkDelete">
                     <i class="fas fa-trash"></i> Delete
                 </button>
+                <button class="btn btn-primary btn-sm" data-fn="showBulkShareModal">
+                    <i class="fas fa-share-nodes"></i> Share
+                </button>
                 {% endif %}
                 <button class="btn btn-outline btn-sm" data-fn="clearSelection"
                     style="color: white; border-color: rgba(255,255,255,0.4);">
@@ -554,6 +557,62 @@
             </div>
         </div>
     </div>
+
+    <!-- Share Modal -->
+    {% if role == 'readwrite' %}
+    <div id="shareModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title" id="shareModalTitle">Share Item</h3>
+                <button class="modal-close" data-fn="closeShareModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="shareModalItems">
+                    <!-- One row per item (single item = one row, bulk = many) populated by JS -->
+                </div>
+                <small class="share-modal-hint">
+                    <i class="fas fa-info-circle"></i>
+                    Anyone with a share link can download that item without logging in. Revoke a link any time to
+                    disable it immediately.
+                </small>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" data-fn="closeShareModal">Close</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Revoke ALL Shares Modal (admin) -->
+    {% if role == 'readwrite' %}
+    <div id="revokeAllSharesModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title"><i class="fas fa-ban"></i> Revoke All Shared Links</h3>
+                <button class="modal-close" data-fn="closeRevokeAllSharesModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="revokeAllSharesCount" class="revoke-all-count-text">This will revoke every currently active share
+                    link.</p>
+                <p class="revoke-all-subtext">To confirm, type the code shown below exactly. A new code is
+                    generated every attempt.</p>
+                <div class="confirm-code-display" id="revokeAllSharesCode">----------</div>
+                <div class="form-group">
+                    <label for="revokeAllSharesInput">Type the code above:</label>
+                    <input type="text" id="revokeAllSharesInput" class="form-control" autocomplete="off"
+                        placeholder="Enter the 10-digit code">
+                </div>
+                <div id="revokeAllSharesError" class="revoke-all-error"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" data-fn="closeRevokeAllSharesModal">Cancel</button>
+                <button class="btn btn-danger" id="confirmRevokeAllShares" data-fn="confirmRevokeAllShares">
+                    <i class="fas fa-ban"></i> Revoke All
+                </button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
 
     <!-- Confirmation Modal -->
     <div id="confirmationModal" class="modal">
