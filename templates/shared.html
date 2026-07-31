@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>{% if valid %}{{ name }} — Shared File{% else %}Link Not Available{% endif %} — Cloudinator FTP</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/shared.css') }}">
+</head>
+
+<body>
+    <div class="card">
+        {% if valid %}
+        <div class="icon-circle">
+            <i class="fas {{ 'fa-folder' if is_dir else 'fa-file' }}"></i>
+        </div>
+        <h1>{{ name }}</h1>
+        <p class="meta">
+            {{ size_display }}{% if size_truncated %}+{% endif %}
+            {% if is_dir %} · folder (downloads as .zip){% endif %}
+        </p>
+        <a class="btn-download" href="{{ url_for('shared_file_download', token=token) }}">
+            <i class="fas fa-download"></i> Download
+        </a>
+        {% if size_truncated %}
+        <p class="truncated-note">This folder is large — size shown is a lower bound.</p>
+        {% endif %}
+        {% else %}
+        <div class="icon-circle error">
+            <i class="fas fa-link-slash"></i>
+        </div>
+        <h1>Link Not Available</h1>
+        <p class="desc">
+            This share link doesn't exist, has expired, or was revoked by its owner.
+            Ask them to send a new link if you still need this file.
+        </p>
+        {% endif %}
+        <div class="footer-note">Shared via Cloudinator FTP</div>
+    </div>
+</body>
+
+</html>

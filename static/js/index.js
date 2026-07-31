@@ -1845,11 +1845,11 @@ function createEmptyFolderRow() {
     const row = document.createElement('tr');
     row.className = 'empty-folder-row';
     row.innerHTML = `
-        <td colspan="6" style="text-align: center; padding: 40px 20px; color: white;">
-            <div style="opacity: 0.6; display: flex; flex-direction: column; align-items: center;">
-                <i class="fas fa-folder-open" style="font-size: 48px; margin-bottom: 15px;"></i>
-                <div style="font-size: 16px; font-weight: 500; margin-bottom: 5px;">This folder is empty</div>
-                <div style="font-size: 13px;">No files or folders to display</div>
+        <td colspan="6" class="empty-folder-cell">
+            <div class="empty-folder-content">
+                <i class="fas fa-folder-open empty-folder-icon"></i>
+                <div class="empty-folder-title">This folder is empty</div>
+                <div class="empty-folder-subtitle">No files or folders to display</div>
             </div>
         </td>
     `;
@@ -1887,7 +1887,7 @@ function createFileTableRow(item, currentPath) {
                         data-folder-path="${escapeHtml(itemPath)}" class="folder-link">
                          ${safeName}
                      </a>` :
-            `<i class="${itemIcon} file-icon file-icon-default" style="color: ${getFileColor(item.name)}"></i>
+            `<i class="${itemIcon} file-icon file-icon-default"></i>
                      ${safeName}${getViewerType(item.name) ? ` <button type="button" class="btn-eye-view" data-fn="openFileViewer" data-args="${dataArgs([itemPath, item.name])}" data-stop="1" title="Preview"><i class="fas fa-eye"></i></button>` : ''}`
         }
             </div>
@@ -1955,6 +1955,15 @@ function createFileTableRow(item, currentPath) {
                         title="Rename">
                     <i class="fas fa-edit"></i>
                 </button>
+
+                <button type="button" class="btn btn-outline btn-sm share-btn" 
+                        data-item-name="${item.name}"
+                        data-item-path="${itemPath}"
+                        data-label="Share"
+                        data-fn="showSingleShareModal" data-args="${dataArgs([itemPath, item.name, !!item.is_dir])}"
+                        title="Share">
+                    <i class="fas fa-share-nodes"></i>
+                </button>
                 
                 <button type="button" class="btn btn-danger btn-sm delete-btn" 
                         data-item-name="${item.name}"
@@ -1970,6 +1979,12 @@ function createFileTableRow(item, currentPath) {
     `;
 
     applyColumnWidths(row);
+
+    if (!item.is_dir) {
+        const iconEl = row.querySelector('.file-icon-default');
+        if (iconEl) iconEl.style.color = getFileColor(item.name);
+    }
+
     return row;
 }
 
@@ -3213,7 +3228,7 @@ function _createFolderGroupRow(group) {
         </div>
         <div class="file-status">
             ${group.status === 'uploading'
-            ? `<div class="progress-bar-small"><div class="progress-fill-small fg-bar" style="width:${pct}%"></div></div>`
+            ? `<div class="progress-bar-small"><div class="progress-fill-small fg-bar"></div></div>`
             : ''}
             ${group.status === 'scanning'
             ? `<div class="progress-bar-small"><div class="progress-fill-small" style="width:100%;background:#f39c12;animation:pulse 1s infinite;"></div></div>`
@@ -3230,6 +3245,12 @@ function _createFolderGroupRow(group) {
                     <i class="fas fa-ban"></i>
                 </button>` : ''}
         </div>`;
+
+    if (group.status === 'uploading') {
+        const barEl = div.querySelector('.fg-bar');
+        if (barEl) barEl.style.width = pct + '%';
+    }
+
     return div;
 }
 
@@ -3344,7 +3365,7 @@ function createQueueItemElement(item) {
 
     div.innerHTML = `
                 <div class="file-info">
-                    <i class="${getFileIcon(item.name)}" style="color: ${getFileColor(item.name)};"></i>
+                    <i class="${getFileIcon(item.name)} queue-item-icon"></i>
                     <div class="file-info-details">
                         <div class="file-info-name" title="${item.displayName || item.name}">
                             ${escapeHtml(item.displayName || item.name)}
@@ -3364,7 +3385,7 @@ function createQueueItemElement(item) {
                 <div class="file-status">
                     ${item.status === 'uploading' || item.status === 'assembling' ? `
                         <div class="progress-bar-small">
-                            <div class="progress-fill-small" style="width: ${item.progress}%"></div>
+                            <div class="progress-fill-small queue-item-bar"></div>
                         </div>
                     ` : ''}
                     <span class="status-text status-${item.status}">
@@ -3382,6 +3403,11 @@ function createQueueItemElement(item) {
                     ` : ''}
                 </div>
             `;
+
+    const queueIconEl = div.querySelector('.queue-item-icon');
+    if (queueIconEl) queueIconEl.style.color = getFileColor(item.name);
+    const queueBarEl = div.querySelector('.queue-item-bar');
+    if (queueBarEl) queueBarEl.style.width = item.progress + '%';
 
     return div;
 }
@@ -4639,9 +4665,9 @@ function _renderOfficePreview(body, data) {
                 html += '<div class="pptx-body">';
                 bodyShapes.forEach(shape => {
                     shape.paragraphs.forEach(p => {
-                        const indent = p.level > 0 ? ` style="padding-left:${p.level * 22}px"` : '';
+                        const indentClass = p.level > 0 ? ` pptx-indent-${Math.min(p.level, 8)}` : '';
                         const bullet = p.level === 0 ? '• ' : '◦ ';
-                        html += `<p class="pptx-para"${indent}>${bullet}${p.text}</p>`;
+                        html += `<p class="pptx-para${indentClass}">${bullet}${p.text}</p>`;
                     });
                 });
                 html += '</div>';
@@ -4798,7 +4824,9 @@ function transformInitialRows() {
                 const clone = nameCell.cloneNode(true);
                 const icons = clone.querySelectorAll('i'); icons.forEach(i => i.remove());
                 const rawText = clone.textContent.trim();
-                nameCell.innerHTML = `<i class="${iconClass} file-icon file-icon-default" style="color: ${getFileColor(filename)}"></i> ${escapeHtml(rawText)}`;
+                nameCell.innerHTML = `<i class="${iconClass} file-icon file-icon-default"></i> ${escapeHtml(rawText)}`;
+                const renamedIconEl = nameCell.querySelector('.file-icon-default');
+                if (renamedIconEl) renamedIconEl.style.color = getFileColor(filename);
             }
 
             // Update type column
@@ -5221,7 +5249,7 @@ function _buildConflictDialog(opts) {
         ].join(';');
 
         const btnHtml = opts.buttons.map(b =>
-            `<button data-action="${b.id}" style="${b.style}">${b.label}</button>`
+            `<button data-action="${b.id}">${b.label}</button>`
         ).join('');
 
         overlay.innerHTML = `
@@ -5273,7 +5301,8 @@ function _buildConflictDialog(opts) {
         ].join(';');
 
         overlay.querySelectorAll('[data-action]').forEach(btn => {
-            btn.style.cssText += ';' + SHARED_BTN;
+            const btnDef = opts.buttons.find(b => b.id === btn.dataset.action);
+            btn.style.cssText = (btnDef && btnDef.style ? btnDef.style + ';' : '') + SHARED_BTN;
             btn.addEventListener('mouseenter', () => btn.style.filter = 'brightness(0.9)');
             btn.addEventListener('mouseleave', () => btn.style.filter = '');
             btn.addEventListener('click', () => { overlay.remove(); resolve(btn.dataset.action); });
@@ -5438,8 +5467,7 @@ async function _promptMoveOrCopyConflicts(paths, destination, action) {
     // Step 2: build list HTML
     const listHtml = conflicts.map(c =>
         `<li style="padding:3px 0;display:flex;align-items:center;gap:7px">
-            <i class="fas ${c.is_dir ? 'fa-folder' : 'fa-file-alt'}"
-               style="color:${c.is_dir ? '#f39c12' : '#3498db'};font-size:0.9em;flex-shrink:0"></i>
+            <i class="fas ${c.is_dir ? 'fa-folder conflict-icon-dir' : 'fa-file-alt conflict-icon-file'}"></i>
             <span style="font-family:monospace;word-break:break-all">${c.name.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
          </li>`
     ).join('');
@@ -7812,6 +7840,324 @@ function addManualCleanupButton() {
 
         adminActions.appendChild(mediaPreviewBtn);
 
+        // --- Revoke All Shares button ---
+        const revokeSharesBtn = document.createElement('button');
+        revokeSharesBtn.id = 'revokeAllSharesBtn';
+        revokeSharesBtn.className = 'btn btn-danger btn-sm manual-cleanup-btn';
+        revokeSharesBtn.innerHTML = '<i class="fas fa-ban"></i> Revoke All Shares';
+        revokeSharesBtn.title = 'Revoke every active share link (requires a typed confirmation code)';
+        revokeSharesBtn.onclick = openRevokeAllSharesModal;
+
+        adminActions.appendChild(revokeSharesBtn);
+
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Share links — per-item share/unshare modal, bulk share/unshare, and the
+// admin "revoke all shares" flow (typed 10-digit code, freshly randomized
+// per attempt).
+// ---------------------------------------------------------------------------
+
+function _shareModalRowTemplate(path, name) {
+    return `
+        <div class="share-item-row" data-share-path="${escAttr(path)}">
+            <div class="share-item-row-header">
+                <strong class="share-item-name" title="${escAttr(name)}">${escapeHtml(name)}</strong>
+                <label class="share-toggle">
+                    <input type="checkbox" class="share-toggle-checkbox"
+                           data-fn-change="onShareToggleChanged" data-args-change="${dataArgs([path])}">
+                    Shared
+                </label>
+            </div>
+            <div class="share-link-row">
+                <input type="text" class="form-control share-link-input" readonly>
+                <button type="button" class="btn btn-outline btn-sm" data-fn="copyShareLink"
+                        data-args="${dataArgs([path])}" title="Copy link"><i class="fas fa-copy"></i></button>
+                <button type="button" class="btn btn-danger btn-sm" data-fn="onShareRevokeClicked"
+                        data-args="${dataArgs([path])}" title="Revoke this link"><i class="fas fa-ban"></i></button>
+            </div>
+            <div class="share-status-loading"><i class="fas fa-spinner fa-spin"></i> Checking current status…</div>
+        </div>
+    `;
+}
+
+async function _renderShareModalRows(items) {
+    const container = document.getElementById('shareModalItems');
+    if (!container) return;
+
+    const bulkControls = items.length > 1 ? `
+        <div class="share-bulk-controls">
+            <button type="button" class="btn btn-primary btn-sm" data-fn="bulkShareAll">
+                <i class="fas fa-share-nodes"></i> Share All
+            </button>
+            <button type="button" class="btn btn-outline btn-sm" data-fn="bulkUnshareAll">
+                <i class="fas fa-ban"></i> Unshare All
+            </button>
+        </div>` : '';
+
+    container.innerHTML = bulkControls + items.map(it => _shareModalRowTemplate(it.path, it.name)).join('');
+
+    for (const it of items) {
+        try {
+            const resp = await fetch(`/api/share/status?path=${encodeURIComponent(it.path)}`);
+            const data = await resp.json();
+            _applyShareRowState(it.path, resp.ok && data.shared ? data : { shared: false });
+        } catch (e) {
+            _applyShareRowState(it.path, { shared: false });
+        }
+    }
+}
+
+function _applyShareRowState(path, state) {
+    const row = document.querySelector(`.share-item-row[data-share-path="${CSS.escape(path)}"]`);
+    if (!row) return;
+    const checkbox = row.querySelector('.share-toggle-checkbox');
+    const linkRow = row.querySelector('.share-link-row');
+    const linkInput = row.querySelector('.share-link-input');
+    const loading = row.querySelector('.share-status-loading');
+    if (loading) loading.style.display = 'none';
+    if (checkbox) checkbox.checked = !!state.shared;
+    if (linkRow) linkRow.style.display = state.shared ? 'flex' : 'none';
+    if (linkInput) linkInput.value = state.shared ? (state.share_url || '') : '';
+}
+
+async function showSingleShareModal(itemPath, itemName /*, isDir — server determines this itself */) {
+    const modal = document.getElementById('shareModal');
+    const title = document.getElementById('shareModalTitle');
+    if (title) title.textContent = `Share "${itemName}"`;
+    await _renderShareModalRows([{ path: itemPath, name: itemName }]);
+    if (modal) modal.classList.add('show');
+}
+
+function showBulkShareModal() {
+    if (selectedItems.size === 0) {
+        showNotification('No Selection', 'No items selected', 'error');
+        return;
+    }
+    const paths = Array.from(selectedItems);
+    const title = document.getElementById('shareModalTitle');
+    if (title) title.textContent = `Share ${paths.length} Item(s)`;
+    _renderShareModalRows(paths.map(p => ({ path: p, name: p.split('/').filter(Boolean).pop() || p })));
+    const modal = document.getElementById('shareModal');
+    if (modal) modal.classList.add('show');
+}
+
+function closeShareModal() {
+    const modal = document.getElementById('shareModal');
+    if (modal) modal.classList.remove('show');
+}
+
+async function onShareToggleChanged(path) {
+    const row = document.querySelector(`.share-item-row[data-share-path="${CSS.escape(path)}"]`);
+    const checkbox = row ? row.querySelector('.share-toggle-checkbox') : null;
+    if (!checkbox) return;
+    const wantShared = checkbox.checked;
+    checkbox.disabled = true;
+    try {
+        if (wantShared) {
+            const resp = await fetch('/api/share', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path })
+            });
+            const data = await resp.json();
+            if (resp.ok) {
+                _applyShareRowState(path, { shared: true, share_url: data.share_url });
+                showUploadStatus('🔗 Share link created', 'success');
+            } else {
+                checkbox.checked = false;
+                showUploadStatus(`❌ ${data.error || 'Failed to create share link'}`, 'error');
+            }
+        } else {
+            await _revokeShareForPath(path, /*quiet=*/false);
+        }
+    } catch (error) {
+        checkbox.checked = !wantShared;
+        showUploadStatus(`❌ Share update failed: ${error.message}`, 'error');
+    } finally {
+        checkbox.disabled = false;
+    }
+}
+
+function onShareRevokeClicked(path) {
+    _revokeShareForPath(path, false);
+}
+
+async function _revokeShareForPath(path, quiet) {
+    try {
+        const resp = await fetch('/api/unshare', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path })
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            _applyShareRowState(path, { shared: false });
+            if (!quiet) showUploadStatus('🚫 Share link revoked', 'success');
+        } else if (!quiet) {
+            showUploadStatus(`❌ ${data.error || 'Failed to revoke share'}`, 'error');
+        }
+    } catch (error) {
+        if (!quiet) showUploadStatus(`❌ Revoke failed: ${error.message}`, 'error');
+    }
+}
+
+function copyShareLink(path) {
+    const row = document.querySelector(`.share-item-row[data-share-path="${CSS.escape(path)}"]`);
+    const input = row ? row.querySelector('.share-link-input') : null;
+    if (!input || !input.value) return;
+
+    const done = () => showUploadStatus('📋 Link copied to clipboard', 'success');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(input.value).then(done).catch(() => {
+            input.select();
+            document.execCommand('copy');
+            done();
+        });
+    } else {
+        input.select();
+        document.execCommand('copy');
+        done();
+    }
+}
+
+async function bulkShareAll() {
+    const rows = document.querySelectorAll('#shareModalItems .share-item-row');
+    const paths = Array.from(rows).map(r => r.dataset.sharePath);
+    if (paths.length === 0) return;
+    try {
+        const resp = await fetch('/api/share/bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths, action: 'share' })
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            for (const path of paths) {
+                const r = data.results[path];
+                if (r && r.token) _applyShareRowState(path, { shared: true, share_url: r.share_url });
+            }
+            showUploadStatus(`🔗 Shared ${paths.length} item(s)`, 'success');
+        } else {
+            showUploadStatus(`❌ ${data.error || 'Bulk share failed'}`, 'error');
+        }
+    } catch (error) {
+        showUploadStatus(`❌ Bulk share failed: ${error.message}`, 'error');
+    }
+}
+
+async function bulkUnshareAll() {
+    const rows = document.querySelectorAll('#shareModalItems .share-item-row');
+    const paths = Array.from(rows).map(r => r.dataset.sharePath);
+    if (paths.length === 0) return;
+    try {
+        const resp = await fetch('/api/share/bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths, action: 'unshare' })
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            paths.forEach(path => _applyShareRowState(path, { shared: false }));
+            showUploadStatus(`🚫 Unshared ${paths.length} item(s)`, 'success');
+        } else {
+            showUploadStatus(`❌ ${data.error || 'Bulk unshare failed'}`, 'error');
+        }
+    } catch (error) {
+        showUploadStatus(`❌ Bulk unshare failed: ${error.message}`, 'error');
+    }
+}
+
+// --- Admin: revoke ALL share links, gated by a freshly-randomized 10-digit
+// code that must be typed back exactly. A new code is minted server-side
+// every time the dialog opens, so a remembered/scripted code never works
+// for a later attempt. ---
+let _revokeAllSharesNonce = null;
+let _revokeAllSharesCode = null;
+
+async function openRevokeAllSharesModal() {
+    const modal = document.getElementById('revokeAllSharesModal');
+    const countEl = document.getElementById('revokeAllSharesCount');
+    const codeEl = document.getElementById('revokeAllSharesCode');
+    const inputEl = document.getElementById('revokeAllSharesInput');
+    const errorEl = document.getElementById('revokeAllSharesError');
+
+    if (inputEl) inputEl.value = '';
+    if (errorEl) errorEl.style.display = 'none';
+    if (codeEl) codeEl.textContent = '----------';
+    _revokeAllSharesNonce = null;
+    _revokeAllSharesCode = null;
+
+    try {
+        const countResp = await fetch('/admin/shares/count');
+        const countData = await countResp.json();
+        if (countEl && countResp.ok) {
+            countEl.textContent = `This will revoke ${countData.count} currently active share link(s). This cannot be undone.`;
+        }
+    } catch (e) { /* non-fatal — proceed without the count */ }
+
+    try {
+        const resp = await fetch('/admin/revoke_all_shares/code', { method: 'POST' });
+        const data = await resp.json();
+        if (resp.ok) {
+            _revokeAllSharesNonce = data.nonce;
+            _revokeAllSharesCode = data.code;
+            if (codeEl) codeEl.textContent = data.code;
+        } else {
+            showUploadStatus(`❌ ${data.error || 'Failed to start confirmation'}`, 'error');
+            return;
+        }
+    } catch (error) {
+        showUploadStatus(`❌ Failed to start confirmation: ${error.message}`, 'error');
+        return;
+    }
+
+    if (modal) modal.classList.add('show');
+    if (inputEl) inputEl.focus();
+}
+
+function closeRevokeAllSharesModal() {
+    const modal = document.getElementById('revokeAllSharesModal');
+    if (modal) modal.classList.remove('show');
+    _revokeAllSharesNonce = null;
+    _revokeAllSharesCode = null;
+}
+
+async function confirmRevokeAllShares() {
+    const inputEl = document.getElementById('revokeAllSharesInput');
+    const errorEl = document.getElementById('revokeAllSharesError');
+    const btn = document.getElementById('confirmRevokeAllShares');
+    const typed = inputEl ? inputEl.value.trim() : '';
+
+    if (errorEl) errorEl.style.display = 'none';
+    if (!_revokeAllSharesNonce) {
+        if (errorEl) { errorEl.textContent = 'Confirmation expired — close and reopen this dialog.'; errorEl.style.display = 'block'; }
+        return;
+    }
+    if (!typed) {
+        if (errorEl) { errorEl.textContent = 'Type the code shown above to confirm.'; errorEl.style.display = 'block'; }
+        return;
+    }
+
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Revoking...'; }
+    try {
+        const resp = await fetch('/admin/revoke_all_shares', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nonce: _revokeAllSharesNonce, code: typed })
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            showUploadStatus(`🚫 Revoked ${data.revoked_count} share link(s)`, 'success');
+            closeRevokeAllSharesModal();
+        } else {
+            if (errorEl) { errorEl.textContent = data.error || 'Failed to revoke — request a new code and try again.'; errorEl.style.display = 'block'; }
+        }
+    } catch (error) {
+        if (errorEl) { errorEl.textContent = `Error: ${error.message}`; errorEl.style.display = 'block'; }
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-ban"></i> Revoke All'; }
     }
 }
 
@@ -9889,13 +10235,13 @@ function _renderArchivePreview(body, data) {
     const fileCt = data.entries.filter(e => !e.is_dir).length;
     const dirCt = data.entries.filter(e => e.is_dir).length;
 
-    const typeBadgeColour = { zip: '#e67e22', rar: '#8e44ad', '7z': '#2980b9', tar: '#27ae60' };
-    const badgeStyle = `background:${typeBadgeColour[data.type] || '#555'}`;
+    const typeBadgeClass = { zip: 'archive-type-badge-zip', rar: 'archive-type-badge-rar', '7z': 'archive-type-badge-7z', tar: 'archive-type-badge-tar' };
+    const badgeClass = typeBadgeClass[data.type] || 'archive-type-badge-default';
 
     const header = document.createElement('div');
     header.className = 'archive-header';
     header.innerHTML = `
-        <span class="archive-type-badge" style="${badgeStyle}">${escapeHtml(data.type.toUpperCase())}</span>
+        <span class="archive-type-badge ${badgeClass}">${escapeHtml(data.type.toUpperCase())}</span>
         <span class="archive-stat"><i class="fas fa-file"></i> ${fileCt.toLocaleString()} file${fileCt !== 1 ? 's' : ''}</span>
         <span class="archive-stat"><i class="fas fa-folder"></i> ${dirCt.toLocaleString()} folder${dirCt !== 1 ? 's' : ''}</span>
         <span class="archive-stat"><i class="fas fa-weight-hanging"></i> ${fmtSize(data.total_size)}</span>

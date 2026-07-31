@@ -8,6 +8,7 @@ without creating any directories or files.
 """
 
 import os
+import secrets
 import sqlite3
 import threading
 import uuid
@@ -154,6 +155,20 @@ def _do_bootstrap(conn):
             token      TEXT    NOT NULL,
             updated_at REAL    NOT NULL DEFAULT (unixepoch())
         );
+        CREATE TABLE IF NOT EXISTS share_links (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            token          TEXT    UNIQUE NOT NULL,
+            file_path      TEXT    NOT NULL,
+            item_name      TEXT    NOT NULL,
+            is_dir         INTEGER NOT NULL DEFAULT 0,
+            created_by     TEXT,
+            created_at     REAL    NOT NULL DEFAULT (unixepoch()),
+            revoked        INTEGER NOT NULL DEFAULT 0,
+            revoked_at     REAL,
+            download_count INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_share_links_path ON share_links(file_path);
+        CREATE INDEX IF NOT EXISTS idx_share_links_revoked ON share_links(revoked);
     """)
 
     # ── Migration: add nt_hash column for SMB/NTLM auth (idempotent) ───────
@@ -348,6 +363,137 @@ class _Database:
                 "SELECT username FROM users WHERE nt_hash IS NULL ORDER BY username"
             ).fetchall()
         return [r["username"] for r in rows]
+
+    # ------------------------------------------------------------------
+    # Share links — opaque-token public download links.
+    #
+    # The URL a browser sees (/shared/<token>) never contains the real file
+    # path — the token is an unguessable random string (secrets.token_urlsafe)
+    # mapped server-side to the actual path. The real filename is preserved
+    # separately in `item_name` so the download still saves under its
+    # original name (via Content-Disposition), even though the URL is opaque.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _norm_path(file_path: str) -> str:
+        return file_path.strip().strip("/").replace("\\", "/")
+
+    def create_share(
+        self, file_path: str, item_name: str, is_dir: bool, created_by: str
+    ) -> str:
+        """
+        Return an active share token for this path — reuses the existing
+        token if one is already active (idempotent 'share' toggle), else
+        mints a new one.
+        """
+        norm = self._norm_path(file_path)
+        with _write_lock, _connect() as conn:
+            row = conn.execute(
+                "SELECT token FROM share_links WHERE file_path=? AND revoked=0",
+                (norm,),
+            ).fetchone()
+            if row:
+                return row["token"]
+
+            token = secrets.token_urlsafe(12)
+            conn.execute(
+                """
+                INSERT INTO share_links(token, file_path, item_name, is_dir, created_by)
+                VALUES(?,?,?,?,?)
+                """,
+                (token, norm, item_name, 1 if is_dir else 0, created_by),
+            )
+        print(f"🔗 Share link created for: {norm} (by {created_by})")
+        return token
+
+    def get_share_by_token(self, token: str) -> dict | None:
+        """Active share only — revoked/unknown tokens return None."""
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM share_links WHERE token=? AND revoked=0", (token,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_share_by_path(self, file_path: str) -> dict | None:
+        """Active share only, for populating the share modal's current state."""
+        norm = self._norm_path(file_path)
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM share_links WHERE file_path=? AND revoked=0", (norm,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_shares_for_paths(self, file_paths: list) -> dict:
+        """Bulk lookup: {normalized_path: share_dict} for every currently-active share among file_paths."""
+        norm_paths = [self._norm_path(p) for p in file_paths]
+        if not norm_paths:
+            return {}
+        placeholders = ",".join("?" for _ in norm_paths)
+        with _connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM share_links WHERE revoked=0 AND file_path IN ({placeholders})",
+                norm_paths,
+            ).fetchall()
+        return {r["file_path"]: dict(r) for r in rows}
+
+    def revoke_share_by_token(self, token: str) -> bool:
+        with _write_lock, _connect() as conn:
+            cur = conn.execute(
+                "UPDATE share_links SET revoked=1, revoked_at=unixepoch() WHERE token=? AND revoked=0",
+                (token,),
+            )
+        revoked = cur.rowcount > 0
+        if revoked:
+            print(f"🚫 Share link revoked: {token}")
+        return revoked
+
+    def revoke_share_by_path(self, file_path: str) -> bool:
+        norm = self._norm_path(file_path)
+        with _write_lock, _connect() as conn:
+            cur = conn.execute(
+                "UPDATE share_links SET revoked=1, revoked_at=unixepoch() WHERE file_path=? AND revoked=0",
+                (norm,),
+            )
+        return cur.rowcount > 0
+
+    def bulk_revoke_by_paths(self, file_paths: list) -> int:
+        norm_paths = [self._norm_path(p) for p in file_paths]
+        if not norm_paths:
+            return 0
+        placeholders = ",".join("?" for _ in norm_paths)
+        with _write_lock, _connect() as conn:
+            cur = conn.execute(
+                f"UPDATE share_links SET revoked=1, revoked_at=unixepoch() "
+                f"WHERE revoked=0 AND file_path IN ({placeholders})",
+                norm_paths,
+            )
+        return cur.rowcount
+
+    def revoke_all_shares(self) -> int:
+        """Revoke every currently-active share link. Used by the admin
+        'revoke all' button and revoke_sharing.py — both require their own
+        confirmation step before calling this."""
+        with _write_lock, _connect() as conn:
+            cur = conn.execute(
+                "UPDATE share_links SET revoked=1, revoked_at=unixepoch() WHERE revoked=0"
+            )
+        count = cur.rowcount
+        print(f"🚫 Revoked ALL share links ({count} link(s))")
+        return count
+
+    def list_active_shares(self) -> list:
+        with _connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM share_links WHERE revoked=0 ORDER BY created_at DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def record_share_download(self, token: str):
+        with _write_lock, _connect() as conn:
+            conn.execute(
+                "UPDATE share_links SET download_count = download_count + 1 WHERE token=?",
+                (token,),
+            )
 
 
 # ------------------------------------------------------------------

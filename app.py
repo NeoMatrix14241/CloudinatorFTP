@@ -29,6 +29,7 @@ from flask import (
     Response,
     make_response,
     render_template_string,
+    abort,
 )
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -89,7 +90,7 @@ from config import (
     ENABLE_LIBVIPS,
     ENABLE_SEARCH_INDEX,
 )
-from database import get_session_secret
+from database import get_session_secret, db
 
 SESSION_SECRET = get_session_secret()
 from auth import (
@@ -306,27 +307,43 @@ mimetypes.add_type("text/javascript", ".mjs")
 
 # ---------------------------------------------------------------------------
 # CSP: SHA-256 hashes of every static inline style="..." attribute value used
-# in index.html / viewer.html. These let the CSP allow exactly these inline
-# styles via style-src-attr 'unsafe-hashes' instead of a blanket
+# in index.html / viewer.html / index.js. These let the CSP allow exactly
+# these inline styles via style-src-attr 'unsafe-hashes' instead of a blanket
 # style-src 'unsafe-inline', which would let an attacker inject arbitrary
 # styles anywhere on the page.
 #
-# All 64 inline style="..." occurrences (54 unique values) in this project
-# are static markup — none are built from Jinja variables — so a fixed hash
-# list is safe and won't go stale from templating. If you add a NEW inline
-# style="..." attribute to index.html or viewer.html later, that new value's
-# hash won't be in this list and the browser will silently drop that one
-# style (console will show a CSP violation) until you regenerate this list:
+# index.js was added to this list's scope after it became clear it has its
+# own static inline style="..." attributes (built via innerHTML template
+# strings) that were never covered here before — they were silently being
+# dropped by the CSP the whole time. Any inline style="..." attribute in
+# index.js that is DYNAMIC (built from a variable, e.g.
+# style="color: ${getFileColor(x)}") CANNOT go in this list — a hash only
+# matches one exact string. Those must instead be set via element.style.x =
+# value in JS (a CSSOM property assignment — exempt from style-src-attr
+# entirely, unlike setAttribute('style', ...) or a literal style="..." in
+# markup/innerHTML) or reduced to a fixed set of CSS classes. As of this
+# writing every dynamic one has already been converted that way — this list
+# should only ever need static, fixed string values.
+#
+# If you add a NEW inline style="..." attribute to index.html, viewer.html,
+# or index.js later, that new value's hash won't be in this list and the
+# browser will silently drop that one style (console will show a CSP
+# violation) until you regenerate this list:
 #
 #   python3 -c "
 #   import re, hashlib, base64, html
 #   values = set()
-#   for f in ['templates/index.html', 'templates/viewer.html']:
+#   for f in ['templates/index.html', 'templates/viewer.html', 'static/js/index.js']:
 #       content = open(f, encoding='utf-8').read()
 #       for m in re.finditer(r'style=\"([^\"]*)\"', content):
-#           values.add(html.unescape(m.group(1)))
+#           v = m.group(1)
+#           if '\${' in v:
+#               continue  # dynamic — can't be hashed, see note above
+#           values.add(html.unescape(v))
 #   for v in sorted(values):
 #       print(f\"'sha256-{base64.b64encode(hashlib.sha256(v.encode()).digest()).decode()}'\")"
+#
+# (adjust the index.js path above to wherever it's actually served from)
 #
 # Caveat: style-src-attr / 'unsafe-hashes' is CSP Level 3. Safari does not
 # support it (as of this writing), so Safari visitors will lose the styling
@@ -389,7 +406,82 @@ _INLINE_STYLE_HASHES = (
     "'sha256-MFnzbRN2ummEtLbjqVmAx9EZ36GDgHykzBkkjODUur8=' "
     "'sha256-tLhJLdhP/19dgmpWYiz9xIF+DCqxjOgU8dXIGTdF3Wg=' "
     "'sha256-NjYDAvf3Yswi9GqXn8q5mE3okYa3Q4PuzJ0DkAhe4yQ=' "
-    "'sha256-r+kKTo91UeZ8VS1VQWyNsdB9Zi5TaQKG9Dg7TBeSY/w='"
+    "'sha256-r+kKTo91UeZ8VS1VQWyNsdB9Zi5TaQKG9Dg7TBeSY/w=' "
+    "'sha256-8OJVJw6LnDTwJvgQ15Uij+G5lbrYOWEw1LE+/Kq6L9Y=' "
+    "'sha256-jsriSIEfqFC/B9X7+tpl+eS9ypUx8V6BOcnV68ztSZQ=' "
+    "'sha256-9ig60SJFAJpRoRoEpSxw6KWwIKRUchVM08ZMUObL1DQ=' "
+    "'sha256-sWB6XOuBfsiqNdjt23qlKOInevfQerm+VjzKuzm7I9M=' "
+    "'sha256-+Vc1EaQBqwRzEzB1EnS+SnnpCeJh+Bi+gjGJT87SM3I=' "
+    "'sha256-dAKIyuEsumLvyLFlrlgzJQt0T2a9q4AgfBmidg4UgJc=' "
+    "'sha256-h3YznOZSlYQ2T/3Jzv2EgiySj4U8Y8CwBXdOPW4hu7k=' "
+    "'sha256-iK5NXTOsH05WBEU4bMLhEG2/HXIHjskPURnxlqP3Fog=' "
+    "'sha256-FMZfA0LYx1qGOGNmQzmXVOXNmPxzmRViqQ7sPTxH3YA=' "
+    "'sha256-cICVVvhFn82zHo0E0TTHn7OQdbmnOPx4apHsb4ALb4M=' "
+    "'sha256-SZYjMs0U3hA54QFWhfNpEflnP+KvIiRnXOMor5iZgQo=' "
+    "'sha256-KDXwFxmUk8bphB8Y70oJCrTy5NA1eRE4eY8YtBFzHbk=' "
+    "'sha256-FNGrYfufbCyXUTAe+FIRzXZJordZR26z2rTygC4t4lI=' "
+    "'sha256-jtY41J3/AqgOz+JFyBQATgOwvRnJbSRU0sK1JUb7Vtc=' "
+    "'sha256-fovNQmL0rXwWkckSMD5QaJIPRdlgwMgfSHQULmjrf0A=' "
+    "'sha256-CUYeeW+qK6aN9sIB78XKVx5IejFavF5gpiUZxO72w14=' "
+    "'sha256-TYKX08g140mCCzTydWf8yx2U96PISYFmCwIqKmn4roQ=' "
+    "'sha256-hiCdyfqY5jkLejsYYDPs16eBb2hAyf26y0KGGGgR1Y0=' "
+    "'sha256-YAXWZKFV3jDcZW23JuKauwd8p8v2sWP2lQno1EjMTE0=' "
+    "'sha256-GsBdobBqUHnsJL4Y2AGmh1agrRrExMSa5Ux8g9qu7EI=' "
+    "'sha256-BQ5eA/mw6jES31KSfh/A55TC7nzftLBWpZBzzDfwUrA=' "
+    "'sha256-Sp06Do6sWir54qEPJBpq/hq4FmShf3d7tnObRrV40XA=' "
+    "'sha256-hpgnRQgrknYEHM7TNkPerV0IW9uqIhHkxj0SzDGIST8=' "
+    "'sha256-RplG6L4DS7tinB+kpxygtAVbINLXXNahDRzdfk1+cwY=' "
+    "'sha256-UsOOA4poiDExagMqyBHrj94aHDnzvCDg3iI4EswFiS0=' "
+    "'sha256-IuTtgGQymstyVrH9I9l6uJp6gLjJ9QW9k/VwH1OBFPk=' "
+    "'sha256-3L/EVCTr6pdzsJZnVQO+uVRk9X2Pc1Nz+WDQJD31/Ak=' "
+    "'sha256-JgCtqZG0a58cRleZMam7zrTD76G2pXWpVJ9slnA4+Es=' "
+    "'sha256-i7SUXS+H1UryBgDwNFnobea8SMwVjnYL0rGvOD8PIy4=' "
+    "'sha256-o2rj/Gic8u14SvdwtadxEkNsIsEkowTRyt/NRHZHmdg=' "
+    "'sha256-VoXb0HBC5xgbqNg7NRsxTqMHD8jeFY8Ew5fXiCz3GX4=' "
+    "'sha256-aqNNdDLnnrDOnTNdkJpYlAxKVJtLt9CtFLklmInuUAE=' "
+    "'sha256-0EZqoz+oBhx7gF4nvY2bSqoGyy4zLjNF+SDQXGp/ZrY=' "
+    "'sha256-NudHPjq+wtjofQf9mavUp2gqZIj9pkzEQgjGNVciSg8=' "
+    "'sha256-SHY0SLkaoN1bfsrcBa32dJT7QMoVQEgHd95XBg0p/jE=' "
+    "'sha256-EmJE8TUego+hQrwTWTKzP0FR9OmqkES7/jmdtYY3/yk=' "
+    "'sha256-MpuM1tcGyuu2bCBYRgExbpm3+b7qR0QkgfXDIQQ0Vls=' "
+    "'sha256-YlOHamSaY0ai4QEZYjD+9Mf+UG1KI007SUtO6nnQNKQ=' "
+    "'sha256-ytj0z3sXS6CFRvCsW9eKWoxIe+9e3IT+Oj8M62IJ/Ac=' "
+    "'sha256-mQCI/c9DbNleo/ZiMLl8mjjRMRY7T33/2gljmJF3GQo=' "
+    "'sha256-0BY2dc4Z+icxyPhKj2/3TNNa9+5CgJmfqrf7inraJ3c=' "
+    "'sha256-4UPH2xZ4U6bOpmGs3BxEo0GZVmpbUZkNf8lrL0HYvFg=' "
+    "'sha256-CryCX1yRt50anZ6OH1cFffEJkNUjwyWWqwcM5sQKQ4o=' "
+    "'sha256-MG9fl9dQ40AbtNbCFSyyjWxoLlQ1chPyyHPTaHQXjtU=' "
+    "'sha256-4Y31uXfvb2tlLh0QMJ43fjefLlCGwwh8lM/sCeKkpto=' "
+    "'sha256-TgJQVwAL23+5sBOjWyePt+Ct8lfrbIQ1PTY7CNoAT9g=' "
+    "'sha256-zc7xhsgV170rEuPoIssaeSOeF4YDmIe96rN7JCujVyc=' "
+    "'sha256-qDx2lRwBtFwvichL63r+EzOvUKXI2vAWAeql+L4CcvI=' "
+    "'sha256-K4tYHy3/DDsKrrQWgO9XsaGwb4HyOnEkmnPaXbddqvc=' "
+    "'sha256-Htw2WBqtRbH9KPKQfV+9vs9Gm2MWxq3aceazwQcOezY=' "
+    "'sha256-fGkDP7tFaZbeV2kt/WyqN2cs2qo39ErOM2XxSNxNMe0=' "
+    "'sha256-wbu5VAl7cs5jkQC5RsSyZG0+TGJiIioEPOVhIYNsntw=' "
+    "'sha256-6FGICTHHyk8eCQxgG2QJ7FKBvmh0Bad9ny8YAUlogJo=' "
+    "'sha256-iuT1LgdNEVTThHpnZwkUc+V1FW84ztl5dKJ8eWZJjVI=' "
+    "'sha256-tWmH28u+UOD+TwBRVCmUv4XSGLM3bwZmv5BCa9X43gw=' "
+    "'sha256-l8Ql11beu0/kas4wyLi/uHYtkwoGc9vxP2d5zPUle0w=' "
+    "'sha256-Vv7wUBsu2D+kFu36NbC05J7Ta8SM6CcvZaHq7V7are4=' "
+    "'sha256-ueQyfiv9Hz6/QCe9zgG6oGo4ymD5b6HFmZwC6RJWpQM=' "
+    "'sha256-PpZyeb/uN2vEHgWDQLqD6Fz17C0qk8EdQCN3u3ngch0=' "
+    "'sha256-N3h02OF5cjS55dyJpDbPWucOroXTyzA2qWpWWxcKwO0=' "
+    "'sha256-iq0Z0m764A1/OeseXMFPqJ7brCXUQZIaj1vrzR9ax9w=' "
+    "'sha256-dSDoLSm14g+4WtW5g8pUFyaSTnQIpc5DB8o6ZZ/ZHpw=' "
+    "'sha256-GqFTJUCWicExXmV0AE20UXYqkOJqOAtjKvC48DVs7rw=' "
+    "'sha256-3GABHWx0GJuf2OVqcmjh7PcQNV9yW3UH842ECBwHO4Y=' "
+    "'sha256-zHwg6jvnCP3ddKXScxiMY4ZLLIR3rFJIro7HED0j/kI=' "
+    "'sha256-NFiCpimeh2u6pfe4jDQiazh5+pTuAb2eggl4+WZbJMI=' "
+    "'sha256-Dl4HFNCXafSV452QXkPxJVKqiX5QSSY1Zm7tAhiLBJI=' "
+    "'sha256-OVvBzncEtn7q+H7vP0bKUq4sazWwT63XyT4lk39tF04=' "
+    "'sha256-jqPfeFdtQz8DQlNJu8TELikip/ow4YibFJn8/FTRAjk=' "
+    "'sha256-LTjqMsPXt96oUZEsonzBuEGV35S2K3zfgz3VsgxFK54=' "
+    "'sha256-f46QcEOvwjbVktF4ZELkp2OjsBBF3IilXneZe2xpmr4=' "
+    "'sha256-UiXlt9djFx1o7crFtCH7sUqquV6B2BX9ozY9jqs43JE=' "
+    "'sha256-K+MErBm2dfoNYzPiv+JwnlCpeJjCcnq0XN+FP6+Esz0=' "
+    "'sha256-G1BR0wU4PZyN/xje5UjmpZbkO0q6sDomFK2DT81svxA=' "
+    "'sha256-CFz7XUx3dO7TOX4RcnZ+osqCc+Owc1o8JNUiD0DGKqQ='"
 )
 
 app = Flask(__name__)
@@ -572,8 +664,15 @@ else:
 
 @app.before_request
 def validate_session():
-    # Skip validation for login-related routes
-    if request.endpoint in ["login", "static"]:
+    # Skip validation for login-related routes and the public share-link
+    # pages/downloads — those are meant to work for anyone with the link,
+    # no account required.
+    if request.endpoint in [
+        "login",
+        "static",
+        "shared_download",
+        "shared_file_download",
+    ]:
         return
 
     # Check if user is logged in
@@ -839,6 +938,56 @@ class ChunkTracker:
 
 # Global chunk tracker instance
 chunk_tracker = ChunkTracker()
+
+
+# ------------------------------------------------------------------
+# "Revoke all shares" confirmation codes — a fresh random 10-digit string
+# is issued per attempt and must be typed back exactly before the revoke-all
+# admin action runs. In-memory, single-use, short-lived (like the rate
+# limiter above) — not persisted, resets on restart, which is fine since a
+# stale code is simply invalid.
+# ------------------------------------------------------------------
+_revoke_all_codes = {}  # nonce -> {"code": str, "session_id": str, "issued_at": float}
+_revoke_all_codes_lock = threading.Lock()
+_REVOKE_CODE_TTL = 120  # seconds a code stays valid
+
+
+def _issue_revoke_all_code(session_id: str) -> tuple:
+    import random
+
+    nonce = str(uuid.uuid4())
+    code = "".join(random.choices("0123456789", k=10))
+    with _revoke_all_codes_lock:
+        # Only one outstanding code per session — a fresh attempt invalidates any prior one
+        for existing_nonce, entry in list(_revoke_all_codes.items()):
+            if entry["session_id"] == session_id:
+                _revoke_all_codes.pop(existing_nonce, None)
+        _revoke_all_codes[nonce] = {
+            "code": code,
+            "session_id": session_id,
+            "issued_at": time.time(),
+        }
+    return nonce, code
+
+
+def _check_revoke_all_code(session_id: str, nonce: str, typed_code: str) -> bool:
+    with _revoke_all_codes_lock:
+        entry = _revoke_all_codes.pop(
+            nonce, None
+        )  # single-use: pop regardless of outcome
+    if not entry:
+        return False
+    if entry["session_id"] != session_id:
+        return False
+    if time.time() - entry["issued_at"] > _REVOKE_CODE_TTL:
+        return False
+    return secrets_compare(entry["code"], typed_code or "")
+
+
+def secrets_compare(a: str, b: str) -> bool:
+    import hmac
+
+    return hmac.compare_digest(a, b)
 
 
 def login_required(f):
@@ -1220,8 +1369,12 @@ def logout():
 
         # Tell the browser to wipe cookies/cache/storage for this origin now
         # that the session is gone, rather than relying solely on cookie
-        # expiry — helps on shared/public machines.
-        response.headers["Clear-Site-Data"] = '"cache", "cookies", "storage"'
+        # expiry — helps on shared/public machines. Browsers only honor this
+        # header on secure origins (HTTPS) — sending it over plain HTTP (e.g.
+        # local LAN access by IP) just produces a harmless console warning,
+        # so only set it when the request actually came in over HTTPS.
+        if _request_is_secure():
+            response.headers["Clear-Site-Data"] = '"cache", "cookies", "storage"'
 
         return response
     except Exception as e:
@@ -1300,6 +1453,248 @@ def view_file(path):
     directory = os.path.dirname(full_path)
     filename = os.path.basename(full_path)
     return send_from_directory(directory, filename, as_attachment=False)
+
+
+@app.route("/api/share", methods=["POST"])
+@login_required
+def create_share():
+    """Create (or return the existing) public share link for one file/folder."""
+    role = get_role(current_user())
+    if role != "readwrite":
+        return jsonify({"error": "Permission denied"}), 403
+
+    data = request.get_json(silent=True) or {}
+    path = data.get("path", "")
+    if not path or not storage.is_safe_path(path):
+        return jsonify({"error": "Invalid file path"}), 400
+
+    full_path = os.path.join(ROOT_DIR, path)
+    if not os.path.exists(full_path):
+        return jsonify({"error": "File not found"}), 404
+
+    is_dir = os.path.isdir(full_path)
+    item_name = os.path.basename(full_path.rstrip("/\\"))
+    token = db.create_share(path, item_name, is_dir, current_user())
+    share_url = f"{request.host_url.rstrip('/')}/shared/{token}"
+
+    logging.info(f"Share link created by {current_user()}: {path}")
+    return jsonify(
+        {"success": True, "token": token, "share_url": share_url, "name": item_name}
+    )
+
+
+@app.route("/api/unshare", methods=["POST"])
+@login_required
+def revoke_share():
+    """Revoke the active share link for one file/folder, by path."""
+    role = get_role(current_user())
+    if role != "readwrite":
+        return jsonify({"error": "Permission denied"}), 403
+
+    data = request.get_json(silent=True) or {}
+    path = data.get("path", "")
+    if not path:
+        return jsonify({"error": "path is required"}), 400
+
+    revoked = db.revoke_share_by_path(path)
+    logging.info(f"Share link revoked by {current_user()}: {path} (found={revoked})")
+    return jsonify({"success": True, "revoked": revoked})
+
+
+@app.route("/api/share/status", methods=["GET"])
+@login_required
+def share_status():
+    """Return current share state for one path — used to populate the share modal."""
+    path = request.args.get("path", "")
+    if not path:
+        return jsonify({"error": "path is required"}), 400
+    share = db.get_share_by_path(path)
+    if share:
+        share_url = f"{request.host_url.rstrip('/')}/shared/{share['token']}"
+        return jsonify(
+            {"shared": True, "token": share["token"], "share_url": share_url}
+        )
+    return jsonify({"shared": False})
+
+
+@app.route("/api/share/bulk", methods=["POST"])
+@login_required
+def bulk_share():
+    """Bulk share or unshare a list of paths (used by the multi-select bulk action bar)."""
+    role = get_role(current_user())
+    if role != "readwrite":
+        return jsonify({"error": "Permission denied"}), 403
+
+    data = request.get_json(silent=True) or {}
+    paths = data.get("paths") or []
+    action = data.get("action")
+    if action not in ("share", "unshare"):
+        return jsonify({"error": "action must be 'share' or 'unshare'"}), 400
+    if not paths:
+        return jsonify({"error": "No paths provided"}), 400
+
+    results = {}
+    if action == "share":
+        for path in paths:
+            if not storage.is_safe_path(path):
+                results[path] = {"error": "Invalid path"}
+                continue
+            full_path = os.path.join(ROOT_DIR, path)
+            if not os.path.exists(full_path):
+                results[path] = {"error": "Not found"}
+                continue
+            is_dir = os.path.isdir(full_path)
+            item_name = os.path.basename(full_path.rstrip("/\\"))
+            token = db.create_share(path, item_name, is_dir, current_user())
+            results[path] = {
+                "token": token,
+                "share_url": f"{request.host_url.rstrip('/')}/shared/{token}",
+            }
+        logging.info(f"Bulk share by {current_user()}: {len(paths)} item(s)")
+    else:
+        revoked_count = db.bulk_revoke_by_paths(paths)
+        for path in paths:
+            results[path] = {"revoked": True}
+        logging.info(
+            f"Bulk unshare by {current_user()}: {revoked_count}/{len(paths)} item(s)"
+        )
+
+    return jsonify({"success": True, "results": results})
+
+
+def _human_size(num_bytes):
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if num_bytes < 1024 or unit == "TB":
+            return f"{num_bytes:.1f} {unit}" if unit != "B" else f"{num_bytes} {unit}"
+        num_bytes /= 1024
+
+
+def _dir_size(path, cap_entries=20000):
+    """Best-effort recursive size — bails out past cap_entries so a huge
+    shared folder can't hang the landing page on every load."""
+    total = 0
+    count = 0
+    for root, dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+            count += 1
+            if count > cap_entries:
+                return total, True  # size, truncated
+    return total, False
+
+
+@app.route("/shared/<token>")
+def shared_download(token):
+    """
+    Public landing page for a share token. No @login_required — this is
+    the whole point of a share link (also whitelisted in validate_session()
+    below, since that hook runs before route-level decorators even fire).
+
+    Deliberately does NOT stream file bytes itself. Chat apps and messengers
+    auto-fetch a pasted link to build a preview card — if this route served
+    the file directly, that preview fetch would count as a real download and
+    burn bandwidth on large files. The actual bytes are served from
+    /shared/<token>/download, reached only via the button click here.
+    """
+    share = db.get_share_by_token(token)
+    if not share:
+        # Same page whether the token never existed, expired, or was revoked —
+        # don't let a prober distinguish those cases.
+        return render_template("shared.html", valid=False), 404
+
+    file_path = share["file_path"]
+    full_path = (
+        os.path.join(ROOT_DIR, file_path) if storage.is_safe_path(file_path) else None
+    )
+    if not full_path or not os.path.exists(full_path):
+        return render_template("shared.html", valid=False), 404
+
+    is_dir = os.path.isdir(full_path)
+    size_bytes, size_truncated = (
+        _dir_size(full_path) if is_dir else (os.path.getsize(full_path), False)
+    )
+
+    return render_template(
+        "shared.html",
+        valid=True,
+        token=token,
+        name=share["item_name"],
+        is_dir=is_dir,
+        size_display=_human_size(size_bytes),
+        size_truncated=size_truncated,
+        download_count=share["download_count"],
+    )
+
+
+@app.route("/shared/<token>/download")
+def shared_file_download(token):
+    """
+    Public, unauthenticated file/zip stream for a share token. Reached only
+    by clicking Download on the /shared/<token> landing page — see the
+    docstring there for why this is split out.
+    """
+    share = db.get_share_by_token(token)
+    if not share:
+        abort(404)
+
+    file_path = share["file_path"]
+    if not storage.is_safe_path(file_path):
+        abort(404)
+
+    full_path = os.path.join(ROOT_DIR, file_path)
+    if not os.path.exists(full_path):
+        abort(404)
+
+    db.record_share_download(token)
+
+    if os.path.isfile(full_path):
+        directory = os.path.dirname(full_path)
+        filename = os.path.basename(full_path)
+        return send_from_directory(
+            directory, filename, as_attachment=True, download_name=share["item_name"]
+        )
+
+    # Shared folder — stream it as a ZIP, same approach as bulk-download.
+    zip_filename = f"{share['item_name']}.zip"
+
+    def generate_zip_stream():
+        zf = zipstream.ZipFile(
+            mode="w", compression=zipstream.ZIP_DEFLATED, allowZip64=True
+        )
+        dir_name = share["item_name"]
+        for root, dirs, files in os.walk(full_path):
+            rel_path = os.path.relpath(root, full_path)
+            arc_root = (
+                dir_name
+                if rel_path == "."
+                else os.path.join(dir_name, rel_path).replace("\\", "/")
+            )
+            for file in files:
+                try:
+                    fp = os.path.join(root, file)
+                    arc_name = os.path.join(arc_root, file).replace("\\", "/")
+                    zf.write(fp, arcname=arc_name)
+                except (PermissionError, OSError) as e:
+                    logging.warning(f"Shared ZIP: skipped {fp}: {e}")
+                    continue
+            if not files and not dirs:
+                zf.writestr(arc_root + "/", "")
+        for chunk in zf:
+            yield chunk
+
+    return Response(
+        generate_zip_stream(),
+        mimetype="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{zip_filename}"',
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Content-Encoding": "identity",
+        },
+    )
 
 
 @app.route("/pdfviewer")
@@ -2658,6 +3053,68 @@ def admin_cleanup_chunks():
                 ),
                 500,
             )
+
+
+@app.route("/admin/shares/count", methods=["GET"])
+@login_required
+def admin_shares_count():
+    """How many share links are currently active — shown before the revoke-all confirmation."""
+    role = get_role(current_user())
+    if role != "readwrite":
+        return jsonify({"error": "Permission denied"}), 403
+    count = len(db.list_active_shares())
+    return jsonify({"count": count})
+
+
+@app.route("/admin/revoke_all_shares/code", methods=["POST"])
+@login_required
+def admin_revoke_all_shares_code():
+    """
+    Issue a fresh, random 10-digit confirmation code for the 'revoke all
+    shares' action. A new code is minted every time this is called — the
+    person must type back exactly the code shown for THIS attempt, so a
+    remembered/scripted code from a previous attempt won't work.
+    """
+    role = get_role(current_user())
+    if role != "readwrite":
+        return jsonify({"error": "Permission denied"}), 403
+
+    session_id = session.get("session_id") or str(uuid.uuid4())
+    session["session_id"] = session_id
+    nonce, code = _issue_revoke_all_code(session_id)
+    return jsonify({"nonce": nonce, "code": code, "expires_in": _REVOKE_CODE_TTL})
+
+
+@app.route("/admin/revoke_all_shares", methods=["POST"])
+@login_required
+def admin_revoke_all_shares():
+    """Revoke every active share link. Requires the matching code from
+    /admin/revoke_all_shares/code, typed back exactly, single-use."""
+    role = get_role(current_user())
+    if role != "readwrite":
+        return jsonify({"error": "Permission denied"}), 403
+
+    data = request.get_json(silent=True) or {}
+    nonce = data.get("nonce", "")
+    typed_code = data.get("code", "")
+    session_id = session.get("session_id", "")
+
+    if not nonce or not typed_code:
+        return jsonify({"error": "Confirmation code is required"}), 400
+
+    if not _check_revoke_all_code(session_id, nonce, typed_code):
+        return (
+            jsonify(
+                {
+                    "error": "Confirmation code is incorrect or expired — request a new one"
+                }
+            ),
+            400,
+        )
+
+    count = db.revoke_all_shares()
+    logging.info(f"ALL share links revoked by {current_user()} ({count} link(s))")
+    return jsonify({"success": True, "revoked_count": count})
 
 
 @app.route("/admin/chunk_stats", methods=["GET"])
