@@ -10,3 +10,7 @@ document.addEventListener('click', () => {
 document.addEventListener('keydown', () => {
     clearTimeout(redirectTimer);
 });
+
+document.getElementById('backBtn')?.addEventListener('click', () => {
+    history.back();
+});
