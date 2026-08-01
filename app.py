@@ -1639,7 +1639,13 @@ def shared_file_download(token):
     by clicking Download on the /shared/<token> landing page — see the
     docstring there for why this is split out.
     """
+    import time
+
+    _t0 = time.time()
+    print(f"[shared_dl {token}] request received")
+
     share = db.get_share_by_token(token)
+    print(f"[shared_dl {token}] +{time.time()-_t0:.3f}s got share row")
     if not share:
         abort(404)
 
@@ -1650,15 +1656,24 @@ def shared_file_download(token):
     full_path = os.path.join(ROOT_DIR, file_path)
     if not os.path.exists(full_path):
         abort(404)
+    print(f"[shared_dl {token}] +{time.time()-_t0:.3f}s confirmed file exists")
 
     db.record_share_download(token)
+    print(f"[shared_dl {token}] +{time.time()-_t0:.3f}s recorded download count")
 
     if os.path.isfile(full_path):
         directory = os.path.dirname(full_path)
         filename = os.path.basename(full_path)
-        return send_from_directory(
+        print(
+            f"[shared_dl {token}] +{time.time()-_t0:.3f}s calling send_from_directory"
+        )
+        resp = send_from_directory(
             directory, filename, as_attachment=True, download_name=share["item_name"]
         )
+        print(
+            f"[shared_dl {token}] +{time.time()-_t0:.3f}s send_from_directory returned"
+        )
+        return resp
 
     # Shared folder — stream it as a ZIP, same approach as bulk-download.
     zip_filename = f"{share['item_name']}.zip"
