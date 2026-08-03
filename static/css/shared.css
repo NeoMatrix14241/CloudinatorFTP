@@ -100,3 +100,62 @@ p.desc {
     color: rgba(255, 255, 255, 0.4);
     margin-top: 10px;
 }
+
+.icon-circle.locked {
+    background: rgba(241, 196, 15, 0.18);
+    color: #f1c40f;
+}
+
+.error-text {
+    color: #e74c3c;
+}
+
+.gate-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    text-align: left;
+}
+
+.form-input {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.06);
+    color: #fff;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.form-input::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.form-input:focus {
+    outline: none;
+    border-color: #3498db;
+}
+
+.gate-error {
+    color: #e74c3c;
+    font-size: 13px;
+    margin: 10px 0 0;
+    min-height: 16px;
+}
+
+.spinner {
+    width: 28px;
+    height: 28px;
+    margin: 8px auto 0;
+    border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, 0.15);
+    border-top-color: #3498db;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

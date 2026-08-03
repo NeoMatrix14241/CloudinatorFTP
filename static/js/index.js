@@ -7840,28 +7840,108 @@ function addManualCleanupButton() {
 
         adminActions.appendChild(mediaPreviewBtn);
 
-        // --- Revoke All Shares button ---
-        const revokeSharesBtn = document.createElement('button');
-        revokeSharesBtn.id = 'revokeAllSharesBtn';
-        revokeSharesBtn.className = 'btn btn-danger btn-sm manual-cleanup-btn';
-        revokeSharesBtn.innerHTML = '<i class="fas fa-ban"></i> Revoke All Shares';
-        revokeSharesBtn.title = 'Revoke every active share link (requires a typed confirmation code)';
-        revokeSharesBtn.onclick = openRevokeAllSharesModal;
+        // --- Manage Shared button ---
+        const manageSharedBtn = document.createElement('button');
+        manageSharedBtn.id = 'manageSharedBtn';
+        manageSharedBtn.className = 'btn btn-primary btn-sm manual-cleanup-btn';
+        manageSharedBtn.innerHTML = '<i class="fas fa-shield-halved"></i> Manage Shared';
+        manageSharedBtn.title = 'View and manage every active share link, approve access requests, or revoke all links';
+        manageSharedBtn.onclick = openManageSharedModal;
 
-        adminActions.appendChild(revokeSharesBtn);
+        adminActions.appendChild(manageSharedBtn);
 
     }
 }
 
 // ---------------------------------------------------------------------------
-// Share links — per-item share/unshare modal, bulk share/unshare, and the
-// admin "revoke all shares" flow (typed 10-digit code, freshly randomized
-// per attempt).
+// Share links — per-item share/unshare modal (with security: passkey /
+// approval / expiry), bulk share/unshare, and the admin "Manage Shared"
+// panel (active shares, pending approval requests, revoke-all).
 // ---------------------------------------------------------------------------
 
-function _shareModalRowTemplate(path, name) {
+function _fmtEpoch(sec) {
+    if (!sec) return 'Never';
+    const d = new Date(sec * 1000);
+    const now = Date.now();
+    const diff = sec * 1000 - now;
+    if (diff <= 0) return 'Expired';
+    const days = Math.floor(diff / 86400000);
+    if (days >= 1) return `in ${days}d (${d.toLocaleDateString()})`;
+    const hours = Math.floor(diff / 3600000);
+    if (hours >= 1) return `in ${hours}h`;
+    const mins = Math.max(1, Math.floor(diff / 60000));
+    return `in ${mins}m`;
+}
+
+function _fmtAgo(sec) {
+    if (!sec) return '';
+    const diff = Date.now() - sec * 1000;
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
+}
+
+function _modeBadge(mode) {
+    if (mode === 'passkey') return '<span class="mode-badge mode-passkey"><i class="fas fa-key"></i> Passkey</span>';
+    if (mode === 'approval') return '<span class="mode-badge mode-approval"><i class="fas fa-user-check"></i> Approval</span>';
+    return '<span class="mode-badge mode-public"><i class="fas fa-globe"></i> Public</span>';
+}
+
+// --- Security panel (used when creating new shares from the Share modal) ---
+
+function _initShareSecurityPanelEvents() {
+    const modeRadios = document.querySelectorAll('input[name="shareSecurityMode"]');
+    const passkeySub = document.getElementById('sharePasskeySub');
+    modeRadios.forEach(r => r.addEventListener('change', () => {
+        if (passkeySub) passkeySub.style.display = (r.checked && r.value === 'passkey') ? 'block' : passkeySub.style.display;
+        if (r.checked && r.value !== 'passkey' && passkeySub) passkeySub.style.display = 'none';
+    }));
+    const expiryPreset = document.getElementById('shareExpiryPreset');
+    const expiryCustomSub = document.getElementById('shareExpiryCustomSub');
+    if (expiryPreset) {
+        expiryPreset.addEventListener('change', () => {
+            if (expiryCustomSub) expiryCustomSub.style.display = expiryPreset.value === 'custom' ? 'block' : 'none';
+        });
+    }
+}
+document.addEventListener('DOMContentLoaded', _initShareSecurityPanelEvents);
+
+function _computeExpiresAt(presetValue, customValue) {
+    if (presetValue === 'never') return null;
+    if (presetValue === 'custom') {
+        if (!customValue) return null;
+        const ms = Date.parse(customValue);
+        return isNaN(ms) ? null : Math.floor(ms / 1000);
+    }
+    const seconds = parseInt(presetValue, 10);
+    if (!seconds) return null;
+    return Math.floor(Date.now() / 1000) + seconds;
+}
+
+function _readShareSecurityPanel() {
+    const modeEl = document.querySelector('input[name="shareSecurityMode"]:checked');
+    const mode = modeEl ? modeEl.value : 'public';
+    const passkeyInput = document.getElementById('sharePasskeyInput');
+    const preset = document.getElementById('shareExpiryPreset');
+    const customInput = document.getElementById('shareExpiryCustomInput');
+    const payload = { security_mode: mode };
+    if (mode === 'passkey') {
+        const val = passkeyInput ? passkeyInput.value.trim() : '';
+        if (val) payload.passkey = val; else payload.generate_passkey = true;
+    }
+    const expiresAt = _computeExpiresAt(preset ? preset.value : 'never', customInput ? customInput.value : '');
+    if (expiresAt) payload.expires_at = expiresAt;
+    return payload;
+}
+
+// --- Share modal rows ---
+
+function _shareModalRowTemplate(path, name, index) {
     return `
-        <div class="share-item-row" data-share-path="${escAttr(path)}">
+        <div class="share-item-row" data-share-path="${escAttr(path)}" data-row-index="${index}">
             <div class="share-item-row-header">
                 <strong class="share-item-name" title="${escAttr(name)}">${escapeHtml(name)}</strong>
                 <label class="share-toggle">
@@ -7877,9 +7957,63 @@ function _shareModalRowTemplate(path, name) {
                 <button type="button" class="btn btn-danger btn-sm" data-fn="onShareRevokeClicked"
                         data-args="${dataArgs([path])}" title="Revoke this link"><i class="fas fa-ban"></i></button>
             </div>
+            <div class="share-security-summary">
+                <span class="share-summary-badges"></span>
+                <button type="button" class="btn btn-outline btn-xs" data-fn="toggleShareRowEdit"
+                        data-args="${dataArgs([path])}"><i class="fas fa-sliders"></i> Edit security</button>
+            </div>
+            <div class="share-passkey-reveal" style="display:none;"></div>
+            <div class="share-row-editor" style="display:none;">
+                <div class="share-security-row">
+                    <div class="security-mode-options">
+                        <label><input type="radio" name="rowMode${index}" value="public"> <i class="fas fa-globe"></i> Public</label>
+                        <label><input type="radio" name="rowMode${index}" value="passkey"> <i class="fas fa-key"></i> Passkey</label>
+                        <label><input type="radio" name="rowMode${index}" value="approval"> <i class="fas fa-user-check"></i> Approval</label>
+                    </div>
+                </div>
+                <div class="share-security-sub row-passkey-sub" style="display:none;">
+                    <input type="text" class="form-control row-passkey-input" placeholder="New passkey — leave blank to keep or auto-generate">
+                    <label class="row-generate-label"><input type="checkbox" class="row-generate-passkey"> Generate new random passkey</label>
+                </div>
+                <div class="share-security-row">
+                    <select class="form-control row-expiry-select">
+                        <option value="keep">Keep current expiry</option>
+                        <option value="never">Never</option>
+                        <option value="3600">1 hour</option>
+                        <option value="86400">1 day</option>
+                        <option value="604800">7 days</option>
+                        <option value="2592000">30 days</option>
+                        <option value="custom">Custom date…</option>
+                    </select>
+                </div>
+                <div class="share-security-sub row-expiry-custom-sub" style="display:none;">
+                    <input type="datetime-local" class="form-control row-expiry-custom-input">
+                </div>
+                <div class="row-editor-actions">
+                    <button type="button" class="btn btn-outline btn-sm" data-fn="toggleShareRowEdit"
+                            data-args="${dataArgs([path])}">Cancel</button>
+                    <button type="button" class="btn btn-primary btn-sm" data-fn="saveShareRowSettings"
+                            data-args="${dataArgs([path])}"><i class="fas fa-check"></i> Save</button>
+                </div>
+            </div>
             <div class="share-status-loading"><i class="fas fa-spinner fa-spin"></i> Checking current status…</div>
         </div>
     `;
+}
+
+function _wireShareRowEditorEvents(row) {
+    const modeRadios = row.querySelectorAll('.share-row-editor input[type="radio"]');
+    const passkeySub = row.querySelector('.row-passkey-sub');
+    modeRadios.forEach(r => r.addEventListener('change', () => {
+        if (passkeySub) passkeySub.style.display = r.value === 'passkey' ? 'block' : 'none';
+    }));
+    const expirySelect = row.querySelector('.row-expiry-select');
+    const expiryCustomSub = row.querySelector('.row-expiry-custom-sub');
+    if (expirySelect) {
+        expirySelect.addEventListener('change', () => {
+            if (expiryCustomSub) expiryCustomSub.style.display = expirySelect.value === 'custom' ? 'block' : 'none';
+        });
+    }
 }
 
 async function _renderShareModalRows(items) {
@@ -7896,7 +8030,8 @@ async function _renderShareModalRows(items) {
             </button>
         </div>` : '';
 
-    container.innerHTML = bulkControls + items.map(it => _shareModalRowTemplate(it.path, it.name)).join('');
+    container.innerHTML = bulkControls + items.map((it, i) => _shareModalRowTemplate(it.path, it.name, i)).join('');
+    container.querySelectorAll('.share-item-row').forEach(_wireShareRowEditorEvents);
 
     for (const it of items) {
         try {
@@ -7916,10 +8051,27 @@ function _applyShareRowState(path, state) {
     const linkRow = row.querySelector('.share-link-row');
     const linkInput = row.querySelector('.share-link-input');
     const loading = row.querySelector('.share-status-loading');
+    const summaryEl = row.querySelector('.share-security-summary');
+    const badgesEl = row.querySelector('.share-summary-badges');
     if (loading) loading.style.display = 'none';
     if (checkbox) checkbox.checked = !!state.shared;
     if (linkRow) linkRow.style.display = state.shared ? 'flex' : 'none';
     if (linkInput) linkInput.value = state.shared ? (state.share_url || '') : '';
+    if (summaryEl) summaryEl.style.display = state.shared ? 'flex' : 'none';
+
+    if (state.shared) {
+        row.dataset.securityMode = state.security_mode || 'public';
+        row.dataset.hasPasskey = state.has_passkey ? '1' : '';
+        row.dataset.expiresAt = state.expires_at || '';
+        if (badgesEl) {
+            badgesEl.innerHTML = _modeBadge(state.security_mode) +
+                ` <span class="expiry-badge"><i class="fas fa-clock"></i> ${escapeHtml(_fmtEpoch(state.expires_at))}</span>`;
+        }
+        const modeRadio = row.querySelector(`.share-row-editor input[value="${state.security_mode || 'public'}"]`);
+        if (modeRadio) modeRadio.checked = true;
+        const passkeySub = row.querySelector('.row-passkey-sub');
+        if (passkeySub) passkeySub.style.display = state.security_mode === 'passkey' ? 'block' : 'none';
+    }
 }
 
 async function showSingleShareModal(itemPath, itemName /*, isDir — server determines this itself */) {
@@ -7948,6 +8100,15 @@ function closeShareModal() {
     if (modal) modal.classList.remove('show');
 }
 
+function _showRowPasskeyReveal(row, passkey) {
+    const el = row ? row.querySelector('.share-passkey-reveal') : null;
+    if (!el) return;
+    el.style.display = 'block';
+    el.innerHTML = `<i class="fas fa-key"></i> Passkey: <code>${escapeHtml(passkey)}</code>
+        <button type="button" class="btn btn-outline btn-xs" onclick="navigator.clipboard && navigator.clipboard.writeText('${escAttr(passkey)}')">Copy</button>
+        <span class="passkey-reveal-note">Shown once — save it now.</span>`;
+}
+
 async function onShareToggleChanged(path) {
     const row = document.querySelector(`.share-item-row[data-share-path="${CSS.escape(path)}"]`);
     const checkbox = row ? row.querySelector('.share-toggle-checkbox') : null;
@@ -7956,14 +8117,19 @@ async function onShareToggleChanged(path) {
     checkbox.disabled = true;
     try {
         if (wantShared) {
+            const payload = Object.assign({ path }, _readShareSecurityPanel());
             const resp = await fetch('/api/share', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path })
+                body: JSON.stringify(payload)
             });
             const data = await resp.json();
             if (resp.ok) {
-                _applyShareRowState(path, { shared: true, share_url: data.share_url });
+                _applyShareRowState(path, {
+                    shared: true, share_url: data.share_url, security_mode: data.security_mode,
+                    has_passkey: !!data.passkey, expires_at: data.expires_at
+                });
+                if (data.passkey) _showRowPasskeyReveal(row, data.passkey);
                 showUploadStatus('🔗 Share link created', 'success');
             } else {
                 checkbox.checked = false;
@@ -8022,23 +8188,93 @@ function copyShareLink(path) {
     }
 }
 
+function toggleShareRowEdit(path) {
+    const row = document.querySelector(`.share-item-row[data-share-path="${CSS.escape(path)}"]`);
+    const editor = row ? row.querySelector('.share-row-editor') : null;
+    if (!editor) return;
+    editor.style.display = editor.style.display === 'none' ? 'block' : 'none';
+}
+
+async function saveShareRowSettings(path) {
+    const row = document.querySelector(`.share-item-row[data-share-path="${CSS.escape(path)}"]`);
+    if (!row) return;
+    const token = row.dataset.shareToken; // populated lazily below via share status if needed
+    const modeEl = row.querySelector('.share-row-editor input[type="radio"]:checked');
+    const passkeyInput = row.querySelector('.row-passkey-input');
+    const generateCb = row.querySelector('.row-generate-passkey');
+    const expirySelect = row.querySelector('.row-expiry-select');
+    const expiryCustomInput = row.querySelector('.row-expiry-custom-input');
+
+    const payload = { path }; // resolved server-side to a token via a status lookup fallback below
+    if (modeEl) payload.security_mode = modeEl.value;
+    if (generateCb && generateCb.checked) payload.generate_passkey = true;
+    else if (passkeyInput && passkeyInput.value.trim()) payload.passkey = passkeyInput.value.trim();
+
+    const expiryVal = expirySelect ? expirySelect.value : 'keep';
+    if (expiryVal === 'never') payload.clear_expiry = true;
+    else if (expiryVal !== 'keep') {
+        const expiresAt = _computeExpiresAt(expiryVal, expiryCustomInput ? expiryCustomInput.value : '');
+        if (expiresAt) payload.expires_at = expiresAt;
+    }
+
+    try {
+        // /api/share/settings addresses shares by token — look it up from status first.
+        const statusResp = await fetch(`/api/share/status?path=${encodeURIComponent(path)}`);
+        const statusData = await statusResp.json();
+        if (!statusResp.ok || !statusData.shared) {
+            showUploadStatus('❌ This item is no longer shared', 'error');
+            return;
+        }
+        payload.token = statusData.token;
+        delete payload.path;
+
+        const resp = await fetch('/api/share/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            const refreshed = await (await fetch(`/api/share/status?path=${encodeURIComponent(path)}`)).json();
+            _applyShareRowState(path, refreshed.shared ? refreshed : { shared: false });
+            if (data.passkey) _showRowPasskeyReveal(row, data.passkey);
+            toggleShareRowEdit(path);
+            showUploadStatus('✅ Share settings updated', 'success');
+        } else {
+            showUploadStatus(`❌ ${data.error || 'Failed to update settings'}`, 'error');
+        }
+    } catch (error) {
+        showUploadStatus(`❌ Failed to update settings: ${error.message}`, 'error');
+    }
+}
+
 async function bulkShareAll() {
     const rows = document.querySelectorAll('#shareModalItems .share-item-row');
     const paths = Array.from(rows).map(r => r.dataset.sharePath);
     if (paths.length === 0) return;
     try {
+        const payload = Object.assign({ paths, action: 'share' }, _readShareSecurityPanel());
         const resp = await fetch('/api/share/bulk', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ paths, action: 'share' })
+            body: JSON.stringify(payload)
         });
         const data = await resp.json();
         if (resp.ok) {
             for (const path of paths) {
                 const r = data.results[path];
-                if (r && r.token) _applyShareRowState(path, { shared: true, share_url: r.share_url });
+                if (r && r.token) {
+                    _applyShareRowState(path, {
+                        shared: true, share_url: r.share_url, security_mode: payload.security_mode,
+                        has_passkey: payload.security_mode === 'passkey', expires_at: payload.expires_at
+                    });
+                }
             }
-            showUploadStatus(`🔗 Shared ${paths.length} item(s)`, 'success');
+            if (data.results._passkey) {
+                showUploadStatus(`🔗 Shared ${paths.length} item(s) — passkey: ${data.results._passkey}`, 'success');
+            } else {
+                showUploadStatus(`🔗 Shared ${paths.length} item(s)`, 'success');
+            }
         } else {
             showUploadStatus(`❌ ${data.error || 'Bulk share failed'}`, 'error');
         }
@@ -8069,15 +8305,202 @@ async function bulkUnshareAll() {
     }
 }
 
-// --- Admin: revoke ALL share links, gated by a freshly-randomized 10-digit
-// code that must be typed back exactly. A new code is minted server-side
-// every time the dialog opens, so a remembered/scripted code never works
-// for a later attempt. ---
+// ---------------------------------------------------------------------------
+// Manage Shared (admin) — Active Shares / Pending Requests / Danger Zone
+// ---------------------------------------------------------------------------
+
+function openManageSharedModal() {
+    const modal = document.getElementById('manageSharedModal');
+    if (modal) modal.classList.add('show');
+    switchManageSharedTab('active');
+    _refreshManageSharedCounts();
+}
+
+function closeManageSharedModal() {
+    const modal = document.getElementById('manageSharedModal');
+    if (modal) modal.classList.remove('show');
+    _revokeAllSharesNonce = null;
+    _revokeAllSharesCode = null;
+}
+
+function switchManageSharedTab(tab) {
+    document.querySelectorAll('.manage-shared-tab').forEach(btn => btn.classList.remove('active'));
+    const activeBtn = Array.from(document.querySelectorAll('.manage-shared-tab'))
+        .find(btn => btn.getAttribute('data-args') === JSON.stringify([tab]));
+    if (activeBtn) activeBtn.classList.add('active');
+
+    ['active', 'requests', 'danger'].forEach(t => {
+        const panel = document.getElementById(`manageSharedPanel-${t}`);
+        if (panel) panel.style.display = t === tab ? 'block' : 'none';
+    });
+
+    if (tab === 'active') loadManageSharedActive();
+    else if (tab === 'requests') loadManageSharedRequests();
+    else if (tab === 'danger') _openDangerZone();
+}
+
+async function _refreshManageSharedCounts() {
+    try {
+        const [activeResp, reqResp] = await Promise.all([
+            fetch('/admin/shares'), fetch('/admin/shares/requests')
+        ]);
+        const activeData = await activeResp.json();
+        const reqData = await reqResp.json();
+        const activeCountEl = document.getElementById('manageSharedActiveCount');
+        const reqCountEl = document.getElementById('manageSharedRequestsCount');
+        if (activeCountEl && activeResp.ok) activeCountEl.textContent = activeData.shares.length;
+        if (reqCountEl && reqResp.ok) reqCountEl.textContent = reqData.requests.length || '';
+    } catch (e) { /* non-fatal */ }
+}
+
+function _manageSharedRowTemplate(share) {
+    const path = share.file_path;
+    return `
+        <div class="manage-share-row">
+            <div class="manage-share-main">
+                <i class="fas ${share.is_dir ? 'fa-folder' : 'fa-file'}"></i>
+                <div class="manage-share-info">
+                    <strong title="${escAttr(path)}">${escapeHtml(share.item_name)}</strong>
+                    <div class="manage-share-meta">
+                        ${_modeBadge(share.security_mode)}
+                        <span class="expiry-badge"><i class="fas fa-clock"></i> ${escapeHtml(_fmtEpoch(share.expires_at))}</span>
+                        <span class="downloads-badge"><i class="fas fa-download"></i> ${share.download_count}</span>
+                        <span class="created-badge">by ${escapeHtml(share.created_by || '?')} · ${_fmtAgo(share.created_at)}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="manage-share-actions">
+                <button type="button" class="btn btn-outline btn-xs" data-fn="copyManageShareLink"
+                        data-args="${dataArgs([share.share_url])}" title="Copy link"><i class="fas fa-copy"></i></button>
+                <button type="button" class="btn btn-danger btn-xs" data-fn="revokeManageShare"
+                        data-args="${dataArgs([path])}" title="Revoke"><i class="fas fa-ban"></i> Revoke</button>
+            </div>
+        </div>
+    `;
+}
+
+async function loadManageSharedActive() {
+    const container = document.getElementById('manageSharedActiveList');
+    if (!container) return;
+    container.innerHTML = '<div class="share-status-loading"><i class="fas fa-spinner fa-spin"></i> Loading shares…</div>';
+    try {
+        const resp = await fetch('/admin/shares');
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'Failed to load shares');
+        if (!data.shares.length) {
+            container.innerHTML = '<p class="manage-shared-empty">No active share links.</p>';
+            return;
+        }
+        container.innerHTML = data.shares.map(_manageSharedRowTemplate).join('');
+    } catch (error) {
+        container.innerHTML = `<p class="manage-shared-empty">❌ ${escapeHtml(error.message)}</p>`;
+    }
+}
+
+function copyManageShareLink(url) {
+    if (!url) return;
+    navigator.clipboard && navigator.clipboard.writeText(url);
+    showUploadStatus('📋 Link copied to clipboard', 'success');
+}
+
+async function revokeManageShare(path) {
+    await _revokeShareForPath(path, false);
+    loadManageSharedActive();
+    _refreshManageSharedCounts();
+}
+
+function _manageRequestRowTemplate(req) {
+    return `
+        <div class="manage-request-row" data-request-id="${req.id}">
+            <div class="manage-share-main">
+                <i class="fas fa-user-clock"></i>
+                <div class="manage-share-info">
+                    <strong>${escapeHtml(req.requester_name)}</strong>
+                    <div class="manage-share-meta">
+                        <span>wants <strong>${escapeHtml(req.item_name)}</strong></span>
+                        <span class="created-badge">${_fmtAgo(req.requested_at)}</span>
+                    </div>
+                    ${req.requester_note ? `<div class="request-note">"${escapeHtml(req.requester_note)}"</div>` : ''}
+                </div>
+            </div>
+            <div class="manage-share-actions request-actions">
+                <label class="max-downloads-label">Downloads:
+                    <input type="number" class="form-control max-downloads-input" value="1" min="1" style="width:60px;">
+                </label>
+                <button type="button" class="btn btn-primary btn-xs" data-fn="approveShareRequest"
+                        data-args="${dataArgs([req.id])}"><i class="fas fa-check"></i> Approve</button>
+                <button type="button" class="btn btn-danger btn-xs" data-fn="denyShareRequest"
+                        data-args="${dataArgs([req.id])}"><i class="fas fa-xmark"></i> Deny</button>
+            </div>
+        </div>
+    `;
+}
+
+async function loadManageSharedRequests() {
+    const container = document.getElementById('manageSharedRequestsList');
+    if (!container) return;
+    container.innerHTML = '<div class="share-status-loading"><i class="fas fa-spinner fa-spin"></i> Loading requests…</div>';
+    try {
+        const resp = await fetch('/admin/shares/requests');
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'Failed to load requests');
+        if (!data.requests.length) {
+            container.innerHTML = '<p class="manage-shared-empty">No pending access requests.</p>';
+            return;
+        }
+        container.innerHTML = data.requests.map(_manageRequestRowTemplate).join('');
+    } catch (error) {
+        container.innerHTML = `<p class="manage-shared-empty">❌ ${escapeHtml(error.message)}</p>`;
+    }
+}
+
+async function approveShareRequest(id) {
+    const row = document.querySelector(`.manage-request-row[data-request-id="${id}"]`);
+    const input = row ? row.querySelector('.max-downloads-input') : null;
+    const maxDownloads = input ? Math.max(1, parseInt(input.value, 10) || 1) : 1;
+    try {
+        const resp = await fetch(`/admin/shares/requests/${id}/approve`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ max_downloads: maxDownloads })
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            showUploadStatus('✅ Access approved', 'success');
+            loadManageSharedRequests();
+            _refreshManageSharedCounts();
+        } else {
+            showUploadStatus(`❌ ${data.error || 'Failed to approve'}`, 'error');
+        }
+    } catch (error) {
+        showUploadStatus(`❌ Failed to approve: ${error.message}`, 'error');
+    }
+}
+
+async function denyShareRequest(id) {
+    try {
+        const resp = await fetch(`/admin/shares/requests/${id}/deny`, { method: 'POST' });
+        const data = await resp.json();
+        if (resp.ok) {
+            showUploadStatus('🚫 Access denied', 'success');
+            loadManageSharedRequests();
+            _refreshManageSharedCounts();
+        } else {
+            showUploadStatus(`❌ ${data.error || 'Failed to deny'}`, 'error');
+        }
+    } catch (error) {
+        showUploadStatus(`❌ Failed to deny: ${error.message}`, 'error');
+    }
+}
+
+// --- Danger Zone: revoke ALL share links, gated by a freshly-randomized
+// 10-digit code that must be typed back exactly. A new code is minted
+// server-side every time this tab is opened, so a remembered/scripted code
+// never works for a later attempt. ---
 let _revokeAllSharesNonce = null;
 let _revokeAllSharesCode = null;
 
-async function openRevokeAllSharesModal() {
-    const modal = document.getElementById('revokeAllSharesModal');
+async function _openDangerZone() {
     const countEl = document.getElementById('revokeAllSharesCount');
     const codeEl = document.getElementById('revokeAllSharesCode');
     const inputEl = document.getElementById('revokeAllSharesInput');
@@ -8106,22 +8529,10 @@ async function openRevokeAllSharesModal() {
             if (codeEl) codeEl.textContent = data.code;
         } else {
             showUploadStatus(`❌ ${data.error || 'Failed to start confirmation'}`, 'error');
-            return;
         }
     } catch (error) {
         showUploadStatus(`❌ Failed to start confirmation: ${error.message}`, 'error');
-        return;
     }
-
-    if (modal) modal.classList.add('show');
-    if (inputEl) inputEl.focus();
-}
-
-function closeRevokeAllSharesModal() {
-    const modal = document.getElementById('revokeAllSharesModal');
-    if (modal) modal.classList.remove('show');
-    _revokeAllSharesNonce = null;
-    _revokeAllSharesCode = null;
 }
 
 async function confirmRevokeAllShares() {
@@ -8132,7 +8543,7 @@ async function confirmRevokeAllShares() {
 
     if (errorEl) errorEl.style.display = 'none';
     if (!_revokeAllSharesNonce) {
-        if (errorEl) { errorEl.textContent = 'Confirmation expired — close and reopen this dialog.'; errorEl.style.display = 'block'; }
+        if (errorEl) { errorEl.textContent = 'Confirmation expired — switch tabs and back to get a new code.'; errorEl.style.display = 'block'; }
         return;
     }
     if (!typed) {
@@ -8150,7 +8561,11 @@ async function confirmRevokeAllShares() {
         const data = await resp.json();
         if (resp.ok) {
             showUploadStatus(`🚫 Revoked ${data.revoked_count} share link(s)`, 'success');
-            closeRevokeAllSharesModal();
+            _revokeAllSharesNonce = null;
+            _revokeAllSharesCode = null;
+            loadManageSharedActive();
+            _refreshManageSharedCounts();
+            switchManageSharedTab('active');
         } else {
             if (errorEl) { errorEl.textContent = data.error || 'Failed to revoke — request a new code and try again.'; errorEl.style.display = 'block'; }
         }

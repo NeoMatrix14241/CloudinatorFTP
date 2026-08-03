@@ -13,17 +13,80 @@
 <body>
     <div class="card">
         {% if valid %}
-        <div class="icon-circle">
+        <div class="icon-circle{% if security_mode != 'public' and not unlocked %} locked{% endif %}">
+            {% if security_mode == 'passkey' and not unlocked %}
+            <i class="fas fa-key"></i>
+            {% elif security_mode == 'approval' and not unlocked %}
+            <i class="fas fa-user-clock"></i>
+            {% else %}
             <i class="fas {{ 'fa-folder' if is_dir else 'fa-file' }}"></i>
+            {% endif %}
         </div>
         <h1>{{ name }}</h1>
         <p class="meta">
             {{ size_display }}{% if size_truncated %}+{% endif %}
             {% if is_dir %} · folder (downloads as .zip){% endif %}
         </p>
+
+        {% if unlocked %}
         <a class="btn-download" href="{{ url_for('shared_file_download', token=token) }}">
             <i class="fas fa-download"></i> Download
         </a>
+        {% if downloads_remaining is not none %}
+        <p class="truncated-note">{{ downloads_remaining }} download{{ 's' if downloads_remaining != 1 else '' }}
+            remaining on this approval.</p>
+        {% endif %}
+
+        {% elif security_mode == 'passkey' %}
+        <p class="desc">This item is protected — enter the passkey to unlock the download.</p>
+        <form id="passkeyForm" class="gate-form" autocomplete="off">
+            <input type="text" id="passkeyInput" class="form-input" placeholder="Enter passkey" autocomplete="off"
+                required>
+            <button type="submit" class="btn-download" id="passkeySubmit">
+                <i class="fas fa-unlock"></i> Unlock
+            </button>
+        </form>
+        <p class="gate-error" id="gateError"></p>
+
+        {% elif security_mode == 'approval' %}
+        {% if request_state == 'pending' %}
+        <p class="desc">Your access request is waiting for approval. This page will update automatically once it's
+            reviewed.</p>
+        <div class="spinner"></div>
+        {% elif request_state == 'denied' %}
+        <p class="desc error-text">Your access request was denied.</p>
+        <form id="requestForm" class="gate-form" autocomplete="off">
+            <input type="text" id="requesterName" class="form-input" placeholder="Your name" required>
+            <input type="text" id="requesterNote" class="form-input" placeholder="Note (optional)">
+            <button type="submit" class="btn-download" id="requestSubmit">
+                <i class="fas fa-paper-plane"></i> Request Again
+            </button>
+        </form>
+        <p class="gate-error" id="gateError"></p>
+        {% elif request_state == 'used_up' %}
+        <p class="desc">Your approved downloads for this link have been used up.</p>
+        <form id="requestForm" class="gate-form" autocomplete="off">
+            <input type="text" id="requesterName" class="form-input" placeholder="Your name" required>
+            <input type="text" id="requesterNote" class="form-input" placeholder="Note (optional)">
+            <button type="submit" class="btn-download" id="requestSubmit">
+                <i class="fas fa-paper-plane"></i> Request Access
+            </button>
+        </form>
+        <p class="gate-error" id="gateError"></p>
+        {% else %}
+        <p class="desc">This item requires the owner's approval. Submit a request and check back — you don't need to
+            keep this tab open.</p>
+        <form id="requestForm" class="gate-form" autocomplete="off">
+            <input type="text" id="requesterName" class="form-input" placeholder="Your name" required>
+            <input type="text" id="requesterNote" class="form-input" placeholder="Note (optional)">
+            <button type="submit" class="btn-download" id="requestSubmit">
+                <i class="fas fa-paper-plane"></i> Request Access
+            </button>
+        </form>
+        <p class="gate-error" id="gateError"></p>
+        {% endif %}
+        {% endif %}
+
         {% if size_truncated %}
         <p class="truncated-note">This folder is large — size shown is a lower bound.</p>
         {% endif %}
@@ -39,6 +102,88 @@
         {% endif %}
         <div class="footer-note">Shared via Cloudinator FTP</div>
     </div>
+
+    {% if valid and security_mode == 'passkey' and not unlocked %}
+    <script>
+        document.getElementById('passkeyForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            const btn = document.getElementById('passkeySubmit');
+            const errEl = document.getElementById('gateError');
+            const passkey = document.getElementById('passkeyInput').value.trim();
+            errEl.textContent = '';
+            if (!passkey) return;
+            btn.disabled = true;
+            try {
+                const res = await fetch('{{ url_for("shared_verify_passkey", token=token) }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ passkey })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    window.location.reload();
+                } else {
+                    errEl.textContent = data.error || 'Incorrect passkey';
+                    btn.disabled = false;
+                }
+            } catch (err) {
+                errEl.textContent = 'Something went wrong — try again.';
+                btn.disabled = false;
+            }
+        });
+    </script>
+    {% endif %}
+
+    {% if valid and security_mode == 'approval' %}
+    <script>
+        const requestForm = document.getElementById('requestForm');
+        if (requestForm) {
+            requestForm.addEventListener('submit', async function (e) {
+                e.preventDefault();
+                const btn = document.getElementById('requestSubmit');
+                const errEl = document.getElementById('gateError');
+                const name = document.getElementById('requesterName').value.trim();
+                const note = document.getElementById('requesterNote').value.trim();
+                errEl.textContent = '';
+                if (!name) return;
+                btn.disabled = true;
+                try {
+                    const res = await fetch('{{ url_for("shared_request_access", token=token) }}', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name, note })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        window.location.reload();
+                    } else {
+                        errEl.textContent = data.error || 'Something went wrong — try again.';
+                        btn.disabled = false;
+                    }
+                } catch (err) {
+                    errEl.textContent = 'Something went wrong — try again.';
+                    btn.disabled = false;
+                }
+            });
+        }
+
+        {% if request_state == 'pending' %}
+        // Poll for a decision so the visitor doesn't have to keep refreshing.
+        const _pollInterval = setInterval(async function () {
+            try {
+                const res = await fetch('{{ url_for("shared_request_status", token=token) }}');
+                const data = await res.json();
+                if (data.status && data.status !== 'pending') {
+                    clearInterval(_pollInterval);
+                    window.location.reload();
+                }
+            } catch (err) {
+                // silent — try again next tick
+            }
+        }, 4000);
+        {% endif %}
+    </script>
+    {% endif %}
 </body>
 
 </html>

@@ -286,8 +286,9 @@
                 {% if path and path != '' %}
                 <div class="btn-group" style="display: flex; gap: 5px; flex-shrink: 0;">
                     <!-- Root button with home icon -->
-                    <a href="#" data-fn="navigateToFolder" data-args='[""]' data-prevent="1" class="btn btn-outline btn-sm"
-                        style="color: white; border-color: rgba(255,255,255,0.4);" title="Go to root folder">
+                    <a href="#" data-fn="navigateToFolder" data-args='[""]' data-prevent="1"
+                        class="btn btn-outline btn-sm" style="color: white; border-color: rgba(255,255,255,0.4);"
+                        title="Go to root folder">
                         <i class="fas fa-home"></i> Root
                     </a>
 
@@ -301,8 +302,9 @@
                     </a>
                     {% else %}
                     <!-- If we're only one level deep, up button also goes to root -->
-                    <a href="#" data-fn="navigateToFolder" data-args='[""]' data-prevent="1" class="btn btn-outline btn-sm"
-                        style="color: white; border-color: rgba(255,255,255,0.4);" title="Go up to root folder">
+                    <a href="#" data-fn="navigateToFolder" data-args='[""]' data-prevent="1"
+                        class="btn btn-outline btn-sm" style="color: white; border-color: rgba(255,255,255,0.4);"
+                        title="Go up to root folder">
                         <i class="fas fa-level-up-alt"></i> Up
                     </a>
                     {% endif %}
@@ -360,9 +362,9 @@
                     <thead>
                         <tr>
                             <th style="width: 50px;">
-                                <input type="checkbox" id="selectAll" class="file-checkbox" data-fn-change="toggleSelectAll"
-                                    {% if role !='readwrite' and role !='readonly' %} style="visibility:hidden;" {%
-                                    endif %}>
+                                <input type="checkbox" id="selectAll" class="file-checkbox"
+                                    data-fn-change="toggleSelectAll" {% if role !='readwrite' and role !='readonly' %}
+                                    style="visibility:hidden;" {% endif %}>
                             </th>
                             <th class="sortable" data-sort="name" style="cursor: pointer;">
                                 <i class="fas fa-file"></i> Name
@@ -567,13 +569,44 @@
                 <button class="modal-close" data-fn="closeShareModal">&times;</button>
             </div>
             <div class="modal-body">
+                <div class="share-security-panel">
+                    <div class="share-security-row">
+                        <label>Security for new shares</label>
+                        <div class="security-mode-options">
+                            <label><input type="radio" name="shareSecurityMode" value="public" checked> <i
+                                    class="fas fa-globe"></i> Public</label>
+                            <label><input type="radio" name="shareSecurityMode" value="passkey"> <i
+                                    class="fas fa-key"></i> Passkey</label>
+                            <label><input type="radio" name="shareSecurityMode" value="approval"> <i
+                                    class="fas fa-user-check"></i> Approval</label>
+                        </div>
+                    </div>
+                    <div class="share-security-sub" id="sharePasskeySub" style="display:none;">
+                        <input type="text" id="sharePasskeyInput" class="form-control"
+                            placeholder="Custom passkey — leave blank to auto-generate">
+                    </div>
+                    <div class="share-security-row">
+                        <label for="shareExpiryPreset">Expires</label>
+                        <select id="shareExpiryPreset" class="form-control">
+                            <option value="never">Never</option>
+                            <option value="3600">1 hour</option>
+                            <option value="86400">1 day</option>
+                            <option value="604800">7 days</option>
+                            <option value="2592000">30 days</option>
+                            <option value="custom">Custom date…</option>
+                        </select>
+                    </div>
+                    <div class="share-security-sub" id="shareExpiryCustomSub" style="display:none;">
+                        <input type="datetime-local" id="shareExpiryCustomInput" class="form-control">
+                    </div>
+                </div>
                 <div id="shareModalItems">
                     <!-- One row per item (single item = one row, bulk = many) populated by JS -->
                 </div>
                 <small class="share-modal-hint">
                     <i class="fas fa-info-circle"></i>
-                    Anyone with a share link can download that item without logging in. Revoke a link any time to
-                    disable it immediately.
+                    Public links work for anyone. Passkey and Approval links add a gate before download — manage or
+                    revoke any link any time from <strong>Manage Shared</strong>.
                 </small>
             </div>
             <div class="modal-footer">
@@ -583,32 +616,64 @@
     </div>
     {% endif %}
 
-    <!-- Revoke ALL Shares Modal (admin) -->
+    <!-- Manage Shared Modal (admin) -->
     {% if role == 'readwrite' %}
-    <div id="revokeAllSharesModal" class="modal">
-        <div class="modal-content">
+    <div id="manageSharedModal" class="modal">
+        <div class="modal-content modal-content-lg">
             <div class="modal-header">
-                <h3 class="modal-title"><i class="fas fa-ban"></i> Revoke All Shared Links</h3>
-                <button class="modal-close" data-fn="closeRevokeAllSharesModal">&times;</button>
+                <h3 class="modal-title"><i class="fas fa-shield-halved"></i> Manage Shared</h3>
+                <button class="modal-close" data-fn="closeManageSharedModal">&times;</button>
             </div>
             <div class="modal-body">
-                <p id="revokeAllSharesCount" class="revoke-all-count-text">This will revoke every currently active share
-                    link.</p>
-                <p class="revoke-all-subtext">To confirm, type the code shown below exactly. A new code is
-                    generated every attempt.</p>
-                <div class="confirm-code-display" id="revokeAllSharesCode">----------</div>
-                <div class="form-group">
-                    <label for="revokeAllSharesInput">Type the code above:</label>
-                    <input type="text" id="revokeAllSharesInput" class="form-control" autocomplete="off"
-                        placeholder="Enter the 10-digit code">
+                <div class="manage-shared-tabs">
+                    <button type="button" class="manage-shared-tab active" data-fn="switchManageSharedTab"
+                        data-args="[&quot;active&quot;]">
+                        <i class="fas fa-link"></i> Active Shares <span id="manageSharedActiveCount"
+                            class="tab-count"></span>
+                    </button>
+                    <button type="button" class="manage-shared-tab" data-fn="switchManageSharedTab"
+                        data-args="[&quot;requests&quot;]">
+                        <i class="fas fa-user-clock"></i> Pending Requests <span id="manageSharedRequestsCount"
+                            class="tab-count"></span>
+                    </button>
+                    <button type="button" class="manage-shared-tab" data-fn="switchManageSharedTab"
+                        data-args="[&quot;danger&quot;]">
+                        <i class="fas fa-triangle-exclamation"></i> Danger Zone
+                    </button>
                 </div>
-                <div id="revokeAllSharesError" class="revoke-all-error"></div>
+
+                <div class="manage-shared-panel" id="manageSharedPanel-active">
+                    <div id="manageSharedActiveList" class="manage-shared-list">
+                        <div class="share-status-loading"><i class="fas fa-spinner fa-spin"></i> Loading shares…</div>
+                    </div>
+                </div>
+
+                <div class="manage-shared-panel" id="manageSharedPanel-requests" style="display:none;">
+                    <div id="manageSharedRequestsList" class="manage-shared-list">
+                        <div class="share-status-loading"><i class="fas fa-spinner fa-spin"></i> Loading requests…
+                        </div>
+                    </div>
+                </div>
+
+                <div class="manage-shared-panel" id="manageSharedPanel-danger" style="display:none;">
+                    <p id="revokeAllSharesCount" class="revoke-all-count-text">This will revoke every currently
+                        active share link.</p>
+                    <p class="revoke-all-subtext">To confirm, type the code shown below exactly. A new code is
+                        generated every attempt.</p>
+                    <div class="confirm-code-display" id="revokeAllSharesCode">----------</div>
+                    <div class="form-group">
+                        <label for="revokeAllSharesInput">Type the code above:</label>
+                        <input type="text" id="revokeAllSharesInput" class="form-control" autocomplete="off"
+                            placeholder="Enter the 10-digit code">
+                    </div>
+                    <div id="revokeAllSharesError" class="revoke-all-error"></div>
+                    <button class="btn btn-danger" id="confirmRevokeAllShares" data-fn="confirmRevokeAllShares">
+                        <i class="fas fa-ban"></i> Revoke All
+                    </button>
+                </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" data-fn="closeRevokeAllSharesModal">Cancel</button>
-                <button class="btn btn-danger" id="confirmRevokeAllShares" data-fn="confirmRevokeAllShares">
-                    <i class="fas fa-ban"></i> Revoke All
-                </button>
+                <button class="btn btn-outline" data-fn="closeManageSharedModal">Close</button>
             </div>
         </div>
     </div>

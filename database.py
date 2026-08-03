@@ -165,10 +165,32 @@ def _do_bootstrap(conn):
             created_at     REAL    NOT NULL DEFAULT (unixepoch()),
             revoked        INTEGER NOT NULL DEFAULT 0,
             revoked_at     REAL,
-            download_count INTEGER NOT NULL DEFAULT 0
+            download_count INTEGER NOT NULL DEFAULT 0,
+            security_mode  TEXT    NOT NULL DEFAULT 'public'
+                                   CHECK(security_mode IN ('public','passkey','approval')),
+            passkey_hash   TEXT,
+            expires_at     REAL
         );
         CREATE INDEX IF NOT EXISTS idx_share_links_path ON share_links(file_path);
         CREATE INDEX IF NOT EXISTS idx_share_links_revoked ON share_links(revoked);
+
+        CREATE TABLE IF NOT EXISTS share_access_requests (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            token           TEXT    NOT NULL,
+            requester_name  TEXT    NOT NULL,
+            requester_note  TEXT,
+            status          TEXT    NOT NULL DEFAULT 'pending'
+                                    CHECK(status IN ('pending','approved','denied')),
+            requested_at    REAL    NOT NULL DEFAULT (unixepoch()),
+            decided_at      REAL,
+            decided_by      TEXT,
+            max_downloads   INTEGER,
+            downloads_used  INTEGER NOT NULL DEFAULT 0,
+            access_token    TEXT    UNIQUE NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_access_req_token ON share_access_requests(token);
+        CREATE INDEX IF NOT EXISTS idx_access_req_status ON share_access_requests(status);
+        CREATE INDEX IF NOT EXISTS idx_access_req_access_token ON share_access_requests(access_token);
     """)
 
     # ── Migration: add nt_hash column for SMB/NTLM auth (idempotent) ───────
@@ -179,6 +201,18 @@ def _do_bootstrap(conn):
         print("🔧 Migrated users table: added nt_hash column (for SMB auth)")
         print(
             "   ⚠️  Existing users must reset their password once before SMB works for them."
+        )
+
+    # ── Migration: share link security (mode/passkey/expiry) (idempotent) ──
+    share_cols = [row[1] for row in conn.execute("PRAGMA table_info(share_links)")]
+    if "security_mode" not in share_cols:
+        conn.execute(
+            "ALTER TABLE share_links ADD COLUMN security_mode TEXT NOT NULL DEFAULT 'public'"
+        )
+        conn.execute("ALTER TABLE share_links ADD COLUMN passkey_hash TEXT")
+        conn.execute("ALTER TABLE share_links ADD COLUMN expires_at REAL")
+        print(
+            "🔧 Migrated share_links table: added security_mode/passkey_hash/expires_at"
         )
 
     count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
@@ -378,14 +412,28 @@ class _Database:
     def _norm_path(file_path: str) -> str:
         return file_path.strip().strip("/").replace("\\", "/")
 
+    @staticmethod
+    def _hash_passkey(passkey: str) -> str:
+        return bcrypt.hashpw(passkey.encode(), bcrypt.gensalt()).decode()
+
     def create_share(
-        self, file_path: str, item_name: str, is_dir: bool, created_by: str
+        self,
+        file_path: str,
+        item_name: str,
+        is_dir: bool,
+        created_by: str,
+        security_mode: str = "public",
+        passkey: str | None = None,
+        expires_at: float | None = None,
     ) -> str:
         """
         Return an active share token for this path — reuses the existing
         token if one is already active (idempotent 'share' toggle), else
-        mints a new one.
+        mints a new one with the given security settings. Security settings
+        are ignored on reuse; call update_share_settings() to change them.
         """
+        if security_mode not in ("public", "passkey", "approval"):
+            raise ValueError(f"Invalid security_mode: {security_mode!r}")
         norm = self._norm_path(file_path)
         with _write_lock, _connect() as conn:
             row = conn.execute(
@@ -396,15 +444,76 @@ class _Database:
                 return row["token"]
 
             token = secrets.token_urlsafe(12)
+            passkey_hash = self._hash_passkey(passkey) if passkey else None
             conn.execute(
                 """
-                INSERT INTO share_links(token, file_path, item_name, is_dir, created_by)
-                VALUES(?,?,?,?,?)
+                INSERT INTO share_links(
+                    token, file_path, item_name, is_dir, created_by,
+                    security_mode, passkey_hash, expires_at
+                )
+                VALUES(?,?,?,?,?,?,?,?)
                 """,
-                (token, norm, item_name, 1 if is_dir else 0, created_by),
+                (
+                    token,
+                    norm,
+                    item_name,
+                    1 if is_dir else 0,
+                    created_by,
+                    security_mode,
+                    passkey_hash,
+                    expires_at,
+                ),
             )
-        print(f"🔗 Share link created for: {norm} (by {created_by})")
+        print(
+            f"🔗 Share link created for: {norm} (by {created_by}, mode={security_mode})"
+        )
         return token
+
+    def update_share_settings(
+        self,
+        token: str,
+        security_mode: str | None = None,
+        passkey: str | None = None,
+        clear_passkey: bool = False,
+        expires_at: float | None = None,
+        clear_expiry: bool = False,
+    ) -> bool:
+        """Edit an existing active share's security settings from the
+        Manage Shared panel. Only provided fields are changed."""
+        sets, params = [], []
+        if security_mode is not None:
+            if security_mode not in ("public", "passkey", "approval"):
+                raise ValueError(f"Invalid security_mode: {security_mode!r}")
+            sets.append("security_mode=?")
+            params.append(security_mode)
+        if passkey:
+            sets.append("passkey_hash=?")
+            params.append(self._hash_passkey(passkey))
+        elif clear_passkey:
+            sets.append("passkey_hash=NULL")
+        if expires_at is not None:
+            sets.append("expires_at=?")
+            params.append(expires_at)
+        elif clear_expiry:
+            sets.append("expires_at=NULL")
+        if not sets:
+            return False
+        params.append(token)
+        with _write_lock, _connect() as conn:
+            cur = conn.execute(
+                f"UPDATE share_links SET {', '.join(sets)} WHERE token=? AND revoked=0",
+                params,
+            )
+        return cur.rowcount > 0
+
+    def verify_share_passkey(self, token: str, passkey: str) -> bool:
+        share = self.get_share_by_token(token)
+        if not share or not share.get("passkey_hash"):
+            return False
+        try:
+            return bcrypt.checkpw(passkey.encode(), share["passkey_hash"].encode())
+        except (ValueError, TypeError):
+            return False
 
     def get_share_by_token(self, token: str) -> dict | None:
         """Active share only — revoked/unknown tokens return None."""
@@ -494,6 +603,107 @@ class _Database:
                 "UPDATE share_links SET download_count = download_count + 1 WHERE token=?",
                 (token,),
             )
+
+    # ------------------------------------------------------------------
+    # Share access requests — the "approval" security mode. A visitor on
+    # an approval-gated /shared/<token> page submits a request; it lands
+    # in the Manage Shared → Pending Requests queue for a readwrite admin
+    # to approve (choosing how many downloads the grant is good for) or
+    # deny. access_token is issued at request time and doubles as both
+    # the poll/status token (stored in the visitor's browser as a cookie)
+    # and, once approved, the download-authorization token.
+    # ------------------------------------------------------------------
+
+    def create_access_request(
+        self, token: str, requester_name: str, requester_note: str | None
+    ) -> str:
+        access_token = secrets.token_urlsafe(20)
+        with _write_lock, _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO share_access_requests(token, requester_name, requester_note, access_token)
+                VALUES(?,?,?,?)
+                """,
+                (
+                    token,
+                    requester_name.strip()[:120],
+                    (requester_note or "").strip()[:500],
+                    access_token,
+                ),
+            )
+        return access_token
+
+    def get_access_request_by_access_token(self, access_token: str) -> dict | None:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM share_access_requests WHERE access_token=?",
+                (access_token,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_pending_requests(self) -> list:
+        """All pending requests, joined with their share's item name/path,
+        for the admin Pending Requests queue. Skips requests whose share
+        was since revoked."""
+        with _connect() as conn:
+            rows = conn.execute("""
+                SELECT r.*, s.item_name, s.file_path, s.is_dir
+                FROM share_access_requests r
+                JOIN share_links s ON s.token = r.token AND s.revoked = 0
+                WHERE r.status = 'pending'
+                ORDER BY r.requested_at ASC
+                """).fetchall()
+        return [dict(r) for r in rows]
+
+    def count_pending_requests(self) -> int:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) c FROM share_access_requests WHERE status='pending'"
+            ).fetchone()
+        return row["c"]
+
+    def approve_access_request(
+        self, request_id: int, decided_by: str, max_downloads: int
+    ) -> bool:
+        max_downloads = max(1, int(max_downloads))
+        with _write_lock, _connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE share_access_requests
+                SET status='approved', decided_at=unixepoch(), decided_by=?, max_downloads=?
+                WHERE id=? AND status='pending'
+                """,
+                (decided_by, max_downloads, request_id),
+            )
+        return cur.rowcount > 0
+
+    def deny_access_request(self, request_id: int, decided_by: str) -> bool:
+        with _write_lock, _connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE share_access_requests
+                SET status='denied', decided_at=unixepoch(), decided_by=?
+                WHERE id=? AND status='pending'
+                """,
+                (decided_by, request_id),
+            )
+        return cur.rowcount > 0
+
+    def record_access_request_download(self, access_token: str) -> bool:
+        """Increments downloads_used for an approved grant. Returns False
+        (and does nothing) if the grant is missing, not approved, or
+        already used up — caller should treat that as unauthorized."""
+        with _write_lock, _connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE share_access_requests
+                SET downloads_used = downloads_used + 1
+                WHERE access_token=? AND status='approved'
+                  AND downloads_used < max_downloads
+                """,
+                (access_token,),
+            )
+        return cur.rowcount > 0
 
 
 # ------------------------------------------------------------------
