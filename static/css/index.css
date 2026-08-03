@@ -1450,6 +1450,338 @@ i.fa-file {
     letter-spacing: 2px;
 }
 
+.btn-xs {
+    padding: 4px 9px;
+    font-size: 11px;
+    border-radius: 6px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Share security panel (mode / passkey / expiry) — new-share settings */
+/* ------------------------------------------------------------------ */
+
+.share-security-panel {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+}
+
+.share-security-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+}
+
+.share-security-row:last-child {
+    margin-bottom: 0;
+}
+
+.share-security-row>label:first-child {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 13px;
+    font-weight: 500;
+    flex-shrink: 0;
+}
+
+.share-security-row .form-control {
+    width: auto;
+    flex: 1;
+    min-width: 160px;
+    padding: 7px 10px;
+    font-size: 13px;
+}
+
+.security-mode-options {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+
+.security-mode-options label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.85);
+    cursor: pointer;
+    user-select: none;
+}
+
+.security-mode-options input[type="radio"] {
+    cursor: pointer;
+}
+
+.share-security-sub {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.12);
+}
+
+.share-security-sub .form-control {
+    width: 100%;
+}
+
+/* ------------------------------------------------------------------ */
+/* Per-item share row: summary badges, passkey reveal, inline editor  */
+/* ------------------------------------------------------------------ */
+
+.share-security-summary {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.share-summary-badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.mode-badge,
+.expiry-badge,
+.downloads-badge,
+.created-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 20px;
+    white-space: nowrap;
+}
+
+.mode-badge.mode-public {
+    background: rgba(52, 152, 219, 0.18);
+    color: #6cb6e8;
+}
+
+.mode-badge.mode-passkey {
+    background: rgba(241, 196, 15, 0.18);
+    color: #f1c40f;
+}
+
+.mode-badge.mode-approval {
+    background: rgba(155, 89, 182, 0.2);
+    color: #c896e0;
+}
+
+.expiry-badge,
+.downloads-badge,
+.created-badge {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.65);
+}
+
+.share-passkey-reveal {
+    margin-top: 10px;
+    padding: 9px 11px;
+    border-radius: 8px;
+    background: rgba(241, 196, 15, 0.12);
+    border: 1px solid rgba(241, 196, 15, 0.35);
+    font-size: 13px;
+    color: #f1c40f;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.share-passkey-reveal code {
+    background: rgba(0, 0, 0, 0.25);
+    padding: 2px 7px;
+    border-radius: 5px;
+    color: #fff;
+    font-family: 'Courier New', monospace;
+}
+
+.passkey-reveal-note {
+    color: rgba(241, 196, 15, 0.7);
+    font-size: 11px;
+    margin-left: auto;
+}
+
+.share-row-editor {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.row-passkey-sub {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.row-generate-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.6);
+    cursor: pointer;
+    user-select: none;
+}
+
+.row-editor-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Manage Shared panel (admin): tabs + active shares + pending requests */
+/* ------------------------------------------------------------------ */
+
+.modal-content-lg {
+    max-width: 640px;
+}
+
+.manage-shared-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.manage-shared-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: rgba(255, 255, 255, 0.6);
+    padding: 9px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.manage-shared-tab:hover {
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.manage-shared-tab.active {
+    color: #fff;
+    border-bottom-color: #3498db;
+}
+
+.tab-count {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 10px;
+    padding: 1px 7px;
+    font-size: 11px;
+    min-width: 16px;
+    text-align: center;
+}
+
+.manage-shared-panel {
+    min-height: 120px;
+}
+
+.manage-shared-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 420px;
+    overflow-y: auto;
+}
+
+.manage-shared-empty {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 13px;
+    text-align: center;
+    padding: 24px 0;
+}
+
+.manage-share-row,
+.manage-request-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    flex-wrap: wrap;
+}
+
+.manage-share-main {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+    flex: 1;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.manage-share-info {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+}
+
+.manage-share-info strong {
+    color: #fff;
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 320px;
+}
+
+.manage-share-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.manage-share-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.request-actions {
+    flex-wrap: wrap;
+}
+
+.request-note {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.55);
+    font-style: italic;
+    max-width: 320px;
+}
+
+.max-downloads-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.max-downloads-input {
+    padding: 5px 8px !important;
+    font-size: 12px !important;
+}
+
 /* Folder Browser Styles */
 .folder-browser {
     background: rgba(255, 255, 255, 0.07);
