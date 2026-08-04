@@ -8073,6 +8073,26 @@ function _applyShareRowState(path, state) {
         if (modeRadio) modeRadio.checked = true;
         const passkeySub = row.querySelector('.row-passkey-sub');
         if (passkeySub) passkeySub.style.display = state.security_mode === 'passkey' ? 'block' : 'none';
+    } else {
+        // Unshared (checkbox unticked / revoked) — clear everything the
+        // "shared" branch above populates, so a stale passkey-reveal box
+        // or an open row editor from the previous share doesn't linger
+        // until the modal is closed and reopened.
+        delete row.dataset.securityMode;
+        delete row.dataset.hasPasskey;
+        delete row.dataset.expiresAt;
+        if (badgesEl) badgesEl.innerHTML = '';
+        const passkeyReveal = row.querySelector('.share-passkey-reveal');
+        if (passkeyReveal) {
+            passkeyReveal.style.display = 'none';
+            passkeyReveal.innerHTML = '';
+        }
+        const editor = row.querySelector('.share-row-editor');
+        if (editor) editor.style.display = 'none';
+        const publicRadio = row.querySelector('.share-row-editor input[value="public"]');
+        if (publicRadio) publicRadio.checked = true;
+        const rowPasskeySub = row.querySelector('.row-passkey-sub');
+        if (rowPasskeySub) rowPasskeySub.style.display = 'none';
     }
 }
 
@@ -8107,8 +8127,20 @@ function _showRowPasskeyReveal(row, passkey) {
     if (!el) return;
     el.style.display = 'block';
     el.innerHTML = `<i class="fas fa-key"></i> Passkey: <code>${escapeHtml(passkey)}</code>
-        <button type="button" class="btn btn-outline btn-xs" onclick="navigator.clipboard && navigator.clipboard.writeText('${escAttr(passkey)}')">Copy</button>
+        <button type="button" class="btn btn-outline btn-xs" data-fn="copyRevealedPasskey"
+                data-args="${dataArgs([passkey])}">Copy</button>
         <span class="passkey-reveal-note">Shown once — save it now.</span>`;
+}
+
+function copyRevealedPasskey(passkey) {
+    const done = () => showUploadStatus('📋 Passkey copied to clipboard', 'success');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(passkey).then(done).catch(() => {
+            showUploadStatus('❌ Could not copy passkey', 'error');
+        });
+    } else {
+        showUploadStatus('❌ Could not copy passkey', 'error');
+    }
 }
 
 async function onShareToggleChanged(path) {
