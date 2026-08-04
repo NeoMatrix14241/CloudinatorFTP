@@ -449,7 +449,7 @@ cmd_status() {
             echo ""
             info "Last 5 lines of $(basename "$active_log"):"
             echo ""
-            tail -n 5 "$active_log" | sed 's/^/    /'
+            tail -n 5 "$active_log" | sed 's/^/    /' || true
             echo ""
         fi
     fi
@@ -565,8 +565,20 @@ run_utility() {
     header "Running ${script}"
     divider
     trap '' INT    # shell ignores Ctrl-C so manage.sh itself doesn't exit
-    "$PYTHON" "${SCRIPT_DIR}/${script}" "$@"
-    local ec=$?
+    # IMPORTANT: this must be `cmd || ec=$?`, not `cmd; local ec=$?`.
+    # Under `set -e`, a bare failing command aborts the ENTIRE manage.sh
+    # process on the spot — execution never reaches the next line, so
+    # `local ec=$?`, `trap - INT`, and the success/error message below all
+    # get skipped, and control never returns to the menu loop. Every Python
+    # utility here (including revoke_sharing.py) is expected to exit
+    # non-zero on cancelled/failed actions, so this isn't a rare edge case —
+    # it fires on ordinary use. Making the command the LHS of `||` puts it
+    # in a tested context, which `set -e` explicitly exempts, so a failure
+    # is captured into `ec` instead of killing the shell. This makes the
+    # function safe regardless of whether the caller also wraps it in
+    # `|| true` — see cmd_menu below, which does both as defense in depth.
+    local ec=0
+    "$PYTHON" "${SCRIPT_DIR}/${script}" "$@" || ec=$?
     trap - INT     # restore default signal handling
     divider
     (( ec == 0 )) && success "${script%.py} finished." \
@@ -583,8 +595,9 @@ run_bash_script() {
     header "Running ${script}"
     divider
     trap '' INT    # shell ignores Ctrl-C so manage.sh itself doesn't exit
-    bash "${SCRIPT_DIR}/${script}" "$@"
-    local ec=$?
+    # See the comment in run_utility() above — same `set -e` hazard, same fix.
+    local ec=0
+    bash "${SCRIPT_DIR}/${script}" "$@" || ec=$?
     trap - INT     # restore default signal handling
     divider
     (( ec == 0 )) && success "${script} finished." \
@@ -706,7 +719,7 @@ cmd_menu() {
         echo "  13) reset_db.py         — Reset database"
         echo "  14) setup_storage.py    — Configure storage"
         echo "  15) setup_pymodules.sh  — Setup and Update Python packages"
-        echo "  16) revoke_sharing.py   — List/revoke share links"
+        echo "  16) revoke_sharing.py   — Share link management (links, passkeys, approvals)"
         if is_termux; then
             echo "  17) termux_setup.sh    — Termux initial setup (Android only)"
         fi
@@ -721,7 +734,7 @@ cmd_menu() {
             2)  cmd_start dev_server || true ;;
             3)  cmd_stop || true ;;
             4)  cmd_restart || true ;;
-            5)  cmd_status ;;
+            5)  cmd_status || true ;;
             6)
                 local at
                 at=$(active_server)
@@ -734,7 +747,7 @@ cmd_menu() {
                     cmd_logs "$lt" || true
                 fi
             ;;
-            7)  cmd_clean_logs ;;
+            7)  cmd_clean_logs || true ;;
             8)  run_utility "smb_setup.py" || true ;;
             9)  run_utility "kick_sessions.py" || true ;;
             10) run_utility "config.py" || true ;;
@@ -783,7 +796,12 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
   reset-db              python reset_db.py
   setup-storage         python setup_storage.py
   update-modules        bash setup_pymodules.sh
-  revoke-shares          python revoke_sharing.py [list|revoke <token>|revoke-path <path>|revoke-all]
+  revoke-shares          python revoke_sharing.py [no args → interactive menu]
+                           subcommands: list | revoke <token> | revoke-path <path> |
+                           revoke-all | edit <token> [opts] | edit-path <path> [opts] |
+                           requests | approve <id> | deny <id>
+                           (edit opts: --mode --passkey --generate-passkey
+                            --clear-passkey --expires-in --never-expire)
   termux-setup          bash termux_setup.sh  (Android/Termux only)
 
 ${BOLD}OTHER${NC}
@@ -797,6 +815,7 @@ ${BOLD}EXAMPLES${NC}
   ./manage.sh logs server -f     # follow live output; Ctrl-C to detach only
   ./manage.sh clean-logs         # delete old log files
   ./manage.sh revoke-shares list # list active share links
+  ./manage.sh revoke-shares      # interactive share-management menu
   ./manage.sh stop               # gracefully stop the server
   ./manage.sh menu               # interactive mode
 
