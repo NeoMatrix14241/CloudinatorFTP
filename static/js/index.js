@@ -7844,11 +7844,13 @@ function addManualCleanupButton() {
         const manageSharedBtn = document.createElement('button');
         manageSharedBtn.id = 'manageSharedBtn';
         manageSharedBtn.className = 'btn btn-primary btn-sm manual-cleanup-btn';
-        manageSharedBtn.innerHTML = '<i class="fas fa-shield-halved"></i> Manage Shared';
+        manageSharedBtn.innerHTML = '<i class="fas fa-shield-halved"></i> Manage Shared' +
+            '<span id="manageSharedBtnBadge" class="notif-badge" style="display:none;">0</span>';
         manageSharedBtn.title = 'View and manage every active share link, approve access requests, or revoke all links';
         manageSharedBtn.onclick = openManageSharedModal;
 
         adminActions.appendChild(manageSharedBtn);
+        _startManageSharedBadgePolling();
 
     }
 }
@@ -8350,7 +8352,36 @@ async function _refreshManageSharedCounts() {
         const reqCountEl = document.getElementById('manageSharedRequestsCount');
         if (activeCountEl && activeResp.ok) activeCountEl.textContent = activeData.shares.length;
         if (reqCountEl && reqResp.ok) reqCountEl.textContent = reqData.requests.length || '';
+        if (reqResp.ok) _setManageSharedBadge(reqData.requests.length);
     } catch (e) { /* non-fatal */ }
+}
+
+function _setManageSharedBadge(count) {
+    const badge = document.getElementById('manageSharedBtnBadge');
+    if (!badge) return;
+    if (count > 0) {
+        badge.textContent = count > 99 ? '99+' : String(count);
+        badge.style.display = 'inline-flex';
+    } else {
+        badge.style.display = 'none';
+    }
+}
+
+async function _pollManageSharedBadge() {
+    try {
+        const resp = await fetch('/admin/shares/requests');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        _setManageSharedBadge(data.requests.length);
+    } catch (e) { /* non-fatal — network hiccup, try again next tick */ }
+}
+
+let _manageSharedBadgeInterval = null;
+
+function _startManageSharedBadgePolling() {
+    if (_manageSharedBadgeInterval) return; // already running
+    _pollManageSharedBadge();
+    _manageSharedBadgeInterval = setInterval(_pollManageSharedBadge, 30000);
 }
 
 function _manageSharedRowTemplate(share) {
