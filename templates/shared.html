@@ -10,7 +10,10 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/shared.css') }}">
 </head>
 
-<body>
+<body{% if valid %} data-security-mode="{{ security_mode }}" data-request-state="{{ request_state or '' }}" {% if
+    security_mode=='passkey' %}data-passkey-url="{{ url_for('shared_verify_passkey', token=token) }}" {% endif %} {% if
+    security_mode=='approval' %}data-request-url="{{ url_for('shared_request_access', token=token) }}"
+    data-status-url="{{ url_for('shared_request_status', token=token) }}" {% endif %} {% endif %}>
     <div class="card">
         {% if valid %}
         <div class="icon-circle{% if security_mode != 'public' and not unlocked %} locked{% endif %}">
@@ -103,87 +106,9 @@
         <div class="footer-note">Shared via Cloudinator FTP</div>
     </div>
 
-    {% if valid and security_mode == 'passkey' and not unlocked %}
-    <script>
-        document.getElementById('passkeyForm').addEventListener('submit', async function (e) {
-            e.preventDefault();
-            const btn = document.getElementById('passkeySubmit');
-            const errEl = document.getElementById('gateError');
-            const passkey = document.getElementById('passkeyInput').value.trim();
-            errEl.textContent = '';
-            if (!passkey) return;
-            btn.disabled = true;
-            try {
-                const res = await fetch('{{ url_for("shared_verify_passkey", token=token) }}', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ passkey })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    window.location.reload();
-                } else {
-                    errEl.textContent = data.error || 'Incorrect passkey';
-                    btn.disabled = false;
-                }
-            } catch (err) {
-                errEl.textContent = 'Something went wrong — try again.';
-                btn.disabled = false;
-            }
-        });
-    </script>
+    {% if valid and ((security_mode == 'passkey' and not unlocked) or security_mode == 'approval') %}
+    <script src="{{ url_for('static', filename='js/shared.js') }}"></script>
     {% endif %}
-
-    {% if valid and security_mode == 'approval' %}
-    <script>
-        const requestForm = document.getElementById('requestForm');
-        if (requestForm) {
-            requestForm.addEventListener('submit', async function (e) {
-                e.preventDefault();
-                const btn = document.getElementById('requestSubmit');
-                const errEl = document.getElementById('gateError');
-                const name = document.getElementById('requesterName').value.trim();
-                const note = document.getElementById('requesterNote').value.trim();
-                errEl.textContent = '';
-                if (!name) return;
-                btn.disabled = true;
-                try {
-                    const res = await fetch('{{ url_for("shared_request_access", token=token) }}', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name, note })
-                    });
-                    const data = await res.json();
-                    if (data.success) {
-                        window.location.reload();
-                    } else {
-                        errEl.textContent = data.error || 'Something went wrong — try again.';
-                        btn.disabled = false;
-                    }
-                } catch (err) {
-                    errEl.textContent = 'Something went wrong — try again.';
-                    btn.disabled = false;
-                }
-            });
-        }
-
-        {% if request_state == 'pending' %}
-        // Poll for a decision so the visitor doesn't have to keep refreshing.
-        const _pollInterval = setInterval(async function () {
-            try {
-                const res = await fetch('{{ url_for("shared_request_status", token=token) }}');
-                const data = await res.json();
-                if (data.status && data.status !== 'pending') {
-                    clearInterval(_pollInterval);
-                    window.location.reload();
-                }
-            } catch (err) {
-                // silent — try again next tick
-            }
-        }, 4000);
-        {% endif %}
-    </script>
-    {% endif %}
-</body>
+    </body>
 
 </html>
