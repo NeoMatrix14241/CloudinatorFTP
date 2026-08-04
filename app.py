@@ -1876,6 +1876,7 @@ def shared_download(token):
 
 
 @app.route("/shared/<token>/passkey", methods=["POST"])
+@csrf.exempt  # anonymous visitor, no session — CSRF tokens don't apply here (see shared_request_access below)
 def shared_verify_passkey(token):
     """Verify a passkey for a passkey-gated share; on success, sets a signed
     unlock cookie scoped to this token so the landing/download routes treat
@@ -1901,6 +1902,16 @@ def shared_verify_passkey(token):
 
 
 @app.route("/shared/<token>/request", methods=["POST"])
+@csrf.exempt
+# Both share-link POST endpoints above are hit by anonymous visitors who were
+# never issued a session or a CSRF token (shared.html has no login session —
+# it's a public link). CSRFProtect(app) at the top of this file protects
+# every POST/PUT/PATCH/DELETE by default, so without this exemption these
+# two routes 400 with "The CSRF token is missing" before ever reaching the
+# database — that's not a hypothetical, it silently swallowed every access
+# request submitted from the landing page. CSRF exemption is correct here
+# (not a token workaround) because there's no authenticated session for a
+# forged cross-site request to piggyback on in the first place.
 def shared_request_access(token):
     """Submit an access request for an approval-gated share. Issues an
     access_token cookie the visitor's browser uses to poll status and,

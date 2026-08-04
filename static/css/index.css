@@ -1456,6 +1456,41 @@ i.fa-file {
     border-radius: 6px;
 }
 
+.manual-cleanup-btn {
+    position: relative;
+}
+
+.notif-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    margin-left: 6px;
+    border-radius: 10px;
+    background: #e74c3c;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    vertical-align: middle;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.15);
+}
+
+/* Native datetime-local picker: browsers render the calendar/clock icon and
+   the popup itself using the OS light theme by default, regardless of the
+   input's own background — color-scheme tells the browser to draw its own
+   chrome (icon + popup) in dark mode instead, matching the rest of the UI. */
+input[type="datetime-local"].form-control {
+    color-scheme: dark;
+}
+
+input[type="datetime-local"].form-control::-webkit-calendar-picker-indicator {
+    filter: invert(0.85);
+    cursor: pointer;
+}
+
 /* ------------------------------------------------------------------ */
 /* Share security panel (mode / passkey / expiry) — new-share settings */
 /* ------------------------------------------------------------------ */
