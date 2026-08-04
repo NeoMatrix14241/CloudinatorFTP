@@ -1499,17 +1499,17 @@ input[type="datetime-local"].form-control::-webkit-calendar-picker-indicator {
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 8px;
-    padding: 12px 14px;
-    margin-bottom: 14px;
+    padding: 18px 20px;
+    margin-bottom: 18px;
 }
 
 .share-security-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
+    gap: 14px;
     flex-wrap: wrap;
-    margin-bottom: 10px;
+    margin-bottom: 16px;
 }
 
 .share-security-row:last-child {
@@ -1518,7 +1518,7 @@ input[type="datetime-local"].form-control::-webkit-calendar-picker-indicator {
 
 .share-security-row>label:first-child {
     color: rgba(255, 255, 255, 0.85);
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 500;
     flex-shrink: 0;
 }
@@ -1527,8 +1527,24 @@ input[type="datetime-local"].form-control::-webkit-calendar-picker-indicator {
     width: auto;
     flex: 1;
     min-width: 160px;
-    padding: 7px 10px;
-    font-size: 13px;
+    padding: 9px 12px;
+    font-size: 14px;
+}
+
+/* Dropdowns (e.g. the "Expires" select) inherit the translucent dark
+   background + white text from .form-control, but browsers render the
+   native option-list popup with their own OS chrome by default — ignoring
+   the parent's background and leaving white text on a white popup, which
+   is unreadable. color-scheme tells the browser to draw the popup itself
+   in dark mode, and the explicit option colors are a fallback for browsers
+   that don't honor color-scheme on <option>. */
+select.form-control {
+    color-scheme: dark;
+}
+
+select.form-control option {
+    background: #2c3e50;
+    color: #fff;
 }
 
 .security-mode-options {
@@ -1552,8 +1568,8 @@ input[type="datetime-local"].form-control::-webkit-calendar-picker-indicator {
 }
 
 .share-security-sub {
-    margin-top: 8px;
-    padding-top: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
     border-top: 1px dashed rgba(255, 255, 255, 0.12);
 }
 
