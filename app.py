@@ -1515,6 +1515,24 @@ def _share_is_expired(share: dict) -> bool:
     return bool(exp) and time.time() > exp
 
 
+def _get_live_share(token: str):
+    """Fetch a share by token, lazily revoking (and returning None for) it
+    if it's past its expires_at. Used by every route that touches a share
+    token — landing page, passkey verify, request-access, and download —
+    so an expired share gets cleaned up out of the active-shares list on
+    whichever route a visitor happens to hit first, not just the landing
+    page. Without this, list_active_shares() (and the revoke-all count)
+    would keep counting shares that are already inaccessible everywhere
+    else, until someone happened to reload the plain landing page again."""
+    share = db.get_share_by_token(token)
+    if not share:
+        return None
+    if _share_is_expired(share):
+        db.revoke_share_by_token(token)
+        return None
+    return share
+
+
 def _is_passkey_unlocked(token: str) -> bool:
     cookie = request.cookies.get(_passkey_cookie_name(token))
     if not cookie:
@@ -1806,11 +1824,8 @@ def shared_download(token):
     burn bandwidth on large files. The actual bytes are served from
     /shared/<token>/download, reached only via the button click here.
     """
-    share = db.get_share_by_token(token)
-    if not share or _share_is_expired(share):
-        if share:
-            # Expired — clean it up so it drops out of the active shares list.
-            db.revoke_share_by_token(token)
+    share = _get_live_share(token)
+    if not share:
         return render_template("shared.html", valid=False), 404
 
     file_path = share["file_path"]
@@ -1881,8 +1896,8 @@ def shared_verify_passkey(token):
     """Verify a passkey for a passkey-gated share; on success, sets a signed
     unlock cookie scoped to this token so the landing/download routes treat
     this browser as unlocked."""
-    share = db.get_share_by_token(token)
-    if not share or _share_is_expired(share) or share["security_mode"] != "passkey":
+    share = _get_live_share(token)
+    if not share or share["security_mode"] != "passkey":
         return jsonify({"error": "Not available"}), 404
 
     data = request.get_json(silent=True) or {}
@@ -1916,8 +1931,8 @@ def shared_request_access(token):
     """Submit an access request for an approval-gated share. Issues an
     access_token cookie the visitor's browser uses to poll status and,
     once approved, to authorize downloads."""
-    share = db.get_share_by_token(token)
-    if not share or _share_is_expired(share) or share["security_mode"] != "approval":
+    share = _get_live_share(token)
+    if not share or share["security_mode"] != "approval":
         return jsonify({"error": "Not available"}), 404
 
     data = request.get_json(silent=True) or {}
@@ -1976,8 +1991,8 @@ def shared_file_download(token):
     _t0 = time.time()
     print(f"[shared_dl {token}] request received")
 
-    share = db.get_share_by_token(token)
-    if not share or _share_is_expired(share):
+    share = _get_live_share(token)
+    if not share:
         abort(404)
     print(f"[shared_dl {token}] +{time.time()-_t0:.3f}s got share row")
 
@@ -4795,6 +4810,40 @@ def start_orphan_cleanup_scheduler():
     print("🗑️ Started enhanced orphaned chunk cleanup scheduler (every 5 minutes)")
 
 
+def start_expired_share_cleanup_scheduler():
+    """Start a background thread that periodically revokes expired shares.
+
+    _get_live_share() already revokes an expired share lazily the moment
+    any visitor route touches its token, but a share nobody ever revisits
+    after it expires would otherwise sit in the DB — and in the Manage
+    Shared → Active Shares list / revoke-all count — forever. This is the
+    same belt-and-suspenders pattern as the chunk/orphan cleanup workers
+    above: lazy cleanup on access, plus a periodic sweep so dead entries
+    don't depend on someone stumbling back onto the link.
+    """
+
+    def expired_share_cleanup_worker():
+        while True:
+            try:
+                time.sleep(600)  # Every 10 minutes
+                now = time.time()
+                stale = [
+                    s["token"]
+                    for s in db.list_active_shares()
+                    if s.get("expires_at") and now > s["expires_at"]
+                ]
+                for token in stale:
+                    db.revoke_share_by_token(token)
+                if stale:
+                    print(f"🧹 Revoked {len(stale)} expired share(s)")
+            except Exception as e:
+                print(f"❌ Error in expired share cleanup worker: {e}")
+
+    cleanup_thread = threading.Thread(target=expired_share_cleanup_worker, daemon=True)
+    cleanup_thread.start()
+    print("🔗 Started expired share cleanup scheduler (every 10 minutes)")
+
+
 def assembly_worker():
     """Background worker that processes assembly jobs"""
     print("🔄 Assembly worker started")
@@ -6508,6 +6557,7 @@ def initialize_cleanup():
     # Start enhanced cleanup schedulers
     start_enhanced_cleanup_scheduler()
     start_orphan_cleanup_scheduler()
+    start_expired_share_cleanup_scheduler()
 
     # Start assembly worker
     start_assembly_worker()
