@@ -8457,11 +8457,62 @@ async function _pollManageSharedBadge() {
     } catch (e) { /* non-fatal — network hiccup, try again next tick */ }
 }
 
+// ---------------------------------------------------------------------------
+// Live badge via SSE. The server pushes a fresh pending-request count the
+// instant a request is created/approved/denied (see realtime_shares.py /
+// /admin/shares/requests/stream) — this is genuinely real-time, not a fast
+// poll. EventSource reconnects automatically on transient drops; if the
+// browser gives up entirely (or doesn't support EventSource at all), we
+// fall back to the old interval-poll-plus-refresh-on-focus behavior so the
+// badge still stays roughly current instead of going silent forever.
+// ---------------------------------------------------------------------------
 let _manageSharedBadgeInterval = null;
+let _shareEventsSource = null;
 
 function _startManageSharedBadgePolling() {
+    if (_manageSharedBadgeInterval || _shareEventsSource) return; // already running
+    _pollManageSharedBadge(); // paint a real value immediately while the stream connects
+    _startShareEventsStream();
+}
+
+function _startShareEventsStream() {
+    if (typeof EventSource === 'undefined') {
+        _fallBackToBadgePolling();
+        return;
+    }
+    try {
+        _shareEventsSource = new EventSource('/admin/shares/requests/stream');
+        _shareEventsSource.onmessage = function (e) {
+            let data;
+            try { data = JSON.parse(e.data); } catch (err) { return; }
+            if (data.type !== 'share_requests_update') return; // ignore 'connected'/'ping'
+
+            _setManageSharedBadge(data.pending_count);
+            const reqCountEl = document.getElementById('manageSharedRequestsCount');
+            if (reqCountEl) reqCountEl.textContent = data.pending_count || '';
+
+            // If the Pending Requests tab is the one currently open, refresh
+            // its row list too, so an approve/deny from another session (or
+            // a brand-new request) shows up without a manual reopen.
+            const reqPanel = document.getElementById('manageSharedPanel-requests');
+            if (reqPanel && reqPanel.style.display !== 'none') {
+                loadManageSharedRequests();
+            }
+        };
+        _shareEventsSource.onerror = function () {
+            if (_shareEventsSource && _shareEventsSource.readyState === EventSource.CLOSED) {
+                _shareEventsSource = null;
+                _fallBackToBadgePolling();
+            }
+            // Otherwise EventSource is auto-reconnecting — nothing to do.
+        };
+    } catch (e) {
+        _fallBackToBadgePolling();
+    }
+}
+
+function _fallBackToBadgePolling() {
     if (_manageSharedBadgeInterval) return; // already running
-    _pollManageSharedBadge();
     _manageSharedBadgeInterval = setInterval(_pollManageSharedBadge, 30000);
     // Browsers throttle (or fully pause) setInterval timers in background
     // tabs to save resources, so a request submitted while this tab wasn't

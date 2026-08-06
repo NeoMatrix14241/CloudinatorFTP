@@ -189,6 +189,7 @@ rate_limiter = RateLimiter()
 from file_monitor import get_file_monitor, init_file_monitor
 from search_index import search_index_manager
 from realtime_stats import storage_stats_sse, trigger_storage_update, get_event_manager
+from realtime_shares import share_events_sse, trigger_share_event
 
 # Assembly Queue System
 import queue
@@ -1960,6 +1961,13 @@ def shared_request_access(token):
     access_token = db.create_access_request(token, name, note)
     logging.info(f"Access requested for share {token} by '{name}'")
 
+    try:
+        trigger_share_event(len(db.list_pending_requests()), "created")
+    except Exception as e:
+        # Never let a broadcast hiccup break the actual request submission —
+        # this is an anonymous visitor-facing route.
+        logging.warning(f"Failed to broadcast share-request event: {e}")
+
     resp = jsonify({"success": True, "status": "pending"})
     resp.set_cookie(
         _approval_cookie_name(token),
@@ -3495,6 +3503,21 @@ def admin_shares_pending_requests():
     return jsonify({"requests": requests})
 
 
+@app.route("/admin/shares/requests/stream", methods=["GET"])
+@login_required
+def admin_shares_requests_stream():
+    """Server-Sent Events stream that pushes the pending-request count the
+    instant a request is created, approved, or denied — this is what powers
+    the live badge on the Manage Shared button, replacing what used to be a
+    30s poll (plus a refresh-on-tab-focus fallback for background-tab
+    throttling). Same Waitress-safe streaming approach as
+    /api/storage_stats_stream."""
+    role = get_role(current_user())
+    if role != "readwrite":
+        return jsonify({"error": "Permission denied"}), 403
+    return share_events_sse()
+
+
 @app.route("/admin/shares/requests/<int:request_id>/approve", methods=["POST"])
 @login_required
 def admin_approve_share_request(request_id):
@@ -3518,6 +3541,10 @@ def admin_approve_share_request(request_id):
     logging.info(
         f"Access request {request_id} approved by {current_user()} (max_downloads={max_downloads})"
     )
+    try:
+        trigger_share_event(len(db.list_pending_requests()), "approved")
+    except Exception as e:
+        logging.warning(f"Failed to broadcast share-request event: {e}")
     return jsonify({"success": True})
 
 
@@ -3533,6 +3560,10 @@ def admin_deny_share_request(request_id):
     if not ok:
         return jsonify({"error": "Request not found or already decided"}), 404
     logging.info(f"Access request {request_id} denied by {current_user()}")
+    try:
+        trigger_share_event(len(db.list_pending_requests()), "denied")
+    except Exception as e:
+        logging.warning(f"Failed to broadcast share-request event: {e}")
     return jsonify({"success": True})
 
 
