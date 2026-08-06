@@ -8346,8 +8346,7 @@ async function bulkUnshareAll() {
 function openManageSharedModal() {
     const modal = document.getElementById('manageSharedModal');
     if (modal) modal.classList.add('show');
-    switchManageSharedTab('active');
-    _refreshManageSharedCounts();
+    switchManageSharedTab('active'); // also refreshes counts now
 }
 
 function closeManageSharedModal() {
@@ -8372,6 +8371,14 @@ function switchManageSharedTab(tab) {
     if (tab === 'active') loadManageSharedActive();
     else if (tab === 'requests') loadManageSharedRequests();
     else if (tab === 'danger') _openDangerZone();
+
+    // Row lists refetch themselves on every tab switch, but the pill counts
+    // next to each tab label were only ever refreshed on modal-open or after
+    // an explicit revoke/approve/deny action — switching tabs never touched
+    // them, so they'd silently go stale (e.g. an expired share vanishing
+    // from the Active list on refetch, while its pill count stayed frozen
+    // at the old number). Keep them in lockstep with whatever's on screen.
+    _refreshManageSharedCounts();
 }
 
 // Per-share timers so the Active Shares tab (list + pill counts) updates
