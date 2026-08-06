@@ -8355,6 +8355,7 @@ function closeManageSharedModal() {
     if (modal) modal.classList.remove('show');
     _revokeAllSharesNonce = null;
     _revokeAllSharesCode = null;
+    _clearShareExpiryTimers();
 }
 
 function switchManageSharedTab(tab) {
@@ -8373,6 +8374,48 @@ function switchManageSharedTab(tab) {
     else if (tab === 'danger') _openDangerZone();
 }
 
+// Per-share timers so the Active Shares tab (list + pill counts) updates
+// the instant a share crosses its expires_at, instead of waiting for the
+// next tab switch/modal reopen. We already know each share's exact expiry
+// timestamp from the API response, so rather than polling faster (which
+// only shrinks the staleness window, never closes it), we schedule a
+// one-shot timeout for exactly when it happens and reconcile with the
+// server at that moment. setTimeout has a ~24.8-day max delay, so shares
+// expiring further out just aren't scheduled yet — they'll get picked up
+// next time the list is fetched and is closer to their expiry.
+const _manageShareExpiryTimers = new Map(); // token -> timeoutId
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+
+function _clearShareExpiryTimers() {
+    _manageShareExpiryTimers.forEach(id => clearTimeout(id));
+    _manageShareExpiryTimers.clear();
+}
+
+function _scheduleShareExpiryTimers(shares) {
+    _clearShareExpiryTimers();
+    const now = Date.now();
+    shares.forEach(share => {
+        if (!share.expires_at) return;
+        const delay = share.expires_at * 1000 - now;
+        if (delay <= 0 || delay > MAX_TIMEOUT_MS) return; // already past, or too far out to schedule
+        const id = setTimeout(() => _onShareExpiredClientSide(share.token), delay);
+        _manageShareExpiryTimers.set(share.token, id);
+    });
+}
+
+function _onShareExpiredClientSide(token) {
+    _manageShareExpiryTimers.delete(token);
+    // Drop the row immediately if it's on screen, then reconcile with the
+    // server (which now self-prunes on read) so counts/other tabs line up.
+    const row = document.querySelector(`.manage-share-row[data-token="${CSS.escape(token)}"]`);
+    if (row) row.remove();
+    const container = document.getElementById('manageSharedActiveList');
+    if (container && !container.querySelector('.manage-share-row')) {
+        container.innerHTML = '<p class="manage-shared-empty">No active share links.</p>';
+    }
+    _refreshManageSharedCounts();
+}
+
 async function _refreshManageSharedCounts() {
     try {
         const [activeResp, reqResp] = await Promise.all([
@@ -8385,6 +8428,7 @@ async function _refreshManageSharedCounts() {
         if (activeCountEl && activeResp.ok) activeCountEl.textContent = activeData.shares.length;
         if (reqCountEl && reqResp.ok) reqCountEl.textContent = reqData.requests.length || '';
         if (reqResp.ok) _setManageSharedBadge(reqData.requests.length);
+        if (activeResp.ok) _scheduleShareExpiryTimers(activeData.shares);
     } catch (e) { /* non-fatal */ }
 }
 
@@ -8419,7 +8463,7 @@ function _startManageSharedBadgePolling() {
 function _manageSharedRowTemplate(share) {
     const path = share.file_path;
     return `
-        <div class="manage-share-row">
+        <div class="manage-share-row" data-token="${escAttr(share.token)}">
             <div class="manage-share-main">
                 <i class="fas ${share.is_dir ? 'fa-folder' : 'fa-file'}"></i>
                 <div class="manage-share-info">
@@ -8455,6 +8499,7 @@ async function loadManageSharedActive() {
             return;
         }
         container.innerHTML = data.shares.map(_manageSharedRowTemplate).join('');
+        _scheduleShareExpiryTimers(data.shares);
     } catch (error) {
         container.innerHTML = `<p class="manage-shared-empty">❌ ${escapeHtml(error.message)}</p>`;
     }
