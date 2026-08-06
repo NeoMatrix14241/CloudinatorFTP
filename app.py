@@ -1515,6 +1515,22 @@ def _share_is_expired(share: dict) -> bool:
     return bool(exp) and time.time() > exp
 
 
+def _prune_expired_shares(shares: list) -> list:
+    """Filter an active-shares list down to genuinely live ones, revoking
+    any that are past expires_at along the way. Same lazy-cleanup pattern
+    as _get_live_share, but applied to the whole list — used by the
+    Manage Shared → Active Shares endpoints so an expired share can't sit
+    there looking "active" just because no visitor has hit its link yet
+    and the periodic background sweep hasn't gotten to it."""
+    live = []
+    for s in shares:
+        if _share_is_expired(s):
+            db.revoke_share_by_token(s["token"])
+        else:
+            live.append(s)
+    return live
+
+
 def _get_live_share(token: str):
     """Fetch a share by token, lazily revoking (and returning None for) it
     if it's past its expires_at. Used by every route that touches a share
@@ -3449,7 +3465,7 @@ def admin_shares_count():
     role = get_role(current_user())
     if role != "readwrite":
         return jsonify({"error": "Permission denied"}), 403
-    count = len(db.list_active_shares())
+    count = len(_prune_expired_shares(db.list_active_shares()))
     return jsonify({"count": count})
 
 
@@ -3460,7 +3476,7 @@ def admin_shares_list():
     role = get_role(current_user())
     if role != "readwrite":
         return jsonify({"error": "Permission denied"}), 403
-    shares = db.list_active_shares()
+    shares = _prune_expired_shares(db.list_active_shares())
     for s in shares:
         s["share_url"] = f"{request.host_url.rstrip('/')}/shared/{s['token']}"
         s["has_passkey"] = bool(s.pop("passkey_hash", None))
@@ -4825,7 +4841,6 @@ def start_expired_share_cleanup_scheduler():
     def expired_share_cleanup_worker():
         while True:
             try:
-                time.sleep(600)  # Every 10 minutes
                 now = time.time()
                 stale = [
                     s["token"]
@@ -4838,6 +4853,7 @@ def start_expired_share_cleanup_scheduler():
                     print(f"🧹 Revoked {len(stale)} expired share(s)")
             except Exception as e:
                 print(f"❌ Error in expired share cleanup worker: {e}")
+            time.sleep(600)  # Every 10 minutes
 
     cleanup_thread = threading.Thread(target=expired_share_cleanup_worker, daemon=True)
     cleanup_thread.start()
