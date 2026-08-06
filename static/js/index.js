@@ -8463,6 +8463,14 @@ function _startManageSharedBadgePolling() {
     if (_manageSharedBadgeInterval) return; // already running
     _pollManageSharedBadge();
     _manageSharedBadgeInterval = setInterval(_pollManageSharedBadge, 30000);
+    // Browsers throttle (or fully pause) setInterval timers in background
+    // tabs to save resources, so a request submitted while this tab wasn't
+    // focused can sit un-polled well past the 30s interval. Force a fresh
+    // check the instant the tab regains focus, so switching back always
+    // reflects reality immediately instead of waiting on a throttled timer.
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') _pollManageSharedBadge();
+    });
 }
 
 function _manageSharedRowTemplate(share) {
