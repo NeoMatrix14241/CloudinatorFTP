@@ -8385,6 +8385,12 @@ function switchManageSharedTab(tab) {
 // next time the list is fetched and is closer to their expiry.
 const _manageShareExpiryTimers = new Map(); // token -> timeoutId
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+// Small cushion so the client timer never fires before the server's own
+// clock would agree the share is expired — without this, a browser clock
+// running even a second ahead of the server causes the row to vanish from
+// the DOM while the server still counts it as active for a moment,
+// leaving the tab pill showing a stale (too-high) number.
+const EXPIRY_BUFFER_MS = 2000;
 
 function _clearShareExpiryTimers() {
     _manageShareExpiryTimers.forEach(id => clearTimeout(id));
@@ -8396,7 +8402,7 @@ function _scheduleShareExpiryTimers(shares) {
     const now = Date.now();
     shares.forEach(share => {
         if (!share.expires_at) return;
-        const delay = share.expires_at * 1000 - now;
+        const delay = share.expires_at * 1000 - now + EXPIRY_BUFFER_MS;
         if (delay <= 0 || delay > MAX_TIMEOUT_MS) return; // already past, or too far out to schedule
         const id = setTimeout(() => _onShareExpiredClientSide(share.token), delay);
         _manageShareExpiryTimers.set(share.token, id);
@@ -8405,13 +8411,12 @@ function _scheduleShareExpiryTimers(shares) {
 
 function _onShareExpiredClientSide(token) {
     _manageShareExpiryTimers.delete(token);
-    // Drop the row immediately if it's on screen, then reconcile with the
-    // server (which now self-prunes on read) so counts/other tabs line up.
-    const row = document.querySelector(`.manage-share-row[data-token="${CSS.escape(token)}"]`);
-    if (row) row.remove();
-    const container = document.getElementById('manageSharedActiveList');
-    if (container && !container.querySelector('.manage-share-row')) {
-        container.innerHTML = '<p class="manage-shared-empty">No active share links.</p>';
+    // Re-render from the server's own answer rather than mutating the DOM
+    // ourselves — that's what keeps the visible list and the tab pill
+    // counts guaranteed to agree, since both come from the same fetch.
+    const activePanel = document.getElementById('manageSharedPanel-active');
+    if (activePanel && activePanel.style.display !== 'none') {
+        loadManageSharedActive();
     }
     _refreshManageSharedCounts();
 }
