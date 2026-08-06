@@ -8347,6 +8347,7 @@ function openManageSharedModal() {
     const modal = document.getElementById('manageSharedModal');
     if (modal) modal.classList.add('show');
     switchManageSharedTab('active'); // also refreshes counts now
+    _startManageSharedVisibilityRefresh();
 }
 
 function closeManageSharedModal() {
@@ -8355,7 +8356,43 @@ function closeManageSharedModal() {
     _revokeAllSharesNonce = null;
     _revokeAllSharesCode = null;
     _clearShareExpiryTimers();
+    _stopManageSharedVisibilityRefresh();
 }
+
+// The per-share setTimeout in _scheduleShareExpiryTimers is a nice
+// "instant while the tab is actually active" mechanism, but browsers
+// (especially Chrome on Android) can significantly delay or fully
+// suspend setTimeout/setInterval callbacks in a tab that isn't the
+// current foreground/visible one — screen locked, app-switched away,
+// even briefly. When that happens the timer just doesn't fire on
+// schedule, and the modal is left showing a share the server has
+// already expired/pruned. As a safety net, force a full refresh of
+// whichever Manage Shared tab is open every time the tab regains
+// visibility while the modal is up — same pattern already used for
+// the pending-requests badge fallback.
+let _manageSharedVisibilityHandler = null;
+
+function _startManageSharedVisibilityRefresh() {
+    if (_manageSharedVisibilityHandler) return; // already running
+    _manageSharedVisibilityHandler = () => {
+        if (document.visibilityState !== 'visible') return;
+        const modal = document.getElementById('manageSharedModal');
+        if (!modal || !modal.classList.contains('show')) return;
+        const activePanel = document.getElementById('manageSharedPanel-active');
+        const reqPanel = document.getElementById('manageSharedPanel-requests');
+        if (activePanel && activePanel.style.display !== 'none') loadManageSharedActive();
+        else if (reqPanel && reqPanel.style.display !== 'none') loadManageSharedRequests();
+        _refreshManageSharedCounts();
+    };
+    document.addEventListener('visibilitychange', _manageSharedVisibilityHandler);
+}
+
+function _stopManageSharedVisibilityRefresh() {
+    if (!_manageSharedVisibilityHandler) return;
+    document.removeEventListener('visibilitychange', _manageSharedVisibilityHandler);
+    _manageSharedVisibilityHandler = null;
+}
+
 
 function switchManageSharedTab(tab) {
     document.querySelectorAll('.manage-shared-tab').forEach(btn => btn.classList.remove('active'));
