@@ -53,6 +53,31 @@ class ShareEventManager:
             "reason": reason,
             "pending_count": pending_count,
         }
+        self._send(
+            update_data,
+            log_label=f"share-request update ({reason}, pending={pending_count})",
+        )
+
+    def broadcast_active_shares_changed(self, reason: str = "expired"):
+        """Push a signal that the active-shares list changed (a share was
+        auto-revoked for being past its expires_at, wherever that happened —
+        the periodic sweep, or a lazy revoke-on-read triggered by an admin
+        or a visitor hitting an expired link). The client doesn't need the
+        full share data here, just a nudge to refetch — same connection,
+        same admin-only stream as the pending-request events, just a
+        different event type. This is what makes expiry removal in the
+        Manage Shared → Active Shares tab NOT depend on a client-side
+        setTimeout ever firing — browsers (especially mobile) can silently
+        throttle or suspend those in backgrounded tabs, so the server
+        telling the client directly is the only reliable mechanism."""
+        update_data = {
+            "type": "active_shares_changed",
+            "timestamp": time.time(),
+            "reason": reason,
+        }
+        self._send(update_data, log_label=f"active-shares change ({reason})")
+
+    def _send(self, update_data: dict, log_label: str):
         with self.lock:
             disconnected = set()
             for client_queue in self.clients:
@@ -67,10 +92,7 @@ class ShareEventManager:
                     f"📡 Removed {len(disconnected)} disconnected share-events client(s)"
                 )
 
-        print(
-            f"📡 Broadcasted share-request update ({reason}, pending={pending_count}) "
-            f"to {len(self.clients)} client(s)"
-        )
+        print(f"📡 Broadcasted {log_label} to {len(self.clients)} client(s)")
 
     def get_client_count(self):
         with self.lock:
@@ -134,6 +156,12 @@ def trigger_share_event(pending_count: int, reason: str):
     """Callback used by app.py wherever a request is created, approved, or
     denied — mirrors trigger_storage_update()'s role for the file monitor."""
     share_event_manager.broadcast(pending_count, reason)
+
+
+def trigger_active_shares_changed(reason: str = "expired"):
+    """Callback used by app.py wherever a share gets auto-revoked for being
+    past its expires_at — the periodic sweep, or a lazy revoke-on-read."""
+    share_event_manager.broadcast_active_shares_changed(reason)
 
 
 def get_share_event_manager():

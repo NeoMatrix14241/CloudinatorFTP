@@ -8529,19 +8529,35 @@ function _startShareEventsStream() {
         _shareEventsSource.onmessage = function (e) {
             let data;
             try { data = JSON.parse(e.data); } catch (err) { return; }
-            if (data.type !== 'share_requests_update') return; // ignore 'connected'/'ping'
 
-            _setManageSharedBadge(data.pending_count);
-            const reqCountEl = document.getElementById('manageSharedRequestsCount');
-            if (reqCountEl) reqCountEl.textContent = data.pending_count || '';
+            if (data.type === 'share_requests_update') {
+                _setManageSharedBadge(data.pending_count);
+                const reqCountEl = document.getElementById('manageSharedRequestsCount');
+                if (reqCountEl) reqCountEl.textContent = data.pending_count || '';
 
-            // If the Pending Requests tab is the one currently open, refresh
-            // its row list too, so an approve/deny from another session (or
-            // a brand-new request) shows up without a manual reopen.
-            const reqPanel = document.getElementById('manageSharedPanel-requests');
-            if (reqPanel && reqPanel.style.display !== 'none') {
-                loadManageSharedRequests();
+                // If the Pending Requests tab is the one currently open, refresh
+                // its row list too, so an approve/deny from another session (or
+                // a brand-new request) shows up without a manual reopen.
+                const reqPanel = document.getElementById('manageSharedPanel-requests');
+                if (reqPanel && reqPanel.style.display !== 'none') {
+                    loadManageSharedRequests();
+                }
+            } else if (data.type === 'active_shares_changed') {
+                // Server revoked an expired share — from the 15s sweep, or a
+                // visitor/admin lazily triggering it. This is the mechanism
+                // that makes expiry removal actually live, since it doesn't
+                // depend on a client-side setTimeout ever firing (browsers,
+                // especially mobile, can throttle/suspend those in a
+                // backgrounded tab). Refresh whatever's on screen.
+                const modal = document.getElementById('manageSharedModal');
+                const modalOpen = modal && modal.classList.contains('show');
+                const activePanel = document.getElementById('manageSharedPanel-active');
+                if (modalOpen && activePanel && activePanel.style.display !== 'none') {
+                    loadManageSharedActive();
+                }
+                if (modalOpen) _refreshManageSharedCounts();
             }
+            // else: 'connected' / 'ping' — nothing to do
         };
         _shareEventsSource.onerror = function () {
             if (_shareEventsSource && _shareEventsSource.readyState === EventSource.CLOSED) {
