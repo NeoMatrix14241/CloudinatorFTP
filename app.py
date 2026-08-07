@@ -1210,7 +1210,7 @@ def after_request(response):
         "object-src 'none'; "
         "form-action 'self'; "
         "frame-ancestors 'none'; "
-        "frame-src 'none'; "
+        "frame-src 'self'; "
         "worker-src 'none'; "
         "manifest-src 'none'; "
         "base-uri 'self'"
