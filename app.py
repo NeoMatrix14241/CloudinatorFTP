@@ -1209,7 +1209,7 @@ def after_request(response):
         "font-src 'self'; "
         "object-src 'none'; "
         "form-action 'self'; "
-        "frame-ancestors 'none'; "
+        "frame-ancestors 'self'; "
         "frame-src 'self'; "
         "worker-src 'none'; "
         "manifest-src 'none'; "
