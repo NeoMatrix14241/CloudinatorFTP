@@ -189,7 +189,11 @@ rate_limiter = RateLimiter()
 from file_monitor import get_file_monitor, init_file_monitor
 from search_index import search_index_manager
 from realtime_stats import storage_stats_sse, trigger_storage_update, get_event_manager
-from realtime_shares import share_events_sse, trigger_share_event
+from realtime_shares import (
+    share_events_sse,
+    trigger_share_event,
+    trigger_active_shares_changed,
+)
 
 # Assembly Queue System
 import queue
@@ -1524,11 +1528,21 @@ def _prune_expired_shares(shares: list) -> list:
     there looking "active" just because no visitor has hit its link yet
     and the periodic background sweep hasn't gotten to it."""
     live = []
+    pruned_any = False
     for s in shares:
         if _share_is_expired(s):
             db.revoke_share_by_token(s["token"])
+            pruned_any = True
         else:
             live.append(s)
+    if pruned_any:
+        # Let every connected admin know — not just whoever made this
+        # particular request — so the Active Shares tab updates even in a
+        # tab that's just sitting open and never re-fetches on its own.
+        try:
+            trigger_active_shares_changed("expired")
+        except Exception as e:
+            logging.warning(f"Failed to broadcast active-shares change: {e}")
     return live
 
 
@@ -1546,6 +1560,10 @@ def _get_live_share(token: str):
         return None
     if _share_is_expired(share):
         db.revoke_share_by_token(token)
+        try:
+            trigger_active_shares_changed("expired")
+        except Exception as e:
+            logging.warning(f"Failed to broadcast active-shares change: {e}")
         return None
     return share
 
@@ -4860,35 +4878,30 @@ def start_orphan_cleanup_scheduler():
 def start_expired_share_cleanup_scheduler():
     """Start a background thread that periodically revokes expired shares.
 
-    _get_live_share() already revokes an expired share lazily the moment
-    any visitor route touches its token, but a share nobody ever revisits
-    after it expires would otherwise sit in the DB — and in the Manage
-    Shared → Active Shares list / revoke-all count — forever. This is the
-    same belt-and-suspenders pattern as the chunk/orphan cleanup workers
-    above: lazy cleanup on access, plus a periodic sweep so dead entries
-    don't depend on someone stumbling back onto the link.
+    _get_live_share() and _prune_expired_shares() already revoke an expired
+    share lazily the moment any visitor route or admin fetch touches it,
+    but a share nobody ever revisits after it expires would otherwise sit
+    in the DB — and in the Manage Shared → Active Shares list / revoke-all
+    count — until someone happens to look. This sweep is what makes expiry
+    removal actually "live" for an admin who just has the tab open and
+    idle: it runs frequently and (via _prune_expired_shares) broadcasts an
+    active_shares_changed SSE event to every connected admin the moment it
+    revokes something, rather than depending on a client-side setTimeout
+    that browsers can throttle/suspend in a backgrounded tab, or on the
+    admin manually triggering a refetch (switching tabs, etc).
     """
 
     def expired_share_cleanup_worker():
         while True:
             try:
-                now = time.time()
-                stale = [
-                    s["token"]
-                    for s in db.list_active_shares()
-                    if s.get("expires_at") and now > s["expires_at"]
-                ]
-                for token in stale:
-                    db.revoke_share_by_token(token)
-                if stale:
-                    print(f"🧹 Revoked {len(stale)} expired share(s)")
+                _prune_expired_shares(db.list_active_shares())
             except Exception as e:
                 print(f"❌ Error in expired share cleanup worker: {e}")
-            time.sleep(600)  # Every 10 minutes
+            time.sleep(15)  # frequent enough to feel live, cheap enough to not matter
 
     cleanup_thread = threading.Thread(target=expired_share_cleanup_worker, daemon=True)
     cleanup_thread.start()
-    print("🔗 Started expired share cleanup scheduler (every 10 minutes)")
+    print("🔗 Started expired share cleanup scheduler (every 15 seconds)")
 
 
 def assembly_worker():
