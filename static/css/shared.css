@@ -159,3 +159,118 @@ p.desc {
         transform: rotate(360deg);
     }
 }
+
+/* Folder browser — kept minimal to match the existing card look rather
+   than pulling in the full authenticated-app file-browser styling. */
+
+.browser-breadcrumbs {
+    text-align: left;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.55);
+    margin: 4px 0 12px;
+    word-break: break-word;
+}
+
+.browser-breadcrumbs .crumb {
+    color: #3498db;
+    text-decoration: none;
+}
+
+.browser-breadcrumbs .crumb:hover {
+    text-decoration: underline;
+}
+
+.browser-list {
+    text-align: left;
+    max-height: 360px;
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    margin-bottom: 14px;
+}
+
+.browser-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    transition: background 0.1s ease;
+}
+
+.browser-row:last-child {
+    border-bottom: none;
+}
+
+.browser-row:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.browser-check {
+    flex: 0 0 auto;
+}
+
+.browser-icon {
+    flex: 0 0 auto;
+    font-size: 15px;
+}
+
+.browser-name {
+    flex: 1 1 auto;
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.browser-size {
+    flex: 0 0 auto;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.45);
+    min-width: 56px;
+    text-align: right;
+}
+
+.browser-download-btn {
+    flex: 0 0 auto;
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.6);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px 6px;
+    border-radius: 6px;
+}
+
+.browser-download-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+}
+
+.browser-loading,
+.browser-empty {
+    padding: 20px;
+    text-align: center;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.browser-selection-bar {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 14px;
+    padding: 10px 14px;
+    background: rgba(52, 152, 219, 0.12);
+    border: 1px solid rgba(52, 152, 219, 0.3);
+    border-radius: 10px;
+    font-size: 13px;
+}
+
+.browser-selection-bar .btn-download {
+    width: auto;
+    padding: 8px 16px;
+    font-size: 13px;
+}

@@ -10,9 +10,11 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/shared.css') }}">
 </head>
 
-<body{% if valid %} data-security-mode="{{ security_mode }}" data-request-state="{{ request_state or '' }}" {% if
-    security_mode=='passkey' %}data-passkey-url="{{ url_for('shared_verify_passkey', token=token) }}" {% endif %} {% if
-    security_mode=='approval' %}data-request-url="{{ url_for('shared_request_access', token=token) }}"
+<body{% if valid %} data-security-mode="{{ security_mode }}" data-request-state="{{ request_state or '' }}"
+    data-token="{{ token }}" data-is-dir="{{ 'true' if is_dir else 'false' }}"
+    data-unlocked="{{ 'true' if unlocked else 'false' }}" {% if security_mode=='passkey'
+    %}data-passkey-url="{{ url_for('shared_verify_passkey', token=token) }}" {% endif %} {% if security_mode=='approval'
+    %}data-request-url="{{ url_for('shared_request_access', token=token) }}"
     data-status-url="{{ url_for('shared_request_status', token=token) }}" {% endif %} {% endif %}>
     <div class="card">
         {% if valid %}
@@ -33,11 +35,25 @@
 
         {% if unlocked %}
         <a class="btn-download" href="{{ url_for('shared_file_download', token=token) }}">
-            <i class="fas fa-download"></i> Download
+            <i class="fas fa-download"></i> Download{% if is_dir %} All (.zip){% endif %}
         </a>
         {% if downloads_remaining is not none %}
         <p class="truncated-note">{{ downloads_remaining }} download{{ 's' if downloads_remaining != 1 else '' }}
             remaining on this approval.</p>
+        {% endif %}
+
+        {% if is_dir %}
+        <div id="folderBrowser">
+            <div id="browserBreadcrumbs" class="browser-breadcrumbs"></div>
+            <div id="browserSelectionBar" class="browser-selection-bar">
+                <span id="browserSelectionCount">0 selected</span>
+                <button type="button" id="browserDownloadSelectedBtn" class="btn-download">
+                    Download selected
+                </button>
+            </div>
+            <div id="browserList" class="browser-list"></div>
+            <p id="browserError" class="gate-error"></p>
+        </div>
         {% endif %}
 
         {% elif security_mode == 'passkey' %}
@@ -106,7 +122,8 @@
         <div class="footer-note">Shared via Cloudinator FTP</div>
     </div>
 
-    {% if valid and ((security_mode == 'passkey' and not unlocked) or security_mode == 'approval') %}
+    {% if valid and ((security_mode == 'passkey' and not unlocked) or security_mode == 'approval' or (unlocked and
+    is_dir)) %}
     <script src="{{ url_for('static', filename='js/shared.js') }}"></script>
     {% endif %}
     </body>
