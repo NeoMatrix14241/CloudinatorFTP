@@ -689,6 +689,9 @@ def validate_session():
         "shared_verify_passkey",
         "shared_request_access",
         "shared_request_status",
+        "shared_browse",
+        "shared_download_item",
+        "shared_zip_selected",
     ]:
         return
 
@@ -2019,6 +2022,124 @@ def shared_request_status(token):
     return jsonify({"status": req["status"]})
 
 
+def _resolve_shared_subpath(share, subpath):
+    """Resolve a browse/download subpath against a share's OWN root, and
+    refuse anything that would land outside it.
+
+    storage.is_safe_path only proves a path can't escape ROOT_DIR — it says
+    nothing about staying inside *this specific share's* folder. Without an
+    extra check here, sharing folder A would let a visitor request a
+    subpath that resolves to sibling folder B under ROOT_DIR, which was
+    never shared. This adds that second, tighter containment check (and
+    covers '..' segments and symlink escapes via realpath comparison, not
+    just string prefix matching).
+
+    Returns (rel_path, full_path) — both relative-to-ROOT_DIR and absolute —
+    or (None, None) if the subpath is invalid, escapes the share, or the
+    target doesn't exist.
+    """
+    share_root = share["file_path"]
+    rel_path = os.path.normpath(os.path.join(share_root, subpath or "")).replace(
+        "\\", "/"
+    )
+    if rel_path in (".", ""):
+        rel_path = share_root
+
+    if not storage.is_safe_path(rel_path):
+        return None, None
+
+    full_path = os.path.join(ROOT_DIR, rel_path)
+    share_full_root = os.path.realpath(os.path.join(ROOT_DIR, share_root))
+    real_full = os.path.realpath(full_path)
+    if real_full != share_full_root and not real_full.startswith(
+        share_full_root + os.sep
+    ):
+        return None, None
+
+    if not os.path.exists(full_path):
+        return None, None
+
+    return rel_path, full_path
+
+
+def _shared_access_granted(token, share):
+    """Re-check the passkey/approval gate for the current visitor. This is
+    the single source of truth for "is this browser allowed to see/download
+    this share right now" — shared_download (landing page), shared_browse,
+    shared_download_item, and shared_zip_selected all call this instead of
+    each re-implementing the check, so the gate can't drift out of sync
+    between routes.
+
+    Returns (granted: bool, access_token: str | None). access_token is only
+    populated for approval mode, since callers that record a download need
+    it to know which access-request row to decrement against.
+    """
+    mode = share["security_mode"]
+    if mode == "public":
+        return True, None
+    if mode == "passkey":
+        return _is_passkey_unlocked(share["token"]), None
+    if mode == "approval":
+        access_token = request.cookies.get(_approval_cookie_name(share["token"]))
+        req = (
+            db.get_access_request_by_access_token(access_token)
+            if access_token
+            else None
+        )
+        if (
+            req
+            and req["token"] == share["token"]
+            and req["status"] == "approved"
+            and req["downloads_used"] < req["max_downloads"]
+        ):
+            return True, access_token
+        return False, access_token
+    return False, None
+
+
+def _stream_folder_zip(full_path, arc_name):
+    """Stream a folder as a ZIP under mimetype application/zip. arc_name is
+    the folder's name as it should appear at the top level of the archive.
+    Shared by the top-level share download, single-subfolder download, and
+    reused (with a slightly different inner loop) by shared_zip_selected."""
+
+    def generate_zip_stream():
+        zf = zipstream.ZipFile(
+            mode="w", compression=zipstream.ZIP_DEFLATED, allowZip64=True
+        )
+        for root, dirs, files in os.walk(full_path):
+            rel_path = os.path.relpath(root, full_path)
+            arc_root = (
+                arc_name
+                if rel_path == "."
+                else os.path.join(arc_name, rel_path).replace("\\", "/")
+            )
+            for file in files:
+                try:
+                    fp = os.path.join(root, file)
+                    zf.write(
+                        fp, arcname=os.path.join(arc_root, file).replace("\\", "/")
+                    )
+                except (PermissionError, OSError) as e:
+                    logging.warning(f"Shared ZIP: skipped {fp}: {e}")
+                    continue
+            if not files and not dirs:
+                zf.writestr(arc_root + "/", "")
+        for chunk in zf:
+            yield chunk
+
+    return Response(
+        generate_zip_stream(),
+        mimetype="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{arc_name}.zip"',
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Content-Encoding": "identity",
+        },
+    )
+
+
 @app.route("/shared/<token>/download")
 def shared_file_download(token):
     """
@@ -2039,24 +2160,9 @@ def shared_file_download(token):
     print(f"[shared_dl {token}] +{time.time()-_t0:.3f}s got share row")
 
     mode = share["security_mode"]
-    access_token = None
-    if mode == "passkey":
-        if not _is_passkey_unlocked(token):
-            return redirect(url_for("shared_download", token=token))
-    elif mode == "approval":
-        access_token = request.cookies.get(_approval_cookie_name(token))
-        req = (
-            db.get_access_request_by_access_token(access_token)
-            if access_token
-            else None
-        )
-        if (
-            not req
-            or req["token"] != token
-            or req["status"] != "approved"
-            or req["downloads_used"] >= req["max_downloads"]
-        ):
-            return redirect(url_for("shared_download", token=token))
+    granted, access_token = _shared_access_granted(token, share)
+    if not granted:
+        return redirect(url_for("shared_download", token=token))
 
     file_path = share["file_path"]
     if not storage.is_safe_path(file_path):
@@ -2087,30 +2193,169 @@ def shared_file_download(token):
         return resp
 
     # Shared folder — stream it as a ZIP, same approach as bulk-download.
-    zip_filename = f"{share['item_name']}.zip"
+    return _stream_folder_zip(full_path, share["item_name"])
+
+
+@app.route("/shared/<token>/browse", defaults={"subpath": ""})
+@app.route("/shared/<token>/browse/<path:subpath>")
+def shared_browse(token, subpath):
+    """List the contents of a folder inside a shared folder (JSON), for the
+    in-page browser on the landing page. subpath is relative to the share's
+    own root, e.g. browsing into a nested folder inside what was shared.
+
+    Re-checks the passkey/approval gate on every call — browsing is not a
+    side door around the gate the landing page enforces — and confines
+    subpath to the share's own subtree via _resolve_shared_subpath, so a
+    visitor can't walk sideways to anything else under ROOT_DIR.
+    """
+    share = _get_live_share(token)
+    if not share:
+        return jsonify({"error": "Not available"}), 404
+
+    granted, _ = _shared_access_granted(token, share)
+    if not granted:
+        return jsonify({"error": "Locked"}), 403
+
+    rel_path, full_path = _resolve_shared_subpath(share, subpath)
+    if rel_path is None or not os.path.isdir(full_path):
+        return jsonify({"error": "Not found"}), 404
+
+    items = storage.list_dir(rel_path)
+    resp = jsonify({"success": True, "items": items, "subpath": subpath})
+    # Same no-store pattern as the rest of the app — this listing can reveal
+    # filenames inside an approval-gated share, so it shouldn't be cached by
+    # a shared/public browser profile any more than the download itself is.
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
+
+
+@app.route("/shared/<token>/download-item/<path:subpath>")
+def shared_download_item(token, subpath):
+    """Download a single file, or a single subfolder (as a ZIP), from
+    inside a browsed shared folder. Same gate + subtree confinement as
+    shared_browse. Counts as one use against an approval grant's
+    downloads_remaining, exactly like the top-level share download —
+    browsing into a folder and grabbing files piecemeal isn't a way around
+    the download limit.
+    """
+    share = _get_live_share(token)
+    if not share:
+        abort(404)
+
+    granted, access_token = _shared_access_granted(token, share)
+    if not granted:
+        return redirect(url_for("shared_download", token=token))
+
+    rel_path, full_path = _resolve_shared_subpath(share, subpath)
+    if rel_path is None:
+        abort(404)
+
+    db.record_share_download(token)
+    if share["security_mode"] == "approval" and access_token:
+        db.record_access_request_download(access_token)
+
+    if os.path.isfile(full_path):
+        directory = os.path.dirname(full_path)
+        filename = os.path.basename(full_path)
+        return send_from_directory(
+            directory, filename, as_attachment=True, download_name=filename
+        )
+
+    item_name = os.path.basename(full_path.rstrip("/\\"))
+    return _stream_folder_zip(full_path, item_name)
+
+
+@app.route("/shared/<token>/zip", methods=["POST"])
+@csrf.exempt
+# Anonymous visitor, no session — identical rationale to shared_verify_passkey
+# and shared_request_access above: CSRFProtect(app) covers every unsafe-verb
+# route by default, and there's no authenticated session here for a forged
+# cross-site request to piggyback on in the first place.
+def shared_zip_selected(token):
+    """Zip up a visitor's multi-selected files/subfolders from inside a
+    shared folder into one download. Each selected item counts as one use
+    against an approval grant's downloads_remaining — checked up front
+    against the *whole* selection so a batch either fully fits inside what's
+    left or is rejected outright, never partially spent.
+    """
+    share = _get_live_share(token)
+    if not share:
+        return jsonify({"error": "Not available"}), 404
+
+    granted, access_token = _shared_access_granted(token, share)
+    if not granted:
+        return jsonify({"error": "Locked"}), 403
+
+    data = request.get_json(silent=True) or {}
+    subpaths = data.get("paths") or []
+    if not subpaths or not isinstance(subpaths, list):
+        return jsonify({"error": "No paths provided"}), 400
+    if len(subpaths) > 200:
+        return jsonify({"error": "Too many items selected"}), 400
+
+    resolved = []
+    for sp in subpaths:
+        rel_path, full_path = _resolve_shared_subpath(share, sp)
+        if rel_path is None:
+            return jsonify({"error": f"Invalid selection: {sp}"}), 400
+        resolved.append(full_path)
+
+    if share["security_mode"] == "approval" and access_token:
+        req = db.get_access_request_by_access_token(access_token)
+        remaining = req["max_downloads"] - req["downloads_used"]
+        if len(resolved) > remaining:
+            return (
+                jsonify(
+                    {
+                        "error": f"Only {remaining} download(s) remaining for this "
+                        f"share, but {len(resolved)} item(s) were selected"
+                    }
+                ),
+                403,
+            )
+
+    db.record_share_download(token)
+    if share["security_mode"] == "approval" and access_token:
+        for _ in resolved:
+            db.record_access_request_download(access_token)
+
+    zip_filename = f"{share['item_name']}_selected.zip"
 
     def generate_zip_stream():
         zf = zipstream.ZipFile(
             mode="w", compression=zipstream.ZIP_DEFLATED, allowZip64=True
         )
-        dir_name = share["item_name"]
-        for root, dirs, files in os.walk(full_path):
-            rel_path = os.path.relpath(root, full_path)
-            arc_root = (
-                dir_name
-                if rel_path == "."
-                else os.path.join(dir_name, rel_path).replace("\\", "/")
-            )
-            for file in files:
-                try:
-                    fp = os.path.join(root, file)
-                    arc_name = os.path.join(arc_root, file).replace("\\", "/")
-                    zf.write(fp, arcname=arc_name)
-                except (PermissionError, OSError) as e:
-                    logging.warning(f"Shared ZIP: skipped {fp}: {e}")
-                    continue
-            if not files and not dirs:
-                zf.writestr(arc_root + "/", "")
+        for item_full_path in resolved:
+            try:
+                if os.path.isfile(item_full_path):
+                    zf.write(item_full_path, arcname=os.path.basename(item_full_path))
+                elif os.path.isdir(item_full_path):
+                    base = os.path.basename(item_full_path.rstrip("/\\"))
+                    for root, dirs, files in os.walk(item_full_path):
+                        rel = os.path.relpath(root, item_full_path)
+                        arc_root = (
+                            base
+                            if rel == "."
+                            else os.path.join(base, rel).replace("\\", "/")
+                        )
+                        for file in files:
+                            try:
+                                fp = os.path.join(root, file)
+                                zf.write(
+                                    fp,
+                                    arcname=os.path.join(arc_root, file).replace(
+                                        "\\", "/"
+                                    ),
+                                )
+                            except (PermissionError, OSError) as e:
+                                logging.warning(f"Shared multi-zip: skipped {fp}: {e}")
+                                continue
+                        if not files and not dirs:
+                            zf.writestr(arc_root + "/", "")
+            except (PermissionError, OSError) as e:
+                logging.warning(f"Shared multi-zip: skipped {item_full_path}: {e}")
+                continue
         for chunk in zf:
             yield chunk
 
