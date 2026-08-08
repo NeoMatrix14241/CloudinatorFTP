@@ -3575,6 +3575,42 @@ function getViewerType(filename) {
     return null;
 }
 
+/**
+ * Resolves once the merged pdf.js viewer (viewer.mjs, loaded as a <script
+ * type="module"> in <head>) has finished initializing and is ready to accept
+ * `.open({ url })` calls. Module scripts execute asynchronously, so on a
+ * cold page load PDFViewerApplication may not be attached to `window` yet by
+ * the time a user clicks a PDF — this polls briefly until it is, then defers
+ * to pdf.js's own `initializedPromise`.
+ */
+/**
+ * Snapshot of document.title taken right before the merged pdf.js viewer
+ * takes over. pdf.js unconditionally overwrites document.title when a PDF
+ * opens (expected pdf.js behavior) — but this app also has a live
+ * connection-status indicator that continuously rewrites document.title by
+ * stripping/re-adding an emoji prefix (see the SSE/polling code further
+ * down). If we don't explicitly restore the pre-PDF title on close, that
+ * indicator would start prepending emojis onto the PDF's filename instead
+ * of the app's real title, permanently, until a full page reload.
+ */
+let _pdfViewerPrevTitle = null;
+
+function _pdfjsReady() {
+    return new Promise((resolve, reject) => {
+        const start = Date.now();
+        (function poll() {
+            const app = window.PDFViewerApplication;
+            if (app && app.initializedPromise) {
+                app.initializedPromise.then(resolve, reject);
+            } else if (Date.now() - start > 15000) {
+                reject(new Error('PDF viewer failed to initialize'));
+            } else {
+                setTimeout(poll, 50);
+            }
+        })();
+    });
+}
+
 /** Open the file viewer modal for a given server-relative path. */
 function openFileViewer(itemPath, filename) {
     const viewType = getViewerType(filename);
@@ -3594,6 +3630,12 @@ function openFileViewer(itemPath, filename) {
     // Clear previous content
     body.innerHTML = '';
     body.className = 'modal-body file-viewer-body';
+    body.style.display = '';
+    // The merged pdf.js viewer overlay is a sibling of `body`, not a child of
+    // it, so it survives body.innerHTML resets above. Default it hidden here;
+    // the 'pdf' case below is the only one that re-shows it.
+    const _pdfRootDefault = document.getElementById('pdfjsViewerRoot');
+    if (_pdfRootDefault) _pdfRootDefault.style.display = 'none';
 
     let inner = '';
     switch (viewType) {
@@ -3666,67 +3708,39 @@ function openFileViewer(itemPath, filename) {
             break;
         case 'pdf': {
             body.classList.add('viewer-pdf');
-            // Use the official pdf.js viewer (web/viewer.html) via iframe —
-            // gives the full toolbar, thumbnails, search, print, etc. for free.
-            const _pdfViewerUrl = '/pdfviewer?file=' + encodeURIComponent(viewUrl);
-            const _pdfIframe = document.createElement('iframe');
-            _pdfIframe.src = _pdfViewerUrl;
-            _pdfIframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;display:block;';
-            _pdfIframe.allowFullscreen = true;
-            // Inject mobile-responsive CSS into the pdf.js viewer (same-origin)
-            _pdfIframe.addEventListener('load', () => {
-                try {
-                    const iDoc = _pdfIframe.contentDocument || _pdfIframe.contentWindow.document;
-                    const mobileStyle = iDoc.createElement('style');
-                    mobileStyle.textContent = `
-                        @media (max-width: 768px) {
-                            /* Make the toolbar scroll horizontally instead of clipping */
-                            #toolbarViewer,
-                            .toolbar,
-                            #toolbarContainer {
-                                overflow-x: auto !important;
-                                overflow-y: hidden !important;
-                                flex-wrap: nowrap !important;
-                                -webkit-overflow-scrolling: touch;
-                                scrollbar-width: none; /* hide scrollbar but keep scrollability */
-                            }
-                            #toolbarViewer::-webkit-scrollbar,
-                            .toolbar::-webkit-scrollbar,
-                            #toolbarContainer::-webkit-scrollbar { display: none; }
-
-                            /* Keep toolbar sections from shrinking so all buttons stay visible */
-                            #toolbarViewerLeft,
-                            #toolbarViewerMiddle,
-                            #toolbarViewerRight {
-                                flex-shrink: 0 !important;
-                            }
-
-                            /* Slightly shrink buttons/inputs so more fit without scrolling */
-                            #toolbarViewer input,
-                            #toolbarViewer button,
-                            #toolbarViewer select,
-                            #toolbarViewer .toolbarButton,
-                            #toolbarViewer .dropdownToolbarButton {
-                                min-width: unset !important;
-                                padding-left: 4px !important;
-                                padding-right: 4px !important;
-                                font-size: 12px !important;
-                            }
-
-                            /* Scale the viewer area to fill remaining space */
-                            #viewerContainer,
-                            #mainContainer {
-                                top: 0 !important;
-                                width: 100% !important;
-                                max-width: 100% !important;
-                            }
-                        }
-                    `;
-                    iDoc.head.appendChild(mobileStyle);
-                } catch (e) { /* cross-origin safety — silently skip */ }
-            });
-            body.innerHTML = '';
-            body.appendChild(_pdfIframe);
+            // Use the official pdf.js viewer, merged directly into this page
+            // (see #pdfjsViewerRoot in index.html) instead of an iframe —
+            // gives the full toolbar, thumbnails, search, print, etc. without
+            // ever framing a URL, so CSP's frame-src directive never applies.
+            const pdfRoot = document.getElementById('pdfjsViewerRoot');
+            body.style.display = 'none';
+            pdfRoot.style.display = 'block';
+            _pdfViewerPrevTitle = document.title;
+            _pdfjsReady()
+                .then(() => {
+                    const app = window.PDFViewerApplication;
+                    // The old iframe-based viewer never touched this page's
+                    // tab title at all — iframes have an isolated
+                    // document.title, so whatever viewer.html set internally
+                    // stayed inside the iframe. Now that pdf.js is merged
+                    // into this same document, its setTitle() calls
+                    // (triggered on open, and again once the PDF's embedded
+                    // metadata loads) directly mutate the real page title.
+                    // Disable that entirely to restore the old behavior:
+                    // the tab title never changes while viewing a PDF.
+                    app.setTitle = () => {};
+                    return app.open({ url: viewUrl });
+                })
+                .catch(err => {
+                    console.error('PDF viewer failed to load:', err);
+                    pdfRoot.style.display = 'none';
+                    body.style.display = '';
+                    if (_pdfViewerPrevTitle !== null) {
+                        document.title = _pdfViewerPrevTitle;
+                        _pdfViewerPrevTitle = null;
+                    }
+                    body.innerHTML = `<div class="viewer-text-loading"><i class="fas fa-exclamation-triangle"></i> Could not load PDF viewer: ${escapeHtml(err && err.message ? err.message : String(err))}</div>`;
+                });
             inner = '';
             break;
         }
@@ -4234,6 +4248,26 @@ function closeFileViewer() {
     if (!modal) return;
     modal.classList.remove('show');
 
+    // 0. If the merged pdf.js viewer overlay is active, unload its document
+    //    and hide it. It's a sibling of `body`, not a child, so it survives
+    //    body.innerHTML clears below and must be handled separately.
+    const pdfRoot = document.getElementById('pdfjsViewerRoot');
+    if (pdfRoot && pdfRoot.style.display !== 'none') {
+        pdfRoot.style.display = 'none';
+        body.style.display = '';
+        try {
+            if (window.PDFViewerApplication && typeof window.PDFViewerApplication.close === 'function') {
+                window.PDFViewerApplication.close();
+            }
+        } catch (_) { /* best-effort cleanup */ }
+        // pdf.js overwrote document.title when it opened this file; restore
+        // whatever was there before (see _pdfViewerPrevTitle definition for why).
+        if (_pdfViewerPrevTitle !== null) {
+            document.title = _pdfViewerPrevTitle;
+            _pdfViewerPrevTitle = null;
+        }
+    }
+
     // Clean up image zoom listeners and exit fullscreen if active
     if (window._imgZoomAbortCtrl) {
         try { window._imgZoomAbortCtrl.abort(); } catch (_) { }
@@ -4270,275 +4304,8 @@ function closeFileViewer() {
 
     // 4. Clear the body
     body.innerHTML = '';
-
-    // 5. Reset PDF.js state so reopening a PDF starts fresh
-    _pdfState.doc = null;
-    _pdfState.scale = 1;
-    _pdfState.baseScale = 1;
-    _pdfState.rendering = false;
 }
 
-// ── PDF.js helpers ────────────────────────────────────────────────────────────
-
-const _pdfState = { doc: null, scale: 1, baseScale: 1, rendering: false };
-
-// Lazily loaded PDF.js v5 ESM module reference
-let _pdfjsLib = null;
-let _pdfjsLoadPromise = null;
-
-function _loadPdfJs() {
-    if (_pdfjsLib) return Promise.resolve(_pdfjsLib);
-    if (_pdfjsLoadPromise) return _pdfjsLoadPromise;
-    _pdfjsLoadPromise = new Function('return import("/static/js/pdf.mjs")')().then(lib => {
-        _pdfjsLib = lib;
-        _pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/js/pdf.worker.mjs';
-        return lib;
-    });
-    return _pdfjsLoadPromise;
-}
-
-function _renderPdfJs(url) {
-    _pdfState.doc = null;
-    _pdfState.scale = 1;
-    _pdfState.baseScale = 1;
-    _pdfState.rendering = false;
-
-    // cMapUrl enables correct text extraction/selection for PDFs using
-    // non-standard font encodings (CJK, Symbol, custom encodings, etc.).
-    // Requires the cmaps/ folder to be served at /static/js/cmaps/.
-    // standardFontDataUrl covers the 14 standard PDF fonts for correct rendering.
-    _pdfjsLib.getDocument({
-        url,
-        cMapUrl: '/static/js/cmaps/',
-        cMapPacked: true,
-        standardFontDataUrl: '/static/js/standard_fonts/',
-    }).promise
-        .then(doc => {
-            _pdfState.doc = doc;
-            const loadingEl = document.getElementById('pdf-loading');
-            if (loadingEl) loadingEl.style.display = 'none';
-            const info = document.getElementById('pdf-page-info');
-            if (info) info.textContent = `${doc.numPages} page${doc.numPages !== 1 ? 's' : ''}`;
-
-            doc.getPage(1).then(page => {
-                // Defer measurement to next animation frame so the modal has
-                // finished layout and pagesEl.clientWidth is reliable.
-                // Without this, fast-loading / cached PDFs measure 0 and
-                // produce a broken baseScale that makes zoom non-functional.
-                requestAnimationFrame(() => {
-                    const pagesEl = document.getElementById('pdf-pages');
-                    const rawW = pagesEl ? pagesEl.clientWidth : 0;
-                    const availW = (rawW > 48 ? rawW : window.innerWidth) - 24;
-                    const pageW = page.getViewport({ scale: 1 }).width;
-                    _pdfState.baseScale = pageW > 0 ? availW / pageW : 1;
-                    _pdfState.scale = _pdfState.baseScale;
-                    _pdfZoomLabel();
-                    _renderAllPages();
-                });
-            });
-        })
-        .catch(err => {
-            const loadingEl = document.getElementById('pdf-loading');
-            if (loadingEl) loadingEl.innerHTML =
-                `<i class="fas fa-exclamation-triangle"></i> Could not load PDF: ${err.message}`;
-        });
-}
-
-function _renderAllPages(restoreScrollRatio) {
-    if (!_pdfState.doc) return;
-    const pagesEl = document.getElementById('pdf-pages');
-    if (!pagesEl) return;
-
-    const scrollRatio = restoreScrollRatio !== undefined
-        ? restoreScrollRatio
-        : (pagesEl.scrollHeight > 0 ? pagesEl.scrollTop / pagesEl.scrollHeight : 0);
-
-    const total = _pdfState.doc.numPages;
-    const existing = [...pagesEl.querySelectorAll('.viewer-pdfjs-page')];
-
-    for (let i = existing.length + 1; i <= total; i++) {
-        const wrap = document.createElement('div');
-        wrap.className = 'viewer-pdfjs-page';
-        wrap.dataset.page = i;
-
-        const canvas = document.createElement('canvas');
-        canvas.className = 'viewer-pdfjs-canvas';
-
-        const textLayer = document.createElement('div');
-        textLayer.className = 'viewer-pdfjs-text textLayer';
-
-        wrap.appendChild(canvas);
-        wrap.appendChild(textLayer);
-        pagesEl.appendChild(wrap);
-        existing.push(wrap);
-    }
-
-    const renders = existing.slice(0, total).map((wrap, idx) => {
-        const canvas = wrap.querySelector('.viewer-pdfjs-canvas');
-        const textLayer = wrap.querySelector('.viewer-pdfjs-text');
-        return _renderSinglePage(idx + 1, canvas, textLayer);
-    });
-
-    Promise.all(renders).then(() => {
-        pagesEl.scrollTop = pagesEl.scrollHeight * scrollRatio;
-    });
-}
-
-function _renderSinglePage(pageNum, canvas, textLayer) {
-    const gen = (canvas._pdfGen = (canvas._pdfGen || 0) + 1);
-
-    // Cancel any in-flight renderTextLayer task for this text layer
-    if (textLayer && textLayer._pdfRenderTask) {
-        try { textLayer._pdfRenderTask.cancel(); } catch (_) { }
-        textLayer._pdfRenderTask = null;
-    }
-
-    return _pdfState.doc.getPage(pageNum).then(page => {
-        const dpr = window.devicePixelRatio || 1;
-        const viewport = page.getViewport({ scale: _pdfState.scale });
-        const viewportHiDp = page.getViewport({ scale: _pdfState.scale * dpr });
-
-        const offscreen = document.createElement('canvas');
-        offscreen.width = viewportHiDp.width;
-        offscreen.height = viewportHiDp.height;
-
-        return page.render({ canvasContext: offscreen.getContext('2d'), viewport: viewportHiDp }).promise.then(() => {
-            if (canvas._pdfGen !== gen) return;
-
-            canvas.width = viewportHiDp.width;
-            canvas.height = viewportHiDp.height;
-            canvas.style.width = viewport.width + 'px';
-            canvas.style.height = viewport.height + 'px';
-            canvas.getContext('2d').drawImage(offscreen, 0, 0);
-
-            const wrap = canvas.parentElement;
-            if (wrap) {
-                wrap.style.width = viewport.width + 'px';
-                wrap.style.height = viewport.height + 'px';
-            }
-
-            if (textLayer) {
-                textLayer.innerHTML = '';
-                textLayer.style.width = viewport.width + 'px';
-                textLayer.style.height = viewport.height + 'px';
-                // --scale-factor must be the logical scale (not DPR-multiplied)
-                textLayer.style.setProperty('--scale-factor', String(_pdfState.scale));
-                // renderTextLayer removed in pdf.js v4; use TextLayer class instead
-                if (canvas._pdfGen !== gen) return;
-                if (textLayer._pdfRenderTask) {
-                    try { textLayer._pdfRenderTask.cancel(); } catch (_) { }
-                    textLayer._pdfRenderTask = null;
-                }
-                const tl = new _pdfjsLib.TextLayer({
-                    textContentSource: page.streamTextContent(),
-                    container: textLayer,
-                    viewport: viewport,
-                });
-                textLayer._pdfRenderTask = tl;
-                tl.render().then(() => {
-                    if (textLayer._pdfRenderTask === tl) textLayer._pdfRenderTask = null;
-                }).catch(() => { });
-            }
-
-            const pagesEl = document.getElementById('pdf-pages');
-            if (pagesEl) {
-                pagesEl.style.alignItems = viewport.width <= pagesEl.clientWidth
-                    ? 'center'
-                    : 'flex-start';
-            }
-        });
-    });
-}
-function _pdfZoomLabel() {
-    const el = document.getElementById('pdf-zoom-level');
-    if (el) el.textContent = Math.round((_pdfState.scale / _pdfState.baseScale) * 100) + '%';
-}
-
-
-
-
-/**
- * Intercepts native pinch-to-zoom on the PDF pages container.
- * During pinch: re-renders only the visible pages each frame — fast enough
- * to feel real-time. On release: re-renders all pages for full sharpness.
- */
-function _pdfAttachPinchZoom(container) {
-    let startDist = 0;
-    let startScale = 1;
-    let pinching = false;
-    let rafPending = false;
-
-    function _dist(touches) {
-        const dx = touches[0].clientX - touches[1].clientX;
-        const dy = touches[0].clientY - touches[1].clientY;
-        return Math.hypot(dx, dy);
-    }
-
-    function _visibleCanvases() {
-        const pagesEl = document.getElementById('pdf-pages');
-        if (!pagesEl) return [];
-        const top = pagesEl.scrollTop;
-        const bottom = top + pagesEl.clientHeight;
-        return [...pagesEl.querySelectorAll('.viewer-pdfjs-canvas')].filter(c => {
-            const wrap = c.parentElement;
-            const offsetTop = wrap ? wrap.offsetTop : c.offsetTop;
-            return offsetTop + (wrap ? wrap.offsetHeight : c.offsetHeight) >= top && offsetTop <= bottom;
-        });
-    }
-
-    function _renderVisible() {
-        _visibleCanvases().forEach(canvas => {
-            const pageNum = parseInt(canvas.dataset.page, 10) ||
-                parseInt(canvas.closest('.viewer-pdfjs-page')?.dataset.page, 10);
-            const textLayer = canvas.parentElement?.querySelector('.viewer-pdfjs-text');
-            if (pageNum) _renderSinglePage(pageNum, canvas, textLayer);
-        });
-        _pdfZoomLabel();
-    }
-
-    container.addEventListener('touchstart', e => {
-        if (e.touches.length === 2) {
-            pinching = true;
-            startDist = _dist(e.touches);
-            startScale = _pdfState.scale;
-            e.preventDefault();
-        }
-    }, { passive: false });
-
-    container.addEventListener('touchmove', e => {
-        if (!pinching || e.touches.length !== 2) return;
-        e.preventDefault();
-
-        const ratio = _dist(e.touches) / startDist;
-        const newScale = Math.max(
-            _pdfState.baseScale * 0.5,
-            Math.min(_pdfState.baseScale * 4, startScale * ratio)
-        );
-        _pdfState.scale = newScale;
-
-        // Throttle to one render per animation frame
-        if (!rafPending) {
-            rafPending = true;
-            requestAnimationFrame(() => {
-                _renderVisible();
-                rafPending = false;
-            });
-        }
-    }, { passive: false });
-
-    container.addEventListener('touchend', e => {
-        if (!pinching || e.touches.length >= 2) return;
-        pinching = false;
-
-        // Re-render all pages (including off-screen) at the final scale
-        const pagesEl = document.getElementById('pdf-pages');
-        const scrollRatio = pagesEl && pagesEl.scrollHeight > 0
-            ? pagesEl.scrollTop / pagesEl.scrollHeight : 0;
-        _renderAllPages(scrollRatio);
-    });
-}
-
-// ── End PDF.js helpers ────────────────────────────────────────────────────────
 
 function _renderOfficePreview(body, data) {
     body.innerHTML = '';
