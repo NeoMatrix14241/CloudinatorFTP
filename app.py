@@ -1211,7 +1211,7 @@ def after_request(response):
         "form-action 'self'; "
         "frame-ancestors 'none'; "
         "frame-src 'none'; "
-        "worker-src 'none'; "
+        "worker-src 'self'; "
         "manifest-src 'none'; "
         "base-uri 'self'"
     )
@@ -2369,12 +2369,6 @@ def shared_zip_selected(token):
             "Content-Encoding": "identity",
         },
     )
-
-
-@app.route("/pdfviewer")
-@login_required
-def pdf_viewer():
-    return render_template("viewer.html")
 
 
 @app.route("/office_preview/<path:path>")

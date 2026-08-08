@@ -1,0 +1,91 @@
+/* ── Undo page-wide leaks from the merged pdf.js viewer.css ─────────────────
+   viewer.css was written assuming it owns the entire document (it used to
+   live in its own iframe). Two of its rules use selectors that can't be
+   scoped to a container no matter where the <link> sits in the DOM:
+
+   1. `:root { color-scheme: light dark; }` — `:root` always means the
+      page's actual <html> element. `color-scheme` is inherited, so this
+      silently forced every native form control on the whole page — this
+      app's own checkboxes included — into browser-default light/dark
+      rendering instead of this app's intended theme. Reset it back to
+      `normal` (the value the page had before viewer.css existed) at the
+      real root, then re-apply pdf.js's own intended value only inside its
+      own container so its internal controls still look right.
+   2. `body { margin:0; background-color:...; scrollbar-color:...; }` —
+      also targets the real <body>, not a scoped copy of it. Restored here.
+   This file is loaded after viewer.css, so these rules win the cascade
+   tie on the exact same selectors/properties. */
+:root {
+    color-scheme: normal;
+}
+
+#pdfjsViewerRoot {
+    color-scheme: light dark;
+}
+
+body {
+    margin: 0;
+    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    scrollbar-color: auto;
+}
+
+/* Scope the pdf.js viewer to sit inside the file-viewer modal instead
+   of owning the full page, and keep it hidden until a PDF is opened. */
+#pdfjsViewerRoot {
+    display: none;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+#pdfjsViewerRoot #outerContainer,
+#pdfjsViewerRoot #mainContainer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+@media (max-width: 768px) {
+
+    #pdfjsViewerRoot #toolbarViewer,
+    #pdfjsViewerRoot .toolbar,
+    #pdfjsViewerRoot #toolbarContainer {
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        flex-wrap: nowrap !important;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+
+    #pdfjsViewerRoot #toolbarViewer::-webkit-scrollbar,
+    #pdfjsViewerRoot .toolbar::-webkit-scrollbar,
+    #pdfjsViewerRoot #toolbarContainer::-webkit-scrollbar {
+        display: none;
+    }
+
+    #pdfjsViewerRoot #toolbarViewerLeft,
+    #pdfjsViewerRoot #toolbarViewerMiddle,
+    #pdfjsViewerRoot #toolbarViewerRight {
+        flex-shrink: 0 !important;
+    }
+
+    #pdfjsViewerRoot #toolbarViewer input,
+    #pdfjsViewerRoot #toolbarViewer button,
+    #pdfjsViewerRoot #toolbarViewer select,
+    #pdfjsViewerRoot #toolbarViewer .toolbarButton,
+    #pdfjsViewerRoot #toolbarViewer .dropdownToolbarButton {
+        min-width: unset !important;
+        padding-left: 4px !important;
+        padding-right: 4px !important;
+        font-size: 12px !important;
+    }
+
+    #pdfjsViewerRoot #viewerContainer,
+    #pdfjsViewerRoot #mainContainer {
+        top: 0 !important;
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+}
