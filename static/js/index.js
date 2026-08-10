@@ -15,6 +15,38 @@
         return meta ? meta.getAttribute('content') : null;
     }
 
+    function setCsrfToken(token) {
+        const meta = document.querySelector('meta[name="csrf-token"]');
+        if (meta && token) meta.setAttribute('content', token);
+    }
+
+    // The <meta name="csrf-token"> tag is only ever as fresh as the page
+    // render that produced it. If session.clear() runs server-side after
+    // this page loaded — e.g. logging out and into a different account in
+    // another tab, since all tabs share one session cookie — the token
+    // baked into this page's HTML no longer matches the session and every
+    // state-changing fetch() starts 400ing with "CSRF token missing/
+    // incorrect", with no way for this tab to know until it tries.
+    // /csrf-token (added alongside this fix) hands out a token for
+    // whatever session is CURRENTLY active, so a stale tab can resync
+    // itself instead of dead-ending the user's action.
+    let _csrfRefreshPromise = null;
+    async function refreshCsrfToken() {
+        if (!_csrfRefreshPromise) {
+            _csrfRefreshPromise = _origFetch('/csrf-token', { credentials: 'same-origin' })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((data) => {
+                    if (data && data.csrf_token) setCsrfToken(data.csrf_token);
+                    return data ? data.csrf_token : null;
+                })
+                .catch(() => null)
+                .finally(() => {
+                    _csrfRefreshPromise = null;
+                });
+        }
+        return _csrfRefreshPromise;
+    }
+
     function isSameOrigin(url) {
         try {
             return new URL(url, window.location.href).origin === window.location.origin;
@@ -23,12 +55,13 @@
         }
     }
 
-    window.fetch = function (input, init) {
+    async function fetchWithCsrf(input, init) {
         init = init || {};
         const method = (init.method || (input && input.method) || 'GET').toUpperCase();
         const url = typeof input === 'string' ? input : (input && input.url) || '';
+        const needsCsrf = STATE_CHANGING.has(method) && isSameOrigin(url);
 
-        if (STATE_CHANGING.has(method) && isSameOrigin(url)) {
+        if (needsCsrf) {
             const token = getCsrfToken();
             if (token) {
                 const headers = new Headers(init.headers || (input && input.headers) || {});
@@ -38,8 +71,47 @@
                 init = Object.assign({}, init, { headers });
             }
         }
-        return _origFetch(input, init);
+
+        const response = await _origFetch(input, init);
+
+        // A 400 here on a state-changing request almost always means this
+        // tab's token went stale (see comment above). Refresh once and
+        // replay the request transparently — if the retry also fails, the
+        // caller sees that response and handles/report it as usual.
+        if (needsCsrf && response.status === 400) {
+            const cloned = response.clone();
+            let looksLikeCsrfFailure = true;
+            try {
+                const text = await cloned.text();
+                looksLikeCsrfFailure = /csrf/i.test(text);
+            } catch (e) {
+                // Non-text body (e.g. binary) — assume it could still be
+                // the CSRF error page and attempt the resync anyway.
+            }
+
+            if (looksLikeCsrfFailure) {
+                const freshToken = await refreshCsrfToken();
+                if (freshToken) {
+                    const headers = new Headers(init.headers || {});
+                    headers.set('X-CSRFToken', freshToken);
+                    init = Object.assign({}, init, { headers });
+                    return _origFetch(input, init);
+                }
+            }
+        }
+
+        return response;
+    }
+
+    window.fetch = function (input, init) {
+        return fetchWithCsrf(input, init);
     };
+
+    // Exposed so non-fetch call sites (e.g. the XMLHttpRequest upload path
+    // below) can resync the meta tag through the same mechanism instead of
+    // duplicating the refresh logic.
+    window._refreshCsrfToken = refreshCsrfToken;
+    window._getCsrfToken = getCsrfToken;
 })();
 
 // ---------------------------------------------------------------------------
@@ -3728,7 +3800,7 @@ function openFileViewer(itemPath, filename) {
                     // metadata loads) directly mutate the real page title.
                     // Disable that entirely to restore the old behavior:
                     // the tab title never changes while viewing a PDF.
-                    app.setTitle = () => {};
+                    app.setTitle = () => { };
                     return app.open({ url: viewUrl });
                 })
                 .catch(err => {
@@ -5916,7 +5988,13 @@ async function startSequentialUploads(pendingFiles) {
 // 10MB/file boundaries — and critically, if sending genuinely stalls, these
 // events simply stop firing (nothing is faked/interpolated), so _rollingSpeed's
 // time-decay does the honest thing and speed/ETA taper toward 0 on their own.
-function xhrUpload(url, formData, { signal, onProgress } = {}) {
+// FormData is safe to send more than once (unlike a fetch ReadableStream
+// body), so on a CSRF-shaped 400 this resyncs the meta tag via
+// /csrf-token and replays the exact same upload once with the fresh
+// token — same stale-tab scenario as the fetch wrapper above (see its
+// comment), just handled here too since uploads go through XHR instead
+// of fetch() to get real upload-progress events.
+function _sendXhrUploadOnce(url, formData, token, { signal, onProgress } = {}) {
     return new Promise((resolve, reject) => {
         if (signal?.aborted) {
             reject(new DOMException('The user aborted a request.', 'AbortError'));
@@ -5925,8 +6003,7 @@ function xhrUpload(url, formData, { signal, onProgress } = {}) {
 
         const xhr = new XMLHttpRequest();
         xhr.open('POST', url);
-        const _csrfMeta = document.querySelector('meta[name="csrf-token"]');
-        if (_csrfMeta) xhr.setRequestHeader('X-CSRFToken', _csrfMeta.getAttribute('content'));
+        if (token) xhr.setRequestHeader('X-CSRFToken', token);
 
         let abortHandler;
         if (signal) {
@@ -5956,6 +6033,27 @@ function xhrUpload(url, formData, { signal, onProgress } = {}) {
 
         xhr.send(formData);
     });
+}
+
+async function xhrUpload(url, formData, opts = {}) {
+    const token = window._getCsrfToken ? window._getCsrfToken() : document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+    const response = await _sendXhrUploadOnce(url, formData, token, opts);
+
+    if (response.status === 400 && window._refreshCsrfToken) {
+        let looksLikeCsrfFailure = true;
+        try {
+            looksLikeCsrfFailure = /csrf/i.test(await response.text());
+        } catch (e) { /* non-text body — assume it could still be the CSRF error page */ }
+
+        if (looksLikeCsrfFailure) {
+            const freshToken = await window._refreshCsrfToken();
+            if (freshToken) {
+                return _sendXhrUploadOnce(url, formData, freshToken, opts);
+            }
+        }
+    }
+
+    return response;
 }
 
 async function uploadSingleFile(item) {

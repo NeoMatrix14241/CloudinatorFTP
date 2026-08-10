@@ -608,8 +608,26 @@ app.config.update(
 # The frontend needs to send the token as either a hidden form field
 # ("csrf_token") or the "X-CSRFToken" header — see index.js/login.html patches.
 from flask_wtf import CSRFProtect
+from flask_wtf.csrf import generate_csrf
 
 csrf = CSRFProtect(app)
+
+
+@app.route("/csrf-token")
+def get_csrf_token():
+    """Return the CSRF token for the CURRENT session as JSON.
+
+    Any page/tab left open across a login/account-switch (session.clear()
+    in login()) is holding a token baked in at render time that no longer
+    matches the new session, so its next POST/PUT/PATCH/DELETE 400s with
+    "The CSRF token is missing/incorrect." Rather than trusting a token
+    embedded at page load, the frontend should call this right before a
+    state-changing fetch (or on catching a 400 CSRF error) and use the
+    fresh value instead of reloading the whole page.
+    No @login_required — an anonymous session still needs a valid token
+    to submit the /login form itself.
+    """
+    return jsonify({"csrf_token": generate_csrf()})
 
 
 def _trigger_reconcile(settle=False):
