@@ -3800,7 +3800,7 @@ function openFileViewer(itemPath, filename) {
                     // metadata loads) directly mutate the real page title.
                     // Disable that entirely to restore the old behavior:
                     // the tab title never changes while viewing a PDF.
-                    app.setTitle = () => { };
+                    app.setTitle = () => {};
                     return app.open({ url: viewUrl });
                 })
                 .catch(err => {
@@ -7347,8 +7347,27 @@ async function performBulkZipDownload(paths) {
         input.type = 'hidden';
         input.name = 'paths';
         input.value = JSON.stringify(paths);
-
         form.appendChild(input);
+
+        // This is a real <form>.submit() navigation, NOT fetch/XHR, so the
+        // CSRF-injecting fetch() wrapper (top of this file) never touches
+        // it — that wrapper only patches window.fetch. Flask-WTF looks for
+        // the token in an X-CSRFToken header OR a form field literally
+        // named "csrf_token"; a browser form submit can only supply the
+        // latter. Fetch a guaranteed-current token right before building
+        // the form (not the possibly-stale <meta> tag — see the fetch
+        // wrapper's comment on session.clear() invalidating it across
+        // tabs) so this keeps working even right after switching accounts.
+        const csrfToken = (window._refreshCsrfToken && await window._refreshCsrfToken())
+            || (window._getCsrfToken && window._getCsrfToken());
+        if (csrfToken) {
+            const csrfInput = document.createElement('input');
+            csrfInput.type = 'hidden';
+            csrfInput.name = 'csrf_token';
+            csrfInput.value = csrfToken;
+            form.appendChild(csrfInput);
+        }
+
         document.body.appendChild(form);
         form.submit();
 
