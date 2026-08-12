@@ -915,7 +915,7 @@ async def validate_session():
         # /favicon.ico request racing the login page load.
         if session.get("username") or session.get("server_token"):
             session.clear()
-        return redirect(url_for("login"))
+        return redirect(url_for("login"), code=301)
 
     # Verify the account still exists in users.json.
     # Without this, a deleted account's still-valid cookie causes an infinite
@@ -924,7 +924,7 @@ async def validate_session():
     username = session.get("username")
     if not username or get_role(username) is None:
         session.clear()
-        return redirect(url_for("login"))
+        return redirect(url_for("login"), code=301)
 
     # Session lifetime controlled by PERMANENT_SESSION_LIFETIME (86400s = 24h)
     # and refreshed on every request via SESSION_REFRESH_EACH_REQUEST=True.
