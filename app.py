@@ -1231,7 +1231,7 @@ def login_required(f):
                 or request.accept_mimetypes.best == "application/json"
             ):
                 return jsonify({"error": "Session expired", "redirect": "/login"}), 401
-            return redirect(url_for("login"), code=301)
+            return redirect(url_for("login"))
         return await f(*args, **kwargs)
 
     return decorated
@@ -1533,7 +1533,7 @@ async def _debug_headers():
 async def login():
     # If user is already logged in, redirect to index
     if session.get("logged_in"):
-        return redirect(url_for("index"), code=301)
+        return redirect(url_for("index"))
 
     if request.method == "POST":
         # Check brute-force lockout before touching DB
@@ -1557,7 +1557,7 @@ async def login():
             session["login_time"] = int(time.time())
             session.modified = True
 
-            return redirect(url_for("index"), code=301)
+            return redirect(url_for("index"))
         else:
             rate_limiter.record_failure()
             left = rate_limiter.attempts_remaining()
