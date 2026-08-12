@@ -5,7 +5,7 @@ All user data and the server token now live in cloudinator.db (SQLite).
 users.json and session_token.txt are no longer used.
 """
 
-from flask import session
+from quart import session
 from database import db
 
 

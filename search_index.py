@@ -89,8 +89,7 @@ def _do_bootstrap(conn) -> bool:
     Returns True if FTS5 trigram is available, False otherwise.
     """
     # files_meta: always present, plain SQL, ext/count queries go here
-    conn.executescript(
-        """
+    conn.executescript("""
         CREATE TABLE IF NOT EXISTS files_meta (
             rel_path   TEXT PRIMARY KEY,
             name_lower TEXT NOT NULL,
@@ -101,8 +100,7 @@ def _do_bootstrap(conn) -> bool:
             ON files_meta(ext_lower, is_dir);
         CREATE INDEX IF NOT EXISTS idx_meta_name_lower
             ON files_meta(name_lower);
-    """
-    )
+    """)
 
     use_fts = False
     try:
@@ -116,8 +114,7 @@ def _do_bootstrap(conn) -> bool:
         pass
 
     if use_fts:
-        conn.executescript(
-            """
+        conn.executescript("""
             CREATE VIRTUAL TABLE IF NOT EXISTS files USING fts5(
                 name,
                 rel_path,
@@ -125,15 +122,13 @@ def _do_bootstrap(conn) -> bool:
                 parent_rel,
                 tokenize=\'trigram\'
             );
-        """
-        )
+        """)
         print(
             "✅ Search index: FTS5 trigram + files_meta (fast name search + exact counts)"
         )
     else:
         # No FTS5 — files_meta handles everything via LIKE
-        conn.executescript(
-            """
+        conn.executescript("""
             CREATE TABLE IF NOT EXISTS files (
                 rel_path   TEXT PRIMARY KEY,
                 name       TEXT NOT NULL,
@@ -143,8 +138,7 @@ def _do_bootstrap(conn) -> bool:
             );
             CREATE INDEX IF NOT EXISTS idx_files_name_lower
                 ON files(name_lower);
-        """
-        )
+        """)
         print("✅ Search index: LIKE table mode (SQLite trigram unavailable)")
 
     return use_fts

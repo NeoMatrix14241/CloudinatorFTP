@@ -3800,7 +3800,7 @@ function openFileViewer(itemPath, filename) {
                     // metadata loads) directly mutate the real page title.
                     // Disable that entirely to restore the old behavior:
                     // the tab title never changes while viewing a PDF.
-                    app.setTitle = () => {};
+                    app.setTitle = () => { };
                     return app.open({ url: viewUrl });
                 })
                 .catch(err => {
@@ -8125,8 +8125,13 @@ async function saveShareRowSettings(path) {
 
     const payload = { path }; // resolved server-side to a token via a status lookup fallback below
     if (modeEl) payload.security_mode = modeEl.value;
-    if (generateCb && generateCb.checked) payload.generate_passkey = true;
-    else if (passkeyInput && passkeyInput.value.trim()) payload.passkey = passkeyInput.value.trim();
+    if (modeEl && modeEl.value === 'passkey') {
+        if (generateCb && generateCb.checked) payload.generate_passkey = true;
+        else if (passkeyInput && passkeyInput.value.trim()) payload.passkey = passkeyInput.value.trim();
+    } else {
+        // Switching to approval/public — don't leave the old passkey active.
+        payload.clear_passkey = true;
+    }
 
     const expiryVal = expirySelect ? expirySelect.value : 'keep';
     if (expiryVal === 'never') payload.clear_expiry = true;

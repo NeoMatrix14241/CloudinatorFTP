@@ -1,33 +1,48 @@
 #!/usr/bin/env python3
 """
 Real-time Storage Stats Broadcasting
-Handles WebSocket connections and Server-Sent Events for live storage updates
+Handles Server-Sent Events for live storage updates.
+
+Quart/asyncio note: broadcast_update() is called from the watchdog
+file-monitor's own background thread (see file_monitor.py — it is NOT
+asyncio, it's threading.Thread), while event_stream() below runs inside
+Hypercorn's event loop. asyncio.Queue is not thread-safe to put() into
+directly from a foreign thread, so broadcast pushes are marshalled onto
+the loop via loop.call_soon_threadsafe(). The loop reference is captured
+lazily the first time a client connects (which always happens on the
+event loop thread, inside the async route) — so this file needs no
+startup wiring in app.py beyond registering the route itself.
 """
 
+import asyncio
 import json
 import time
 import threading
-from flask import request, Response
-from queue import Queue, Empty
-from typing import Dict, Set
+from typing import Set
 from dataclasses import asdict
+
+from quart import Response
 
 
 class StorageStatsEventManager:
     """Manages real-time storage stats broadcasting to connected clients"""
 
     def __init__(self):
-        self.clients: Set[Queue] = set()
+        self.clients: Set[asyncio.Queue] = set()
         self.lock = threading.Lock()
         self.last_stats = None
+        self.loop: asyncio.AbstractEventLoop | None = None
 
-    def add_client(self, client_queue: Queue):
-        """Add a new client to receive updates"""
+    def add_client(self, client_queue: asyncio.Queue):
+        """Add a new client to receive updates. Must be called from the
+        event loop thread — captures self.loop for cross-thread broadcasts."""
         with self.lock:
             self.clients.add(client_queue)
+            if self.loop is None:
+                self.loop = asyncio.get_running_loop()
             print(f"📡 Client connected. Total clients: {len(self.clients)}")
 
-    def remove_client(self, client_queue: Queue):
+    def remove_client(self, client_queue: asyncio.Queue):
         """Remove a client from updates"""
         with self.lock:
             self.clients.discard(client_queue)
@@ -41,6 +56,9 @@ class StorageStatsEventManager:
         walk_progress: bool = False,
     ):
         """Broadcast storage stats update to all connected clients.
+
+        Safe to call from any thread (e.g. the watchdog reconcile thread
+        in file_monitor.py) — pushes are marshalled onto the event loop.
 
         Three distinct event kinds (mutually exclusive):
           walk_progress=True,  reconcile_complete=False
@@ -105,31 +123,32 @@ class StorageStatsEventManager:
 
             # Broadcast to all clients
             with self.lock:
-                disconnected_clients = set()
-                for client_queue in self.clients:
-                    try:
-                        # Non-blocking put with timeout
-                        client_queue.put(update_data, timeout=0.1)
-                    except:
-                        # Client queue is full or closed, mark for removal
-                        disconnected_clients.add(client_queue)
+                clients_snapshot = list(self.clients)
+                loop = self.loop
 
-                # Remove disconnected clients
-                for client in disconnected_clients:
-                    self.clients.discard(client)
-
-                if disconnected_clients:
-                    print(
-                        f"📡 Removed {len(disconnected_clients)} disconnected clients"
+            if loop is not None:
+                for client_queue in clients_snapshot:
+                    loop.call_soon_threadsafe(
+                        self._safe_put_nowait, client_queue, update_data
                     )
 
-            print(f"📡 Broadcasted storage update to {len(self.clients)} clients")
+            print(f"📡 Broadcasted storage update to {len(clients_snapshot)} clients")
             print(
                 f"🔍 Update data includes: files={update_data['data']['file_count']}, dirs={update_data['data']['dir_count']}, total_space={update_data['data']['total_space']}, free_space={update_data['data']['free_space']}"
             )
 
         except Exception as e:
             print(f"❌ Error broadcasting update: {e}")
+
+    @staticmethod
+    def _safe_put_nowait(client_queue: asyncio.Queue, update_data: dict):
+        """Runs on the event loop thread via call_soon_threadsafe. A full
+        queue means a slow/stuck client — drop the update for them rather
+        than blocking the loop or the broadcasting thread."""
+        try:
+            client_queue.put_nowait(update_data)
+        except asyncio.QueueFull:
+            pass
 
     def get_last_stats(self):
         """Get the last broadcasted stats"""
@@ -189,16 +208,17 @@ class StorageStatsEventManager:
 event_manager = StorageStatsEventManager()
 
 
-def storage_stats_sse():
-    """Server-Sent Events endpoint for real-time storage stats - Waitress compatible"""
-    from flask import request
+async def storage_stats_sse():
+    """Server-Sent Events endpoint for real-time storage stats — async
+    generator streamed via Hypercorn (HTTP/1.1 chunked, or native DATA
+    frames under HTTP/2 and HTTP/3 — no special headers needed for either)."""
 
-    def event_stream():
-        client_queue = Queue(maxsize=50)
+    async def event_stream():
+        client_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
         event_manager.add_client(client_queue)
 
         try:
-            # Send initial connection message with proper SSE format (as bytes for Waitress)
+            # Send initial connection message
             yield f"data: {json.dumps({'type': 'connected', 'timestamp': time.time()})}\n\n".encode(
                 "utf-8"
             )
@@ -211,7 +231,7 @@ def storage_stats_sse():
 
             # Provide instant stats - don't wait for slow force_check
             if current_snapshot:
-                print("� Using cached snapshot for instant SSE response")
+                print("📡 Using cached snapshot for instant SSE response")
                 file_count = current_snapshot.file_count
                 dir_count = current_snapshot.dir_count
                 total_size = current_snapshot.total_size
@@ -255,9 +275,9 @@ def storage_stats_sse():
             # Keep connection alive and send updates
             while True:
                 try:
-                    data = client_queue.get(timeout=10)
+                    data = await asyncio.wait_for(client_queue.get(), timeout=10)
                     yield f"data: {json.dumps(data)}\n\n".encode("utf-8")
-                except Empty:
+                except asyncio.TimeoutError:
                     yield f"data: {json.dumps({'type': 'ping', 'timestamp': time.time()})}\n\n".encode(
                         "utf-8"
                     )
@@ -269,17 +289,7 @@ def storage_stats_sse():
             event_manager.remove_client(client_queue)
             print(f"📡 SSE client cleanup completed")
 
-    # Waitress streams any WSGI iterable chunk-by-chunk as long as:
-    # 1. No Content-Length header is set (so it uses chunked transfer encoding)
-    # 2. direct_passthrough is NOT set (that's Werkzeug-only and breaks Waitress)
-    # 3. The generator yields bytes (already done above with .encode('utf-8'))
-    from flask import Response
-
-    response = Response(
-        event_stream(),
-        mimetype="text/event-stream",
-        status=200,
-    )
+    response = Response(event_stream(), mimetype="text/event-stream", status=200)
 
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
@@ -287,9 +297,10 @@ def storage_stats_sse():
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Credentials"] = "true"
     response.headers["X-Accel-Buffering"] = "no"
-    # Remove Content-Length so Waitress uses chunked transfer — required for streaming
-    response.headers.remove("Content-Length")
-    # DO NOT set direct_passthrough — Werkzeug-only, silently breaks Waitress SSE
+    # No Content-Length manipulation needed here (unlike the old Waitress
+    # version) — Quart never sets Content-Length on an async-generator
+    # response body, so it's chunked/streamed by default under Hypercorn
+    # on HTTP/1.1, and framed natively under HTTP/2 and HTTP/3.
 
     return response
 

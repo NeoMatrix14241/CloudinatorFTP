@@ -7,33 +7,39 @@ waiting on a poll interval or an unfocused-tab timer.
 
 Deliberately mirrors realtime_stats.py's StorageStatsEventManager /
 storage_stats_sse pattern (same client-queue broadcast model, same
-Waitress-safe streaming response) rather than inventing a second SSE
-approach that behaves differently under the same server.
+call_soon_threadsafe cross-thread handoff, same async-generator streaming
+response) rather than inventing a second approach that behaves differently
+under the same server. See realtime_stats.py's module docstring for why
+the thread-to-loop handoff is needed at all.
 """
 
+import asyncio
 import json
 import time
 import threading
-from flask import Response
-from queue import Queue, Empty
 from typing import Set
+
+from quart import Response
 
 
 class ShareEventManager:
     """Manages real-time share-request-count broadcasting to connected admins"""
 
     def __init__(self):
-        self.clients: Set[Queue] = set()
+        self.clients: Set[asyncio.Queue] = set()
         self.lock = threading.Lock()
+        self.loop: asyncio.AbstractEventLoop | None = None
 
-    def add_client(self, client_queue: Queue):
+    def add_client(self, client_queue: asyncio.Queue):
         with self.lock:
             self.clients.add(client_queue)
+            if self.loop is None:
+                self.loop = asyncio.get_running_loop()
             print(
                 f"📡 Share-events client connected. Total clients: {len(self.clients)}"
             )
 
-    def remove_client(self, client_queue: Queue):
+    def remove_client(self, client_queue: asyncio.Queue):
         with self.lock:
             self.clients.discard(client_queue)
             print(
@@ -78,21 +84,25 @@ class ShareEventManager:
         self._send(update_data, log_label=f"active-shares change ({reason})")
 
     def _send(self, update_data: dict, log_label: str):
+        """Safe to call from any thread — see module docstring."""
         with self.lock:
-            disconnected = set()
-            for client_queue in self.clients:
-                try:
-                    client_queue.put(update_data, timeout=0.1)
-                except Exception:
-                    disconnected.add(client_queue)
-            for client in disconnected:
-                self.clients.discard(client)
-            if disconnected:
-                print(
-                    f"📡 Removed {len(disconnected)} disconnected share-events client(s)"
+            clients_snapshot = list(self.clients)
+            loop = self.loop
+
+        if loop is not None:
+            for client_queue in clients_snapshot:
+                loop.call_soon_threadsafe(
+                    self._safe_put_nowait, client_queue, update_data
                 )
 
-        print(f"📡 Broadcasted {log_label} to {len(self.clients)} client(s)")
+        print(f"📡 Broadcasted {log_label} to {len(clients_snapshot)} client(s)")
+
+    @staticmethod
+    def _safe_put_nowait(client_queue: asyncio.Queue, update_data: dict):
+        try:
+            client_queue.put_nowait(update_data)
+        except asyncio.QueueFull:
+            pass
 
     def get_client_count(self):
         with self.lock:
@@ -103,16 +113,16 @@ class ShareEventManager:
 share_event_manager = ShareEventManager()
 
 
-def share_events_sse():
+async def share_events_sse():
     """Server-Sent Events endpoint for real-time pending-request counts —
-    same Waitress-compatible streaming approach as storage_stats_sse()."""
+    same async-generator streaming approach as storage_stats_sse()."""
 
-    def event_stream():
-        client_queue = Queue(maxsize=50)
+    async def event_stream():
+        client_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
         share_event_manager.add_client(client_queue)
 
         try:
-            # Initial handshake message (as bytes for Waitress, same as storage_stats_sse)
+            # Initial handshake message
             yield f"data: {json.dumps({'type': 'connected', 'timestamp': time.time()})}\n\n".encode(
                 "utf-8"
             )
@@ -122,9 +132,9 @@ def share_events_sse():
             # balancers from timing the idle connection out.
             while True:
                 try:
-                    data = client_queue.get(timeout=15)
+                    data = await asyncio.wait_for(client_queue.get(), timeout=15)
                     yield f"data: {json.dumps(data)}\n\n".encode("utf-8")
-                except Empty:
+                except asyncio.TimeoutError:
                     yield f"data: {json.dumps({'type': 'ping', 'timestamp': time.time()})}\n\n".encode(
                         "utf-8"
                     )
@@ -142,9 +152,7 @@ def share_events_sse():
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     response.headers["X-Accel-Buffering"] = "no"
-    # Remove Content-Length so Waitress uses chunked transfer — required for streaming
-    response.headers.remove("Content-Length")
-    # DO NOT set direct_passthrough — Werkzeug-only, silently breaks Waitress SSE
+    # No Content-Length manipulation needed — see realtime_stats.py.
     # No permissive CORS headers here (unlike storage_stats_sse) — this is an
     # authenticated, same-origin admin endpoint; it doesn't need cross-origin
     # credentialed access and shouldn't advertise it.

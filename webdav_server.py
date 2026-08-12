@@ -1,9 +1,21 @@
 """
 webdav_server.py — WebDAV server for CloudinatorFTP
 ----------------------------------------------------
-Exposes ROOT_DIR over HTTP WebDAV on WEBDAV_PORT (default 8080)
-using wsgidav + waitress.  Shares the same user database and roles
-as the main Flask server.
+Exposes ROOT_DIR over HTTP/HTTPS WebDAV on WEBDAV_PORT/WEBDAV_HTTPS_PORT
+(default 8080/8443) using wsgidav, served via Hypercorn — same server
+library as the main app, standardized on for every server in this project
+now that the main app moved off Flask/Waitress to Quart/Hypercorn.
+
+wsgidav's app is WSGI-only (no ASGI-native alternative exists), so
+asgiref.wsgi.WsgiToAsgi bridges it into something Hypercorn can serve.
+This is a dependency-consolidation move, not a performance one — the
+underlying wsgidav app is still synchronous, and WsgiToAsgi still runs it
+in a thread pool under the hood, same as waitress/cheroot did before.
+The concrete win: one server library everywhere instead of three
+(waitress + cheroot + Hypercorn), and HTTP/2 on the HTTPS listener.
+Verified directly: PROPFIND, GET, PUT, and auth enforcement (401/207/201)
+all behave identically to the old waitress+cheroot setup, including over
+HTTP/2.
 
 Native drive mapping:
   Windows → This PC → Map Network Drive → http://HOST:8080/
@@ -14,7 +26,7 @@ Native drive mapping:
             sudo mount -t davfs http://HOST:8080/ /mnt/cloudinator
             /etc/fstab: http://HOST:8080/ /mnt/cloudinator davfs user,auto 0 0
 
-Roles (same as Flask):
+Roles (same as the main app):
   readwrite → full access: GET PUT DELETE MKCOL MOVE COPY LOCK PROPFIND …
   readonly  → read access only: GET PROPFIND OPTIONS HEAD
               write-method requests return 403 before reaching wsgidav
@@ -28,6 +40,7 @@ import base64
 import hashlib
 import logging
 import os
+import asyncio
 import threading
 import time
 from app import get_local_ip
@@ -326,58 +339,88 @@ def _build_app(root_dir: str):
 
 
 # ── Server lifecycle ──────────────────────────────────────────────────────
+# Both HTTP and HTTPS run from a single Hypercorn Config/process/thread —
+# `bind` is the TLS listener, `insecure_bind` is the plain-HTTP one, same
+# pattern as prod_server.py. Either can be an empty list to disable that
+# listener independently, matching the old WEBDAV_ENABLED/WEBDAV_HTTPS_ENABLED
+# split.
 
-_http_server = None
-_https_server = None
-_http_thread = None
-_https_thread = None
-
-
-def _start_http(app, port: int):
-    """Start HTTP WebDAV server using waitress (fallback: threaded wsgiref)."""
-    try:
-        from waitress import create_server
-
-        srv = create_server(app, host="0.0.0.0", port=port, threads=8)
-        return srv, srv.run
-    except ImportError:
-        import wsgiref.simple_server as _wss
-        from socketserver import ThreadingMixIn
-
-        class _TWSGI(ThreadingMixIn, _wss.WSGIServer):
-            daemon_threads = True
-            allow_reuse_address = True
-
-        srv = _TWSGI(("0.0.0.0", port), _wss.WSGIRequestHandler)
-        srv.set_app(app)
-        return srv, srv.serve_forever
+_webdav_thread: "threading.Thread | None" = None
+_webdav_loop: "asyncio.AbstractEventLoop | None" = None
+_webdav_shutdown_event: "asyncio.Event | None" = None
 
 
-def _start_https(app, port: int):
+def _build_hypercorn_logger(name: str) -> logging.Logger:
+    """Hypercorn's default error-log formatter (used whenever Config.errorlog
+    is left at its default "-") includes %(process)d, which crashes under
+    Python 3.14 — record.process comes back None in that code path, a
+    Python 3.14 logging-module behavior change, not a bug in this app.
+    Passing a pre-built Logger instead of the string "-" makes Hypercorn's
+    _create_logger() skip its own crashing formatter construction entirely
+    (it has an early return for an already-built logging.Logger target).
+    Same fix as prod_server.py's identical helper — duplicated rather than
+    imported since this module and prod_server.py aren't otherwise coupled.
     """
-    Start HTTPS WebDAV server using cheroot + BuiltinSSLAdapter.
-    Generates a self-signed cert in db/ on first run.
-    cheroot is a dependency of wsgidav so it is always available.
-    """
-    from cheroot import wsgi as cheroot_wsgi
-    from cheroot.ssl.builtin import BuiltinSSLAdapter
-    from paths import get_db_dir
-    import ssl_cert
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
+            )
+        )
+        logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    return logger
 
-    db_dir = get_db_dir(create=True)
-    cert_path, key_path = ssl_cert.get_cert_paths(db_dir)
 
-    srv = cheroot_wsgi.Server(("0.0.0.0", port), app, numthreads=8)
-    srv.ssl_adapter = BuiltinSSLAdapter(cert_path, key_path)
-    return srv, srv.start  # cheroot uses .start(), not .run()
+def _start_hypercorn(wsgi_app, http_port, https_port, cert_path, key_path):
+    """Runs WebDAV (HTTP and/or HTTPS) via Hypercorn in a background thread.
+    Returns the Thread object."""
+    from asgiref.wsgi import WsgiToAsgi
+    from hypercorn.config import Config
+    from hypercorn.asyncio import serve
+
+    asgi_app = WsgiToAsgi(wsgi_app)
+
+    cfg = Config()
+    cfg.bind = [f"0.0.0.0:{https_port}"] if https_port else []
+    cfg.insecure_bind = [f"0.0.0.0:{http_port}"] if http_port else []
+    cfg.errorlog = _build_hypercorn_logger(
+        "hypercorn.webdav"
+    )  # see _build_hypercorn_logger's docstring
+    if https_port:
+        cfg.certfile = cert_path
+        cfg.keyfile = key_path
+        cfg.alpn_protocols = ["h2", "http/1.1"]
+    # keep_alive_max_requests intentionally left at Hypercorn's default
+    # (1000) — see prod_server.py's comment on this exact setting. 0 does
+    # NOT mean unlimited, it means "close after the very first request".
+
+    async def _run():
+        global _webdav_loop, _webdav_shutdown_event
+        _webdav_loop = asyncio.get_running_loop()
+        _webdav_shutdown_event = asyncio.Event()
+
+        async def _shutdown_trigger():
+            await _webdav_shutdown_event.wait()
+
+        await serve(asgi_app, cfg, shutdown_trigger=_shutdown_trigger)
+
+    thread = threading.Thread(
+        target=lambda: asyncio.run(_run()), name="webdav-hypercorn", daemon=True
+    )
+    thread.start()
+    return thread
 
 
 def start() -> bool:
     """
-    Start WebDAV servers (HTTP and/or HTTPS) in background daemon threads.
-    Returns True if at least one server started successfully.
+    Start WebDAV (HTTP and/or HTTPS) via Hypercorn in a background thread.
+    Returns True if at least one listener started successfully.
     """
-    global _http_server, _https_server, _http_thread, _https_thread
+    global _webdav_thread
 
     try:
         from config import (
@@ -408,53 +451,67 @@ def start() -> bool:
         print(f"❌ WebDAV app build failed: {exc}")
         return False
 
-    started = False
+    try:
+        import asgiref  # noqa — verify available
+    except ImportError:
+        print("⚠️  WebDAV not started: 'asgiref' is not installed.")
+        print("   Install it: pip install asgiref")
+        return False
 
-    # ── HTTP ──────────────────────────────────────────────────────────────
-    if WEBDAV_ENABLED:
+    http_port = WEBDAV_PORT if WEBDAV_ENABLED else None
+    https_port = WEBDAV_HTTPS_PORT if WEBDAV_HTTPS_ENABLED else None
+
+    cert_path = key_path = None
+    if https_port:
         try:
-            _http_server, run_fn = _start_http(app, WEBDAV_PORT)
-            _http_thread = threading.Thread(
-                target=run_fn, name="webdav-http", daemon=True
-            )
-            _http_thread.start()
-            print(f"🌐 WebDAV HTTP:  http://{LOCAL_IP}:{WEBDAV_PORT}/")
-            started = True
+            from paths import get_db_dir
+            import ssl_cert
+
+            db_dir = get_db_dir(create=True)
+            cert_path, key_path = ssl_cert.get_cert_paths(db_dir)
         except Exception as exc:
-            print(f"❌ WebDAV HTTP failed: {exc}")
+            print(f"❌ WebDAV HTTPS: could not prepare TLS cert: {exc}")
+            https_port = None
+            if not http_port:
+                return False
 
-    # ── HTTPS ─────────────────────────────────────────────────────────────
-    if WEBDAV_HTTPS_ENABLED:
-        try:
-            _https_server, run_fn = _start_https(app, WEBDAV_HTTPS_PORT)
-            _https_thread = threading.Thread(
-                target=run_fn, name="webdav-https", daemon=True
-            )
-            _https_thread.start()
-            print(f"🔐 WebDAV HTTPS: https://{LOCAL_IP}:{WEBDAV_HTTPS_PORT}/")
+    try:
+        _webdav_thread = _start_hypercorn(
+            app, http_port, https_port, cert_path, key_path
+        )
+    except OSError as exc:
+        print(f"❌ WebDAV: cannot bind requested port(s): {exc}")
+        return False
+    except Exception as exc:
+        print(f"❌ WebDAV Hypercorn failed to start: {exc}")
+        return False
+
+    if http_port:
+        print(f"🌐 WebDAV HTTP:  http://{LOCAL_IP}:{http_port}/")
+    if https_port:
+        print(f"🔐 WebDAV HTTPS: https://{LOCAL_IP}:{https_port}/  (HTTP/2 enabled)")
+        if http_port:
             print(f"   Import cert on any LAN PC — elevated PowerShell, one line:")
             print(
-                f'   $f="$env:TEMP\\c.crt"; Invoke-WebRequest http://{LOCAL_IP}:{WEBDAV_PORT}/webdav.crt -OutFile $f; Import-Certificate $f -CertStoreLocation Cert:\\LocalMachine\\Root; del $f'
+                f'   $f="$env:TEMP\\c.crt"; Invoke-WebRequest http://{LOCAL_IP}:{http_port}/webdav.crt -OutFile $f; Import-Certificate $f -CertStoreLocation Cert:\\LocalMachine\\Root; del $f'
             )
-            started = True
-        except Exception as exc:
-            print(f"❌ WebDAV HTTPS failed: {exc}")
+        else:
+            print(
+                f"   Import {cert_path} as a trusted root manually — the HTTP"
+                f" listener that normally serves it for the PowerShell"
+                f" one-liner above is disabled (WEBDAV_ENABLED=False)."
+            )
 
-    return started
+    return True
 
 
 def stop():
-    """Shut down both WebDAV servers (best-effort)."""
-    global _http_server, _https_server
-    for srv in (_http_server, _https_server):
-        if srv:
-            try:
-                if hasattr(srv, "close"):
-                    srv.close()
-                elif hasattr(srv, "stop"):
-                    srv.stop()
-                elif hasattr(srv, "shutdown"):
-                    srv.shutdown()
-            except Exception:
-                pass
-    _http_server = _https_server = None
+    """Shut down the WebDAV Hypercorn server (best-effort, graceful)."""
+    global _webdav_loop, _webdav_shutdown_event
+    if _webdav_loop is not None and _webdav_shutdown_event is not None:
+        try:
+            _webdav_loop.call_soon_threadsafe(_webdav_shutdown_event.set)
+        except Exception:
+            pass
+    _webdav_loop = None
+    _webdav_shutdown_event = None

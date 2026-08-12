@@ -9,14 +9,12 @@ ensure_dirs()
 # Bulk ZIP progress tracking
 bulk_zip_progress = {}
 
-from flask import g
-
 # Global flag for cancelling bulk ZIP
 bulk_zip_cancelled = {}
 
 # Move this endpoint below app initialization
-from flask import (
-    Flask,
+from quart import (
+    Quart,
     render_template,
     request,
     redirect,
@@ -31,18 +29,55 @@ from flask import (
     render_template_string,
     abort,
 )
-from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import ClientDisconnected
 import os
 import sys
 import shutil
 import json
+import asyncio
 import threading
 import time
 import logging
 import uuid
 import socket
+
+
+async def _stream_from_thread(sync_generator):
+    """Bridges a blocking, synchronous generator (e.g. zipstream reading
+    files off disk) into an async stream, so building a large ZIP doesn't
+    block Hypercorn's event loop — and every other in-flight request —
+    for the whole duration of the download. Runs sync_generator's
+    iteration in a worker thread and re-yields its items on the loop.
+
+    Used by every route that streams a folder/multi-select ZIP download
+    (Response(generate_zip_stream(), ...) previously handed the raw sync
+    generator straight to Flask, which was fine under Waitress's
+    thread-per-request model but would stall the whole server under
+    Quart's single event loop).
+    """
+    loop = asyncio.get_running_loop()
+    out_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+    _DONE = object()
+
+    def _worker():
+        try:
+            for chunk in sync_generator:
+                asyncio.run_coroutine_threadsafe(out_queue.put(chunk), loop).result()
+        except Exception as e:  # noqa: BLE001 — re-raised on the loop below
+            asyncio.run_coroutine_threadsafe(out_queue.put(e), loop).result()
+        finally:
+            asyncio.run_coroutine_threadsafe(out_queue.put(_DONE), loop).result()
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+    while True:
+        item = await out_queue.get()
+        if item is _DONE:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield item
 
 
 def get_local_ip() -> str:
@@ -498,7 +533,7 @@ _INLINE_STYLE_HASHES = (
     "'sha256-CFz7XUx3dO7TOX4RcnZ+osqCc+Owc1o8JNUiD0DGKqQ='"
 )
 
-app = Flask(__name__)
+app = Quart(__name__)
 
 # ---------------------------------------------------------------------------
 # CORS allowlist — localhost, any private LAN address, and your public domain.
@@ -509,6 +544,12 @@ app = Flask(__name__)
 #
 # Set CLOUDINATOR_PUBLIC_DOMAIN=cloudinator.site (no scheme) if you serve
 # through a domain/tunnel. Leave unset and only localhost/LAN are allowed.
+#
+# Implemented by hand rather than via quart-cors: quart-cors' allow_origin
+# only takes exact strings or "*", not regex patterns, so it can't express
+# "any port on any RFC1918 address" the way flask-cors' `resources={...}`
+# dict could. This after_request hook + explicit OPTIONS route reproduces
+# the exact same matching behaviour instead of quietly narrowing it.
 # ---------------------------------------------------------------------------
 _PUBLIC_DOMAIN = os.environ.get("CLOUDINATOR_PUBLIC_DOMAIN", "").strip()
 
@@ -522,11 +563,49 @@ _CORS_ORIGIN_PATTERNS = [
 if _PUBLIC_DOMAIN:
     _CORS_ORIGIN_PATTERNS.append(rf"^https://{re.escape(_PUBLIC_DOMAIN)}$")
 
-CORS(
-    app,
-    resources={r"/*": {"origins": [re.compile(p) for p in _CORS_ORIGIN_PATTERNS]}},
-    supports_credentials=True,
-)
+_CORS_ORIGIN_REGEXES = [re.compile(p) for p in _CORS_ORIGIN_PATTERNS]
+
+
+def _cors_origin_allowed(origin: str) -> bool:
+    return bool(origin) and any(p.match(origin) for p in _CORS_ORIGIN_REGEXES)
+
+
+@app.after_request
+async def _apply_cors_headers(response):
+    origin = request.headers.get("Origin")
+    if _cors_origin_allowed(origin):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        # Origin-dependent response — never let a shared cache serve one
+        # origin's CORS headers back to a different origin.
+        existing_vary = response.headers.get("Vary", "")
+        if "Origin" not in existing_vary:
+            response.headers["Vary"] = (
+                f"{existing_vary}, Origin" if existing_vary else "Origin"
+            )
+    return response
+
+
+@app.route("/<path:_cors_any_path>", methods=["OPTIONS"])
+@app.route("/", methods=["OPTIONS"])
+async def _cors_preflight(_cors_any_path=""):
+    """Handles CORS preflight for every route. Registered before any other
+    route with the same path/method combo would otherwise 405 on OPTIONS."""
+    origin = request.headers.get("Origin")
+    resp = Response("", status=204)
+    if _cors_origin_allowed(origin):
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Access-Control-Allow-Credentials"] = "true"
+        resp.headers["Access-Control-Allow-Methods"] = (
+            "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+        )
+        requested_headers = request.headers.get("Access-Control-Request-Headers")
+        resp.headers["Access-Control-Allow-Headers"] = requested_headers or (
+            "Content-Type, X-CSRFToken, X-CSRF-Token"
+        )
+        resp.headers["Access-Control-Max-Age"] = "600"
+    return resp
+
 
 app.secret_key = SESSION_SECRET
 
@@ -546,12 +625,59 @@ def _request_is_secure() -> bool:
     both covers a standard reverse proxy (X-Forwarded-Proto) and Cloudflare
     specifically (CF-Visitor), whichever is actually present.
 
-    LAN/localhost requests won't carry either header, so they correctly
-    fall through to False here — same as before.
+    NOTE — this used to also mean "LAN/localhost requests won't carry either
+    header, so they correctly fall through to False here." That was true
+    under the old Waitress setup, where LAN access was plain HTTP. It is NO
+    LONGER true post-Quart/Hypercorn migration: prod_server.py now serves
+    HTTPS directly to every client including LAN/WiFi, so request.is_secure
+    is True for them too. This function is still fine to use for things
+    like the Secure-cookie flag and Clear-Site-Data, where "any HTTPS
+    connection, even our own self-signed one" is the right test. It is
+    explicitly NOT fine for HSTS — see _request_via_trusted_tls() below.
     """
     if request.is_secure:
         return True
 
+    if request.headers.get("X-Forwarded-Proto", "").lower() == "https":
+        return True
+
+    cf_visitor = request.headers.get("CF-Visitor", "")
+    if cf_visitor:
+        try:
+            if json.loads(cf_visitor).get("scheme") == "https":
+                return True
+        except (ValueError, AttributeError):
+            pass
+
+    return False
+
+
+def _request_via_trusted_tls() -> bool:
+    """
+    True ONLY when this request came through the Cloudflare tunnel — i.e.
+    a real, publicly-trusted CA certificate was validated by the client,
+    not Hypercorn's own self-signed one.
+
+    This is deliberately stricter than _request_is_secure() and exists
+    ONLY for gating the HSTS header. request.is_secure now being True for
+    direct LAN/WiFi connections (see the migration note in
+    _request_is_secure()'s docstring) means those clients are all on the
+    self-signed cert whenever they're not tunneled. HSTS is a ratchet: once
+    a browser receives it for a host, that browser refuses to offer a
+    certificate-warning bypass for that host for the entire max-age (a
+    year, here) — no "Proceed anyway" link, no user recourse (this is
+    standard, spec'd browser behavior, not a bug in any one browser).
+    Sending it to a device running on an unimported self-signed cert
+    doesn't just warn them once — it can lock that device out of the app
+    entirely (e.g. right after logout forces a fresh TLS handshake) until
+    the HSTS entry expires or is manually cleared on that device.
+
+    request.is_secure being True by itself must NEVER count here — under
+    this deployment it always means Hypercorn terminated TLS directly with
+    the self-signed cert (the tunnel forwards to the app over plain HTTP
+    and is identified via the headers below instead), so it's exactly the
+    case HSTS needs to be withheld from.
+    """
     if request.headers.get("X-Forwarded-Proto", "").lower() == "https":
         return True
 
@@ -579,7 +705,7 @@ def _request_is_secure() -> bool:
 # reached through a TLS-terminating tunnel/proxy — see that function's
 # docstring.
 # ---------------------------------------------------------------------------
-from flask.sessions import SecureCookieSessionInterface
+from quart.sessions import SecureCookieSessionInterface
 
 
 class _DynamicSecureSessionInterface(SecureCookieSessionInterface):
@@ -599,22 +725,85 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=PERMANENT_SESSION_LIFETIME,
     SESSION_REFRESH_EACH_REQUEST=True,  # cookie expiry slides forward on every request
     SESSION_COOKIE_NAME="cloudinator_session",
-    MAX_CONTENT_LENGTH=MAX_CONTENT_LENGTH,  # now actually enforced by Flask, was previously unset
-    WTF_CSRF_HEADERS=["X-CSRFToken", "X-CSRF-Token"],
-    WTF_CSRF_TIME_LIMIT=None,  # tied to session lifetime instead of its own expiry
+    MAX_CONTENT_LENGTH=MAX_CONTENT_LENGTH,  # now actually enforced by Quart, was previously unset
 )
 
+# ---------------------------------------------------------------------------
 # CSRF protection for every state-changing request (POST/PUT/PATCH/DELETE).
-# The frontend needs to send the token as either a hidden form field
-# ("csrf_token") or the "X-CSRFToken" header — see index.js/login.html patches.
-from flask_wtf import CSRFProtect
-from flask_wtf.csrf import generate_csrf
+# The frontend sends the token as either a hidden form field ("csrf_token")
+# or the "X-CSRFToken"/"X-CSRF-Token" header — see index.js/login.html.
+#
+# Hand-rolled instead of quart_wtf: quart-wtf's only release (0.0.1) hard-pins
+# quart<0.19, which in turn needs werkzeug~=2.3 — incompatible with modern
+# Quart/Werkzeug and everything else in this app's dependency stack (verified
+# directly: installing quart-wtf forces a Werkzeug downgrade that breaks
+# Quart's own import). This reimplements only what's actually used here:
+# a session-tied random token, header-or-form validation on unsafe methods,
+# and an .exempt() decorator for the two anonymous share-link routes.
+# Token lives inside the signed session cookie (SecureCookieSessionInterface,
+# itsdangerous-backed) — same trust boundary flask-wtf's session-tied tokens
+# relied on, not a bare double-submit cookie.
+# ---------------------------------------------------------------------------
+_CSRF_HEADER_NAMES = ["X-CSRFToken", "X-CSRF-Token"]
+_CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
+
+
+def generate_csrf() -> str:
+    """Returns this session's CSRF token, minting one on first call. Exposed
+    to Jinja as csrf_token() — same name/usage as flask-wtf's template global,
+    so index.html's <meta> tag and login.html's hidden field are unchanged."""
+    token = session.get("csrf_token")
+    if not token:
+        token = _secrets.token_urlsafe(32)
+        session["csrf_token"] = token
+    return token
+
+
+class CSRFProtect:
+    def __init__(self, app=None):
+        self._exempt_endpoints: set = set()
+        if app is not None:
+            self.init_app(app)
+
+    def init_app(self, app):
+        app.jinja_env.globals["csrf_token"] = generate_csrf
+        app.before_request(self._protect)
+
+    def exempt(self, view):
+        """Marks the endpoint exempt, resolved by endpoint name at request
+        time rather than by wrapping the function — works regardless of
+        whether @csrf.exempt sits above or below @app.route."""
+        self._exempt_endpoints.add(view.__name__)
+        return view
+
+    async def _protect(self):
+        if request.method in _CSRF_SAFE_METHODS:
+            return
+        if request.endpoint is None or request.endpoint in self._exempt_endpoints:
+            return
+
+        expected = session.get("csrf_token")
+        if not expected:
+            abort(400, description="CSRF token missing")
+
+        provided = None
+        for header_name in _CSRF_HEADER_NAMES:
+            provided = request.headers.get(header_name)
+            if provided:
+                break
+        if not provided:
+            form = await request.form
+            provided = form.get("csrf_token")
+
+        if not provided or not secrets_compare(provided, expected):
+            abort(400, description="CSRF token missing or incorrect")
+
 
 csrf = CSRFProtect(app)
 
 
 @app.route("/csrf-token")
-def get_csrf_token():
+async def get_csrf_token():
     """Return the CSRF token for the CURRENT session as JSON.
 
     Any page/tab left open across a login/account-switch (session.clear()
@@ -695,7 +884,7 @@ else:
 
 
 @app.before_request
-def validate_session():
+async def validate_session():
     # Skip validation for login-related routes and the public share-link
     # pages/downloads — those are meant to work for anyone with the link,
     # no account required.
@@ -742,14 +931,14 @@ def validate_session():
 
 
 @app.route("/check_session")
-def check_session():
+async def check_session():
     if not is_logged_in():
         return jsonify({"error": "Session expired"}), 401
     return jsonify({"status": "ok"}), 200
 
 
 @app.route("/cancel_bulk_zip", methods=["POST"])
-def cancel_bulk_zip():
+async def cancel_bulk_zip():
     session_id = session.get("session_id") or request.cookies.get("session")
     if not session_id:
         return jsonify({"error": "No session ID"}), 400
@@ -1032,7 +1221,7 @@ def login_required(f):
     from functools import wraps
 
     @wraps(f)
-    def decorated(*args, **kwargs):
+    async def decorated(*args, **kwargs):
         if not is_logged_in():
             # API and XHR requests: return 401 JSON so the client can handle it
             # without breaking an in-progress upload with a page redirect.
@@ -1043,7 +1232,7 @@ def login_required(f):
             ):
                 return jsonify({"error": "Session expired", "redirect": "/login"}), 401
             return redirect(url_for("login"))
-        return f(*args, **kwargs)
+        return await f(*args, **kwargs)
 
     return decorated
 
@@ -1080,7 +1269,7 @@ def cleanup_stale_chunks_on_request():
 
 
 @app.before_request
-def before_request():
+async def before_request():
     """Run cleanup before certain requests and handle interrupted uploads"""
     # Ensure session ID exists for logged-in users
     if is_logged_in() and "session_id" not in session:
@@ -1143,7 +1332,7 @@ def before_request():
 
 
 @app.after_request
-def after_request(response):
+async def after_request(response):
     """Add security headers to all responses"""
     # Add cache control headers to authenticated pages
     if request.endpoint and request.endpoint not in ["static"]:
@@ -1309,13 +1498,20 @@ def after_request(response):
 
     response.headers["Content-Security-Policy"] = csp
 
-    # HSTS only makes sense once a browser has actually reached us over
-    # HTTPS — sending it over plain http (LAN/localhost) is a no-op per spec,
-    # but we gate it explicitly so it's never sent on an insecure connection.
-    # Uses _request_is_secure() so this also fires correctly behind the
-    # Cloudflare tunnel, which terminates TLS and talks to Flask over plain
-    # HTTP — request.is_secure alone is always False in that setup.
-    if _request_is_secure():
+    # HSTS must ONLY go to clients who reached us through a real, publicly
+    # trusted CA cert (the Cloudflare tunnel) — never to anyone hitting
+    # Hypercorn's own self-signed listener directly, LAN/WiFi included.
+    # Post-migration, request.is_secure (what _request_is_secure() checks
+    # first) is True for direct LAN/WiFi connections too, since Hypercorn
+    # now terminates TLS with the self-signed cert for everyone, not just
+    # tunnel traffic like under the old Waitress setup. Sending HSTS to a
+    # device still running on an unimported self-signed cert removes that
+    # browser's certificate-warning bypass for a full year (spec'd browser
+    # behavior, "no user recourse") — it doesn't just warn, it can lock the
+    # device out entirely the next time it needs a fresh TLS handshake
+    # (e.g. right after logout's Clear-Site-Data wipes the connection/cache
+    # state). See _request_via_trusted_tls()'s docstring for the full story.
+    if _request_via_trusted_tls():
         response.headers["Strict-Transport-Security"] = (
             "max-age=31536000; includeSubDomains"
         )
@@ -1324,7 +1520,7 @@ def after_request(response):
 
 
 @app.route("/debug/headers")
-def _debug_headers():
+async def _debug_headers():
     """
     TEMPORARY — remove after diagnosing the HSTS/X-Forwarded-Proto issue.
     Shows exactly what headers reached Flask, so we can see what the
@@ -1334,7 +1530,7 @@ def _debug_headers():
 
 
 @app.route("/login", methods=["GET", "POST"])
-def login():
+async def login():
     # If user is already logged in, redirect to index
     if session.get("logged_in"):
         return redirect(url_for("index"))
@@ -1343,13 +1539,13 @@ def login():
         # Check brute-force lockout before touching DB
         if rate_limiter.is_blocked():
             remaining = rate_limiter.remaining_lockout()
-            flash(f"Too many failed attempts. Try again in {remaining} seconds.")
-            return render_template("login.html"), 429
+            await flash(f"Too many failed attempts. Try again in {remaining} seconds.")
+            return await render_template("login.html"), 429
 
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
+        username = (await request.form).get("username", "").strip()
+        password = (await request.form).get("password", "")
 
-        if check_login(username, password):
+        if await asyncio.to_thread(check_login, username, password):
             rate_limiter.record_success()
             # Set up session data
             session.clear()
@@ -1366,15 +1562,17 @@ def login():
             rate_limiter.record_failure()
             left = rate_limiter.attempts_remaining()
             if left > 0:
-                flash(f"Invalid username or password. {left} attempt(s) remaining.")
+                await flash(
+                    f"Invalid username or password. {left} attempt(s) remaining."
+                )
             else:
-                flash(
+                await flash(
                     f"Too many failed attempts. Try again in {RateLimiter.LOCKOUT} seconds."
                 )
-            return render_template("login.html"), 401
+            return await render_template("login.html"), 401
 
     # Render login page with no-cache headers
-    response = make_response(render_template("login.html"))
+    response = await make_response(await render_template("login.html"))
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
@@ -1384,7 +1582,7 @@ def login():
 
 
 @app.route("/logout")
-def logout():
+async def logout():
     try:
         # Clean up any upload chunks
         session_id = session.get("session_id")
@@ -1395,7 +1593,7 @@ def logout():
         session.clear()
 
         # Create response with session-clearing headers
-        response = make_response(redirect(url_for("login", logged_out="1")))
+        response = await make_response(redirect(url_for("login", logged_out="1")))
         response.delete_cookie("cloudinator_session")
         response.delete_cookie("session_check")
 
@@ -1427,22 +1625,24 @@ def logout():
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 @login_required
-def index(path):
+async def index(path):
     # Comprehensive path validation: safety and existence
     if path and not storage.is_valid_path(path):
         if not storage.is_safe_path(path):
-            flash("Invalid path: contains unsafe characters or directory traversal")
+            await flash(
+                "Invalid path: contains unsafe characters or directory traversal"
+            )
         else:
-            flash(f'Path "{path}" does not exist or is not a directory')
+            await flash(f'Path "{path}" does not exist or is not a directory')
         return redirect(url_for("index"))
 
     try:
         # Get current directory info
         current_path = os.path.join(ROOT_DIR, path) if path else ROOT_DIR
-        items = storage.list_dir(path)
+        items = await asyncio.to_thread(storage.list_dir, path)
 
-        response = make_response(
-            render_template(
+        response = await make_response(
+            await render_template(
                 "index.html",
                 items=items,
                 path=path,
@@ -1460,31 +1660,31 @@ def index(path):
 
     except Exception as e:
         logging.error(f"Error loading directory {path}: {e}", exc_info=True)
-        flash("Error loading directory")
+        await flash("Error loading directory")
         return redirect(url_for("index"))
 
 
 @app.route("/download/<path:path>")
 @login_required
-def download(path):
+async def download(path):
     # Security check: ensure path is safe
     if not storage.is_safe_path(path):
-        flash("Invalid file path")
+        await flash("Invalid file path")
         return redirect(url_for("index"))
 
     full_path = os.path.join(ROOT_DIR, path)
     if not os.path.exists(full_path) or os.path.isdir(full_path):
-        flash("File not found")
+        await flash("File not found")
         return redirect(url_for("index"))
 
     directory = os.path.dirname(full_path)
     filename = os.path.basename(full_path)
-    return send_from_directory(directory, filename, as_attachment=True)
+    return await send_from_directory(directory, filename, as_attachment=True)
 
 
 @app.route("/view/<path:path>")
 @login_required
-def view_file(path):
+async def view_file(path):
     """Serve a file inline (for in-browser preview — images, video, audio, PDF, text)."""
     if not storage.is_safe_path(path):
         return "Invalid file path", 400
@@ -1493,7 +1693,7 @@ def view_file(path):
         return "File not found", 404
     directory = os.path.dirname(full_path)
     filename = os.path.basename(full_path)
-    return send_from_directory(directory, filename, as_attachment=False)
+    return await send_from_directory(directory, filename, as_attachment=False)
 
 
 def _generate_passkey(length: int = 8) -> str:
@@ -1602,7 +1802,7 @@ def _is_passkey_unlocked(token: str) -> bool:
 
 @app.route("/api/share", methods=["POST"])
 @login_required
-def create_share():
+async def create_share():
     """Create (or return the existing) public share link for one file/folder,
     with optional security: a passkey gate, an admin-approval gate, and/or
     an expiry. Security settings only apply on first creation — to change
@@ -1611,7 +1811,7 @@ def create_share():
     if role != "readwrite":
         return jsonify({"error": "Permission denied"}), 403
 
-    data = request.get_json(silent=True) or {}
+    data = await request.get_json(silent=True) or {}
     path = data.get("path", "")
     if not path or not storage.is_safe_path(path):
         return jsonify({"error": "Invalid file path"}), 400
@@ -1630,7 +1830,8 @@ def create_share():
 
     is_dir = os.path.isdir(full_path)
     item_name = os.path.basename(full_path.rstrip("/\\"))
-    token = db.create_share(
+    token = await asyncio.to_thread(
+        db.create_share,
         path,
         item_name,
         is_dir,
@@ -1660,14 +1861,14 @@ def create_share():
 
 @app.route("/api/share/settings", methods=["POST"])
 @login_required
-def update_share_settings():
+async def update_share_settings():
     """Edit an already-active share's security mode, passkey, or expiry —
     used by the Manage Shared panel."""
     role = get_role(current_user())
     if role != "readwrite":
         return jsonify({"error": "Permission denied"}), 403
 
-    data = request.get_json(silent=True) or {}
+    data = await request.get_json(silent=True) or {}
     token = data.get("token", "")
     if not token:
         return jsonify({"error": "token is required"}), 400
@@ -1688,6 +1889,12 @@ def update_share_settings():
         plain_passkey = (
             passkey_in if (passkey_in and not generate) else _generate_passkey()
         )
+    elif target_mode != "passkey":
+        # Leaving passkey mode (e.g. switching to approval/public) must not
+        # leave a stale passkey_hash behind — otherwise switching back to
+        # "passkey" later without setting a new one silently revives the
+        # old, previously-shown passkey.
+        clear_passkey = True
 
     clear_expiry = bool(data.get("clear_expiry"))
     expires_at = None
@@ -1700,7 +1907,8 @@ def update_share_settings():
         if expires_at <= time.time():
             return jsonify({"error": "expires_at must be in the future"}), 400
 
-    ok = db.update_share_settings(
+    ok = await asyncio.to_thread(
+        db.update_share_settings,
         token,
         security_mode=security_mode,
         passkey=plain_passkey,
@@ -1720,13 +1928,13 @@ def update_share_settings():
 
 @app.route("/api/unshare", methods=["POST"])
 @login_required
-def revoke_share():
+async def revoke_share():
     """Revoke the active share link for one file/folder, by path."""
     role = get_role(current_user())
     if role != "readwrite":
         return jsonify({"error": "Permission denied"}), 403
 
-    data = request.get_json(silent=True) or {}
+    data = await request.get_json(silent=True) or {}
     path = data.get("path", "")
     if not path:
         return jsonify({"error": "path is required"}), 400
@@ -1738,7 +1946,7 @@ def revoke_share():
 
 @app.route("/api/share/status", methods=["GET"])
 @login_required
-def share_status():
+async def share_status():
     """Return current share state for one path — used to populate the share modal."""
     path = request.args.get("path", "")
     if not path:
@@ -1762,7 +1970,7 @@ def share_status():
 
 @app.route("/api/share/bulk", methods=["POST"])
 @login_required
-def bulk_share():
+async def bulk_share():
     """Bulk share or unshare a list of paths (used by the multi-select bulk
     action bar). When bulk-sharing, the same security settings (mode /
     passkey / expiry) apply to every item in the batch."""
@@ -1770,7 +1978,7 @@ def bulk_share():
     if role != "readwrite":
         return jsonify({"error": "Permission denied"}), 403
 
-    data = request.get_json(silent=True) or {}
+    data = await request.get_json(silent=True) or {}
     paths = data.get("paths") or []
     action = data.get("action")
     if action not in ("share", "unshare"):
@@ -1803,7 +2011,8 @@ def bulk_share():
                 continue
             is_dir = os.path.isdir(full_path)
             item_name = os.path.basename(full_path.rstrip("/\\"))
-            token = db.create_share(
+            token = await asyncio.to_thread(
+                db.create_share,
                 path,
                 item_name,
                 is_dir,
@@ -1857,7 +2066,7 @@ def _dir_size(path, cap_entries=20000):
 
 
 @app.route("/shared/<token>")
-def shared_download(token):
+async def shared_download(token):
     """
     Public landing page for a share token. No @login_required — this is
     the whole point of a share link (also whitelisted in validate_session()
@@ -1882,14 +2091,14 @@ def shared_download(token):
     """
     share = _get_live_share(token)
     if not share:
-        return render_template("shared.html", valid=False), 404
+        return await render_template("shared.html", valid=False), 404
 
     file_path = share["file_path"]
     full_path = (
         os.path.join(ROOT_DIR, file_path) if storage.is_safe_path(file_path) else None
     )
     if not full_path or not os.path.exists(full_path):
-        return render_template("shared.html", valid=False), 404
+        return await render_template("shared.html", valid=False), 404
 
     is_dir = os.path.isdir(full_path)
     size_bytes, size_truncated = (
@@ -1943,12 +2152,12 @@ def shared_download(token):
             ctx["unlocked"] = False
             ctx["request_state"] = None  # no request yet — show the request form
 
-    return render_template("shared.html", **ctx)
+    return await render_template("shared.html", **ctx)
 
 
 @app.route("/shared/<token>/passkey", methods=["POST"])
 @csrf.exempt  # anonymous visitor, no session — CSRF tokens don't apply here (see shared_request_access below)
-def shared_verify_passkey(token):
+async def shared_verify_passkey(token):
     """Verify a passkey for a passkey-gated share; on success, sets a signed
     unlock cookie scoped to this token so the landing/download routes treat
     this browser as unlocked."""
@@ -1956,9 +2165,11 @@ def shared_verify_passkey(token):
     if not share or share["security_mode"] != "passkey":
         return jsonify({"error": "Not available"}), 404
 
-    data = request.get_json(silent=True) or {}
+    data = await request.get_json(silent=True) or {}
     passkey = (data.get("passkey") or "").strip()
-    if not passkey or not db.verify_share_passkey(token, passkey):
+    if not passkey or not await asyncio.to_thread(
+        db.verify_share_passkey, token, passkey
+    ):
         return jsonify({"success": False, "error": "Incorrect passkey"}), 403
 
     resp = jsonify({"success": True})
@@ -1983,7 +2194,7 @@ def shared_verify_passkey(token):
 # request submitted from the landing page. CSRF exemption is correct here
 # (not a token workaround) because there's no authenticated session for a
 # forged cross-site request to piggyback on in the first place.
-def shared_request_access(token):
+async def shared_request_access(token):
     """Submit an access request for an approval-gated share. Issues an
     access_token cookie the visitor's browser uses to poll status and,
     once approved, to authorize downloads."""
@@ -1991,7 +2202,7 @@ def shared_request_access(token):
     if not share or share["security_mode"] != "approval":
         return jsonify({"error": "Not available"}), 404
 
-    data = request.get_json(silent=True) or {}
+    data = await request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
     note = (data.get("note") or "").strip()
     if not name:
@@ -2019,7 +2230,7 @@ def shared_request_access(token):
 
 
 @app.route("/shared/<token>/status", methods=["GET"])
-def shared_request_status(token):
+async def shared_request_status(token):
     """Polled by the landing page while a request is pending, so the
     visitor doesn't have to keep refreshing manually."""
     access_token = request.cookies.get(_approval_cookie_name(token))
@@ -2147,7 +2358,7 @@ def _stream_folder_zip(full_path, arc_name):
             yield chunk
 
     return Response(
-        generate_zip_stream(),
+        _stream_from_thread(generate_zip_stream()),
         mimetype="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="{arc_name}.zip"',
@@ -2159,7 +2370,7 @@ def _stream_folder_zip(full_path, arc_name):
 
 
 @app.route("/shared/<token>/download")
-def shared_file_download(token):
+async def shared_file_download(token):
     """
     Public, unauthenticated file/zip stream for a share token. Reached only
     by clicking Download on the /shared/<token> landing page — see the
@@ -2202,8 +2413,11 @@ def shared_file_download(token):
         print(
             f"[shared_dl {token}] +{time.time()-_t0:.3f}s calling send_from_directory"
         )
-        resp = send_from_directory(
-            directory, filename, as_attachment=True, download_name=share["item_name"]
+        resp = await send_from_directory(
+            directory,
+            filename,
+            as_attachment=True,
+            attachment_filename=share["item_name"],
         )
         print(
             f"[shared_dl {token}] +{time.time()-_t0:.3f}s send_from_directory returned"
@@ -2216,7 +2430,7 @@ def shared_file_download(token):
 
 @app.route("/shared/<token>/browse", defaults={"subpath": ""})
 @app.route("/shared/<token>/browse/<path:subpath>")
-def shared_browse(token, subpath):
+async def shared_browse(token, subpath):
     """List the contents of a folder inside a shared folder (JSON), for the
     in-page browser on the landing page. subpath is relative to the share's
     own root, e.g. browsing into a nested folder inside what was shared.
@@ -2238,7 +2452,7 @@ def shared_browse(token, subpath):
     if rel_path is None or not os.path.isdir(full_path):
         return jsonify({"error": "Not found"}), 404
 
-    items = storage.list_dir(rel_path)
+    items = await asyncio.to_thread(storage.list_dir, rel_path)
     resp = jsonify({"success": True, "items": items, "subpath": subpath})
     # Same no-store pattern as the rest of the app — this listing can reveal
     # filenames inside an approval-gated share, so it shouldn't be cached by
@@ -2249,7 +2463,7 @@ def shared_browse(token, subpath):
 
 
 @app.route("/shared/<token>/download-item/<path:subpath>")
-def shared_download_item(token, subpath):
+async def shared_download_item(token, subpath):
     """Download a single file, or a single subfolder (as a ZIP), from
     inside a browsed shared folder. Same gate + subtree confinement as
     shared_browse. Counts as one use against an approval grant's
@@ -2276,8 +2490,8 @@ def shared_download_item(token, subpath):
     if os.path.isfile(full_path):
         directory = os.path.dirname(full_path)
         filename = os.path.basename(full_path)
-        return send_from_directory(
-            directory, filename, as_attachment=True, download_name=filename
+        return await send_from_directory(
+            directory, filename, as_attachment=True, attachment_filename=filename
         )
 
     item_name = os.path.basename(full_path.rstrip("/\\"))
@@ -2290,7 +2504,7 @@ def shared_download_item(token, subpath):
 # and shared_request_access above: CSRFProtect(app) covers every unsafe-verb
 # route by default, and there's no authenticated session here for a forged
 # cross-site request to piggyback on in the first place.
-def shared_zip_selected(token):
+async def shared_zip_selected(token):
     """Zip up a visitor's multi-selected files/subfolders from inside a
     shared folder into one download. Each selected item counts as one use
     against an approval grant's downloads_remaining — checked up front
@@ -2305,7 +2519,7 @@ def shared_zip_selected(token):
     if not granted:
         return jsonify({"error": "Locked"}), 403
 
-    data = request.get_json(silent=True) or {}
+    data = await request.get_json(silent=True) or {}
     subpaths = data.get("paths") or []
     if not subpaths or not isinstance(subpaths, list):
         return jsonify({"error": "No paths provided"}), 400
@@ -2378,7 +2592,7 @@ def shared_zip_selected(token):
             yield chunk
 
     return Response(
-        generate_zip_stream(),
+        _stream_from_thread(generate_zip_stream()),
         mimetype="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="{zip_filename}"',
@@ -2391,7 +2605,14 @@ def shared_zip_selected(token):
 
 @app.route("/office_preview/<path:path>")
 @login_required
-def office_preview(path):
+async def office_preview(path):
+    """Thin async wrapper — see _office_preview_sync. mammoth/openpyxl/
+    python-pptx document conversion is CPU/IO-heavy synchronous work; same
+    reasoning as archive_preview's wrapper above."""
+    return await asyncio.to_thread(_office_preview_sync, path)
+
+
+def _office_preview_sync(path):
     """Convert Office documents (docx, xlsx, pptx) to structured data for browser preview."""
     import html as html_lib
 
@@ -2531,7 +2752,20 @@ def office_preview(path):
 
 @app.route("/archive_preview/<path:path>")
 @login_required
-def archive_preview(path):
+async def archive_preview(path):
+    """Thin async wrapper — see _archive_preview_sync for the actual logic.
+    Reading/decompressing archive contents (zip/tar/7z/rar, up to 10,000
+    entries, plus password-verification decompression) is CPU/IO-heavy
+    synchronous work. Running it directly in this coroutine would freeze
+    Hypercorn's single event loop for as long as it takes, stalling every
+    other concurrent request — login, other page loads, video preview,
+    everything — for the whole duration. Verified request.args/jsonify()
+    still resolve correctly from inside asyncio.to_thread (Quart's context
+    vars propagate into the worker thread automatically)."""
+    return await asyncio.to_thread(_archive_preview_sync, path)
+
+
+def _archive_preview_sync(path):
     """List contents of an archive file for in-browser preview.
 
     Supports: .zip, .rar, .7z, .tar, .tar.gz, .tar.bz2, .tar.xz
@@ -2944,14 +3178,14 @@ def archive_preview(path):
 
 @app.route("/bulk-download", methods=["POST"])
 @login_required
-def bulk_download():
+async def bulk_download():
     """Download multiple files and folders as a streaming ZIP file using zipstream-new"""
     try:
         print(f"📥 Bulk download request received from user: {current_user()}")
 
         # Handle both JSON and form data
         if request.is_json:
-            data = request.get_json()
+            data = await request.get_json()
             print(f"📋 JSON Request data: {data}")
 
             if not data or "paths" not in data:
@@ -2962,7 +3196,7 @@ def bulk_download():
         else:
             # Handle form data
             print("📋 Form data request received")
-            paths_json = request.form.get("paths")
+            paths_json = (await request.form).get("paths")
             if not paths_json:
                 print("❌ Error: No paths provided in form request")
                 return jsonify({"error": "No paths provided"}), 400
@@ -3119,7 +3353,7 @@ def bulk_download():
 
         # Create response with streaming optimized for large files
         response = Response(
-            generate_zip_stream(),
+            _stream_from_thread(generate_zip_stream()),
             mimetype="application/zip",
             headers={
                 "Content-Disposition": f'attachment; filename="{zip_filename}"',
@@ -3142,7 +3376,7 @@ def bulk_download():
 
 @app.route("/upload", methods=["POST"])
 @login_required
-def upload():
+async def upload():
     session_id = session.get("session_id")
     if not session_id:
         session_id = str(uuid.uuid4())
@@ -3157,11 +3391,11 @@ def upload():
         if role != "readwrite":
             return "Permission denied", 403
 
-        file_id = request.form.get("file_id")
-        chunk_num = request.form.get("chunk_num")
-        total_chunks = request.form.get("total_chunks")
-        filename = request.form.get("filename", "")
-        dest_path = request.form.get("dest_path", "")
+        file_id = (await request.form).get("file_id")
+        chunk_num = (await request.form).get("chunk_num")
+        total_chunks = (await request.form).get("total_chunks")
+        filename = (await request.form).get("filename", "")
+        dest_path = (await request.form).get("dest_path", "")
 
         # Validate filename (must not be empty)
         if not filename:
@@ -3204,7 +3438,7 @@ def upload():
             # Track this upload
             chunk_tracker.track_upload(session_id, file_id)
 
-            chunk = request.files.get("chunk")
+            chunk = (await request.files).get("chunk")
             if not chunk:
                 return "No chunk data received", 400
 
@@ -3268,7 +3502,7 @@ def upload():
 
         else:
             # Whole file upload handling
-            uploaded_file = request.files.get("file")
+            uploaded_file = (await request.files).get("file")
             if not uploaded_file or uploaded_file.filename == "":
                 return "No file selected", 400
 
@@ -3289,7 +3523,7 @@ def upload():
             os.makedirs(target_dir, exist_ok=True)
 
             # Conflict check: return 409 if file exists and overwrite not explicitly requested
-            overwrite = request.form.get("overwrite", "0")
+            overwrite = (await request.form).get("overwrite", "0")
             if (
                 os.path.exists(target_path)
                 and os.path.isfile(target_path)
@@ -3299,16 +3533,16 @@ def upload():
 
             # Save file — retry on Windows file-lock errors (e.g. FastCopy holding a write lock).
             # Without this, save() blocks indefinitely waiting for the lock to release,
-            # which stalls the Flask thread and freezes the entire upload queue.
+            # which stalls the request and freezes the entire upload queue.
             max_attempts = 3
             for attempt in range(max_attempts):
                 try:
                     uploaded_file.stream.seek(0)
-                    uploaded_file.save(target_path)
+                    await uploaded_file.save(target_path)
                     return "File uploaded successfully", 200
                 except PermissionError as e:
                     if attempt < max_attempts - 1:
-                        time.sleep(0.5)
+                        await asyncio.sleep(0.5)
                     else:
                         print(
                             f"❌ File locked after {max_attempts} attempts: {filename} — {e}"
@@ -3350,7 +3584,7 @@ def upload():
 
 @app.route("/cleanup_chunks", methods=["POST"])
 @login_required
-def cleanup_chunks():
+async def cleanup_chunks():
     """Clean up unfinished chunk files"""
     session_id = session.get("session_id")
 
@@ -3359,7 +3593,7 @@ def cleanup_chunks():
         if role != "readwrite":
             return jsonify({"error": "Permission denied"}), 403
 
-        data = request.get_json()
+        data = await request.get_json()
         if not data or "file_id" not in data:
             return jsonify({"error": "File ID is required"}), 400
 
@@ -3402,7 +3636,7 @@ def cleanup_chunks():
 
 @app.route("/cancel_upload", methods=["POST"])
 @login_required
-def cancel_upload():
+async def cancel_upload():
     """Cancel an ongoing upload and clean up its chunks"""
     session_id = session.get("session_id")
 
@@ -3411,7 +3645,7 @@ def cancel_upload():
         if role != "readwrite":
             return jsonify({"error": "Permission denied"}), 403
 
-        data = request.get_json()
+        data = await request.get_json()
         if not data or "file_id" not in data:
             return jsonify({"error": "File ID is required"}), 400
 
@@ -3486,7 +3720,14 @@ def cancel_upload():
 
 @app.route("/admin/clear_media_preview", methods=["POST"])
 @login_required
-def clear_media_preview():
+async def clear_media_preview():
+    """Thin async wrapper — see _clear_media_preview_sync. Walking/scanning
+    the HLS and image cache directories is synchronous filesystem work;
+    same reasoning as archive_preview's wrapper above."""
+    return await asyncio.to_thread(_clear_media_preview_sync)
+
+
+def _clear_media_preview_sync():
     """Admin endpoint to clear HLS transcode and image preview caches."""
     try:
         role = get_role(current_user())
@@ -3593,7 +3834,7 @@ def clear_media_preview():
 
 @app.route("/admin/rebuild_cache", methods=["POST"])
 @login_required
-def admin_rebuild_cache():
+async def admin_rebuild_cache():
     """Delete storage_index.json and trigger a fresh full walk to rebuild it"""
     try:
         role = get_role(current_user())
@@ -3604,26 +3845,34 @@ def admin_rebuild_cache():
         from file_index import file_index_manager, FILE_INDEX_PATH
         import os
 
-        # Delete storage_index.json
-        if os.path.exists(CACHE_FILE):
-            os.remove(CACHE_FILE)
-            print(f"🗑️ Cache file deleted: {CACHE_FILE}")
-        else:
-            print("ℹ️ No cache file found — nothing to delete")
+        def _rebuild_cache_sync():
+            # Delete storage_index.json
+            if os.path.exists(CACHE_FILE):
+                os.remove(CACHE_FILE)
+                print(f"🗑️ Cache file deleted: {CACHE_FILE}")
+            else:
+                print("ℹ️ No cache file found — nothing to delete")
 
-        # Delete file_index.json
-        if os.path.exists(FILE_INDEX_PATH):
-            os.remove(FILE_INDEX_PATH)
-            file_index_manager.clear()
-            print(f"🗑️ File index deleted: {FILE_INDEX_PATH}")
-        else:
-            print("ℹ️ No file index found — nothing to delete")
+            # Delete file_index.json
+            if os.path.exists(FILE_INDEX_PATH):
+                os.remove(FILE_INDEX_PATH)
+                file_index_manager.clear()
+                print(f"🗑️ File index deleted: {FILE_INDEX_PATH}")
+            else:
+                print("ℹ️ No file index found — nothing to delete")
 
-        # Trigger a fresh full reconciliation walk to rebuild both, and
-        # force-push SSE so the UI updates without a manual page refresh.
-        monitor = get_file_monitor()
-        print("🚶 Rebuilding cache from scratch...")
-        monitor._reconcile()
+            # Trigger a fresh full reconciliation walk to rebuild both.
+            monitor = get_file_monitor()
+            print("🚶 Rebuilding cache from scratch...")
+            monitor._reconcile()
+            return monitor
+
+        # This deletes files and runs a full recursive filesystem walk —
+        # previously ran directly on the event loop thread (no threading.Thread,
+        # no asyncio.to_thread), so clicking "Rebuild Cache" froze the ENTIRE
+        # app for every connected user for the whole walk duration, same class
+        # of bug as the ~34 other blocking call sites already fixed elsewhere.
+        monitor = await asyncio.to_thread(_rebuild_cache_sync)
         from realtime_stats import trigger_storage_update
 
         trigger_storage_update(None, monitor.get_current_snapshot())
@@ -3651,7 +3900,7 @@ def admin_rebuild_cache():
 
 @app.route("/admin/cleanup_chunks", methods=["POST"])
 @login_required
-def admin_cleanup_chunks():
+async def admin_cleanup_chunks():
     """Admin endpoint to trigger comprehensive chunk cleanup"""
     from storage import manual_chunks_cleanup, emergency_cleanup_all
 
@@ -3743,7 +3992,7 @@ def admin_cleanup_chunks():
 
 @app.route("/admin/shares/count", methods=["GET"])
 @login_required
-def admin_shares_count():
+async def admin_shares_count():
     """How many share links are currently active — shown before the revoke-all confirmation."""
     role = get_role(current_user())
     if role != "readwrite":
@@ -3754,7 +4003,7 @@ def admin_shares_count():
 
 @app.route("/admin/shares", methods=["GET"])
 @login_required
-def admin_shares_list():
+async def admin_shares_list():
     """Every currently-active share, for the Manage Shared → Active Shares tab."""
     role = get_role(current_user())
     if role != "readwrite":
@@ -3768,7 +4017,7 @@ def admin_shares_list():
 
 @app.route("/admin/shares/requests", methods=["GET"])
 @login_required
-def admin_shares_pending_requests():
+async def admin_shares_pending_requests():
     """Pending access requests across every approval-gated share, for the
     Manage Shared → Pending Requests tab."""
     role = get_role(current_user())
@@ -3780,7 +4029,7 @@ def admin_shares_pending_requests():
 
 @app.route("/admin/shares/requests/stream", methods=["GET"])
 @login_required
-def admin_shares_requests_stream():
+async def admin_shares_requests_stream():
     """Server-Sent Events stream that pushes the pending-request count the
     instant a request is created, approved, or denied — this is what powers
     the live badge on the Manage Shared button, replacing what used to be a
@@ -3790,19 +4039,19 @@ def admin_shares_requests_stream():
     role = get_role(current_user())
     if role != "readwrite":
         return jsonify({"error": "Permission denied"}), 403
-    return share_events_sse()
+    return await share_events_sse()
 
 
 @app.route("/admin/shares/requests/<int:request_id>/approve", methods=["POST"])
 @login_required
-def admin_approve_share_request(request_id):
+async def admin_approve_share_request(request_id):
     """Approve a pending access request, granting it a set number of downloads
     before it locks again."""
     role = get_role(current_user())
     if role != "readwrite":
         return jsonify({"error": "Permission denied"}), 403
 
-    data = request.get_json(silent=True) or {}
+    data = await request.get_json(silent=True) or {}
     try:
         max_downloads = int(data.get("max_downloads", 1))
     except (TypeError, ValueError):
@@ -3825,7 +4074,7 @@ def admin_approve_share_request(request_id):
 
 @app.route("/admin/shares/requests/<int:request_id>/deny", methods=["POST"])
 @login_required
-def admin_deny_share_request(request_id):
+async def admin_deny_share_request(request_id):
     """Deny a pending access request."""
     role = get_role(current_user())
     if role != "readwrite":
@@ -3844,7 +4093,7 @@ def admin_deny_share_request(request_id):
 
 @app.route("/admin/revoke_all_shares/code", methods=["POST"])
 @login_required
-def admin_revoke_all_shares_code():
+async def admin_revoke_all_shares_code():
     """
     Issue a fresh, random 10-digit confirmation code for the 'revoke all
     shares' action. A new code is minted every time this is called — the
@@ -3863,14 +4112,14 @@ def admin_revoke_all_shares_code():
 
 @app.route("/admin/revoke_all_shares", methods=["POST"])
 @login_required
-def admin_revoke_all_shares():
+async def admin_revoke_all_shares():
     """Revoke every active share link. Requires the matching code from
     /admin/revoke_all_shares/code, typed back exactly, single-use."""
     role = get_role(current_user())
     if role != "readwrite":
         return jsonify({"error": "Permission denied"}), 403
 
-    data = request.get_json(silent=True) or {}
+    data = await request.get_json(silent=True) or {}
     nonce = data.get("nonce", "")
     typed_code = data.get("code", "")
     session_id = session.get("session_id", "")
@@ -3895,7 +4144,7 @@ def admin_revoke_all_shares():
 
 @app.route("/admin/chunk_stats", methods=["GET"])
 @login_required
-def chunk_stats():
+async def chunk_stats():
     """Get chunk tracking statistics"""
     try:
         role = get_role(current_user())
@@ -3929,7 +4178,7 @@ def chunk_stats():
 
 @app.route("/admin/upload_status", methods=["GET"])
 @login_required
-def upload_status():
+async def upload_status():
     """Get current upload status for UI updates"""
     try:
         role = get_role(current_user())
@@ -3977,7 +4226,7 @@ def upload_status():
 
 @app.route("/api/storage_stats", methods=["GET"])
 @login_required
-def storage_stats_api():
+async def storage_stats_api():
     """Get storage statistics - INSTANT VERSION using cached data"""
     try:
         print(
@@ -4032,7 +4281,7 @@ def storage_stats_api():
 
 @app.route("/api/storage_stats_slow", methods=["GET"])
 @login_required
-def storage_stats_slow_api():
+async def storage_stats_slow_api():
     """Get storage statistics - SLOW VERSION with full file counting"""
     try:
         print(
@@ -4051,7 +4300,7 @@ def storage_stats_slow_api():
 
 
 @app.route("/api/storage_stats_debug", methods=["GET"])
-def storage_stats_debug():
+async def storage_stats_debug():
     """Debug version of storage stats without authentication"""
     try:
         print("🔧 Debug storage stats API called (no auth required)")
@@ -4079,17 +4328,17 @@ def storage_stats_debug():
 
 
 @app.route("/api/storage_stats_stream", methods=["GET"])
-def storage_stats_stream():
+async def storage_stats_stream():
     """Server-Sent Events endpoint for real-time storage stats"""
     if not is_logged_in():
         return jsonify({"error": "Authentication required"}), 401
 
     print(f"📡 SSE connection established for user: {current_user()}")
-    return storage_stats_sse()
+    return await storage_stats_sse()
 
 
 @app.route("/api/storage_stats_poll", methods=["GET"])
-def storage_stats_poll():
+async def storage_stats_poll():
     """Polling endpoint for storage stats - fallback when SSE fails"""
     if not is_logged_in():
         return jsonify({"error": "Authentication required"}), 401
@@ -4241,7 +4490,7 @@ def storage_stats_poll():
 
 
 @app.route("/api/monitoring_status", methods=["GET"])
-def monitoring_status():
+async def monitoring_status():
     """Get current monitoring system status"""
     if not is_logged_in():
         return jsonify({"error": "Authentication required"}), 401
@@ -4265,7 +4514,7 @@ def monitoring_status():
 
 
 @app.route("/api/disk_stats_fast", methods=["GET"])
-def disk_stats_fast():
+async def disk_stats_fast():
     """Fast disk stats only (no file counting) - no auth required"""
     try:
         print("📊 Fast disk stats request")
@@ -4323,7 +4572,7 @@ def disk_stats_fast():
 
 
 @app.route("/api/health_check", methods=["GET"])
-def health_check():
+async def health_check():
     """Simple health check endpoint that doesn't require authentication"""
     return (
         jsonify(
@@ -4341,7 +4590,7 @@ def health_check():
 
 @app.route("/api/search", methods=["GET"])
 @login_required
-def search_files():
+async def search_files():
     """Paginated deep search.
 
     Query params:
@@ -4416,7 +4665,7 @@ def search_files():
 @app.route("/api/dir_info/", defaults={"path": ""})
 @app.route("/api/dir_info/<path:path>")
 @login_required
-def dir_info(path):
+async def dir_info(path):
     """
     Returns folder size and item count.
     Hits the in-memory index instantly if indexed.
@@ -4454,7 +4703,7 @@ def dir_info(path):
 
 @app.route("/api/assembly_status", methods=["GET"])
 @login_required
-def get_assembly_status():
+async def get_assembly_status():
     """Get all assembly jobs for current session"""
     session_id = session.get("session_id")
     if not session_id:
@@ -4479,7 +4728,7 @@ def get_assembly_status():
 
 @app.route("/api/protect_assembly/<file_id>", methods=["POST"])
 @login_required
-def protect_assembly_job(file_id):
+async def protect_assembly_job(file_id):
     """Mark an assembly job as protected from cleanup"""
     session_id = session.get("session_id")
     if not session_id:
@@ -4498,7 +4747,7 @@ def protect_assembly_job(file_id):
 
 @app.route("/api/assembly_status/<file_id>", methods=["GET"])
 @login_required
-def get_single_assembly_status(file_id):
+async def get_single_assembly_status(file_id):
     """Get status of a specific assembly job"""
     job = assembly_queue.get_job_status(file_id)
 
@@ -4527,7 +4776,7 @@ def get_single_assembly_status(file_id):
 @app.route("/api/files/", defaults={"path": ""})
 @app.route("/api/files/<path:path>")
 @login_required
-def api_files(path):
+async def api_files(path):
     """API endpoint to get file listings as JSON"""
     try:
         # Comprehensive path validation: safety and existence
@@ -4535,7 +4784,7 @@ def api_files(path):
             return jsonify({"error": "Invalid path"}), 400
 
         role = get_role(current_user())
-        items = storage.list_dir(path)
+        items = await asyncio.to_thread(storage.list_dir, path)
 
         response_data = {
             "success": True,
@@ -4553,14 +4802,14 @@ def api_files(path):
 
 @app.route("/bulk_move", methods=["POST"])
 @login_required
-def bulk_move():
+async def bulk_move():
     """Move multiple files/folders to a new location"""
     try:
         role = get_role(current_user())
         if role != "readwrite":
             return jsonify({"error": "Permission denied"}), 403
 
-        data = request.get_json()
+        data = await request.get_json()
         if not data or "paths" not in data:
             return jsonify({"error": "Paths are required"}), 400
 
@@ -4658,14 +4907,14 @@ def bulk_move():
 
 @app.route("/bulk_copy", methods=["POST"])
 @login_required
-def bulk_copy():
+async def bulk_copy():
     """Copy multiple files/folders to a new location"""
     try:
         role = get_role(current_user())
         if role != "readwrite":
             return jsonify({"error": "Permission denied"}), 403
 
-        data = request.get_json()
+        data = await request.get_json()
         if not data or "paths" not in data:
             return jsonify({"error": "Paths are required"}), 400
 
@@ -4767,14 +5016,14 @@ def bulk_copy():
 
 @app.route("/bulk_delete", methods=["POST"])
 @login_required
-def bulk_delete():
+async def bulk_delete():
     """Delete multiple files/folders"""
     try:
         role = get_role(current_user())
         if role != "readwrite":
             return jsonify({"error": "Permission denied"}), 403
 
-        data = request.get_json()
+        data = await request.get_json()
         if not data or "paths" not in data:
             return jsonify({"error": "Paths are required"}), 400
 
@@ -4833,14 +5082,14 @@ def bulk_delete():
 
 @app.route("/rename", methods=["POST"])
 @login_required
-def rename_item():
+async def rename_item():
     """Rename a single file or folder"""
     try:
         role = get_role(current_user())
         if role != "readwrite":
             return jsonify({"error": "Permission denied"}), 403
 
-        data = request.get_json()
+        data = await request.get_json()
         if not data or "old_path" not in data or "new_name" not in data:
             return jsonify({"error": "Old path and new name are required"}), 400
 
@@ -4903,14 +5152,14 @@ def rename_item():
 
 @app.route("/mkdir", methods=["POST"])
 @login_required
-def mkdir():
+async def mkdir():
     try:
         role = get_role(current_user())
         if role != "readwrite":
             return jsonify({"error": "Permission denied"}), 403
 
-        foldername = request.form.get("foldername", "").strip()
-        path = request.form.get("path", "")
+        foldername = (await request.form).get("foldername", "").strip()
+        path = (await request.form).get("path", "")
 
         if not foldername:
             return jsonify({"error": "Folder name required"}), 400
@@ -4947,44 +5196,44 @@ def mkdir():
 
 @app.route("/delete", methods=["POST"])
 @login_required
-def delete():
+async def delete():
     try:
         role = get_role(current_user())
         if role != "readwrite":
-            flash("Permission denied")
+            await flash("Permission denied")
             return redirect(url_for("index"))
 
-        target_path = request.form.get("target_path")
+        target_path = (await request.form).get("target_path")
         if not target_path:
-            flash("Target path is required")
+            await flash("Target path is required")
             return redirect(url_for("index"))
 
         # Security check: ensure path is safe
         if not storage.is_safe_path(target_path):
-            flash("Invalid target path")
+            await flash("Invalid target path")
             return redirect(url_for("index"))
 
         if storage.delete_path(target_path):
-            flash("Item deleted successfully")
+            await flash("Item deleted successfully")
             _trigger_reconcile()
         else:
-            flash("Error deleting item")
+            await flash("Error deleting item")
 
         # Redirect to parent directory
         parent_path = "/".join(target_path.split("/")[:-1])
         return redirect(url_for("index", path=parent_path))
 
     except Exception as e:
-        flash(f"Error deleting item: {str(e)}")
+        await flash(f"Error deleting item: {str(e)}")
         return redirect(url_for("index"))
 
 
 @app.route("/api/check_conflicts", methods=["POST"])
 @login_required
-def api_check_conflicts():
+async def api_check_conflicts():
     """Check which of the given paths would conflict at the destination."""
     try:
-        data = request.get_json()
+        data = await request.get_json()
         if not data:
             return jsonify({"error": "JSON body required"}), 400
         paths = data.get("paths", [])
@@ -5018,7 +5267,7 @@ def api_check_conflicts():
 
 @app.route("/api/exists", methods=["GET"])
 @login_required
-def api_exists():
+async def api_exists():
     """Check whether a path (file or folder) exists under ROOT_DIR."""
     path = request.args.get("path", "")
     if path and not storage.is_safe_path(path):
@@ -5030,15 +5279,15 @@ def api_exists():
 
 
 @app.route("/api/speedtest/ping", methods=["GET"])
-def speedtest_ping():
+async def speedtest_ping():
     # Just return OK for latency test
     return jsonify({"ok": True})
 
 
 @app.route("/api/speedtest/upload", methods=["POST"])
-def speedtest_upload():
+async def speedtest_upload():
     # Receive 25MiB data, measure time server-side if needed
-    file = request.files.get("data")
+    file = (await request.files).get("data")
     if not file:
         return jsonify({"error": "No data"}), 400
     # Optionally read to memory to simulate disk write
@@ -5047,30 +5296,30 @@ def speedtest_upload():
 
 
 @app.route("/api/speedtest/download", methods=["GET"])
-def speedtest_download():
+async def speedtest_download():
     # Send 5MiB of zero bytes
     size = 5 * 1024 * 1024
     buf = io.BytesIO(b"\x00" * size)
-    return send_file(
+    return await send_file(
         buf,
         mimetype="application/octet-stream",
         as_attachment=True,
-        download_name="speedtest.bin",
+        attachment_filename="speedtest.bin",
     )
 
 
 @app.errorhandler(413)
-def too_large(e):
+async def too_large(e):
     return "File too large", 413
 
 
 @app.errorhandler(404)
-def not_found(e):
-    return render_template("404.html"), 404
+async def not_found(e):
+    return await render_template("404.html"), 404
 
 
 @app.errorhandler(500)
-def internal_error(e):
+async def internal_error(e):
     return "Internal server error", 500
 
 
@@ -6139,7 +6388,7 @@ def _patch_master_m3u8_subtitles(master_path: str, extracted_subs: list) -> None
 
 @app.route("/hls_start/<path:video_path>")
 @login_required
-def hls_start(video_path):
+async def hls_start(video_path):
     """
     Kick off HLS transcoding (idempotent).  Returns:
       hls_available: false  — ffmpeg not installed; frontend shows Play Raw only
@@ -6177,7 +6426,7 @@ def hls_start(video_path):
                 }
             )
 
-    if not _ffmpeg_available():
+    if not await asyncio.to_thread(_ffmpeg_available):
         reason = "ffmpeg_disabled" if not ENABLE_FFMPEG else "ffmpeg_not_installed"
         print(
             f"\u26a0\ufe0f  ffmpeg {'disabled' if not ENABLE_FFMPEG else 'not found'} — HLS unavailable, client will use raw playback"
@@ -6219,7 +6468,7 @@ def hls_start(video_path):
 
 @app.route("/hls_status/<cache_key>")
 @login_required
-def hls_status_route(cache_key):
+async def hls_status_route(cache_key):
     """Poll transcoding status.  Returns {status, progress 0-100, profiles?}."""
     if not re.fullmatch(r"[a-f0-9]{32}", cache_key):
         return jsonify({"error": "Invalid key"}), 400
@@ -6228,7 +6477,7 @@ def hls_status_route(cache_key):
 
 @app.route("/hls_files/<cache_key>/<path:hls_path>")
 @login_required
-def hls_files(cache_key, hls_path):
+async def hls_files(cache_key, hls_path):
     """Serve HLS master/sub-playlists (.m3u8) and TS segments (.ts)."""
     if not re.fullmatch(r"[a-f0-9]{32}", cache_key):
         return "Invalid key", 400
@@ -6244,24 +6493,26 @@ def hls_files(cache_key, hls_path):
     if not os.path.exists(file_path):
         return "Not found", 404
     if ext.lower() == ".m3u8":
-        return send_file(
+        return await send_file(
             file_path,
             mimetype="application/vnd.apple.mpegurl",
-            max_age=0,
+            cache_timeout=0,
             conditional=False,
         )
     if ext.lower() == ".vtt":
-        return send_file(
+        return await send_file(
             file_path,
             mimetype="text/vtt",
-            max_age=3600,
+            cache_timeout=3600,
         )
     if ext.lower() == ".mp4":
-        return send_file(file_path, mimetype="video/mp4", max_age=3600)
+        return await send_file(file_path, mimetype="video/mp4", cache_timeout=3600)
     if ext.lower() == ".m4s":
-        return send_file(file_path, mimetype="video/iso.segment", max_age=3600)
+        return await send_file(
+            file_path, mimetype="video/iso.segment", cache_timeout=3600
+        )
     # .ts segments
-    return send_file(file_path, mimetype="video/mp2t", max_age=3600)
+    return await send_file(file_path, mimetype="video/mp2t", cache_timeout=3600)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -6627,7 +6878,7 @@ def _run_img_conversion(full_path: str, cache_key: str, lossy: bool) -> None:
 
 @app.route("/image_preview/<path:path>")
 @login_required
-def image_preview(path):
+async def image_preview(path):
     """
     Serve any image for in-browser preview, converting/compressing as needed.
 
@@ -6672,7 +6923,7 @@ def image_preview(path):
     if not needs_processing:
         directory = os.path.dirname(full_path)
         filename = os.path.basename(full_path)
-        return send_from_directory(directory, filename, as_attachment=False)
+        return await send_from_directory(directory, filename, as_attachment=False)
 
     # ── pyvips not available → graceful raw fallback ──────────────────────
     if not _pyvips_available():
@@ -6699,7 +6950,7 @@ def image_preview(path):
             )
         directory = os.path.dirname(full_path)
         filename = os.path.basename(full_path)
-        return send_from_directory(directory, filename, as_attachment=False)
+        return await send_from_directory(directory, filename, as_attachment=False)
 
     # ── Cache hit check ───────────────────────────────────────────────────
     cache_key = _img_cache_key(full_path)
@@ -6708,11 +6959,11 @@ def image_preview(path):
     if cached_path:
         meta = _img_read_meta(cache_key)
         if meta.get("status") != "error":
-            return send_file(
+            return await send_file(
                 cached_path,
                 mimetype=cached_mime,
                 as_attachment=False,
-                max_age=3600,
+                cache_timeout=3600,
             )
         # Previous conversion failed; fall through to retry
 
@@ -6736,27 +6987,33 @@ def image_preview(path):
         # Spawn daemon thread so it survives a client disconnect, then join
         # for up to 60 s.  Inline join keeps this request from returning a
         # partial/missing image while the first bytes are still being written.
+        # The JOIN ITSELF must run off the event loop — Thread.join() is a
+        # blocking call, and calling it directly here would freeze Hypercorn's
+        # whole single event loop for up to 60s per conversion, stalling
+        # every other concurrent request (login, other page loads, video
+        # preview, everything) for that entire window.
         t = threading.Thread(
             target=_run_img_conversion,
             args=(full_path, cache_key, lossy),
             daemon=True,
         )
         t.start()
-        t.join(timeout=60)
+        await asyncio.to_thread(t.join, 60)
     else:
-        # Another thread is handling this conversion; wait up to 60 s for it
-        existing_event.wait(timeout=60)
+        # Another thread is handling this conversion; wait up to 60 s for it.
+        # Same reasoning as above — Event.wait() blocks, must run off-loop.
+        await asyncio.to_thread(existing_event.wait, 60)
 
     # ── Serve from cache (or fall back to raw if conversion timed out) ────
     cached_path, cached_mime = _img_find_cached(cache_key)
     if cached_path:
         meta = _img_read_meta(cache_key)
         if meta.get("status") != "error":
-            return send_file(
+            return await send_file(
                 cached_path,
                 mimetype=cached_mime,
                 as_attachment=False,
-                max_age=3600,
+                cache_timeout=3600,
             )
 
     # Conversion timed out or permanently failed → serve raw as fallback
@@ -6768,12 +7025,12 @@ def image_preview(path):
     )
     directory = os.path.dirname(full_path)
     filename = os.path.basename(full_path)
-    return send_from_directory(directory, filename, as_attachment=False)
+    return await send_from_directory(directory, filename, as_attachment=False)
 
 
 @app.route("/image_preview_status/<cache_key>")
 @login_required
-def image_preview_status(cache_key):
+async def image_preview_status(cache_key):
     """
     Poll conversion status for a specific cache key.
 
@@ -6809,7 +7066,7 @@ def image_preview_status(cache_key):
 
 @app.route("/image_info/<path:path>")
 @login_required
-def image_info(path):
+async def image_info(path):
     """
     Return metadata about an image file so the frontend can decide whether to
     use /image_preview/<path> or /view/<path>.

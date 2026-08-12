@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
 Development Server for CloudinatorFTP
-Runs the Flask development server for testing and debugging.
-Enhanced to match ASGI configuration capabilities.
+Runs Quart's built-in dev server (Hypercorn under the hood) for testing
+and debugging. Plain HTTP by default — no HTTP/2/3 here, TLS setup adds
+friction that isn't worth it for fast local iteration; use prod_server.py
+if you specifically need to test HTTP/2 or HTTP/3 behaviour locally.
 """
 
 import os
 import sys
 import signal
-import socket
 from app import get_local_ip
 
 LOCAL_IP = get_local_ip()
@@ -17,12 +18,13 @@ LOCAL_IP = get_local_ip()
 sys.path.insert(0, os.path.dirname(__file__))
 
 os.environ["PYTHONUNBUFFERED"] = "1"
-os.environ["FLASK_ENV"] = "development"
+os.environ["QUART_ENV"] = "development"
+os.environ["QUART_DEBUG"] = "1"
 
 # ---------------------------------------------------------------------------
 # Background-service mode  (set by manage.sh launcher)
-#   _BG = True  → SIGINT ignored; use_reloader disabled (Werkzeug's reloader
-#                 spawns a watchdog subprocess with its own signal wiring that
+#   _BG = True  → SIGINT ignored; use_reloader disabled (the reloader spawns
+#                 a watchdog subprocess with its own signal wiring that
 #                 would override SIG_IGN — disabling it is the only safe fix)
 #   _BG = False → running directly; Ctrl+C and the reloader work as normal
 # ---------------------------------------------------------------------------
@@ -44,23 +46,17 @@ if __name__ == "__main__":
 
     from config import ROOT_DIR, HOST, PORT, PERMANENT_SESSION_LIFETIME
 
-    # ── Flask / app config ───────────────────────────────────────────────────
+    # ── Quart app config ─────────────────────────────────────────────────────
     app.config.update(
         MAX_CONTENT_LENGTH=None,  # intentionally unlimited — chunked uploads
         # bypass this anyway (each chunk is well under any reasonable cap),
         # and the person building this app decided unlimited total upload
         # size is fine. Overrides config.py's MAX_CONTENT_LENGTH on purpose.
-        PERMANENT_SESSION_LIFETIME=PERMANENT_SESSION_LIFETIME,  # from config.py —
-        # was hardcoded to timedelta(hours=1) here, silently undoing whatever
-        # session lifetime was configured/persisted elsewhere. Now single-sourced.
+        PERMANENT_SESSION_LIFETIME=PERMANENT_SESSION_LIFETIME,
         SEND_FILE_MAX_AGE_DEFAULT=0,
         TESTING=False,
         DEBUG=True,
-        THREADED=True,
-        PROPAGATE_EXCEPTIONS=True,
-        PRESERVE_CONTEXT_ON_EXCEPTION=None,
         TEMPLATES_AUTO_RELOAD=True,
-        EXPLAIN_TEMPLATE_LOADING=False,
     )
 
     # ── Startup banner ───────────────────────────────────────────────────────
@@ -72,7 +68,7 @@ if __name__ == "__main__":
         print("   • Ctrl+C disabled — use './manage.sh stop' to stop")
         print("   • Auto-reloader disabled (not usable in detached mode)")
     print("🔧 Configuration:")
-    print("   • Debug mode: ON  |  Threading: enabled  |  Upload limit: NONE")
+    print("   • Debug mode: ON  |  Upload limit: NONE  |  HTTP/1.1 only")
     print("   • Auto-reload:", "OFF (BG mode)" if _BG else "ON")
     if not _BG:
         print("📁 Press Ctrl+C to stop the server")
@@ -91,17 +87,16 @@ if __name__ == "__main__":
             host=HOST,
             port=PORT,
             debug=True,
-            threaded=True,
-            # Reloader spawns a watchdog subprocess with its own signal wiring.
-            # Must be off in BG mode so signal.SIG_IGN cannot be overridden.
+            # The reloader spawns a watchdog subprocess with its own signal
+            # wiring. Must be off in BG mode so signal.SIG_IGN cannot be
+            # overridden.
             use_reloader=not _BG,
-            use_debugger=True,
         )
 
     except KeyboardInterrupt:
         import threading as _t
 
-        print("\n🛑 Stopping Flask development server…")
+        print("\n🛑 Stopping development server…")
 
         # Stop WebDAV / SFTP / FTP / SMB protocol servers cleanly. SMB itself
         # never touches Windows' native file sharing (LanmanServer) — that's
@@ -123,5 +118,5 @@ if __name__ == "__main__":
 
     except Exception as e:
         print(f"💥 Server error: {e}")
-        print("🔍 Check your Flask app and dependencies")
+        print("🔍 Check your Quart app and dependencies")
         sys.exit(1)

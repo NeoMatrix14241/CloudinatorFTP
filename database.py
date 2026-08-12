@@ -80,12 +80,28 @@ def _load_or_create_key() -> bytes:
 
 
 _fernet = None  # initialised on first encrypt/decrypt call
+_fernet_lock = threading.Lock()
 
 
 def _get_fernet() -> Fernet:
     global _fernet
     if _fernet is None:
-        _fernet = Fernet(_load_or_create_key())
+        # Double-checked locking — same race as _connect()'s _bootstrapped
+        # flag (see that comment for the full explanation). Concretely here:
+        # _do_bootstrap() encrypts the seeded admin password with whichever
+        # key _get_fernet() returns at that moment. If a second thread
+        # (file_monitor, search_index, or the SMB nt_hash encryption path
+        # all call _encrypt/_decrypt too) raced in and saw _fernet as None
+        # at the same time, it could generate a fresh key file and set a
+        # DIFFERENT Fernet object as the module-level singleton before the
+        # first thread's write landed — so a later check_login() call
+        # decrypts with a different key than the one that encrypted it.
+        # Fernet.decrypt() raises InvalidToken in that case, which
+        # check_login()'s bare except silently turns into "return False" —
+        # this is what made it untraceable rather than a visible error.
+        with _fernet_lock:
+            if _fernet is None:
+                _fernet = Fernet(_load_or_create_key())
     return _fernet
 
 
@@ -123,6 +139,7 @@ def get_session_secret() -> str:
 # ------------------------------------------------------------------
 
 _bootstrapped = False  # schema created on first _connect() call
+_bootstrap_lock = threading.Lock()
 
 
 def _connect() -> sqlite3.Connection:
@@ -133,8 +150,34 @@ def _connect() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     if not _bootstrapped:
-        _bootstrapped = True
-        _do_bootstrap(conn)
+        # Double-checked locking: file_monitor, search_index, and the
+        # cleanup schedulers all start their own threads and can each call
+        # _connect() within moments of each other at startup. The naive
+        # "set the flag, then bootstrap" version let a second thread see
+        # _bootstrapped=True and start querying tables the first thread
+        # hadn't finished creating yet — surfaced as a bare
+        # "sqlite3.OperationalError: no such table: users" with no
+        # meaningful traceback pointing at the real cause. Every concurrent
+        # caller now blocks on this lock until the one thread that actually
+        # runs _do_bootstrap() is finished, instead of racing ahead.
+        with _bootstrap_lock:
+            if not _bootstrapped:
+                _do_bootstrap(conn)
+                # Explicit commit is required here, not optional: _do_bootstrap()
+                # itself never commits (it relies on whatever caller's `with
+                # conn:` block eventually exits to do that). Without this, the
+                # window between releasing _bootstrap_lock and that eventual
+                # commit is wide enough for a DIFFERENT thread's brand-new
+                # sqlite3.connect() + SELECT to run first — under WAL mode a
+                # fresh connection's read snapshot can't see another
+                # connection's uncommitted writes, so it finds zero rows even
+                # though bootstrap "already happened." This is exactly what
+                # made check_login() intermittently fail right after startup
+                # with no table/row-not-found error, just a quiet "invalid
+                # credentials" — verified directly: a raw connection opened
+                # moments later saw the seeded rows just fine.
+                conn.commit()
+                _bootstrapped = True
     return conn
 
 

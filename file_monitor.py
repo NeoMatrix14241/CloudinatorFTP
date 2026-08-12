@@ -13,6 +13,7 @@ Flow:
 """
 
 import os
+import sys
 import json
 import time
 import threading
@@ -28,6 +29,36 @@ from search_index import search_index_manager
 
 # Cache dir resolved via paths.py — created by ensure_dirs() at server startup.
 from paths import get_cache_dir
+
+
+def _lower_current_thread_priority() -> None:
+    """On Windows, drop the CALLING thread's OS scheduling priority so it
+    never competes evenly with the main thread (which under Hypercorn runs
+    the entire asyncio event loop — the only thread pumping every socket
+    read/write/accept for the whole app).
+
+    This is a stronger guarantee than time.sleep()-based GIL yielding: it's
+    an OS-level scheduling decision, not a cooperative one, so it doesn't
+    depend on the walk thread happening to yield at the right moment or on
+    Sleep(0)'s weak "only if another thread is already READY" semantics.
+
+    Must only be called from a thread that is NEVER the one running the
+    event loop (reconcile threads, to_thread workers — never the main
+    thread during start_monitoring()'s synchronous first-boot walk).
+    No-op on non-Windows platforms.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        THREAD_PRIORITY_BELOW_NORMAL = -1
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetCurrentThread()
+        kernel32.SetThreadPriority(handle, THREAD_PRIORITY_BELOW_NORMAL)
+    except Exception as e:
+        print(f"⚠️ Could not lower reconcile thread priority: {e}")
+
 
 CACHE_DIR = get_cache_dir(create=False)
 CACHE_FILE = os.path.join(CACHE_DIR, "storage_index.json")
@@ -49,6 +80,19 @@ BURST_WINDOW = 5.0  # seconds (was 3.0)
 # SSE during the walk caused the UI to oscillate between partial counts.
 WALK_PROGRESS_INTERVAL = 1000  # print a log line every N files
 WALK_PROGRESS_MIN_INTERVAL = 1.0  # (unused — kept for reference only)
+
+# How often (in files) the walk thread voluntarily yields via time.sleep().
+# Under Hypercorn there's a single event-loop thread, so a tight stat()-in-
+# a-loop walk can starve it of GIL time (esp. on Windows). Use a REAL sleep
+# duration, not time.sleep(0): on Windows, time.sleep(0) maps to Win32
+# Sleep(0), which only yields to other threads that are already in the
+# READY state — it does not force an OS timer-based context switch the way
+# POSIX sched_yield() does, so it can return near-instantly without ever
+# actually handing control to the event loop thread. A small nonzero sleep
+# forces a real handoff. 50 files keeps this frequent even inside one huge
+# folder; 1ms per handoff is cheap next to the walk's own syscall cost.
+WALK_YIELD_INTERVAL = 50
+WALK_YIELD_SECONDS = 0.001
 
 # After a reconcile walk finishes, the OS watchdog event queue may still hold
 # thousands of on_created events for files the walk already counted.  Once those
@@ -616,6 +660,18 @@ class FileSystemMonitor:
                 if ".chunks" in dirs:
                     dirs.remove(".chunks")
 
+                # Yield the GIL between directories. Under Hypercorn there is
+                # exactly ONE thread running the whole asyncio event loop, so
+                # a tight loop of thousands of back-to-back os.stat() calls in
+                # this thread can out-race the OS scheduler for the GIL and
+                # starve the event loop thread (worse on Windows than POSIX).
+                # A real (non-zero) sleep forces this thread to actually give
+                # up its turn instead of just offering to — see
+                # WALK_YIELD_SECONDS' comment above for why time.sleep(0)
+                # isn't reliable enough on Windows. The event loop gets a
+                # fair turn between directories.
+                time.sleep(WALK_YIELD_SECONDS)
+
                 root_rel = _rel(root, str(self.root_path))
 
                 # Ensure this dir exists in index
@@ -675,6 +731,12 @@ class FileSystemMonitor:
                         # Emit live progress every WALK_PROGRESS_INTERVAL files
                         if on_progress and file_count % WALK_PROGRESS_INTERVAL == 0:
                             on_progress(file_count, dir_count, total_size)
+
+                        # Yield the GIL every WALK_YIELD_INTERVAL files too —
+                        # the per-directory sleep above isn't enough if a
+                        # single folder holds tens of thousands of files.
+                        if file_count % WALK_YIELD_INTERVAL == 0:
+                            time.sleep(WALK_YIELD_SECONDS)
 
                         # Add file to immediate parent
                         dir_info[root_rel]["file_count"] += 1
@@ -779,6 +841,13 @@ class FileSystemMonitor:
                 self._settle_timer = None
 
     def _reconcile(self):
+        # Every caller of _reconcile() runs it on a background thread (the
+        # periodic reconcile_loop thread, the post-startup delayed_reconcile
+        # thread, the settle timer, reconcile_async's on-demand thread, and
+        # admin_rebuild_cache via asyncio.to_thread) — never on the main
+        # thread that runs Hypercorn's event loop, so it's always safe to
+        # deprioritize the CALLING thread here.
+        _lower_current_thread_priority()
         print("🔄 Background reconciliation walk starting...")
 
         # Keep _pending_reconcile = True for the ENTIRE walk.

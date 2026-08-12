@@ -1,10 +1,9 @@
-Flask<4
-flask-cors<7
+Quart>=0.21.0,<1
 bcrypt<6
 zipstream-new<2
 Werkzeug<4
 watchdog<7
-waitress<4
+hypercorn[h3]<1
 cryptography<50
 mammoth<2
 openpyxl<4
@@ -14,11 +13,10 @@ pyzipper<1
 py7zr<2
 pyvips<4
 wsgidav<5
+asgiref<4
 paramiko<6
 pyftpdlib<3
-cheroot<12
 psutil<8
 pynacl<2
 pyppmd<2
 impacket<1
-flask-wtf<2
