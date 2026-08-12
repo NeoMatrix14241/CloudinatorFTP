@@ -1557,7 +1557,7 @@ async def login():
             session["login_time"] = int(time.time())
             session.modified = True
 
-            return redirect(url_for("index"))
+            return redirect(url_for("index"), code=301)
         else:
             rate_limiter.record_failure()
             left = rate_limiter.attempts_remaining()
