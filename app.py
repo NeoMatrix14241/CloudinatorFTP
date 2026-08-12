@@ -1533,7 +1533,7 @@ async def _debug_headers():
 async def login():
     # If user is already logged in, redirect to index
     if session.get("logged_in"):
-        return redirect(url_for("index"))
+        return redirect(url_for("index"), code=301)
 
     if request.method == "POST":
         # Check brute-force lockout before touching DB
