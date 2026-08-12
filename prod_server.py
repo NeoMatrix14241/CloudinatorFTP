@@ -139,7 +139,7 @@ async def _run():
     hyper_cfg.errorlog = _build_hypercorn_logger(
         "hypercorn.error"
     )  # see _build_hypercorn_logger's docstring
-    hyper_cfg.alpn_protocols = ["h2", "http/1.1"]  # HTTP/3 negotiates over
+    hyper_cfg.alpn_protocols = ["h2"]  # HTTP/3 negotiates over
     # QUIC/UDP separately (via Alt-Svc, which Hypercorn adds automatically
     # once quic_bind is set) — "h3" is not a valid ALPN token for the TCP/TLS
     # listener and breaks its handshake if included here.
