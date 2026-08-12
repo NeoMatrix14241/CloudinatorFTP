@@ -1231,7 +1231,7 @@ def login_required(f):
                 or request.accept_mimetypes.best == "application/json"
             ):
                 return jsonify({"error": "Session expired", "redirect": "/login"}), 401
-            return redirect(url_for("login"))
+            return redirect(url_for("login"), code=301)
         return await f(*args, **kwargs)
 
     return decorated
