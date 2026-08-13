@@ -885,6 +885,8 @@ else:
 
 @app.before_request
 async def validate_session():
+    if "//" in request.path:
+        abort(404)
     # Skip validation for login-related routes and the public share-link
     # pages/downloads — those are meant to work for anyone with the link,
     # no account required.
@@ -913,6 +915,7 @@ async def validate_session():
         # form the user is about to submit ("CSRF tokens do not match")
         # — triggered by something as innocuous as the browser's automatic
         # /favicon.ico request racing the login page load.
+        
         if session.get("username") or session.get("server_token"):
             session.clear()
         return redirect(url_for("login"), code=301)
@@ -1631,6 +1634,20 @@ async def logout():
 @app.route("/<path:path>")
 @login_required
 async def index(path):
+    # Anything starting with "static" here means Quart's own built-in
+    # /static/<filename> route (registered separately, ahead of this
+    # catch-all) failed to match — almost always a malformed request like
+    # a double slash ("/static//whatever") that a real static asset would
+    # never produce. Previously this fell through to the login-gated
+    # catch-all below, which redirected anonymous requests to /login and
+    # returned 200 — indistinguishable from a real page to a scanner, and
+    # exactly what tripped ZAP's Path Traversal heuristic. A plain 404
+    # here is both more correct and stops that false positive, without
+    # touching the real is_safe_path()/is_valid_path() traversal guards
+    # used everywhere else in this file.
+    if path == "static" or path.startswith("static/"):
+        abort(404)
+
     # Comprehensive path validation: safety and existence
     if path and not storage.is_valid_path(path):
         if not storage.is_safe_path(path):
