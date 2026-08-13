@@ -171,10 +171,10 @@ Open a new terminal session and run — **choose what to tunnel**:
 
 ```bash
 # Tunnel the web UI (most common)
-cloudflared tunnel --url http://localhost:5000
+cloudflared tunnel --url https://localhost:5000
 
 # Or tunnel WebDAV (for remote network drive mapping)
-cloudflared tunnel --url http://localhost:8080
+cloudflared tunnel --url https://localhost:8080
 ```
 
 You'll receive a public URL like: `https://random-words-12345.trycloudflare.com`
