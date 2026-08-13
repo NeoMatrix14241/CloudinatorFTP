@@ -165,6 +165,9 @@ nslookup -type=NS domain.com
 
 ### NOTE:
 ** Please note that in order to reach 98 score in sitesecurityscore.com, certain configuration are needed for cloudflare dashboard which I will list **
+
+<img width="1142" height="377" alt="98 score" src="https://github.com/user-attachments/assets/5ddac09a-7aa0-4971-8fe2-3d5e3a21de81" />
+
 ```
 Domains > Overview > yourdomain.com
 
