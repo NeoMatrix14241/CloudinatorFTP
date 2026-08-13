@@ -1,10 +1,10 @@
-Quart>=0.21.0,<1
+Quart<1
 bcrypt<6
 zipstream-new<2
 Werkzeug<4
 watchdog<7
 hypercorn[h3]<1
-cryptography<50
+cryptography<51
 mammoth<2
 openpyxl<4
 python-pptx<2

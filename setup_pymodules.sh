@@ -7,15 +7,22 @@ CONSTRAINTS="constraints.txt"
 # ones that need special handling on Termux. Exceptions are handled below
 # via lookup tables, not by removing entries from this list -- so the list
 # always reflects everything actually in use, on every platform.
+#
+# Post-ASGI-migration list (Quart + hypercorn[h3] instead of the old
+# Flask/flask-cors/flask-wtf/waitress/cheroot WSGI stack; asgiref added).
+# An entry with an extras marker like "hypercorn[h3]" is written to
+# requirements.txt verbatim, but is regex-escaped and has its extras
+# stripped wherever it's used as a pip query or a grep/sed pattern --
+# see pkg_base/pkg_regex below. Square brackets are regex metacharacters,
+# so treating $pkg as a literal string in a pattern would silently
+# corrupt matching for any package using extras.
 packages=(
-    Flask
-    flask-cors
-    flask-wtf
+    Quart
     bcrypt
     zipstream-new
     Werkzeug
     watchdog
-    waitress
+    "hypercorn[h3]"
     cryptography
     mammoth
     openpyxl
@@ -23,14 +30,14 @@ packages=(
     rarfile
     pyzipper
     py7zr
-    pyppmd
-    psutil
-    pynacl
     pyvips
     wsgidav
+    asgiref
     paramiko
     pyftpdlib
-    cheroot
+    psutil
+    pynacl
+    pyppmd
     impacket
 )
 
@@ -63,6 +70,15 @@ declare -A SYSTEM_MANAGED=(
 declare -A COMPAT_CEILING=(
     # [some-pkg]="<X.0"
 )
+
+# Regex-escapes a package name for safe use inside a grep/sed -E pattern.
+# Needed because a couple of entries in `packages` carry a pip extras
+# marker (e.g. "hypercorn[h3]"), and "[" / "]" are regex metacharacters --
+# used unescaped, they'd be parsed as a character class instead of a
+# literal package name, and could match or corrupt unrelated lines.
+regex_escape() {
+    printf '%s' "$1" | sed -E 's/[][(){}.*^$+?|\\]/\\&/g'
+}
 
 # `pkg` is Termux's own wrapper -- it doesn't exist on Windows/regular Linux
 # (and FreeBSD's unrelated `pkg` would false-positive a plain `command -v`
@@ -135,6 +151,16 @@ fi
 echo
 
 for pkg in "${packages[@]}"; do
+    # pkg        -- exact string as written to requirements.txt/constraints.txt,
+    #               and the key used for SYSTEM_MANAGED / COMPAT_CEILING lookups
+    #               (extras marker kept, e.g. "hypercorn[h3]").
+    # pkg_base   -- extras stripped, for pip queries ("pip show", "pip index
+    #               versions" don't want/need "[h3]").
+    # pkg_regex  -- regex-escaped, for use inside grep/sed -E patterns so any
+    #               "[", "]" etc. are matched literally, not as regex syntax.
+    pkg_base="${pkg%%\[*}"
+    pkg_regex="$(regex_escape "$pkg")"
+    
     # --- Exception case: Termux + this package is system-managed ---
     if [ "$IS_TERMUX" -eq 1 ] && [ -n "${SYSTEM_MANAGED[$pkg]+x}" ]; then
         termux_name="${SYSTEM_MANAGED[$pkg]}"
@@ -142,16 +168,16 @@ for pkg in "${packages[@]}"; do
         # Strip any stale direct entry from requirements.txt -- a leftover
         # version line here would force pip to manage it directly no
         # matter what constraints.txt says.
-        sed -i -E "/^${pkg}([>=<~!].*)?$/d" "$REQ"
+        sed -i -E "/^${pkg_regex}([>=<~!].*)?$/d" "$REQ"
         
         if [ -n "$termux_name" ]; then
             echo "[PKG] pkg upgrade -y $termux_name"
-            if ! pkg upgrade -y "$termux_name" >"/tmp/pkg_${pkg}.log" 2>&1; then
-                echo "[WARN] pkg upgrade failed for $termux_name -- see /tmp/pkg_${pkg}.log, leaving existing install as-is."
+            if ! pkg upgrade -y "$termux_name" >"/tmp/pkg_${pkg_base}.log" 2>&1; then
+                echo "[WARN] pkg upgrade failed for $termux_name -- see /tmp/pkg_${pkg_base}.log, leaving existing install as-is."
             fi
         fi
         
-        installed=$(pip show "$pkg" 2>/dev/null | awk -F': ' '/^Version/{print $2}')
+        installed=$(pip show "$pkg_base" 2>/dev/null | awk -F': ' '/^Version/{print $2}')
         if [ -n "$installed" ]; then
             echo "${pkg}==${installed}" >> "$CONSTRAINTS"
             echo "[LOCK] $pkg -> $installed (Termux-managed, excluded from pip's direct list)"
@@ -162,7 +188,7 @@ for pkg in "${packages[@]}"; do
     fi
     
     # --- Normal path: pip manages this package directly ---
-    latest=$(pip index versions "$pkg" 2>/dev/null | grep -oP "(?<=Available versions: )[\d.]+" | head -n 1)
+    latest=$(pip index versions "$pkg_base" 2>/dev/null | grep -oP "(?<=Available versions: )[\d.]+" | head -n 1)
     
     if [ -z "$latest" ]; then
         echo "[WARN] Could not fetch version for $pkg, skipping..."
@@ -185,8 +211,8 @@ for pkg in "${packages[@]}"; do
     
     echo "Updating $pkg to $constraint"
     
-    if grep -qE "^${pkg}([>=<~!]|$)" "$REQ"; then
-        sed -i -E "s/^${pkg}([>=<~!].*)?/${pkg}${constraint}/" "$REQ"
+    if grep -qE "^${pkg_regex}([>=<~!]|$)" "$REQ"; then
+        sed -i -E "s/^${pkg_regex}([>=<~!].*)?\$/${pkg}${constraint}/" "$REQ"
     else
         echo "${pkg}${constraint}" >> "$REQ"
     fi
