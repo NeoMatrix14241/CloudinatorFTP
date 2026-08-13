@@ -930,6 +930,11 @@ async def validate_session():
     # and refreshed on every request via SESSION_REFRESH_EACH_REQUEST=True.
 
 
+@app.route("/robots.txt")
+async def robots_txt():
+    return await send_from_directory(app.static_folder, "robots.txt")
+
+
 @app.route("/check_session")
 async def check_session():
     if not is_logged_in():
