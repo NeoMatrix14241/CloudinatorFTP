@@ -192,17 +192,33 @@ Or if you want to use it with domain, please refer to this [Advanced Cloudflared
 ```bash
 tunnel: <tunnel id>
 credentials-file: C:\Users\%username%\.cloudflared\<tunnel id>.json
+protocol: quic
 ingress:
-  - hostname: domain.com
-    service: http://localhost:5000
+  - hostname: yourowndomain.com
+    service: https://localhost:5000
     originRequest:
       connectTimeout: 0s
       tlsTimeout: 0s
       tcpKeepAlive: 0s
-      keepAliveTimeout: 0s
-      httpHostHeader: domain.com
+      http2Origin: false
       noTLSVerify: true
       disableChunkedEncoding: false
+      keepAliveConnections: 100000000
+      keepAliveTimeout: 0s
+      proxyConnectTimeout: 0s
+      expectContinueTimeout: 0s
+  - hostname: files.yourowndomain.com
+    service: http://localhost:8080
+    originRequest:
+      connectTimeout: 0s
+      tlsTimeout: 0s
+      tcpKeepAlive: 0s
+      http2Origin: false
+      noTLSVerify: false
+      disableChunkedEncoding: false
+      keepAliveConnections: 100000000
+      keepAliveTimeout: 0s
+      httpHostHeader: cloudinator.site
       proxyConnectTimeout: 0s
       expectContinueTimeout: 0s
   - service: http_status:404
