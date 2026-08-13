@@ -6,6 +6,9 @@ A lightweight FTP-like file transfer server that runs on **Termux (Android), Lin
 ![Linux](https://img.shields.io/badge/Linux-supported-FCC624?logo=linux)
 ![Windows](https://img.shields.io/badge/Windows-supported-0078D6?logo=windows)
 
+## 📷 Properly Configured Cloudflare Tunnel with SiteSecurityScore.com
+<img width="1142" height="377" alt="98 score" src="https://github.com/user-attachments/assets/5ddac09a-7aa0-4971-8fe2-3d5e3a21de81" />
+
 ## 📷 Login
 <img width="1794" height="893" alt="image" src="https://github.com/user-attachments/assets/083a1054-b1bd-446b-946c-a3dda29b459b" />
 
