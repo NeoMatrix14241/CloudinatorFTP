@@ -13,19 +13,33 @@ knob to set. keep_alive_timeout below is the actual carried-over setting
 
 TLS is now mandatory, not optional: HTTP/2 works over plaintext (h2c) in
 theory but no browser implements it, and HTTP/3/QUIC only exists over TLS
-1.3 — there's no cleartext QUIC. This reuses ssl_cert.py's self-signed CA
-cert (db/webdav.crt + db/webdav.key) — the same one WebDAV HTTPS already
-uses — rather than minting a second one; import that one cert on each
-client and both WebDAV and the main app trust it.
+1.3 — there's no cleartext QUIC.
 
-Practical effect: the app is now only reachable at https://HOST:PORT/,
-not http://. Browsers will show a self-signed-certificate warning until
-that cert is imported as a trusted root — see ssl_cert.py's module
-docstring for the per-OS import steps (same steps already used for WebDAV).
+Certificate source, in priority order:
+  1. Tailscale — if the `tailscale` CLI is found, the machine is logged
+     into a tailnet with MagicDNS + HTTPS Certificates enabled, `tailscale
+     cert` is used to issue/renew a REAL, publicly-trusted Let's Encrypt
+     cert for this device's `*.ts.net` name. No browser warning, no
+     per-client cert import, but only reachable via the tailnet (Tailscale
+     installed + logged in on the client) at https://<device>.<tailnet>.ts.net:PORT/.
+  2. ssl_cert.py fallback — if Tailscale isn't installed/logged in, or
+     HTTPS Certificates isn't enabled for the tailnet, or the `tailscale
+     cert` call fails for any reason (e.g. no internet), falls back to the
+     self-signed CA cert (db/webdav.crt + db/webdav.key) — the same one
+     WebDAV HTTPS already uses. Reachable at https://HOST:PORT/ via LAN IP
+     or localhost, but browsers show a warning until that cert is imported
+     as a trusted root — see ssl_cert.py's module docstring for per-OS
+     import steps.
+
+Both paths can be used at once (Tailscale cert is what's actually bound to
+Hypercorn, but the self-signed one is still generated/available for
+LAN-only clients that aren't on the tailnet — see ssl_cert.py directly).
 """
 
 import os
 import sys
+import json
+import shutil
 import signal
 import asyncio
 import logging
@@ -81,6 +95,110 @@ def _build_hypercorn_logger(name: str) -> logging.Logger:
     return logger
 
 
+# ---------------------------------------------------------------------------
+# Tailscale certificate support
+# ---------------------------------------------------------------------------
+# If this machine is on a tailnet with MagicDNS + HTTPS Certificates
+# enabled, `tailscale cert` gets us a real Let's Encrypt cert for our
+# *.ts.net name — no self-signed warning, no per-client cert import.
+# Falls back silently to ssl_cert.py's self-signed cert if anything here
+# isn't available (Tailscale not installed, not logged in, HTTPS not
+# enabled for the tailnet, no internet, etc.) — this is best-effort, never
+# a hard requirement to start the server.
+
+
+def _find_tailscale_exe() -> str | None:
+    """Locate the tailscale CLI. shutil.which() covers the common case
+    (it's on PATH on Linux/macOS and most modern Windows installs); falls
+    back to Tailscale's default Windows install location since the Windows
+    GUI client doesn't always add itself to PATH."""
+    exe = shutil.which("tailscale")
+    if exe:
+        return exe
+    if sys.platform == "win32":
+        default = r"C:\Program Files\Tailscale\tailscale.exe"
+        if os.path.exists(default):
+            return default
+    return None
+
+
+async def _get_tailscale_dns_name(ts_exe: str) -> str | None:
+    """Return this machine's MagicDNS name (e.g. 'myserver.tailnet.ts.net'),
+    or None if Tailscale isn't running/logged in."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            ts_exe,
+            "status",
+            "--json",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+        if proc.returncode != 0:
+            return None
+        data = json.loads(stdout)
+        dns_name = data.get("Self", {}).get("DNSName", "").rstrip(".")
+        return dns_name or None
+    except Exception:
+        return None
+
+
+async def _get_tailscale_cert(
+    ts_exe: str, dns_name: str, db_dir: str
+) -> tuple[str, str] | None:
+    """Issue or renew a real cert for `dns_name` via `tailscale cert`,
+    writing it into db_dir alongside the self-signed fallback. Returns
+    (cert_path, key_path) on success, None on any failure — caller falls
+    back to ssl_cert.py's self-signed cert."""
+    cert_path = os.path.join(db_dir, "tailscale.crt")
+    key_path = os.path.join(db_dir, "tailscale.key")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            ts_exe,
+            "cert",
+            "--cert-file",
+            cert_path,
+            "--key-file",
+            key_path,
+            dns_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        if proc.returncode != 0:
+            print(
+                f"⚠️  tailscale cert failed: {stderr.decode(errors='replace').strip()}"
+            )
+            return None
+        if not (os.path.exists(cert_path) and os.path.exists(key_path)):
+            return None
+        return cert_path, key_path
+    except Exception as e:
+        print(f"⚠️  tailscale cert error: {e}")
+        return None
+
+
+# Re-issue every 12h while the server stays up — tailscale certs are
+# short-lived (Let's Encrypt, ~90 days) but nothing renews them
+# automatically except re-running `tailscale cert`. A restart alone only
+# covers renewal if the server happens to restart before expiry; a
+# long-running process needs this loop too.
+_TAILSCALE_RENEW_INTERVAL = 12 * 3600
+
+
+async def _tailscale_renew_loop(ts_exe: str, dns_name: str, db_dir: str):
+    while True:
+        await asyncio.sleep(_TAILSCALE_RENEW_INTERVAL)
+        result = await _get_tailscale_cert(ts_exe, dns_name, db_dir)
+        if result:
+            print("🔄 Tailscale certificate renewed.")
+        else:
+            print(
+                f"⚠️  Tailscale certificate renewal failed — will retry in "
+                f"{_TAILSCALE_RENEW_INTERVAL // 3600}h."
+            )
+
+
 # Add the application directory to Python path
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -127,7 +245,23 @@ async def _run():
     )
 
     db_dir = get_db_dir(create=True)
-    cert_path, key_path = ssl_cert.get_cert_paths(db_dir)
+
+    # ── Cert selection: Tailscale first, self-signed fallback ─────────────
+    cert_path = key_path = None
+    tailscale_exe = _find_tailscale_exe()
+    tailscale_dns_name = None
+    if tailscale_exe:
+        tailscale_dns_name = await _get_tailscale_dns_name(tailscale_exe)
+        if tailscale_dns_name:
+            result = await _get_tailscale_cert(
+                tailscale_exe, tailscale_dns_name, db_dir
+            )
+            if result:
+                cert_path, key_path = result
+
+    using_tailscale = cert_path is not None
+    if not using_tailscale:
+        cert_path, key_path = ssl_cert.get_cert_paths(db_dir)
 
     hyper_cfg = HyperConfig()
     hyper_cfg.bind = [f"{HOST}:{PORT}"]
@@ -179,13 +313,32 @@ async def _run():
     print()
     print(f"📋 Storage directory: {ROOT_DIR}")
     print()
-    print(f"🌐 Local network:  https://{LOCAL_IP}:{PORT}")
-    print(f"🔁 Localhost:      https://localhost:{PORT}")
-    print()
-    print("⚠️  First connection from a new client will show a self-signed")
-    print(f"   certificate warning until {cert_path} is imported as a")
-    print("   trusted root — see ssl_cert.py's module docstring for the")
-    print("   per-OS steps (same cert/steps WebDAV HTTPS already uses).")
+    if using_tailscale:
+        print(f"🔒 Tailscale HTTPS:  https://{tailscale_dns_name}:{PORT}")
+        print("   Real, publicly-trusted cert — no browser warning, no")
+        print("   per-client import needed. Reachable from any device on")
+        print("   this tailnet with Tailscale installed and logged in.")
+        print()
+        print(f"🌐 Local network:  https://{LOCAL_IP}:{PORT}  (self-signed cert")
+        print("   still generated for LAN clients not on the tailnet — see")
+        print("   ssl_cert.py for per-OS trust-import steps if you use this.)")
+    else:
+        print(f"🌐 Local network:  https://{LOCAL_IP}:{PORT}")
+        print(f"🔁 Localhost:      https://localhost:{PORT}")
+        print()
+        print("⚠️  First connection from a new client will show a self-signed")
+        print(f"   certificate warning until {cert_path} is imported as a")
+        print("   trusted root — see ssl_cert.py's module docstring for the")
+        print("   per-OS steps (same cert/steps WebDAV HTTPS already uses).")
+        if tailscale_exe and not tailscale_dns_name:
+            print()
+            print("💡 Tailscale CLI found but not logged in / no MagicDNS name —")
+            print("   run `tailscale up` and enable MagicDNS + HTTPS Certificates")
+            print("   in the admin console to get a real trusted cert instead.")
+        elif not tailscale_exe:
+            print()
+            print("💡 Install Tailscale for a real trusted cert with zero")
+            print("   per-client import: https://tailscale.com/download")
     print()
 
     # ── Graceful shutdown wiring ─────────────────────────────────────────────
@@ -226,6 +379,12 @@ async def _run():
     async def _shutdown_trigger():
         await shutdown_event.wait()
 
+    renew_task = None
+    if using_tailscale:
+        renew_task = asyncio.create_task(
+            _tailscale_renew_loop(tailscale_exe, tailscale_dns_name, db_dir)
+        )
+
     try:
         await serve(
             app,
@@ -233,6 +392,13 @@ async def _run():
             shutdown_trigger=_shutdown_trigger if not _BG else None,
         )
     finally:
+        if renew_task:
+            renew_task.cancel()
+            try:
+                await renew_task
+            except asyncio.CancelledError:
+                pass
+
         print("\n🛑 Stopping protocol servers…")
         protocol_manager.stop_all()
 
