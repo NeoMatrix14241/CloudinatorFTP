@@ -58,7 +58,7 @@ For a quick test without any setup:
 
 ```bash
 # Tunnel just the web UI
-cloudflared tunnel --url http://localhost:5000
+cloudflared tunnel --url https://localhost:5000
 
 # Or tunnel WebDAV (for remote drive mapping)
 cloudflared tunnel --url http://localhost:8080
@@ -139,7 +139,7 @@ Ensure you have already purchased a domain from any registrar:
 
 ## Step 3: Configure Domain at Your Registrar
 
-### 3.1 Disable DNSSEC (Important!)
+### 3.1 Disable DNSSEC (Important! - but further configuration are needed if you want to enable this which is not included in this documentation)
 1. Log in to your domain registrar
 2. Find DNSSEC settings (usually under DNS or Advanced settings)
 3. **Disable DNSSEC** if enabled
@@ -162,6 +162,92 @@ nslookup -type=NS domain.com
 - Return to Cloudflare Dashboard
 - Your domain should show **"Active"** status once propagation completes
 - You'll receive an email when activation is complete
+
+### NOTE:
+** Please note that in order to reach 98 score in sitesecurityscore.com, certain configuration are needed for cloudflare dashboard which I will list **
+```
+Domains > Overview > yourdomain.com
+
+
+DNS > Records > add CAA certificate
+Where name: <yourdomain.com>
+Type: CAA
+Flags: 0
+Tag: Only allow specific hostnames
+TTL: Auto
+CA domain names
+- ssl.com
+- letsencrypt.com
+- pki.goog; cansignhttpexchanges=yes
+
+
+DNS > Records > add TXT DNS Record
+Name: _dmarc
+Type: TXT
+Content: "v=DMARC1; p=quarantine; rua=mailto:e56bef48be1249be9330566093ee17e4@dmarc-reports.cloudflare.net"
+TTL: Auto
+
+
+DNS > Settings
+DNSSEC -> enable (recommended to get domain from cloudflare so this is automatic)
+Multi-signer DNSSEC -> On
+Multi-provider DNS -> On
+
+
+SSL/TLS > Edge Certificates
+Always Use HTTPS: On
+HTTP Strict Transport Security (HSTS)
+- Enable HSTS (Strict-Transport-Security): On
+- Max Age Header (max-age): 12 months
+- Apply HSTS policy to subdomains (includeSubDomains): On
+- Preload: On
+- No-Sniff Header: On
+Minimum TLS Version: TLS 1.3
+Opportunistic Encryption: On
+TLS 1.3: On
+Automatic HTTPS Rewrites: On
+Certificate Transparency Monitoring: On
+
+
+Security > Settings
+AI Labyrinth: On
+Block AI bots: Mixed purpose crawles will be blocked / Configurations: Blocks AI Bots scope: Block on all pages
+Bot fight mode: Off
+Browser integrity check: On
+Configure AI bot policies
+- Search/Agent/Training: Block
+Continuous script monitoring: On (Log host only)
+Security.txt: On (Configure yourself)
+
+
+Speed > Smart Shield > On
+Smart Tiered Cache: On
+Connection Reuse: On
+
+
+Caching > Configuration
+Caching Level: Standard
+Browser Cache TTL: Respect Existing Headers
+Crawler Hints: On
+
+
+Caching > Tiered Cache > On
+Automatic Upper Tiers: Smart Tiered Cache
+
+
+Network
+IPv6 Compatibility: On
+gRPC: On
+WebSockets: On
+Pseudo IPv4: Off
+IP Geolocation: On
+Maximum Upload Size: 100MB
+Network Error Logging: On
+Onion Routing: On
+
+
+Traffic > Load Balancing > Maximize reliability and speed
+```
 
 ---
 
@@ -249,7 +335,6 @@ ingress:
       tlsTimeout: 0s
       tcpKeepAlive: 0s
       keepAliveTimeout: 0s
-      httpHostHeader: domain.com
       noTLSVerify: true
       disableChunkedEncoding: false
       proxyConnectTimeout: 0s
@@ -271,11 +356,17 @@ tunnel: <tunnel-id>
 credentials-file: C:\Users\%USERNAME%\.cloudflared\<tunnel-id>.json
 
 ingress:
-  - hostname: files.domain.com
-    service: http://localhost:8080
+  - hostname: domain.com
+    service: https://localhost:8443
     originRequest:
+      connectTimeout: 0s
+      tlsTimeout: 0s
+      tcpKeepAlive: 0s
+      keepAliveTimeout: 0s
       noTLSVerify: true
       disableChunkedEncoding: false
+      proxyConnectTimeout: 0s
+      expectContinueTimeout: 0s
   - service: http_status:404
 ```
 
@@ -291,6 +382,7 @@ To expose both services simultaneously on different subdomains:
 ```yaml
 tunnel: <tunnel-id>
 credentials-file: C:\Users\%USERNAME%\.cloudflared\<tunnel-id>.json
+protocol: quic
 
 ingress:
   # Web UI — for browser access
@@ -301,7 +393,6 @@ ingress:
       tlsTimeout: 0s
       tcpKeepAlive: 0s
       keepAliveTimeout: 0s
-      httpHostHeader: domain.com
       noTLSVerify: true
       disableChunkedEncoding: false
       proxyConnectTimeout: 0s
@@ -315,7 +406,6 @@ ingress:
       tlsTimeout: 0s
       tcpKeepAlive: 0s
       keepAliveTimeout: 0s
-      httpHostHeader: domain.com
       noTLSVerify: true
       disableChunkedEncoding: false
       proxyConnectTimeout: 0s
@@ -517,6 +607,7 @@ Save as `setup-tunnel.ps1`:
 # Variables
 $TUNNEL_NAME = "my-app-tunnel"
 $DOMAIN = "domain.com"
+$DOMAIN_WEBDAV = "webdav.domain.com"
 
 # Install cloudflared
 Write-Host "Installing cloudflared..." -ForegroundColor Green
@@ -542,7 +633,7 @@ protocol: quic
 
 ingress:
   - hostname: $DOMAIN
-    service: http://localhost:5000
+    service: https://localhost:5000
     originRequest:
       connectTimeout: 0s
       tlsTimeout: 0s
@@ -553,6 +644,20 @@ ingress:
       noTLSVerify: true
       disableChunkedEncoding: false
       keepAliveConnections: 100000000
+      proxyConnectTimeout: 0s
+      expectContinueTimeout: 0s
+  - hostname: $DOMAIN_WEBDAV
+    service: https://localhost:8443
+    originRequest:
+      connectTimeout: 0s
+      tlsTimeout: 0s
+      tcpKeepAlive: 0s
+      http2Origin: false
+      noTLSVerify: false
+      disableChunkedEncoding: false
+      keepAliveConnections: 100000000
+      keepAliveTimeout: 0s
+      httpHostHeader: cloudinator.site
       proxyConnectTimeout: 0s
       expectContinueTimeout: 0s
   - service: http_status:404
@@ -586,7 +691,9 @@ Save as `setup-tunnel-port.ps1`:
 # Variables
 $TUNNEL_NAME = "my-app-tunnel"
 $DOMAIN = "domain.com"
+$DOMAIN_WEBDAV = "webdav.domain.com"
 $SERVICE_PORT = 5000  # Change to 8080 for WebDAV, 8443 for WebDAV HTTPS
+$SERVICE_PORT_WEBDAV = 8443  # Change to 8080 for WebDAV, 8443 for WebDAV HTTPS
 
 # Install cloudflared
 Write-Host "Installing cloudflared..." -ForegroundColor Green
@@ -611,15 +718,28 @@ credentials-file: C:\Users\$env:USERNAME\.cloudflared\$tunnel_id.json
 
 ingress:
   - hostname: $DOMAIN
-    service: http://localhost:$SERVICE_PORT
+    service: https://localhost:$SERVICE_PORT
     originRequest:
       connectTimeout: 0s
       tlsTimeout: 0s
       tcpKeepAlive: 0s
       keepAliveTimeout: 0s
-      httpHostHeader: $DOMAIN
       noTLSVerify: true
       disableChunkedEncoding: false
+      proxyConnectTimeout: 0s
+      expectContinueTimeout: 0s
+  - hostname: $DOMAIN_WEBDAV$
+    service: https://localhost:$SERVICE_PORT_WEBDAV
+    originRequest:
+      connectTimeout: 0s
+      tlsTimeout: 0s
+      tcpKeepAlive: 0s
+      http2Origin: false
+      noTLSVerify: false
+      disableChunkedEncoding: false
+      keepAliveConnections: 100000000
+      keepAliveTimeout: 0s
+      httpHostHeader: cloudinator.site
       proxyConnectTimeout: 0s
       expectContinueTimeout: 0s
   - service: http_status:404
