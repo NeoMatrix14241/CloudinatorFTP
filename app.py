@@ -893,6 +893,7 @@ async def validate_session():
     if request.endpoint in [
         "login",
         "static",
+        "robots_txt",
         "shared_download",
         "shared_file_download",
         "shared_verify_passkey",
@@ -915,7 +916,7 @@ async def validate_session():
         # form the user is about to submit ("CSRF tokens do not match")
         # — triggered by something as innocuous as the browser's automatic
         # /favicon.ico request racing the login page load.
-        
+
         if session.get("username") or session.get("server_token"):
             session.clear()
         return redirect(url_for("login"), code=301)
@@ -1372,6 +1373,16 @@ async def after_request(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers.setdefault("Referrer-Policy", "same-origin")
+
+    # Tell every compliant search engine / AI crawler not to index or follow
+    # links on ANY response, site-wide. This is defense-in-depth on top of
+    # robots.txt: robots.txt only stops crawlers from ever requesting a page,
+    # but a page that's already been linked/discovered elsewhere can still
+    # get indexed unless the response itself says not to. Belt-and-suspenders
+    # — neither one alone is followed by non-compliant/aggressive scrapers.
+    response.headers["X-Robots-Tag"] = (
+        "noindex, nofollow, noarchive, nosnippet, noimageindex"
+    )
 
     # Permissions-Policy — deny browser features this app doesn't use.
     # fullscreen=(self) is kept because the video player (video.js) calls
