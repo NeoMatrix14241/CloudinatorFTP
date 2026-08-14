@@ -894,6 +894,7 @@ async def validate_session():
         "login",
         "static",
         "robots_txt",
+        "sitemap_xml",
         "shared_download",
         "shared_file_download",
         "shared_verify_passkey",
@@ -937,6 +938,16 @@ async def validate_session():
 @app.route("/robots.txt")
 async def robots_txt():
     return await send_from_directory(app.static_folder, "robots.txt")
+
+
+# No sitemap — this app intentionally isn't meant to be crawled/indexed.
+# Without this route, /sitemap.xml falls through to the login-gated
+# catch-all route (index()) and 301s anonymous requests to /login instead
+# of a clean 404, same class of issue robots.txt had before it was
+# exempted above.
+@app.route("/sitemap.xml")
+async def sitemap_xml():
+    abort(404)
 
 
 @app.route("/check_session")
