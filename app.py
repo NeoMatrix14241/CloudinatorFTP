@@ -883,6 +883,20 @@ else:
     print("ℹ️  Search index disabled — using os.walk fallback for all searches")
 
 
+def _lean_redirect(location, code=302):
+    # Quart's own redirect() (like Flask's) sends a small HTML body with a
+    # clickable fallback link. Browsers never show it — they follow the
+    # Location header automatically — but ZAP's "Big Redirect Detected"
+    # heuristic compares body size against a bare-minimum prediction and
+    # flags the difference as a potential info leak. This is the exact
+    # unauthenticated "/" -> "/login" redirect ZAP hit (a 301 issued from
+    # validate_session below), so give it an empty body instead of pulling
+    # in the full page-with-link HTML.
+    response = Response("", status=code)
+    response.headers["Location"] = location
+    return response
+
+
 @app.before_request
 async def validate_session():
     if "//" in request.path:
@@ -920,7 +934,7 @@ async def validate_session():
 
         if session.get("username") or session.get("server_token"):
             session.clear()
-        return redirect(url_for("login"), code=301)
+        return _lean_redirect(url_for("login"), code=301)
 
     # Verify the account still exists in users.json.
     # Without this, a deleted account's still-valid cookie causes an infinite
@@ -929,7 +943,7 @@ async def validate_session():
     username = session.get("username")
     if not username or get_role(username) is None:
         session.clear()
-        return redirect(url_for("login"), code=301)
+        return _lean_redirect(url_for("login"), code=301)
 
     # Session lifetime controlled by PERMANENT_SESSION_LIFETIME (86400s = 24h)
     # and refreshed on every request via SESSION_REFRESH_EACH_REQUEST=True.
