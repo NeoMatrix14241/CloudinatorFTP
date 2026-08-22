@@ -6,8 +6,18 @@ A lightweight FTP-like file transfer server that runs on **Termux (Android), Lin
 ![Linux](https://img.shields.io/badge/Linux-supported-FCC624?logo=linux)
 ![Windows](https://img.shields.io/badge/Windows-supported-0078D6?logo=windows)
 
-## 📷 Properly Configured Cloudflare Tunnel with SiteSecurityScore.com
-<img width="1333" height="426" alt="image" src="https://github.com/user-attachments/assets/4021d3ef-2d1b-4d2a-b493-dd7d2edfaaec" />
+## 📷 Properly Configured Cloudflare Tunnel
+Scanner: [SiteSecurityScore](https://sitesecurityscore.com)
+<img width="1336" height="425" alt="image" src="https://github.com/user-attachments/assets/5834c1ad-ea66-483b-9636-08d2bf895824" />
+
+Scanner: [SecurityHeaders](https://securityheaders.com/)
+<img width="1206" height="316" alt="image" src="https://github.com/user-attachments/assets/fefd930c-4108-4118-84f4-6b57968f41ad" />
+
+Scanner: [HTTP Observatory Report (Mozilla)](https://developer.mozilla.org/en-US/observatory)
+<img width="1051" height="334" alt="image" src="https://github.com/user-attachments/assets/20a797d3-7de1-4c72-93dc-8bce6491e458" />
+
+Scanner: [SecureMonk](https://securemonk.io)
+<img width="1344" height="630" alt="image" src="https://github.com/user-attachments/assets/3a10cee0-76c4-48f9-bb7d-01939d4631c3" />
 
 ## 📷 Login
 <img width="1794" height="893" alt="image" src="https://github.com/user-attachments/assets/083a1054-b1bd-446b-946c-a3dda29b459b" />
