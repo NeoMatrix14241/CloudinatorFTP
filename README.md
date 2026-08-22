@@ -19,6 +19,9 @@ Scanner: [HTTP Observatory Report (Mozilla)](https://developer.mozilla.org/en-US
 Scanner: [SecureMonk](https://securemonk.io)
 <img width="1344" height="630" alt="image" src="https://github.com/user-attachments/assets/3a10cee0-76c4-48f9-bb7d-01939d4631c3" />
 
+Scanner: [OWASP ZAP](https://www.zaproxy.org/)
+<img width="911" height="697" alt="image" src="https://github.com/user-attachments/assets/32c7b693-b57c-44a0-8483-7418f97b11c5" />
+
 ## 📷 Login
 <img width="1794" height="893" alt="image" src="https://github.com/user-attachments/assets/083a1054-b1bd-446b-946c-a3dda29b459b" />
 
