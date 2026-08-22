@@ -171,7 +171,6 @@ nslookup -type=NS domain.com
 ```
 Domains > Overview > yourdomain.com
 
-
 DNS > Records > add CAA certificate
 Where name: <yourdomain.com>
 Type: CAA
@@ -183,19 +182,16 @@ CA domain names
 - letsencrypt.com
 - pki.goog; cansignhttpexchanges=yes
 
-
 DNS > Records > add TXT DNS Record
 Name: _dmarc
 Type: TXT
-Content: "v=DMARC1; p=quarantine; rua=mailto:e56bef48be1249be9330566093ee17e4@dmarc-reports.cloudflare.net"
+Content: "v=DMARC1; p=reject; rua=mailto:e56bef48be1249be9330566093ee17e4@dmarc-reports.cloudflare.net; ruf=mailto:youremail@mail.com"
 TTL: Auto
-
 
 DNS > Settings
 DNSSEC -> enable (recommended to get domain from cloudflare so this is automatic)
 Multi-signer DNSSEC -> On
 Multi-provider DNS -> On
-
 
 SSL/TLS > Edge Certificates
 Always Use HTTPS: On
@@ -211,7 +207,6 @@ TLS 1.3: On
 Automatic HTTPS Rewrites: On
 Certificate Transparency Monitoring: On
 
-
 Security > Settings
 AI Labyrinth: On
 Block AI bots: Mixed purpose crawles will be blocked / Configurations: Blocks AI Bots scope: Block on all pages
@@ -222,21 +217,28 @@ Configure AI bot policies
 Continuous script monitoring: On (Log host only)
 Security.txt: On (Configure yourself)
 
+Speed > Settings
+Content Optimization > Speed Brain > Off
+Rocket Loader > Off
 
 Speed > Smart Shield > On
 Smart Tiered Cache: On
 Connection Reuse: On
+Shared Dictionary Compression > Passthrough
 
+Speed > Settings > Protocol Optimization
+HTTP/2 to Origin > On
+HTTP/3 (with QUIC) > On
+Enhanced HTTP/2 Prioritization > On
+0-RTT Connection Resumption > On
 
 Caching > Configuration
 Caching Level: Standard
 Browser Cache TTL: Respect Existing Headers
 Crawler Hints: On
 
-
 Caching > Tiered Cache > On
 Automatic Upper Tiers: Smart Tiered Cache
-
 
 Network
 IPv6 Compatibility: On
@@ -247,7 +249,6 @@ IP Geolocation: On
 Maximum Upload Size: 100MB
 Network Error Logging: On
 Onion Routing: On
-
 
 Traffic > Load Balancing > Maximize reliability and speed
 ```
@@ -332,7 +333,7 @@ credentials-file: C:\Users\%USERNAME%\.cloudflared\<tunnel-id>.json
 
 ingress:
   - hostname: domain.com
-    service: http://localhost:5000
+    service: https://localhost:5000
     originRequest:
       connectTimeout: 0s
       tlsTimeout: 0s
@@ -390,7 +391,7 @@ protocol: quic
 ingress:
   # Web UI — for browser access
   - hostname: domain.com
-    service: http://localhost:5000
+    service: https://localhost:5000
     originRequest:
       connectTimeout: 0s
       tlsTimeout: 0s
@@ -403,7 +404,7 @@ ingress:
 
   # WebDAV — for remote network drive mapping
   - hostname: files.domain.com
-    service: http://localhost:8080
+    service: https://localhost:8443
     originRequest:
       connectTimeout: 0s
       tlsTimeout: 0s
@@ -642,8 +643,6 @@ ingress:
       tlsTimeout: 0s
       tcpKeepAlive: 0s
       keepAliveTimeout: 0s
-      http2Origin: false
-      httpHostHeader: $DOMAIN
       noTLSVerify: true
       disableChunkedEncoding: false
       keepAliveConnections: 100000000
@@ -655,12 +654,10 @@ ingress:
       connectTimeout: 0s
       tlsTimeout: 0s
       tcpKeepAlive: 0s
-      http2Origin: false
-      noTLSVerify: false
+      noTLSVerify: true
       disableChunkedEncoding: false
       keepAliveConnections: 100000000
       keepAliveTimeout: 0s
-      httpHostHeader: cloudinator.site
       proxyConnectTimeout: 0s
       expectContinueTimeout: 0s
   - service: http_status:404
@@ -695,7 +692,7 @@ Save as `setup-tunnel-port.ps1`:
 $TUNNEL_NAME = "my-app-tunnel"
 $DOMAIN = "domain.com"
 $DOMAIN_WEBDAV = "webdav.domain.com"
-$SERVICE_PORT = 5000  # Change to 8080 for WebDAV, 8443 for WebDAV HTTPS
+$SERVICE_PORT = 5000
 $SERVICE_PORT_WEBDAV = 8443  # Change to 8080 for WebDAV, 8443 for WebDAV HTTPS
 
 # Install cloudflared
