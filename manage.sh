@@ -630,6 +630,168 @@ cmd_setup_modules() {
     run_bash_script "setup_pymodules.sh"
 }
 
+# ── security.txt (static/.well-known/security.txt, RFC 9116) ──────────────────
+# Fields supported: Contact, Expires, Preferred-Languages, Canonical.
+# Existing fields are preserved — pass only the flags you want to change.
+# The Python helper below owns all parsing/formatting/writing so date and
+# language-list normalization behave identically on every platform.
+SECURITY_TXT_PATH="${SCRIPT_DIR}/static/.well-known/security.txt"
+
+_security_txt_apply() {
+    # args: contact expires expires_days preferred_lang canonical
+    local contact="$1" expires="$2" expires_days="$3" plang="$4" canonical="$5"
+    mkdir -p "$(dirname "$SECURITY_TXT_PATH")"
+
+    local ec=0
+    "$PYTHON" - "$SECURITY_TXT_PATH" "$contact" "$expires" "$expires_days" "$plang" "$canonical" << 'PYEOF' || ec=$?
+import sys, os, re
+from datetime import datetime, timedelta, timezone
+
+target, contact, expires, expires_days, plang, canonical = sys.argv[1:7]
+
+REQUIRED_ORDER = ["Contact", "Expires", "Preferred-Languages", "Canonical"]
+
+# ── Load any existing fields so we only overwrite what was passed ──────────
+existing = {}
+if os.path.exists(target):
+    with open(target, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line.strip() or line.strip().startswith("#"):
+                continue
+            if ":" in line:
+                k, _, v = line.partition(":")
+                existing[k.strip()] = v.strip()
+
+# ── Expires: normalize to YYYY-MM-DDTHH:MM:SS.sssZ (RFC 9116 / ISO 8601) ───
+def fmt_expires(raw: str, days: str):
+    if days:
+        try:
+            n = int(days)
+        except ValueError:
+            print(f"❌ --expires-in-days must be an integer, got {days!r}", file=sys.stderr)
+            sys.exit(1)
+        dt = datetime.now(timezone.utc) + timedelta(days=n)
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+    if not raw:
+        return None
+    raw = raw.strip()
+    if re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$', raw):
+        return raw                                    # already exact format
+    m = re.match(r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?Z?$', raw)
+    if m:
+        return m.group(1) + ".000Z"                   # has a time, missing ms/Z
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', raw):
+        return raw + "T23:00:00.000Z"                 # date only → end of day UTC
+    print(f"❌ Could not parse --expires value: {raw!r}", file=sys.stderr)
+    print("   Use YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, or the full YYYY-MM-DDTHH:MM:SS.sssZ", file=sys.stderr)
+    sys.exit(1)
+
+if contact:
+    c = contact.strip()
+    if not re.match(r'^(mailto|https?|tel):', c, re.IGNORECASE):
+        c = f"mailto:{c}"
+    existing["Contact"] = c
+
+new_expires = fmt_expires(expires, expires_days)
+if new_expires:
+    existing["Expires"] = new_expires
+
+if plang:
+    parts = [p.strip() for p in plang.split(",") if p.strip()]
+    existing["Preferred-Languages"] = ", ".join(parts)
+
+if canonical:
+    existing["Canonical"] = canonical.strip()
+
+missing = [k for k in REQUIRED_ORDER if k not in existing]
+if missing:
+    print(f"❌ Missing required field(s): {', '.join(missing)}", file=sys.stderr)
+    print("   Provide via --contact / --expires (or --expires-in-days) / --preferred-lang / --canonical", file=sys.stderr)
+    sys.exit(1)
+
+lines = [f"{k}: {existing[k]}" for k in REQUIRED_ORDER]
+for k, v in existing.items():           # keep any extra custom fields, appended after
+    if k not in REQUIRED_ORDER:
+        lines.append(f"{k}: {v}")
+
+with open(target, "w", encoding="utf-8", newline="\n") as f:
+    f.write("\n".join(lines) + "\n")
+
+print(f"✅ Wrote {target}")
+for line in lines:
+    print(f"   {line}")
+PYEOF
+    return $ec
+}
+
+_security_txt_show() {
+    if [[ -f "$SECURITY_TXT_PATH" ]]; then
+        header "Current security.txt"
+        divider
+        cat "$SECURITY_TXT_PATH"
+        divider
+    else
+        warn "No security.txt yet at ${SECURITY_TXT_PATH}"
+        info "Create one:  ./manage.sh security-txt --contact you@example.com --expires 2030-09-03 --preferred-lang en,fil --canonical https://yourdomain.com/.well-known/security.txt"
+    fi
+}
+
+_security_txt_interactive() {
+    local cur_contact="" cur_expires="" cur_plang="" cur_canonical=""
+    if [[ -f "$SECURITY_TXT_PATH" ]]; then
+        cur_contact=$(grep -m1 '^Contact:' "$SECURITY_TXT_PATH" | cut -d: -f2- | sed 's/^ *//') || true
+        cur_expires=$(grep -m1 '^Expires:' "$SECURITY_TXT_PATH" | cut -d: -f2- | sed 's/^ *//') || true
+        cur_plang=$(grep -m1 '^Preferred-Languages:' "$SECURITY_TXT_PATH" | cut -d: -f2- | sed 's/^ *//') || true
+        cur_canonical=$(grep -m1 '^Canonical:' "$SECURITY_TXT_PATH" | cut -d: -f2- | sed 's/^ *//') || true
+    fi
+
+    header "security.txt — Interactive Update"
+    divider
+    info "Leave a field blank to keep its current value (shown in [brackets])."
+    echo ""
+
+    local contact expires plang canonical
+    read -rp "  Contact (email or mailto:/https: URL) [${cur_contact:-none}]: " contact
+    read -rp "  Expires (YYYY-MM-DD or full ISO datetime) [${cur_expires:-none}]: " expires
+    read -rp "  Preferred-Languages, comma separated [${cur_plang:-none}]: " plang
+    read -rp "  Canonical URL [${cur_canonical:-none}]: " canonical
+
+    _security_txt_apply "$contact" "$expires" "" "$plang" "$canonical"
+}
+
+# ── cmd_security_txt ─────────────────────────────────────────────────────────
+cmd_security_txt() {
+    if [[ $# -eq 0 ]]; then
+        _security_txt_interactive
+        return $?
+    fi
+    if [[ "$1" == "show" ]]; then
+        _security_txt_show
+        return $?
+    fi
+
+    local contact="" expires="" expires_days="" plang="" canonical=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --contact)            contact="$2"; shift 2 ;;
+            --expires)            expires="$2"; shift 2 ;;
+            --expires-in-days)    expires_days="$2"; shift 2 ;;
+            --preferred-lang|--preferred-languages) plang="$2"; shift 2 ;;
+            --canonical)          canonical="$2"; shift 2 ;;
+            *) error "Unknown option: $1"; return 1 ;;
+        esac
+    done
+
+    if [[ -z "$contact$expires$expires_days$plang$canonical" ]]; then
+        error "Specify at least one of --contact --expires --expires-in-days --preferred-lang --canonical"
+        info  "Or run without args for the interactive prompt, or 'show' to print the current file."
+        return 1
+    fi
+
+    _security_txt_apply "$contact" "$expires" "$expires_days" "$plang" "$canonical"
+}
+
 # ── cmd_dashboard ─────────────────────────────────────────────────────────────
 cmd_dashboard() {
     header "Cloudinator — Server Manager"
@@ -720,8 +882,9 @@ cmd_menu() {
         echo "  14) setup_storage.py    — Configure storage"
         echo "  15) setup_pymodules.sh  — Setup and Update Python packages"
         echo "  16) revoke_sharing.py   — Share link management (links, passkeys, approvals)"
+        echo "  17) security.txt        — Update static/.well-known/security.txt"
         if is_termux; then
-            echo "  17) termux_setup.sh    — Termux initial setup (Android only)"
+            echo "  18) termux_setup.sh    — Termux initial setup (Android only)"
         fi
         echo ""
         echo "   q) Quit"
@@ -757,7 +920,8 @@ cmd_menu() {
             14) run_utility "setup_storage.py" || true ;;
             15) cmd_setup_modules || true ;;
             16) run_utility "revoke_sharing.py" || true ;;
-            17) cmd_termux_setup || true ;;
+            17) cmd_security_txt || true ;;
+            18) cmd_termux_setup || true ;;
             q|Q) echo ""; success "Goodbye!"; exit 0 ;;
             *) warn "Invalid option: ${choice}" ;;
         esac
@@ -802,6 +966,18 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
                            requests | approve <id> | deny <id>
                            (edit opts: --mode --passkey --generate-passkey
                             --clear-passkey --expires-in --never-expire)
+  security-txt           Update static/.well-known/security.txt (RFC 9116)
+                           no args → interactive prompt (blank keeps current value)
+                           show    → print the current file
+                           flags   → --contact <email or mailto:/https: URL>
+                                     --expires <YYYY-MM-DD | full ISO datetime>
+                                     --expires-in-days <N>  (relative, computed in UTC)
+                                     --preferred-lang <comma,separated,codes>
+                                     --canonical <URL>
+                           Only the flags you pass are changed — existing fields
+                           in the file are left alone. Expires is normalized to
+                           YYYY-MM-DDTHH:MM:SS.sssZ; a date-only value defaults
+                           to 23:00:00.000Z that day.
   termux-setup          bash termux_setup.sh  (Android/Termux only)
 
 ${BOLD}OTHER${NC}
@@ -816,6 +992,10 @@ ${BOLD}EXAMPLES${NC}
   ./manage.sh clean-logs         # delete old log files
   ./manage.sh revoke-shares list # list active share links
   ./manage.sh revoke-shares      # interactive share-management menu
+  ./manage.sh security-txt --contact you@example.com --expires 2030-09-03 \
+                            --preferred-lang en,fil \
+                            --canonical https://yourdomain.com/.well-known/security.txt
+  ./manage.sh security-txt show  # print the current security.txt
   ./manage.sh stop               # gracefully stop the server
   ./manage.sh menu               # interactive mode
 
@@ -858,6 +1038,7 @@ main() {
         setup-storage)  run_utility "setup_storage.py" "$@" ;;
         setup-modules) cmd_setup_modules ;;
         revoke-shares)  run_utility "revoke_sharing.py" "$@" ;;
+        security-txt)   cmd_security_txt "$@" ;;
         termux-setup)   cmd_termux_setup ;;
         menu)           cmd_menu ;;
         dashboard)      cmd_dashboard ;;
