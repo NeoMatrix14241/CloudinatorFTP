@@ -992,12 +992,10 @@ ${BOLD}EXAMPLES${NC}
   ./manage.sh clean-logs         # delete old log files
   ./manage.sh revoke-shares list # list active share links
   ./manage.sh revoke-shares      # interactive share-management menu
-  ./manage.sh security-txt --contact you@example.com --expires 2030-09-03 \
-                            --preferred-lang en,fil \
-                            --canonical https://yourdomain.com/.well-known/security.txt
-  ./manage.sh security-txt show  # print the current security.txt
   ./manage.sh stop               # gracefully stop the server
   ./manage.sh menu               # interactive mode
+  ./manage.sh security-txt show  # print the current security.txt
+  ./manage.sh security-txt --contact you@example.com --expires 2030-09-03 --preferred-lang en,fil --canonical https://yourdomain.com/.well-known/security.txt
 
 ${BOLD}LOG FILES${NC}
   Saved to logs/ with datetime stamps — each start creates a new file:

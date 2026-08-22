@@ -142,6 +142,9 @@ python config.py
 **Update security.txt and robots.txt(Important for tunneling else optional up to you)**
 ```
 # use your own details
+# you can also use "bash manage.sh menu > 17 to create security.txt
+# or run:
+# bash manage.sh security-txt --contact you@example.com --expires 2030-09-03 --preferred-lang en,fil --canonical https://yourdomain.com/.well-known/security.txt
 static\.well-known\security.txt
 
 # by default, everything is blocked politely
