@@ -1,7 +1,7 @@
 # CloudinatorFTP User Guide
 
 **Version**: 1.2 | **Last Updated**: 2026-08-22  
-**For**: End users accessing the web file manager
+**For**: End users accessing the web file manager (note: documentation for administration will come soon)
 
 Welcome to **The Cloudinator** — a lightweight, secure file sharing platform that works across Windows, Linux, and Android (Termux).
 
