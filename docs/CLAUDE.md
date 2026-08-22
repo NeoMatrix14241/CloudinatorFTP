@@ -1,6 +1,6 @@
 # CloudinatorFTP — Complete Codebase Reference for AI-Assisted Development
 
-**Version**: 4.2 | **Last Updated**: 2026-08-22  
+**Version**: 4.3 | **Last Updated**: 2026-08-22  
 **For**: AI assistants and developers modifying/extending CloudinatorFTP
 
 **Recent updates (2026-07-28)**:
@@ -161,7 +161,7 @@ app.py (Quart entry point, ASGI routes, incl. share-link routes)
 │       └─→ smb_server.py   → impacket
 │
 └─ Supporting CLIs:
-   ├─→ create_user.py (user management)
+   ├─→ manage_users.py (user management — renamed from create_user.py)
    ├─→ reset_db.py (database reset)
    ├─→ kick_sessions.py (session/user revocation — replaced revoke_session.py)
    ├─→ revoke_sharing.py (share-link revocation)
@@ -1688,7 +1688,8 @@ Request → _CertMiddleware (serves /webdav.crt unauthenticated)
 ### SFTP Implementation Notes
 
 - **Host key**: RSA-2048, generated once and stored at `db/sftp_host.rsa`. Back this up — regeneration breaks existing WinSCP known-hosts entries.
-- **Chroot**: All SFTP paths are mapped to `ROOT_DIR`. Path traversal is prevented via `os.path.realpath()` comparison.
+- **Chroot**: All SFTP paths are mapped to `ROOT_DIR` via a segment-by-segment path resolver (`_make_realpath()`), not a single `os.path.join(root, sftp_path)` call — see the Windows bug below for why. Final resolution goes through `os.path.realpath()`, with a clamp back to root if a symlink inside root points outside it.
+- **Windows path-join bug (fixed)**: The original implementation called `os.path.join(root, some_sftp_path)` directly. On Windows, `ntpath.join("C:\\Server\\Files", "\\subfolder")` returns `"C:\\subfolder"` — **not** `"C:\\Server\\Files\\subfolder"` — because a drive-less absolute path (which is exactly what an SFTP client sends, since SFTP paths are POSIX-style and start with `/`) resets `ntpath.join` back to the drive root. This silently clamped every subdirectory lookup back to `ROOT_DIR` on Windows — the SFTP root itself happened to still resolve correctly by coincidence, which is why it could look fine in a quick smoke test. Fix: split the SFTP path into individual segments and join them one at a time with `os.path.join(real, seg)`, so a bare segment name (never starting with a separator) can't trigger `ntpath`'s absolute-path-reset behavior on any OS.
 - **SFTPHandle**: Uses `paramiko.SFTPHandle` with `readfile`/`writefile` attributes — paramiko's default `read()`/`write()` methods use these. Do NOT monkeypatch instance attributes onto `SFTPHandle`; paramiko does not guarantee instance-attribute method dispatch.
 - **`transport.accept(30)`**: Required after `start_server()` to acknowledge the client's session channel. Without it, SFTP subsystem activation stalls.
 
@@ -1778,18 +1779,46 @@ Each is imported lazily inside `start()`. If a library is missing, that protocol
 
 `manage.sh` remains the primary launcher for the server and utility commands. Recent updates also made it more resilient when running nested helpers, because it now suppresses Ctrl-C while a utility script is executing so the shell wrapper does not exit prematurely.
 
-### User Management (create_user.py)
+### security.txt Management (manage.sh security-txt)
+
+New `manage.sh` subcommand — updates `static/.well-known/security.txt` (RFC 9116) without a dedicated Python script; the whole thing is a bash function plus an inline Python heredoc for parsing/formatting, following the same pattern `_launch_detached()` already uses elsewhere in the file.
 
 ```bash
-python create_user.py
+./manage.sh security-txt                      # interactive prompt (blank keeps current value)
+./manage.sh security-txt show                  # print the current file
+./manage.sh security-txt \
+  --contact you@example.com \
+  --expires 2030-09-03 \
+  --preferred-lang en,fil \
+  --canonical https://yourdomain.com/.well-known/security.txt
+```
+
+- **Partial updates**: only the flags passed are changed — any existing `Contact`/`Expires`/`Preferred-Languages`/`Canonical` (or other custom field) already in the file is read first and preserved. On a brand-new file, all four required fields must be present after applying the flags, or it errors out listing what's missing.
+- **`--contact`**: a bare email is auto-prefixed to `mailto:`; a value already starting with `mailto:`, `http:`, `https:`, or `tel:` is left as-is.
+- **`--expires`**: normalized to the exact `YYYY-MM-DDTHH:MM:SS.sssZ` format RFC 9116 expects (also what the person originally specified) — `YYYY-MM-DD` alone becomes that date at `23:00:00.000Z` UTC, a datetime missing milliseconds/`Z` gets them appended, and an already-exact value passes through unchanged.
+- **`--expires-in-days N`**: convenience alternative to `--expires` — computes `now (UTC) + N days` and formats it the same way, mirroring the `--expires-in` convention `revoke_sharing.py` already uses for share links.
+- **`--preferred-lang`**: comma-separated codes are re-joined with `", "` regardless of the spacing typed in (`en,fil` and `en, fil` produce the same output line).
+- Menu option **17** in `cmd_menu`; the Termux-only setup option shifted from 17 → **18** to make room.
+- File path is fixed at `${SCRIPT_DIR}/static/.well-known/security.txt`; the directory is created automatically if it doesn't exist yet.
+
+### User Management (manage_users.py — renamed from create_user.py)
+
+> ⚠️ The file itself still has a stale self-reference (`Run: python create_user.py` in its own docstring) — that's a leftover from the rename, not a typo here. The actual filename and the correct command are `manage_users.py`.
+
+```bash
+python manage_users.py
 # Menu:
-# 1. List users
+# 1. List users (flags any account still on a default password)
 # 2. Add user
 # 3. Change password
-# 4. Delete user
-# 5. Set role (readwrite/readonly)
-# 6. Reset to defaults (admin/admin123, guest/guest123)
+# 4. Change role (readwrite/readonly)
+# 5. Delete user
+# 6. Remove default users — deletes admin/guest ONLY if their password is
+#    still unchanged from the shipped default; does NOT reset a password
+#    back to default (for that, see debug_passwords.py's option 4 below)
+# 7. Exit
 ```
+Every action re-runs the default-credentials warning banner afterward, so it stays visible across the whole session rather than only at startup.
 
 ### Database Tools
 
@@ -1822,11 +1851,13 @@ Also wired into `manage.sh` as a menu option, same convention as the other utili
 ```bash
 python debug_passwords.py
 # Menu:
-# 1. Test common passwords for all users
-# 2. Test custom username/password
-# 3. Show user list
-# 4. Reset to defaults
+# 1. Show all users
+# 2. Test common passwords against all users
+# 3. Test custom username/password
+# 4. Reset admin + guest to default passwords (admin123/guest123)
+# 5. Exit
 ```
+Note the division of labor with `manage_users.py`: that tool's "Remove default users" only *deletes* accounts still on the shipped default password — this tool's option 4 is the one that actually resets a password back to a default value.
 
 **ssl_cert.py** - Certificate management:
 ```bash
@@ -1927,6 +1958,10 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 **Cause**: WinSCP host key warning dialog was dismissed instead of accepted  
 **Fix**: On first connect, click Accept/Yes to cache the host key `db/sftp_host.rsa`
 
+**Problem**: SFTP connects and lists the root fine, but every subfolder shows the same (root) contents, only on Windows  
+**Cause**: `ntpath.join()`'s absolute-path-reset behavior — see the "Windows path-join bug" note in SFTP Implementation Notes above; this is fixed in the current `_make_realpath()`, so if it recurs the deployed `sftp_server.py` is stale  
+**Fix**: Update to the current `sftp_server.py`
+
 **Problem**: SFTP/FTP "searching for host then error"  
 **Cause**: Windows Firewall blocking ports 2222, 2121, 60000-60100  
 **Fix**: Add inbound firewall rules; verify with `Test-NetConnection -Port 2222`
@@ -2020,7 +2055,7 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 
 ### SMB One-Time Setup (smb_setup.py) and lanman_guard.py
 
-Standalone tool, run manually like `create_user.py`/`reset_db.py` — **never** auto-invoked by `prod_server.py`/`dev_server.py`. Detects platform and branches:
+Standalone tool, run manually like `manage_users.py`/`reset_db.py` — **never** auto-invoked by `prod_server.py`/`dev_server.py`. Detects platform and branches:
 
 - **Windows**: confirm → request elevation (one UAC prompt, script relaunches itself elevated and continues automatically) → `Set-Service`/`Stop-Service` on `LanmanServer` → prints "restart now" and stops — **never executes a restart itself, under any circumstance**. A matching restore action, same shape, in reverse.
 - **Linux**: `setcap cap_net_bind_service=+ep` on the Python binary — immediate, no restart, verified directly (created a genuinely non-root user, confirmed it could bind port 445 right after).
@@ -2032,7 +2067,7 @@ Standalone tool, run manually like `create_user.py`/`reset_db.py` — **never** 
 
 Standalone tool, `python kick_sessions.py` with no args launches an interactive menu (same convention as `smb_setup.py`); CLI args (`list`, `rotate <user>`, `delete <user>`, `kick-all [--include-admins]`, `logout-web`) still work for scripting.
 
-Works at the database level only — it's a separate process, same constraint `create_user.py` always had, can't reach into a running server's memory. Real, verified timing per protocol:
+Works at the database level only — it's a separate process, same constraint `manage_users.py` always had, can't reach into a running server's memory. Real, verified timing per protocol:
 - **SFTP/FTP**: instant — both re-validate against the database on every connection, no caching.
 - **WebDAV**: ~30s (`_AuthCache` TTL).
 - **SMB**: ~30s (credential refresh cycle).
@@ -2094,6 +2129,16 @@ Works at the database level only — it's a separate process, same constraint `c
 ---
 
 ## 📝 Changelog
+
+### Version 4.3 — manage.sh security-txt Command
+
+- **Updated: `manage.sh`**
+  - New `security-txt` subcommand manages `static/.well-known/security.txt` (RFC 9116) — direct flags (`--contact`, `--expires`/`--expires-in-days`, `--preferred-lang`, `--canonical`), an interactive prompt when run with no args, and a `show` subcommand
+  - Implemented as a bash function (`cmd_security_txt` + helpers) wrapping an inline Python heredoc for parsing/formatting, the same pattern already used by `_launch_detached()` elsewhere in the file — no new standalone `.py` script added
+  - Partial updates: only the fields passed as flags change; existing fields (including any custom ones beyond the four RFC 9116 fields this command manages) are read from the file first and preserved
+  - `--expires` accepts `YYYY-MM-DD`, a datetime missing milliseconds/`Z`, or the full `YYYY-MM-DDTHH:MM:SS.sssZ` — all normalized to the exact latter format; date-only defaults to `23:00:00.000Z` that day
+  - Added as menu option 17 in `cmd_menu`; the Termux-only setup option shifted from 17 → 18
+  - See its own subsection under Admin Tools & Utilities for full usage
 
 ### Version 4.2 (2026-08-18)
 
@@ -2225,6 +2270,7 @@ Public, opaque-token share links per file/folder, with a "Manage Shared" admin p
   - Full `SFTPServerInterface` implementation chrooted to `ROOT_DIR`
   - Proper `paramiko.SFTPHandle` with `readfile`/`writefile` (not monkeypatched)
   - Role-based access: `readonly` users blocked on all mutation operations
+  - **Later fix**: chroot path mapping rewritten from a single `os.path.join(root, sftp_path)` call to a segment-by-segment resolver — the original silently clamped every subfolder lookup back to root on Windows only, due to `ntpath.join`'s absolute-path-reset behavior on a drive-less absolute path (which is exactly the shape of every incoming SFTP path). See SFTP Implementation Notes above.
 
 - **New file: `ftp_server.py`**
   - pyftpdlib FTP server on port 2121
