@@ -216,8 +216,8 @@ Edit expression > '(ip.src.country ne "<country code>")'
 Security > Security rules
 Custom rules > Create rule
 Rule name: AllowWebSecScanners
-When incoming requests match...: (ip.src.asnum eq 14618 or ip.src.asnum eq 396982 or ip.src.asnum eq 16509 or ip.src.asnum eq 60068)
-Note: This will allow web based scanners such as sitesecurityscore, securityheaders, mozilla http observatory report, and securemonk.io
+When incoming requests match...: (ip.src.asnum eq 14618 or ip.src.asnum eq 396982 or ip.src.asnum eq 16509 or ip.src.asnum eq 60068 or ip.src.asnum eq 63949)
+Note: This will allow web based scanners such as sitesecurityscore, securityheaders, mozilla http observatory report, securemonk.io, OWASP ZAP, HostedScan (Find out your AS Num by going to Security > Analytics > Events)
 
 Security > Security rules
 Rate limiting rules > Create rule
