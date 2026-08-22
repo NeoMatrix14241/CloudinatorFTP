@@ -1,6 +1,6 @@
 # CloudinatorFTP — Complete Codebase Reference for AI-Assisted Development
 
-**Version**: 3.4 | **Last Updated**: 2026-07-28  
+**Version**: 4.2 | **Last Updated**: 2026-08-22  
 **For**: AI assistants and developers modifying/extending CloudinatorFTP
 
 **Recent updates (2026-07-28)**:
@@ -8,6 +8,8 @@
 - Real-time storage stats now use the authenticated SSE endpoint `/api/storage_stats_stream`, with `/api/storage_stats_poll` available as a fallback when the stream is unavailable.
 - The management shell now suppresses Ctrl-C while launching nested utility scripts so `manage.sh` remains in control and the underlying script can exit normally.
 - SMB server hardening now includes additional Windows-specific save/delete compatibility fixes for Office-style file writes and transient lock handling.
+
+**⚠️ Major update since the above (see the Changelog for full detail)**: The server was migrated **from Flask (WSGI) + Waitress to Quart (ASGI) + Hypercorn**, adding native HTTP/2 and HTTP/3 support across the web UI and WebDAV HTTPS. A full public **Share Links** feature was also added (opaque-token links, passkey/approval protection, expiry, bulk share/unshare, a "Manage Shared" admin panel, `revoke_sharing.py` CLI). Anywhere below that still says "Flask" is describing the pre-migration behavior/history — the live server is Quart/Hypercorn. See the [Sharing Routes](#sharing-routes) and Changelog sections for details.
 
 ---
 
@@ -18,7 +20,7 @@
 3. [Architecture & Module Map](#architecture--module-map)
 4. [Core Systems Deep Dive](#core-systems-deep-dive)
 5. [Data Structures](#data-structures)
-6. [Flask Routes & API](#flask-routes--api)
+6. [Quart Routes & API](#quart-routes--api) (includes [Sharing Routes](#sharing-routes))
 7. [Database Schema](#database-schema)
 8. [Authentication & Sessions](#authentication--sessions)
 9. [File Upload System](#file-upload-system)
@@ -41,9 +43,9 @@
 
 | File | Purpose | Key Responsibilities |
 |------|---------|----------------------|
-| **app.py** | Flask server & route handlers | HTTP endpoints, session mgmt, response building |
+| **app.py** | Quart (ASGI) server & route handlers, incl. share-link routes | HTTP endpoints, session mgmt, response building — migrated from Flask/WSGI, see Changelog |
 | **storage.py** | File system operations | List dirs, chunks, assembly, cleanup |
-| **database.py** | SQLite + encryption | Users, passwords, server tokens, sessions |
+| **database.py** | SQLite + encryption | Users, passwords, server tokens, sessions, share tokens/requests |
 | **auth.py** | Authentication helpers | Login/logout, session validation, role checking |
 | **config.py** | Settings & feature toggles | Paths, sizes, feature flags |
 | **paths.py** | Configurable directory resolver | db_path, cache_path, storage_path resolution |
@@ -51,28 +53,31 @@
 | **file_index.py** | Large-folder caching | Indexed dir listings, instant lookups |
 | **search_index.py** | Full-text search engine | FTS5 indexing, query processing |
 | **realtime_stats.py** | Server-Sent Events | Live storage stats broadcasting |
+| **realtime_shares.py** | Server-Sent Events (admin-only) | Live pending-share-request count + active-shares-changed nudges for the Manage Shared panel |
 | **protocol_manager.py** | Protocol server launcher | Starts/stops WebDAV, SFTP, FTP, SMB in background threads |
-| **webdav_server.py** | WebDAV server | wsgidav + waitress/cheroot, HTTP+HTTPS, role enforcement |
+| **webdav_server.py** | WebDAV server | wsgidav WSGI app bridged onto Hypercorn via `asgiref.WsgiToAsgi`; serves HTTP+HTTPS from one Hypercorn Config; role enforcement (no longer waitress/cheroot for serving — cheroot is now only a transitive wsgidav dependency) |
 | **sftp_server.py** | SFTP server | Paramiko SSH/SFTP, RSA host key, chrooted to ROOT_DIR |
 | **smb_server.py** | SMB server | impacket SimpleSMBServer, Tree Connect role enforcement, Windows file-locking fixes |
 | **smb_setup.py** | SMB one-time setup | Standalone tool — Windows LanmanServer, Linux setcap, Android root check |
 | **lanman_guard.py** | SMB Windows state tracker | Passive pending-setup state file, read by smb_server.py, written by smb_setup.py |
-| **kick_sessions.py** | Access revocation tool | Rotate/delete a user, or instantly log out the web UI, for security incidents |
+| **kick_sessions.py** | Access revocation tool | Rotate/delete a user, or instantly log out the web UI, for security incidents (replaced the older `revoke_session.py`) |
+| **revoke_sharing.py** | Share-link revocation tool | Interactive menu + CLI subcommands to list/revoke individual or all share tokens, independent of the web UI |
 | **ftp_server.py** | FTP server | pyftpdlib, custom authorizer, passive ports 60000–60100 |
-| **ssl_cert.py** | TLS certificate manager | Self-signed cert generation, SAN detection, db/ storage |
+| **ssl_cert.py** | TLS certificate manager | Self-signed cert generation, SAN detection, db/ storage; `prod_server.py` now prefers a real Tailscale-issued cert when available, falling back to this self-signed cert otherwise |
 
 ### Startup Order
 
 ```
 1. ensure_dirs() → creates db/, cache/, hls_cache/, img_cache/
-2. database._connect() → SQLite, _bootstrap(), default users
+2. database._connect() → SQLite, _bootstrap() (double-checked-locked + committed before release — see Changelog), default users
 3. file_monitor.init() → full initial walk, build storage_index.json
 4. file_index.py → load/update file_index.json cache
 5. search_index_manager.start_crawler() → background FTS5 population
 6. start_assembly_worker() → chunk assembly background daemon
 7. cleanup_scheduler → starts periodic cleanup
-8. Flask app ready
-9. protocol_manager.start_all() → WebDAV (8080/8443), SFTP (2222), FTP (2121) start in daemon threads; SMB (445/8445) starts too if SMB_ENABLED
+8. Quart app ready, served by Hypercorn (ASGI) — HTTP/1.1, HTTP/2, and HTTP/3; TLS cert comes from Tailscale if available, else ssl_cert.py's self-signed cert
+9. protocol_manager.start_all() → WebDAV (8080/8443, wsgidav bridged onto Hypercorn via asgiref), SFTP (2222), FTP (2121) start in daemon threads; SMB (445/8445) starts too if SMB_ENABLED
+10. start_expired_share_cleanup_scheduler() → periodic sweep that auto-revokes share links past their expires_at and notifies connected admins via realtime_shares.py
 ```
 
 ---
@@ -81,14 +86,15 @@
 
 ### Python modules
 
-- **app.py**: `get_local_ip()`, `RateLimiter`, `AssemblyQueue`, `validate_session()`, `login()`, `logout()`, `index()`, `download()`, `view_file()`, `pdf_viewer()`, `office_preview()`, `archive_preview()`, and `storage_stats_stream()`.
+- **app.py**: `get_local_ip()`, `RateLimiter`, `AssemblyQueue`, `validate_session()` (the `before_request` hook — async, Quart), `login()`, `logout()`, `index()`, `download()`, `view_file()`, `pdf_viewer()`, `office_preview()`, `archive_preview()`, `storage_stats_stream()`, and the share-link handlers `create_share()`, `update_share_settings()`, `revoke_share()`, `bulk_share()`, `shared_download()`, `shared_browse()`, `shared_zip_selected()`.
 - **auth.py**: `check_login()`, `get_role()`, `login_user()`, `logout_user()`, `current_user()`, and `is_logged_in()`.
 - **config.py**: `detect_platform()`, `get_windows_documents_path()`, `get_accessible_storage_path()`, `setup_storage_directory()`, and the configuration helpers such as `configure_server_settings()`, `configure_port()`, `configure_chunk_size()`, and `configure_session_timeout()`.
-- **database.py**: `_connect()`, `_bootstrap()`, `add_user()`, `update_password()`, `check_login()`, `get_role()`, `get_server_token()`, `rotate_server_token()`, `get_smb_credentials()`, and `users_missing_nt_hash()`.
+- **database.py**: `_connect()`, `_bootstrap()`, `add_user()`, `update_password()`, `check_login()`, `get_role()`, `get_server_token()`, `rotate_server_token()`, `get_smb_credentials()`, `users_missing_nt_hash()`, and the share-link methods `create_share()`, `get_share_by_token()`, `get_share_by_path()`, `update_share_settings()`, `revoke_share_by_path()`.
 - **storage.py**: `list_dir()`, `count_directory_items()`, `save_chunk()`, `verify_chunks_complete()`, `assemble_chunks()`, and `cleanup_chunks()`.
 - **file_monitor.py**: `InstantFileEventHandler.on_created()`, `on_deleted()`, `on_moved()`, `on_modified()`, plus `FileSystemMonitor.start()`, `stop()`, and `reconcile()`.
-- **file_index.py**: `_scan_folder_entries()` and `FileIndexManager.load()`, `save()`, `cache_folder()`, `get_entries()`, and `is_cached()`.
+- **file_index.py**: `_scan_folder_entries()` and `FileIndexManager.load()`, `save()`, `build_from_walk()`, `update_folder()`, `remove_folder()`, `rename_folder()`, `get_entries()`, and `is_indexed()`.
 - **search_index.py**: `SearchIndexManager.add()`, `remove()`, `rename()`, `query()`, and the background indexing workflow.
+- **realtime_shares.py**: `ShareEventManager.broadcast()` (pending-request count), `broadcast_active_shares_changed()` (nudges the Active Shares tab to refetch), and `share_events_sse()` — same call-from-any-thread pattern as `realtime_stats.py`.
 - **webdav_server.py**, **sftp_server.py**, **ftp_server.py**, and **smb_server.py**: their protocol-specific startup and auth hooks, including the middleware and role enforcement entry points used by each server.
 
 ### JavaScript modules
@@ -103,13 +109,14 @@ This section is intentionally high-level: the detailed route behavior, storage l
 
 ## 🎯 Project Overview
 
-**CloudinatorFTP** is a sophisticated Flask-based web file server designed for:
+**CloudinatorFTP** is a sophisticated Quart-based (ASGI, served by Hypercorn) web file server designed for:
 - **Multi-platform**: Windows, Linux, macOS, Android (Termux)
 - **Scalability**: Handles 100k+ files with instant response times
 - **Real-time**: Live filesystem monitoring with SSE updates
 - **Rich media**: HLS video streaming, WebP compression, archive preview
 - **Security**: Per-user authentication, role-based access, encrypted passwords
 - **Uploads**: Chunked resumable uploads, automatic assembly, conflict resolution
+- **Public Sharing**: Opaque-token share links per file/folder, with optional passkey or admin-approval gating and expiry
 - **Protocol Access**: WebDAV (native drive mapping), SFTP (WinSCP/sshfs), FTP (legacy clients), SMB (native network drive, one-time setup)
 
 **Core Design Philosophy**:
@@ -118,7 +125,8 @@ This section is intentionally high-level: the detailed route behavior, storage l
 - Lazy initialization (nothing created on import)
 - Modular systems (auth, storage, search, media all independent)
 - Graceful fallbacks (missing ffmpeg → raw video, no libvips → raw images)
-- Protocol servers are optional daemon threads — main Flask server unaffected if any fail
+- Protocol servers are optional daemon threads — main Quart/Hypercorn server unaffected if any fail
+- No blocking calls in the async request path — Hypercorn runs a single event loop, so anything CPU/IO-heavy (bcrypt, image/archive/office conversion, uncached `list_dir()`) is offloaded via `asyncio.to_thread` rather than run inline (unlike the old Waitress/thread-per-request model, a blocking call here stalls every concurrent user, not just one)
 
 ---
 
@@ -127,7 +135,7 @@ This section is intentionally high-level: the detailed route behavior, storage l
 ### Dependency Graph
 
 ```
-app.py (Flask entry point, routes)
+app.py (Quart entry point, ASGI routes, incl. share-link routes)
 │
 ├─→ auth.py → database.py (login, sessions)
 ├─→ config.py → paths.py (settings, directory resolution)
@@ -141,19 +149,22 @@ app.py (Flask entry point, routes)
 │   ├─→ search_index.py (index updates)
 │   └─→ realtime_stats.py (SSE broadcasts)
 │
-├─→ realtime_stats.py (Server-Sent Events)
-├─→ database.py (SQLite persistence)
+├─→ realtime_stats.py (Server-Sent Events — storage stats)
+├─→ realtime_shares.py (Server-Sent Events — pending share requests / active-shares changes)
+├─→ database.py (SQLite persistence, incl. share tokens/requests)
 │
 ├─ Protocol Layer (started from dev_server.py / prod_server.py):
 │   └─→ protocol_manager.py
-│       ├─→ webdav_server.py → wsgidav, waitress/cheroot, ssl_cert.py
+│       ├─→ webdav_server.py → wsgidav, bridged onto Hypercorn via asgiref.WsgiToAsgi, ssl_cert.py (or Tailscale cert)
 │       ├─→ sftp_server.py  → paramiko
-│       └─→ ftp_server.py   → pyftpdlib
+│       ├─→ ftp_server.py   → pyftpdlib
+│       └─→ smb_server.py   → impacket
 │
 └─ Supporting CLIs:
    ├─→ create_user.py (user management)
    ├─→ reset_db.py (database reset)
-   ├─→ revoke_session.py (token rotation)
+   ├─→ kick_sessions.py (session/user revocation — replaced revoke_session.py)
+   ├─→ revoke_sharing.py (share-link revocation)
    └─→ debug_passwords.py (auth testing)
 ```
 
@@ -162,9 +173,9 @@ app.py (Flask entry point, routes)
 1. **Lazy Initialization**: Nothing created on module import—only on first use
 2. **Single Source of Truth**: paths.py resolves all directory locations
 3. **Atomic Operations**: File operations use platform-specific safety (Windows readonly handling)
-4. **No Blocking I/O in HTTP**: Chunks processed, assembly backgrounded, cleanup scheduled
+4. **No Blocking I/O in the Event Loop**: Chunks processed, assembly backgrounded, cleanup scheduled — and since the migration to Hypercorn's single-event-loop ASGI model, any remaining synchronous heavy-lifting (bcrypt, image/archive/office conversion, uncached `list_dir()`) is explicitly wrapped in `asyncio.to_thread` rather than run inline, because it would otherwise block every concurrent request, not just the one that triggered it
 5. **Event-Driven Stats**: Watchdog updates counters; reconcile corrects drift
-6. **Protocol Servers are Daemon Threads**: They die automatically when the main process exits; failures do not affect the Flask server
+6. **Protocol Servers are Daemon Threads**: They die automatically when the main process exits; failures do not affect the Quart/Hypercorn server
 
 ---
 
@@ -194,13 +205,15 @@ app.py (Flask entry point, routes)
 {
   "version": 1,
   "threshold": 80,
+  "saved_at": 1234567890.5,
+  "dir_count": 1,
   "dirs": {
     "videos": {
       "entry_count": 500,
       "indexed_at": 1234567890.5,
       "entries": [
         {"name": "movie1.mkv", "is_dir": false, "size": 4000000000, "modified": 1234567890},
-        {"name": "subfolder", "is_dir": true, "size": 0, "modified": 1234567890}
+        {"name": "subfolder", "is_dir": true, "size": null, "modified": 1234567890}
       ]
     }
   }
@@ -235,9 +248,47 @@ CREATE TABLE server_token (
 
 **Encryption Layer**: Fernet (AES-128 CBC) with key stored in secret.key
 
+**Table: share_links**
+```sql
+CREATE TABLE share_links (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  token          TEXT    UNIQUE NOT NULL,        -- opaque, used in /shared/<token> URLs
+  file_path      TEXT    NOT NULL,
+  item_name      TEXT    NOT NULL,
+  is_dir         INTEGER NOT NULL DEFAULT 0,
+  created_by     TEXT,
+  created_at     REAL    NOT NULL DEFAULT (unixepoch()),
+  revoked        INTEGER NOT NULL DEFAULT 0,
+  revoked_at     REAL,
+  download_count INTEGER NOT NULL DEFAULT 0,
+  security_mode  TEXT    NOT NULL DEFAULT 'public',  -- 'public' | 'passkey' | 'approval'
+  passkey_hash   TEXT,                            -- bcrypt hash; plaintext passkey is only ever returned once, at creation
+  expires_at     REAL                             -- unix timestamp, NULL = never
+);
+```
+
+**Table: share_access_requests** (approval-mode only)
+```sql
+CREATE TABLE share_access_requests (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  token           TEXT    NOT NULL,               -- FK-ish to share_links.token
+  requester_name  TEXT    NOT NULL,
+  requester_note  TEXT,
+  status          TEXT    NOT NULL DEFAULT 'pending',  -- 'pending' | 'approved' | 'denied'
+  requested_at    REAL    NOT NULL DEFAULT (unixepoch()),
+  decided_at      REAL,
+  decided_by      TEXT,
+  max_downloads   INTEGER,                        -- how many downloads this approval grants
+  downloads_used  INTEGER NOT NULL DEFAULT 0,
+  access_token    TEXT    UNIQUE NOT NULL          -- stored in the visitor's cookie, re-checked on every request
+);
+```
+
 ---
 
-## � Flask Routes & API
+## 🔐 Quart Routes & API
+
+> Migrated from Flask to Quart (ASGI) — same route table below, but every handler is now an `async def` and route-registered the same way (`@app.route(...)`) since Quart mirrors Flask's decorator API. See the Changelog for the full migration writeup.
 
 ### Authentication Routes
 
@@ -437,7 +488,76 @@ CREATE TABLE server_token (
 
 ---
 
-### Search Routes
+### Sharing Routes
+
+Public share links let an unauthenticated visitor view/download a file or folder via an opaque token (`/shared/<token>`), never the real file path. Creation/management routes require a `readwrite` session; the `/shared/*` routes are anonymous by design (two of them — `/shared/<token>/passkey` and `/shared/<token>/request` — are also explicitly `@csrf.exempt`, since an anonymous visitor has no session-tied CSRF token to send).
+
+| Route | Method | Auth | Purpose |
+|-------|--------|------|---------|
+| `/api/share` | POST | readwrite | Create (or return existing) share link for one file/folder, with optional security mode + expiry |
+| `/api/share/settings` | POST | readwrite | Edit an active share's security mode, passkey, or expiry (Manage Shared panel) |
+| `/api/unshare` | POST | readwrite | Revoke the share link for one file/folder, by path |
+| `/api/share/status` | GET | readwrite | Current share state for one path — populates the share modal |
+| `/api/share/bulk` | POST | readwrite | Create or revoke share links for multiple paths at once |
+| `/shared/<token>` | GET | None | Public landing page — download button, passkey form, or approval-request form depending on `security_mode` |
+| `/shared/<token>/passkey` | POST | None | Submit a passkey attempt (`@csrf.exempt`) |
+| `/shared/<token>/request` | POST | None | Submit an approval-mode access request (`@csrf.exempt`) |
+| `/shared/<token>/status` | GET | None | Poll the current status of an access request (used by the auto-polling landing page) |
+| `/shared/<token>/download` | GET | None | Download the shared file, or the whole shared folder as a zip |
+| `/shared/<token>/browse` , `/shared/<token>/browse/<path:subpath>` | GET | None | JSON listing for the in-page folder browser (shared folders only) |
+| `/shared/<token>/download-item/<path:subpath>` | GET | None | Download a single file/subfolder from inside a shared folder |
+| `/shared/<token>/zip` | POST | None | Zip and download a multi-select of items from inside a shared folder |
+| `/admin/shares/count` | GET | readwrite | Count of currently-active share links |
+| `/admin/shares` | GET | readwrite | List of all active share links (Manage Shared → Active Shares) |
+| `/admin/shares/requests` | GET | readwrite | List of pending approval requests |
+| `/admin/shares/requests/stream` | GET | readwrite | SSE stream (realtime_shares.py) — live pending-count + active-shares-changed events |
+| `/admin/shares/requests/<int:request_id>/approve` | POST | readwrite | Approve a pending access request |
+| `/admin/shares/requests/<int:request_id>/deny` | POST | readwrite | Deny a pending access request |
+| `/admin/revoke_all_shares/code` | POST | readwrite | Issue a fresh random 10-digit confirmation code for the "Revoke All" danger-zone action |
+| `/admin/revoke_all_shares` | POST | readwrite | Revoke every active share link — requires the code from the endpoint above, typed back exactly |
+
+**Create Share Request**:
+```json
+{
+  "path": "photos/vacation.jpg",
+  "security_mode": "passkey",
+  "passkey": "",
+  "generate_passkey": true,
+  "expires_at": 1699999999.0
+}
+```
+
+**Create Share Response** (passkey/plain shown only once, at creation):
+```json
+{
+  "success": true,
+  "token": "aB3xQ...",
+  "share_url": "https://cloudinatorftp.win/shared/aB3xQ...",
+  "name": "vacation.jpg",
+  "security_mode": "passkey",
+  "expires_at": 1699999999.0,
+  "passkey": "4821"
+}
+```
+
+**Share Status Response**:
+```json
+{
+  "shared": true,
+  "token": "aB3xQ...",
+  "share_url": "https://cloudinatorftp.win/shared/aB3xQ...",
+  "security_mode": "approval",
+  "has_passkey": false,
+  "expires_at": null,
+  "download_count": 3
+}
+```
+
+Security settings (`security_mode`, `passkey`, `expires_at`) are only accepted on first creation via `/api/share` — to change them on an already-shared item, use `/api/share/settings` instead, which also handles clearing a passkey when switching away from passkey mode (so switching back later doesn't silently revive the old passkey) and validates that a new `expires_at` is in the future.
+
+---
+
+
 
 | Route | Method | Auth | Purpose |
 |-------|--------|------|---------|
@@ -656,19 +776,24 @@ GET /api/search?q=mountain&ext=csv,txt&offset=0&limit=50
 
 ```python
 @app.before_request
-def check_session():
+async def validate_session():
+    # Quart before_request hooks are coroutines — this one was the single
+    # hold-out sync function missed by two earlier migration passes (found
+    # via an AST sweep for sync functions under route-like decorators).
     if request.path.startswith('/api/'):
         # Public endpoints: health_check, speedtest
         if request.path in PUBLIC_ENDPOINTS:
             return None
         # Verify session valid
         if not session.get('logged_in'):
-            return redirect('/login')
+            return _lean_redirect(url_for('login'), code=302)
         # Token rotation check: session['server_token'] must match current DB token
         if session['server_token'] != db.get_server_token():
             session.clear()  # invalidated by logout-all
-            return redirect('/login?reason=session_expired')
+            return _lean_redirect(url_for('login', reason='session_expired'), code=301)
 ```
+
+`_lean_redirect()` is a small helper that returns an empty-body `Response` with just the `Location` header set — Quart's default `redirect()` includes an HTML fallback-link body that's harmless functionally but was large enough to trip a ZAP "Big Redirect Detected" finding on the two 301 redirects inside this hook (see Changelog). `login_required`, elsewhere in app.py, is unrelated and still uses Quart's normal `redirect()` — it defaults to 302 and wasn't what ZAP flagged.
 
 ### Default Credentials (on first boot)
 
@@ -707,6 +832,15 @@ User password (plaintext)
 ```
 
 **Key Storage**: secret.key in db_path (256-bit random, base64 encoded)
+
+### CSRF Protection
+
+`quart-wtf` (the natural Flask-WTF equivalent) turned out unusable here: its only release hard-pins `quart<0.19` → `werkzeug~=2.3`, incompatible with the rest of the ASGI stack. Instead, app.py has a small hand-rolled, session-tied `CSRFProtect` implementation.
+
+- **`GET /csrf-token`**: JSON endpoint returning a fresh token tied to the current session.
+- **Frontend fetch-wrapper** (index.js): auto-refreshes the token and retries once on a 400 CSRF failure, so a stale token (e.g. after a long-idle tab) doesn't surface as a user-facing error.
+- **`/bulk-download`'s real `<form>.submit()` POST** bypasses the fetch wrapper entirely (it's a native form submission, not `fetch()`) — this needed its own explicit fix to include the token.
+- **Anonymous share routes are exempted**: `/shared/<token>/passkey` and `/shared/<token>/request` are decorated `@csrf.exempt` — an anonymous visitor has no session-tied CSRF token to send, and without the exemption every visitor POST 400'd with "CSRF token missing" before ever reaching the database (this was the root cause of an earlier "pending access requests aren't being received" report).
 
 ---
 
@@ -934,7 +1068,10 @@ class StorageStatsEventManager:
 
 **Client-Side SSE Connection** (index.js):
 ```javascript
-const sse = new EventSource('/api/storage_stats_sse')
+const sse = new EventSource('/api/storage_stats_stream')
+// Note: the endpoint is authenticated (session cookie sent automatically by
+// EventSource for same-origin requests) — /api/storage_stats_poll is the
+// fallback used if the stream connection can't be established.
 
 sse.addEventListener('message', (e) => {
   const data = JSON.parse(e.data)
@@ -959,6 +1096,16 @@ sse.addEventListener('error', () => {
 2. **normal**: after watchdog event (stats + optional table refresh)
 3. **reconcile_complete**: walk finished (full UI refresh)
 
+### Server-Sent Events (realtime_shares.py)
+
+Deliberately mirrors `realtime_stats.py`'s `StorageStatsEventManager`/`storage_stats_sse` pattern exactly — same per-client `asyncio.Queue` broadcast model, same `loop.call_soon_threadsafe` cross-thread handoff (the loop reference is captured lazily on first client connect, always on the event-loop thread), same async-generator streaming response — rather than inventing a second approach that behaves differently under the same server.
+
+Two event kinds, both admin-only (served from `/admin/shares/requests/stream`):
+- **`share_requests_update`**: pushed whenever a share request is created/approved/denied — carries the current `pending_count` so the Manage Shared badge redraws instantly. `reason` (`created`/`approved`/`denied`) is informational only.
+- **`active_shares_changed`**: pushed whenever a share is auto-revoked for being past `expires_at` — either the periodic sweep (`start_expired_share_cleanup_scheduler()`, see Startup Order) or a lazy revoke-on-read triggered by an admin or a visitor hitting an expired link. Carries no share data, just a nudge — the client refetches. This is what makes expiry removal in Active Shares not depend on a client-side `setTimeout` (unreliable — mobile browsers throttle/suspend those in backgrounded tabs).
+
+A ~15s ping keeps proxies/load balancers from timing out the idle SSE connection, same as `realtime_stats.py`'s ~10s ping.
+
 ---
 
 ## 🗂️ Directory Listing & Caching
@@ -971,7 +1118,7 @@ sse.addEventListener('error', () => {
 def storage.list_dir(path):
   file_index_manager = _get_file_index_manager()
   
-  if file_index_manager.is_cached(path):
+  if file_index_manager.is_indexed(path):
     # O(1) instant return
     return file_index_manager.get_entries(path)
   
@@ -979,8 +1126,8 @@ def storage.list_dir(path):
   entries = os.scandir(path)  # live filesystem
   
   if len(entries) > 80:
-    file_index_manager.cache_folder(path, entries)
-    file_index.json updated on disk
+    file_index_manager.update_folder(path, abs_path)  # re-scans just this folder, caches if > THRESHOLD
+    file_index.json updated on disk (via save())
   
   return sort_entries(entries)
 ```
@@ -1007,8 +1154,8 @@ for entry in entries:
 watchdog.on_created("photos/vacation.jpg")
   ↓
 _update_dir_info_tree("photos/vacation.jpg")
-  ├─ if file_index.is_cached("photos"):
-  │  └─ file_index.add_entry("photos", "vacation.jpg", size, mtime)
+  ├─ if file_index.is_indexed("photos"):
+  │  └─ file_index.update_folder("photos", abs_path)  # re-scans the whole folder, O(direct entries)
   ├─ Update parent dir_info counters
   └─ Update grandparent dir_info counters (recursive)
 ```
@@ -1018,15 +1165,18 @@ _update_dir_info_tree("photos/vacation.jpg")
 "large_folder" now has 81 entries
   ↓
 on_created("large_folder/newfile.txt")
-  └─ if not is_cached("large_folder") AND count>80:
-     └─ file_index.cache_folder("large_folder")
-        └─ scan all 81 entries, save to file_index.json
+  └─ file_index.update_folder("large_folder", abs_path)
+     └─ re-scans; count > THRESHOLD (80) → added to the index and saved
+        (the reverse also happens: update_folder() evicts a folder from the
+        index once its count drops back to ≤ THRESHOLD)
 ```
 
 **Performance Result**:
 - 1000-file folder: <1ms response (cached)
 - 100-file folder: <50ms response (live scan)
 - Move between folders: incremental index update
+
+**Other lifecycle methods**: `build_from_walk()` builds the entire index in one pass right after `file_monitor`'s initial full walk completes (filters to folders exceeding THRESHOLD, saves once). `remove_folder()` prunes a folder and all its descendants from the index when a directory is deleted. `rename_folder()` migrates every affected key when a folder is renamed/moved, rather than re-scanning from scratch.
 
 ---
 
@@ -1488,7 +1638,7 @@ img_cache_path: /tmp/cloudinator_img     (can recreate)
 
 ### Overview
 
-Four additional servers start alongside the Flask app, launched by `protocol_manager.start_all()` (called from both `dev_server.py` and `prod_server.py` after `from app import app`). All four share the same authentication database (`database.db`) and role system (`readwrite` / `readonly`).
+Four additional servers start alongside the Quart app, launched by `protocol_manager.start_all()` (called from both `dev_server.py` and `prod_server.py` after `from app import app`). All four share the same authentication database (`database.db`) and role system (`readwrite` / `readonly`).
 
 SMB is architecturally different from the other three: it defaults to **disabled** (`SMB_ENABLED = False`) even with `impacket` installed, because port 445 needs a one-time, human-run machine setup (`smb_setup.py`) before it's actually usable — see its own section below.
 
@@ -1497,7 +1647,7 @@ SMB is architecturally different from the other three: it defaults to **disabled
 | File | Purpose |
 |------|---------|
 | `protocol_manager.py` | Imports and starts all four protocol servers; prints startup summary |
-| `webdav_server.py` | wsgidav WSGI app with auth cache, role middleware, HTTP+HTTPS, cert serving |
+| `webdav_server.py` | wsgidav WSGI app with auth cache, role middleware, HTTP+HTTPS, cert serving — bridged onto Hypercorn via `asgiref.WsgiToAsgi` (no longer waitress/cheroot for serving; see Changelog) |
 | `sftp_server.py` | Paramiko SSH accept loop, chrooted SFTPServerInterface |
 | `ftp_server.py` | pyftpdlib with standalone CloudinatorAuthorizer (no Windows LogonUser) |
 | `ssl_cert.py` | Self-signed RSA cert generator; embeds all local IPs as SANs |
@@ -1510,7 +1660,7 @@ SMB is architecturally different from the other three: it defaults to **disabled
 
 | Protocol | Port | Notes |
 |----------|------|-------|
-| Flask web UI | 5000 | Existing, unchanged |
+| Web UI (Quart/Hypercorn) | 5000 | Now also speaks HTTP/2 and HTTP/3, not just HTTP/1.1 |
 | WebDAV HTTP | 8080 | Native drive mapping; requires `BasicAuthLevel=2` registry on Windows |
 | WebDAV HTTPS | 8443 | Preferred; no registry edit; requires importing `db/webdav.crt` once |
 | SFTP | 2222 | WinSCP / FileZilla / sshfs |
@@ -1578,19 +1728,21 @@ Request → _CertMiddleware (serves /webdav.crt unauthenticated)
 
 ### SSL Certificate (ssl_cert.py)
 
-- Generated at `db/webdav.crt` + `db/webdav.key` on first HTTPS server start.
+- Generated at `db/webdav.crt` + `db/webdav.key` on first HTTPS server start. **Note**: this location is not a hardcoded constant — `server_config.json` has no db_dir/cert key of its own; the actual directory comes from `paths.py`'s `get_db_dir()`, which reads `storage_config.json`'s `db_path` (defaulting to `<folder containing paths.py>/db` if unset). `prod_server.py` reuses the same directory for the main Hypercorn HTTPS listener's cert, not just WebDAV's.
 - Self-signed, 10-year validity, RSA-2048, SHA-256.
 - SANs include `localhost` and all detected local IPv4 addresses (ensures cert matches whatever IP the client uses).
 - `CA:TRUE` in BasicConstraints so it can be imported as a Trusted Root CA.
 - Served unauthenticated at `http://HOST:8080/webdav.crt` via `_CertMiddleware`.
 - **Regenerate** after IP change: `python ssl_cert.py --regenerate`.
 
+**Tailscale cert preference (prod_server.py)**: On startup, `prod_server.py` first tries `tailscale cert` to obtain a real, publicly-trusted certificate for the device's `*.ts.net` MagicDNS name, with a 12-hour background renewal loop running for the lifetime of the server. If Tailscale isn't installed, not logged in, or not enabled, it falls back to `ssl_cert.py`'s self-signed cert automatically — no configuration needed either way. This only applies to the certificate `prod_server.py` uses for its own Hypercorn HTTPS listener; `webdav_server.py`'s HTTPS listener still uses `ssl_cert.py`'s cert directly.
+
 ### config.py Protocol Variables
 
 ```python
 WEBDAV_ENABLED       = True   # WebDAV HTTP server
 WEBDAV_PORT          = 8080
-WEBDAV_HTTPS_ENABLED = True   # WebDAV HTTPS server (requires cheroot)
+WEBDAV_HTTPS_ENABLED = True   # WebDAV HTTPS server (TLS terminated by Hypercorn now; cheroot is only a transitive wsgidav dependency, not used for serving)
 WEBDAV_HTTPS_PORT    = 8443
 SFTP_ENABLED         = True
 SFTP_PORT            = 2222
@@ -1608,15 +1760,17 @@ All keys are saved/loaded by `save_server_config()` / `load_server_config()` in 
 
 ```
 wsgidav    — WebDAV WSGI server
-cheroot    — WSGI server with SSL support (for HTTPS WebDAV)
+cheroot    — pulled in transitively by wsgidav; no longer used directly for serving (see below)
+asgiref    — bridges wsgidav's WSGI app onto Hypercorn (WsgiToAsgi)
+hypercorn  — ASGI server for the whole stack (web UI + WebDAV HTTP/HTTPS); replaced waitress
 paramiko   — SSH/SFTP implementation
 pyftpdlib  — FTP server
 impacket   — SMB server
 ```
 
-Install: `pip install wsgidav cheroot paramiko pyftpdlib impacket`
+Install: `pip install wsgidav asgiref hypercorn paramiko pyftpdlib impacket` (`waitress` and the explicit `cheroot` pin were dropped from requirements.txt as part of the Quart/Hypercorn migration — the project is now standardized on Hypercorn for every HTTP-speaking component, including WebDAV, which is served via `asgiref.WsgiToAsgi` bridging wsgidav's WSGI app onto the same Hypercorn Config/thread as `prod_server.py` uses, `bind=` for TLS and `insecure_bind=` for plain HTTP. Known caveat: `WsgiToAsgi` doesn't implement ASGI lifespan, so Hypercorn logs a harmless "continuing without Lifespan support" warning on WebDAV startup.)
 
-Each is imported lazily inside `start()`. If a library is missing, that protocol server prints a warning and skips — the main Flask server is unaffected.
+Each is imported lazily inside `start()`. If a library is missing, that protocol server prints a warning and skips — the main Quart server is unaffected.
 
 ---
 
@@ -1647,13 +1801,22 @@ python reset_db.py
 # Use: database corrupted, security breach, clean slate
 ```
 
-**revoke_session.py** - Logout all users:
+**revoke_session.py** - ⚠️ **Superseded by `kick_sessions.py`** (see its own section below) — kept here for history, but new work should use `kick_sessions.py logout-web` instead, which does the same thing plus per-user rotate/delete and a `kick-all` option:
 ```bash
 python revoke_session.py
 # Rotates server_token in database
 # All sessions invalidated within 5 seconds
 # Use: security incident, force re-login
 ```
+
+**revoke_sharing.py** - Revoke share links from the command line, without the web UI:
+```bash
+python revoke_sharing.py            # interactive menu, loops until Exit
+python revoke_sharing.py list       # list all active shares
+python revoke_sharing.py revoke <token>
+python revoke_sharing.py revoke-all # requires its own typed confirmation (mirrors the web UI's random-10-digit-code flow)
+```
+Also wired into `manage.sh` as a menu option, same convention as the other utility scripts.
 
 **debug_passwords.py** - Test login credentials:
 ```bash
@@ -1679,6 +1842,10 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 | `/admin/cleanup_chunks` | POST | Force orphaned chunk cleanup | readwrite |
 | `/admin/chunk_stats` | GET | Active uploads, queue status | readwrite |
 | `/admin/upload_status` | GET | Per-session assembly status | readwrite |
+| `/admin/shares`, `/admin/shares/count` | GET | List / count active share links | readwrite |
+| `/admin/shares/requests`, `/admin/shares/requests/stream` | GET | Pending share-access requests (list + live SSE) | readwrite |
+| `/admin/shares/requests/<id>/approve`, `/deny` | POST | Decide a pending share-access request | readwrite |
+| `/admin/revoke_all_shares/code`, `/admin/revoke_all_shares` | POST | Danger-zone: revoke every active share (typed-code confirmation) | readwrite |
 
 ### Health & Diagnostic Endpoints
 
@@ -1709,6 +1876,8 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 | WebDAV auth (cache miss) | O(bcrypt) | ~100ms | bcrypt cost factor |
 | SFTP file transfer | O(n) | Sequential reads | paramiko transport |
 | SMB credential refresh | O(n) diff | ~every 30s | Skips unchanged users, no UID churn |
+| Concurrent web UI requests | Single event loop (Hypercorn) | One blocking sync call stalls every user, not just one — see Troubleshooting → Quart/Hypercorn Migration Issues | `asyncio.to_thread` for all heavy sync work |
+| Web UI / WebDAV HTTPS connection | HTTP/1.1, HTTP/2, or HTTP/3 | Client-negotiated, no config needed | Hypercorn ALPN |
 
 ---
 
@@ -1786,6 +1955,47 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 **Cause**: Windows file-locking limitations (`WinError 32`) or an unhandled exception in a rarely-hit SMB2 code path  
 **Fix**: Update to the latest `smb_server.py` — three layered fixes already applied (rename/delete retry, `FILE_SHARE_DELETE` on open, command safety net); if it recurs, set `SMB_DEBUG_FILES=1` for file-lifecycle logging
 
+### Quart/Hypercorn Migration Issues (post-4.0)
+
+**Problem**: `internal error` (500) downloading a shared file, but folder-zip shares work fine  
+**Cause**: Quart's `send_file()`/`send_from_directory()` kept Flask's *older* keyword names (`attachment_filename`, `cache_timeout`) rather than modern Flask's (`download_name`, `max_age`) — an earlier migration pass await-wrapped every `send_file` call but never checked the kwarg names, so 10 call sites (single shared-file download, single-item-from-folder download, every HLS/video/image-cache send) were silently 500ing  
+**Fix**: All 10 call sites updated to `download_name=`/`max_age=`; verify with `inspect.signature(app.send_file)` against actual usage if this class of bug recurs
+
+**Problem**: Login always fails right after a fresh startup, even with correct default credentials  
+**Cause**: Two stacked `database.py` bootstrap races: (1) `_bootstrapped` flag was set *before* schema creation actually ran, and (2) even after fixing that with double-checked locking, `_do_bootstrap()` never called `conn.commit()` — under WAL-mode snapshot isolation, a different thread's brand-new connection opened right after the lock released could query before the bootstrap transaction committed, seeing zero rows despite "Seeded default users" already having printed  
+**Fix**: Double-checked locking around bootstrap + an explicit `conn.commit()` before releasing the bootstrap lock
+
+**Problem**: Everything feels sluggish under load — one slow image preview seems to freeze the whole app for every user, not just the one who requested it  
+**Cause**: Waitress ran each request in its own OS thread, so a blocking call only slowed that one request. Hypercorn runs a single event loop — any synchronous blocking call in a route handler freezes the entire app for every concurrent user until it returns. Real offenders found: `image_preview`'s direct `Event.wait(timeout=60)`/`t.join(timeout=60)` (up to 60s app-wide freeze per conversion — the single biggest culprit), `archive_preview`/`office_preview` running their conversion libraries synchronously in the coroutine body, three `storage.list_dir()` call sites, `bcrypt.checkpw`/`bcrypt.hashpw` on login and passkey verification/creation, and `clear_media_preview`'s cache walk  
+**Fix**: Wrapped each in `asyncio.to_thread` — either at the call site directly, or (for the two large conversion functions) renamed the body to a plain sync helper with a thin async wrapper around it. Quart's request/`jsonify` context-locals do propagate correctly into `asyncio.to_thread` workers via contextvars (verified directly before relying on it). `webdav_server.py` needed no equivalent fix — `asgiref.WsgiToAsgi` already runs each WSGI request, including its own bcrypt auth checks, in its own thread automatically via `@sync_to_async`
+
+**Problem**: Public share access requests never seem to reach the server ("stuck on pending" for a request that was never actually submitted)  
+**Cause**: App-wide `CSRFProtect(app)` wasn't exempting the two anonymous share routes (`/shared/<token>/request`, `/shared/<token>/passkey`) — every visitor POST 400'd with "CSRF token missing" before reaching the database, since an anonymous visitor has no session-tied CSRF token to send  
+**Fix**: `@csrf.exempt` added to both routes
+
+**Problem**: `hypercorn` crashes on startup with a `TypeError`/`AttributeError` around `record.process`, only on Python 3.14  
+**Cause**: Hypercorn's default `errorlog="-"` builds an internal logger with a `%(process)d` formatter; a Python 3.14 logging-module behavior change means `record.process` can come back `None`  
+**Fix**: Pass a pre-built `logging.Logger` via `Config.errorlog` instead of the default string target, so Hypercorn's `_create_logger()` skips its own crashing formatter construction. Applied in both `prod_server.py` and `webdav_server.py`
+
+**Problem**: `Quart<1` (unpinned) resolves an old pre-0.19 Quart on a fresh install, which crashes importing `werkzeug.urls.url_quote` (removed in modern Werkzeug)  
+**Fix**: requirements.txt pins `Quart>=0.21.0,<1`
+
+**Problem**: Ctrl+C doesn't cleanly stop `prod_server.py` on Windows  
+**Cause**: The custom shutdown-trigger signal handler called `loop.add_signal_handler()` unconditionally — Windows' `ProactorEventLoop` never implements it, raising `NotImplementedError`  
+**Fix**: Added the same `try/except → signal.signal()` fallback Hypercorn's own internal code already uses in its no-`shutdown_trigger` path
+
+**Problem**: ZAP scan flags "Big Redirect Detected" on the site's root 301  
+**Cause**: Quart's default `redirect()` includes an HTML fallback-link body, which pushed the two 301s inside `validate_session`'s `before_request` hook past ZAP's size heuristic  
+**Fix**: `_lean_redirect()` helper — empty-body `Response`, explicit status code, same `Location` header — used in those two call sites only (not `login_required`, which is unrelated and defaults to 302)
+
+**Problem**: ZAP Attack Mode flags a High-confidence-Low Path Traversal on `GET /static//...`  
+**Cause**: False positive — the double-slash probe didn't match Quart's built-in `/static/<filename>` route, fell through to the login-gated catch-all `@app.route("/<path:path>")` (`index()`), which redirected to `/login` and returned 200, indistinguishable from a real page to the scanner. `index()` already runs `storage.is_safe_path()`/`is_valid_path()` before touching disk, same guard as everywhere else in the app  
+**Fix (defense in depth, not because the traversal was real)**: early `if path == "static" or path.startswith("static/"): abort(404)` in `index()` so malformed `/static/*` requests get a clean 404 instead of falling into the authenticated catch-all
+
+**Problem**: Custom 404 page's "Go Back" button (and its 10-second auto-redirect-home) silently does nothing  
+**Cause**: The `<script src="...404.js">` tag's hardcoded `integrity` (SRI) hash was stale — didn't match 404.js's actual current content — so browsers silently refused to execute the script at all under the site's `script-src 'self'` CSP (no `unsafe-inline`)  
+**Fix**: Recomputed and updated the SRI hash. The "Go Back" button was later removed from the 404 page entirely (design decision, not a further bug) — `history.back()` was a no-op anyway for a visitor with no prior page in that tab's session history, and "Go Home" already covers that case
+
 ### Edge Cases Handled
 
 1. **Symlinks**: Followed by default (can disable with follow_symlinks=False)
@@ -1798,7 +2008,7 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 8. **Database corruption**: reset_db.py for clean slate
 9. **Power loss during assembly**: Marker files (.assembling) protect against partial writes
 10. **Deleted user mid-request**: Session invalidated, redirect to /login
-11. **Protocol server dependency missing**: Graceful skip with install hint; Flask unaffected
+11. **Protocol server dependency missing**: Graceful skip with install hint; Quart unaffected
 12. **WebDAV client re-auth on every request**: _AuthCache prevents repeated bcrypt calls
 13. **SFTP host key regenerated**: All clients see host-key-changed warning (expected)
 14. **FTP passive port range**: Must match firewall rules; default 60000-60100
@@ -1856,7 +2066,7 @@ Works at the database level only — it's a separate process, same constraint `c
 5. Use watchdog incremental over full walks
 
 **When Debugging**:
-1. Enable FLASK_DEBUG=1
+1. Enable `QUART_DEBUG=1` (dev_server.py sets this automatically; the old `FLASK_DEBUG` env var has no effect post-migration)
 2. Check app.py DEBUG_ROUTES (if defined)
 3. Use debug_passwords.py for auth issues
 4. Monitor /api/health_check endpoint
@@ -1875,7 +2085,7 @@ Works at the database level only — it's a separate process, same constraint `c
 - **Linux Deployment**: docs/LINUX_DEPLOYMENT.md
 - **Windows Deployment**: docs/WINDOWS_DEPLOYMENT.md
 - **Android/Termux Deployment**: docs/ANDROID_DEPLOYMENT.md
-- **Apache WSGI Production**: docs/DEPLOY_APACHE.md
+- **Apache WSGI Production**: docs/DEPLOY_APACHE.md (⚠️ predates the Quart/ASGI migration — mod_wsgi only runs WSGI apps and cannot serve an ASGI app like the current Quart/Hypercorn stack; needs a rewrite around a reverse proxy in front of `prod_server.py`, or an ASGI-capable Apache module, before it's trustworthy again)
 - **Cloudflare Tunnel Setup**: docs/SETUP_TUNNEL_ADVANCED.md
 - **rclone Integration**: docs/RCLONE_DEPLOYMENT.md
 - **SMB Protocol Setup**: docs/SMB_PROTOCOL_DEPLOYMENT.md
@@ -1884,6 +2094,72 @@ Works at the database level only — it's a separate process, same constraint `c
 ---
 
 ## 📝 Changelog
+
+### Version 4.2 (2026-08-18)
+
+#### ZAP Security Scan Fixes
+
+- **`app.py`**: `_lean_redirect()` helper added and used in `validate_session`'s two 301 redirects, fixing a ZAP "Big Redirect Detected" false-positive caused by Quart's default `redirect()` HTML fallback body
+- **`app.py`**: `index()` (the login-gated catch-all route) now returns an early 404 for any `/static/*`-shaped path that didn't match the real `/static/<filename>` route, closing off a ZAP "Path Traversal" false-positive (confirmed not a real traversal risk — `index()` already runs `storage.is_safe_path()`/`is_valid_path()` before touching disk)
+- No app-side fix needed for the Medium/Low findings on `static.cloudflareinsights.com`, `edgeupdates.microsoft.com`, or the stale `/robots.txt`/`/sitemap.xml` headers — all third-party or a Cloudflare edge-cache staleness issue, not an app bug (cache purge + "Always Use HTTPS" are Cloudflare-dashboard-side fixes)
+
+#### 404 Page Fix
+
+- **`404.html`**: corrected the stale SRI `integrity` hash on the `404.js` `<script>` tag, which was silently blocking the script (and both the "Go Back" button and the 10-second auto-redirect) under the site's `script-src 'self'` CSP
+- **`404.html` / `404.js`**: "Go Back" button subsequently removed entirely (design decision) — `history.back()` was a no-op for direct-link visitors anyway; "Go Home" already covers that case
+
+### Version 4.1 — Tailscale Certificates
+
+- **Updated: `prod_server.py`**
+  - Tries `tailscale cert` first for a real trusted certificate on the device's `*.ts.net` MagicDNS name, with a 12-hour background renewal loop for the life of the server
+  - Falls back to `ssl_cert.py`'s self-signed certificate automatically if Tailscale isn't installed/logged in/enabled — no configuration needed either way
+  - `webdav_server.py`'s own HTTPS listener is unaffected — it still uses `ssl_cert.py` directly
+
+### Version 4.0 — Flask/Waitress → Quart/Hypercorn (ASGI) Migration
+
+This is the largest architectural change in the project's history: every HTTP-speaking component moved from WSGI (Flask + Waitress) to ASGI (Quart + Hypercorn), adding native HTTP/2 and HTTP/3 support.
+
+- **Updated: `app.py`, `auth.py`, `realtime_stats.py`, `realtime_shares.py`, `dev_server.py`, `prod_server.py`, `requirements.txt`**
+  - Every route handler and `before_request`/`after_request` hook converted to `async def`; `render_template`/`render_template_string`/`make_response`/`flash`/`send_file`/`send_from_directory`/`request.form`/`.files`/`.get_json` are all coroutines in Quart and are now awaited throughout
+  - `validate_session` (the session-check `before_request` hook) was the one hold-out sync function missed by two earlier conversion passes — found via an AST sweep for sync functions under route-like decorators, then fixed; a second AST sweep afterward confirmed zero remaining
+  - `send_file`/`send_from_directory` kwarg mismatch fixed: Quart kept Flask's *older* names (`attachment_filename`, `cache_timeout`) rather than modern Flask's (`download_name`, `max_age`) — 10 call sites were silently 500ing (see Troubleshooting) until fixed
+  - `quart-wtf` (only release: hard-pins `quart<0.19` → `werkzeug~=2.3`, incompatible with the rest of the stack) replaced with a small hand-rolled, session-tied `CSRFProtect` in `app.py`, plus a `/csrf-token` endpoint and a frontend auto-refresh-and-retry-once wrapper
+  - `quart-cors`'s `allow_origin` can't express regex-based origin matching either — replaced with a manual `after_request` CORS hook
+  - Blocking-call audit (Hypercorn's single event loop means one blocking call freezes the app for *every* concurrent user, unlike Waitress's thread-per-request model): `image_preview`'s `Event.wait(timeout=60)`/`t.join(timeout=60)`, `archive_preview`/`office_preview`'s synchronous conversion bodies, 3 `storage.list_dir()` call sites, `bcrypt.checkpw`/`hashpw` on login and share-passkey verify/creation, and `clear_media_preview`'s cache walk — all wrapped in `asyncio.to_thread` (verified Quart's context-locals propagate correctly into `to_thread` workers via contextvars first)
+  - `Config.keep_alive_max_requests=0` does **not** mean unlimited in Hypercorn — h2 closes the connection once `keep_alive_requests > max`, silently GOAWAY-ing every HTTP/2 connection after its first request; left at Hypercorn's own default (1000) instead
+  - Hypercorn's default `errorlog="-"` crashes on Python 3.14 (a `%(process)d` formatter hitting a `None` `record.process`, a stdlib logging-module behavior change) — fixed by passing a pre-built `logging.Logger` via `Config.errorlog` in both `prod_server.py` and `webdav_server.py`
+  - `requirements.txt` pins `Quart>=0.21.0,<1` (a bare `Quart<1` can resolve a pre-0.19 release that still imports `werkzeug.urls.url_quote`, removed in modern Werkzeug — hit in the user's actual Windows/Python 3.14 production deploy)
+  - `prod_server.py`'s custom Ctrl+C signal handler now falls back to `signal.signal()` when `loop.add_signal_handler()` raises `NotImplementedError` (Windows' `ProactorEventLoop` never implements it) — mirrors the fallback Hypercorn's own internal code already uses
+  - The independently-built CSRF hotfix (`/csrf-token` endpoint, fetch-wrapper auto-refresh-and-retry, and a fix for `/bulk-download`'s real `<form>.submit()` POST bypassing the fetch wrapper) was ported into the migrated `app.py` — `index.js` needed no changes
+
+- **Updated: `database.py`**
+  - Two real, pre-existing (not migration-caused) thread-safety bugs found and fixed during verification: `_bootstrapped` was set before schema creation actually ran (fixed with double-checked locking), and even after that, `_do_bootstrap()` never called `conn.commit()`, so a different thread's connection could see zero rows under WAL-mode snapshot isolation despite bootstrap having "completed" — fixed by committing before releasing the bootstrap lock. This was the actual root cause of a 100%-reproducible fresh-startup login failure
+
+- **Rewritten: `webdav_server.py`**
+  - `wsgidav` is WSGI-only; rather than keep a separate waitress/cheroot stack just for WebDAV, it's now bridged onto Hypercorn via `asgiref.WsgiToAsgi`, serving both HTTP and HTTPS from one Hypercorn Config/thread (`bind=` for TLS, `insecure_bind=` for plain HTTP — same pattern `prod_server.py` uses)
+  - `requirements.txt` drops `waitress` and the explicit `cheroot` pin (cheroot still arrives transitively via wsgidav); adds `asgiref`
+  - Known caveat: `WsgiToAsgi` doesn't implement ASGI lifespan, so Hypercorn logs a harmless "continuing without Lifespan support" warning on WebDAV startup
+  - `sftp_server.py`, `ftp_server.py`, `smb_server.py`, `smb_setup.py`, `protocol_manager.py` needed **no** changes — all thread-based, only touching `app.py` via the sync `get_local_ip()` helper
+
+- **Unchanged**: `index.js` (pure frontend, no Flask/Quart-specific code) beyond what the independent CSRF hotfix already required
+
+### Version 3.5 — Share Links
+
+Public, opaque-token share links per file/folder, with a "Manage Shared" admin panel.
+
+- **New routes in `app.py`**: `/api/share`, `/api/share/settings`, `/api/unshare`, `/api/share/status`, `/api/share/bulk`, `/shared/<token>` (+ `/passkey`, `/request`, `/status`, `/download`, `/browse`, `/download-item/<subpath>`, `/zip`), `/admin/shares*`, `/admin/revoke_all_shares*` — see [Sharing Routes](#sharing-routes) for the full table
+- **New tables in `database.py`**: `share_links` (token, path, security_mode, passkey_hash, expires_at, download_count) and `share_access_requests` (approval-mode requests, access_token cookie, max/used downloads)
+- **New file: `revoke_sharing.py`** — CLI + interactive menu for listing/revoking share tokens independent of the web UI; wired into `manage.sh`
+- **New file: `realtime_shares.py`** — SSE for the Manage Shared panel's pending-request badge and active-shares-changed nudges, mirroring `realtime_stats.py`'s pattern
+- **Frontend**: share button in the file-table action column, share modal (protection level, expiry, copy link), bulk share/unshare in the bulk-actions bar, Manage Shared panel (Active Shares / Pending Requests / Revoke All with a fresh-random-10-digit-code confirmation), `shared.html`/`shared.js`/`shared.css` for the public landing page including an in-page folder browser for shared folders
+- **Security fix during rollout**: the two anonymous share routes (`/shared/<token>/passkey`, `/shared/<token>/request`) needed explicit `@csrf.exempt` — the app-wide `CSRFProtect` was 400ing every anonymous visitor POST before it reached the database, which looked like "pending requests aren't being received" until traced
+
+### Version 3.4 (2026-07-28)
+
+- Web UI logout now goes through a client-side entrypoint that still calls the server-side `/logout` handler for session cleanup and cookie invalidation
+- Real-time storage stats moved to the authenticated SSE endpoint `/api/storage_stats_stream`, with `/api/storage_stats_poll` as a fallback
+- `manage.sh` now suppresses Ctrl-C while a nested utility script runs, so the shell wrapper stays in control instead of exiting prematurely
+- Additional SMB Windows-specific save/delete compatibility fixes for Office-style file writes and transient lock handling
 
 ### Version 3.3 (2026-07-10)
 
@@ -2005,5 +2281,5 @@ Works at the database level only — it's a separate process, same constraint `c
 
 ---
 
-**Last Updated**: 2026-07-10  
+**Last Updated**: 2026-08-22  
 **For Questions**: Refer to source code comments marked with `###` or `# --`
