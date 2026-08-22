@@ -1,9 +1,11 @@
 # CloudinatorFTP User Guide
 
-**Version**: 1.1 | **Last Updated**: 2026-06-18  
+**Version**: 1.2 | **Last Updated**: 2026-08-22  
 **For**: End users accessing the web file manager
 
 Welcome to **The Cloudinator** — a lightweight, secure file sharing platform that works across Windows, Linux, and Android (Termux).
+
+> 🆕 **What's new in 1.2**: Public **Share Links** (Section 8) — send anyone a link to a file or folder without giving them a login, optionally protected by a passkey or admin approval, with expiry and download limits. The server itself was also migrated from Flask/Waitress to **Quart/Hypercorn**, adding **HTTP/2 and HTTP/3** support for the web UI and WebDAV HTTPS — nothing changes in how you use the app, but pages and downloads may feel snappier on modern browsers.
 
 ---
 
@@ -16,12 +18,13 @@ Welcome to **The Cloudinator** — a lightweight, secure file sharing platform t
 5. [Uploading Files](#uploading-files)
 6. [Downloading Files](#downloading-files)
 7. [Advanced Search](#advanced-search)
-8. [File Operations](#file-operations)
-9. [Bulk Operations](#bulk-operations)
-10. [Media Preview](#media-preview)
-11. [Protocol Access — FTP, SFTP, WebDAV, SMB](#protocol-access--ftp-sftp-webdav)
-12. [Tips & Tricks](#tips--tricks)
-13. [Troubleshooting](#troubleshooting)
+8. [Sharing Files Publicly (Share Links)](#sharing-files-publicly-share-links)
+9. [File Operations](#file-operations)
+10. [Bulk Operations](#bulk-operations)
+11. [Media Preview](#media-preview)
+12. [Protocol Access — FTP, SFTP, WebDAV, SMB](#protocol-access--ftp-sftp-webdav)
+13. [Tips & Tricks](#tips--tricks)
+14. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -71,9 +74,10 @@ Sessions can end for two reasons:
    - Configured in `config.py`: `PERMANENT_SESSION_LIFETIME = 3600`
    - Adjust as needed for your use case
 
-2. **Token Revoked**: You ran `python revoke_session.py`
-   - Instantly logs out all connected users
-   - Useful for security or testing
+2. **Token Revoked**: An admin ran `python kick_sessions.py` (this replaced the older `revoke_session.py` script)
+   - `kick-all` logs out every connected user within a few seconds
+   - `logout-web` logs out only the web UI, leaving WebDAV/SFTP/FTP/SMB sessions alone
+   - Also used to instantly revoke one user (`rotate`/`delete`) — useful for security incidents or testing
 
 ### Browser History
 
@@ -303,6 +307,76 @@ Finds PDFs with "report" in the name.
 | `*.py,java,cpp` | Python, Java, C++ source files |
 | `contract *.pdf,doc` | PDF or DOC files with "contract" |
 | `*.mp4` | All MP4 videos in entire storage |
+
+---
+
+## Sharing Files Publicly (Share Links)
+
+Share Links let you send someone a file or folder without giving them a Cloudinator login. Anyone with the link can view/download it in their browser at `https://YOUR-SERVER/shared/<token>` — the link uses a random opaque token, never the real file path, so it doesn't reveal anything about your folder structure.
+
+**Note**: Only **readwrite** (admin) users can create or manage shares. Readonly users don't see the share button.
+
+### Creating a Share
+
+1. Hover over a file or folder row (or tap on mobile)
+2. Click the **🔗 share** button in the Actions column
+3. The **Share** modal opens — choose your protection level (see below), then click **Create Link**
+4. The link appears in the modal with a **Copy Link** button
+
+### Protection Levels
+
+| Mode | Behavior |
+|------|----------|
+| **Public** | Anyone with the link can view/download immediately — no extra step |
+| **Passkey** | Visitors must enter a PIN/passphrase before the download unlocks. Set your own passkey, or let Cloudinator generate a random one. The passkey is shown to you **once**, at creation — copy it down, it can't be viewed again (only regenerated) |
+| **Approval** | Visitors submit their name (and an optional note) and wait for you to approve the request from the **Manage Shared** panel. You choose how many downloads each approval allows before it locks again |
+
+### Expiry
+
+Every share can optionally expire:
+- Pick a **preset** (e.g. 1 hour, 1 day, 7 days) or set a **custom date/time**
+- Leave it unset for a link that never expires
+- Once a link expires, visitors see "Link Not Available" — the same message shown for a revoked link
+
+### Sharing a Folder
+
+If you share a folder, visitors get a built-in **folder browser** on the landing page (once unlocked) — they can navigate into subfolders, download individual files, or check multiple items and **Download Selected** as a zip, without needing to download the entire folder at once. A top-level **Download All (.zip)** button is always available too.
+
+### Bulk Share / Unshare
+
+From the bulk-actions bar (select files with checkboxes first):
+1. Click **Share Selected** to create links for every selected item at once (same protection-level options apply to all of them)
+2. Click **Unshare Selected** to revoke links for every selected item at once
+
+### Managing Active Shares — "Manage Shared" Panel
+
+Click **Manage Shared** (readwrite users only) to open a panel with three tabs:
+
+| Tab | Shows |
+|-----|-------|
+| **Active Shares** | Every currently-live share link — edit its protection level, passkey, or expiry, copy the link again, or revoke it individually |
+| **Pending Requests** | Approval-mode requests waiting on a decision — **Approve** or **Deny** each one. A badge on the Manage Shared button shows the live pending count and updates automatically (no need to refresh) |
+| **Revoke All** | Danger zone — instantly revokes **every** active share link at once |
+
+**Revoke All confirmation**: To prevent an accidental click from nuking every link, this button requires you to type a random 10-digit code shown on screen (a fresh one every attempt) before it proceeds.
+
+### Revoking a Single Share
+
+From the file table: open the share modal for that item again and click **Revoke**. From Manage Shared → Active Shares: click **Revoke** next to that entry.
+
+### Command-Line Revocation (revoke_sharing.py)
+
+For scripting or when you don't want to use the web UI:
+```bash
+python revoke_sharing.py            # interactive menu (loops until Exit)
+python revoke_sharing.py list       # list all active shares
+python revoke_sharing.py revoke <token>
+python revoke_sharing.py revoke-all # requires its own typed confirmation
+```
+
+### What the Visitor Sees
+
+A visitor who opens a share link with no protection sees the item name, size, and a **Download** button immediately. A passkey-protected link shows a PIN entry field first. An approval-gated link shows a **Request Access** form; after submitting, the page automatically polls and updates itself once you approve or deny — the visitor doesn't need to keep refreshing.
 
 ---
 
@@ -575,6 +649,8 @@ Click the **☐** checkbox in the table header again to deselect all.
 In addition to the web UI, CloudinatorFTP runs four additional protocol servers. These use the **same username and password** as the web interface — no separate credentials needed. SMB is the one exception — it's off by default until a one-time setup is run (see below).
 
 > 💡 **These are optional extras.** The web UI at `http://SERVER:5000` always works regardless of these protocols.
+
+> 🆕 The web UI and WebDAV HTTPS now run on **Hypercorn**, which speaks **HTTP/2** and **HTTP/3** in addition to HTTP/1.1 — modern browsers and WebDAV clients pick these up automatically, no configuration needed. If the server is running on a [Tailscale](https://tailscale.com) network, it will automatically request a real trusted certificate for the device's `*.ts.net` name instead of the self-signed one below (falling back to self-signed if Tailscale isn't installed/logged in) — so on a Tailscale machine you can usually skip the certificate-import steps entirely.
 
 ### Port Reference
 
@@ -896,7 +972,7 @@ Watch **"Orphaned chunks"** stat (shows incomplete uploads):
 **Workaround**:
 - Reduce `CHUNK_SIZE` in `config.py` (e.g., 5 MB instead of 10 MB)
 - Check internet connection stability
-- Increase timeout in Flask config if needed
+- Increase timeout in Quart/Hypercorn config if needed
 
 ---
 
@@ -1010,6 +1086,25 @@ python create_user.py
 
 ---
 
+#### Issue: "Link Not Available" on a Share Link
+
+**Cause**: The link expired, was individually revoked, or an admin used **Revoke All** in Manage Shared
+
+**Solution**: Ask the file owner to create a new share link — there's no way to recover the old one, it's gone by design once revoked/expired.
+
+---
+
+#### Issue: Share Request Stuck on "Waiting for Approval"
+
+**Cause**: No admin has approved or denied it yet, or the browser tab lost its polling connection
+
+**Solution**:
+1. Ask the file owner to check **Manage Shared → Pending Requests**
+2. If it's not listed there, the request may not have reached the server — try requesting access again
+3. Refreshing the page re-checks the current status immediately
+
+---
+
 #### Issue: WebDAV Drive Shows "Inaccessible" on Windows
 
 **Cause**: WebClient service not started, or BasicAuthLevel not set
@@ -1081,6 +1176,8 @@ On Windows, restart the machine afterward (use **Restart**, not Shut Down) — p
 | Regenerate WebDAV cert | `python ssl_cert.py --regenerate` |
 | Set up SMB (port 445) | `python smb_setup.py` |
 | Lock someone out quickly | `python kick_sessions.py` |
+| Revoke a share link (or all of them) | `python revoke_sharing.py` |
+| See who has active share links | `curl http://localhost:5000/admin/shares` (readwrite session required) |
 
 ---
 
@@ -1107,19 +1204,21 @@ On Windows, restart the machine afterward (use **Restart**, not Shut Down) — p
 
 **A:** Multiple approaches:
 
-1. **Same Server**: Create additional user accounts
+1. **Share Link (no login needed)**: Click the **🔗 share** button on any file/folder to generate a public link — optionally protected with a passkey or admin approval, with an expiry. See [Sharing Files Publicly](#sharing-files-publicly-share-links). This is the fastest option for sharing with people who shouldn't have a full account.
+
+2. **Same Server**: Create additional user accounts
    ```bash
    python create_user.py  # Add new user
    ```
    They can then browse and download shared files.
 
-2. **Different Server**: Create second instance on different port
+3. **Different Server**: Create second instance on different port
    ```bash
    # In config.py, change PORT to 5001
    python prod_server.py
    ```
 
-3. **Public URL**: Set up Cloudflare Tunnel (see `docs/SETUP_TUNNEL_ADVANCED.md`)
+4. **Public URL**: Set up Cloudflare Tunnel (see `docs/SETUP_TUNNEL_ADVANCED.md`)
    - Expose to internet with custom domain
 
 ### Q: What file types are supported?
@@ -1245,6 +1344,7 @@ You now know how to:
 ✅ Upload files (single, multiple, drag-drop)  
 ✅ Download files individually or as ZIP  
 ✅ Use advanced search with extension filters  
+✅ Share files/folders publicly via a Share Link (passkey, approval, or expiry)  
 ✅ Preview media and documents  
 ✅ Perform bulk operations  
 ✅ Connect via WebDAV as a mapped drive  
@@ -1268,9 +1368,9 @@ You now know how to:
 - `docs/WINDOWS_DEPLOYMENT.md` — Windows setup
 - `docs/LINUX_DEPLOYMENT.md` — Linux/systemd setup
 - `docs/ANDROID_DEPLOYMENT.md` — Android/Termux setup
-- `docs/DEPLOY_APACHE.md` — Apache/mod_wsgi production
+- `docs/DEPLOY_APACHE.md` — Apache/mod_wsgi production (⚠️ predates the Quart/ASGI migration — mod_wsgi only runs WSGI apps, so this guide needs a review/rewrite before relying on it; use `prod_server.py` directly or a reverse proxy in front of it in the meantime)
 - `docs/SETUP_TUNNEL_ADVANCED.md` — Cloudflare Tunnel setup
 - `docs/RCLONE_DEPLOYMENT.md` — rclone sync & mount
 - `docs/SMB_PROTOCOL_DEPLOYMENT.md` — SMB one-time setup, per platform
 
-**Last Updated**: 2026-06-18
+**Last Updated**: 2026-08-22
