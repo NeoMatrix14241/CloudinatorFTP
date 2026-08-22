@@ -207,6 +207,31 @@ TLS 1.3: On
 Automatic HTTPS Rewrites: On
 Certificate Transparency Monitoring: On
 
+Security > Security rules
+Custom rules > Create rule
+Rule name: AllowMyCountryOnly
+When incoming requests match...:
+Edit expression > '(ip.src.country ne "<country code>")'
+
+Security > Security rules
+Custom rules > Create rule
+Rule name: AllowWebSecScanners
+When incoming requests match...: (ip.src.asnum eq 14618 or ip.src.asnum eq 396982 or ip.src.asnum eq 16509 or ip.src.asnum eq 60068)
+Note: This will allow web based scanners such as sitesecurityscore, securityheaders, mozilla http observatory report, and securemonk.io
+
+Security > Security rules
+Rate limiting rules > Create rule
+Rule name: LoginRateLimiter
+When incoming requests match...:
+Edit expression: http.request.uri.path eq "/login" and http.request.method eq "POST"
+With the same characteristics... > IP
+When rate exceeds...:
+Requests: 2
+Period: 10 seconds
+Then take action... > Choose action > Block
+For duration... > Duration > 10 seconds
+Status > Active
+
 Security > Settings
 AI Labyrinth: On
 Block AI bots: Mixed purpose crawles will be blocked / Configurations: Blocks AI Bots scope: Block on all pages
