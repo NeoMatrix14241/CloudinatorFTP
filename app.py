@@ -908,6 +908,7 @@ async def validate_session():
         "login",
         "static",
         "robots_txt",
+        "security_txt",
         "sitemap_xml",
         "shared_download",
         "shared_file_download",
