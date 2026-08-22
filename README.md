@@ -139,6 +139,12 @@ python setup_storage.py
 python config.py
 ```
 
+**Update security.txt (Important for tunneling else optional up to you)**
+```
+# use your own details
+static\.well-known\security.txt
+```
+
 #### 5. 👥 Setup Users (Optional)
 
 **Default Users** (created automatically):
