@@ -949,16 +949,25 @@ async def validate_session():
     # and refreshed on every request via SESSION_REFRESH_EACH_REQUEST=True.
 
 
+# Route to robots.txt
 @app.route("/robots.txt")
 async def robots_txt():
-    return await send_from_directory(app.static_folder, "robots.txt")
+    response = await send_from_directory(app.static_folder, 'robots.txt', mimetype='text/plain')
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
+
+
+# Route to security.txt for search engine crawlers and security researchers
+@app.route('/.well-known/security.txt')
+async def security_txt():
+    response = await send_from_directory(app.static_folder, '.well-known/security.txt', mimetype='text/plain')
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
 
 
 # No sitemap — this app intentionally isn't meant to be crawled/indexed.
-# Without this route, /sitemap.xml falls through to the login-gated
-# catch-all route (index()) and 301s anonymous requests to /login instead
-# of a clean 404, same class of issue robots.txt had before it was
-# exempted above.
 @app.route("/sitemap.xml")
 async def sitemap_xml():
     abort(404)

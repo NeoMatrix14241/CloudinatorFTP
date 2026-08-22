@@ -1,0 +1,4 @@
+Contact: mailto:youremail@mail.com
+Expires: 2030-09-03T23:00:00.000Z
+Preferred-Languages: en, fil
+Canonical: https://yourdomain.com/.well-known/security.txt
