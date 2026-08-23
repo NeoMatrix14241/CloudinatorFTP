@@ -1,6 +1,6 @@
 # CloudinatorFTP — Complete Codebase Reference for AI-Assisted Development
 
-**Version**: 4.3 | **Last Updated**: 2026-08-22  
+**Version**: 4.3 (+ 2026-08-23 route-sync notes) | **Last Updated**: 2026-08-23  
 **For**: AI assistants and developers modifying/extending CloudinatorFTP
 
 **Recent updates (2026-07-28)**:
@@ -10,6 +10,8 @@
 - SMB server hardening now includes additional Windows-specific save/delete compatibility fixes for Office-style file writes and transient lock handling.
 
 **⚠️ Major update since the above (see the Changelog for full detail)**: The server was migrated **from Flask (WSGI) + Waitress to Quart (ASGI) + Hypercorn**, adding native HTTP/2 and HTTP/3 support across the web UI and WebDAV HTTPS. A full public **Share Links** feature was also added (opaque-token links, passkey/approval protection, expiry, bulk share/unshare, a "Manage Shared" admin panel, `revoke_sharing.py` CLI). Anywhere below that still says "Flask" is describing the pre-migration behavior/history — the live server is Quart/Hypercorn. See the [Sharing Routes](#sharing-routes) and Changelog sections for details.
+
+**🆕 2026-08-23 sync note**: `app.py` and `index.js` were diffed against this doc and found to have drifted further than the sections below reflect — mostly route-path renames and a batch of new endpoints that were never written up. Rather than rewrite the tables below (which still have useful response-shape examples), corrections and additions live in a new **[Route Path Corrections & New Endpoints (2026-08-23)](#route-path-corrections--new-endpoints-2026-08-23)** section right after the original "Quart Routes & API" section, and in the updated JS function list under Quick Reference. Treat that new section as authoritative for *paths*; treat the older tables as authoritative for general request/response shape except where the new section says otherwise.
 
 ---
 
@@ -102,6 +104,17 @@
 - **static/js/index.js**: `initTapTooltips()`, `lockTableColumnWidths()`, `smartTableColumnizer()`, `searchTable()`, `performDeepSearch()`, `navigateToFolder()`, `loadStorageStats()`, `updateStorageDisplay()`, `addToUploadQueue()`, `cancelUpload()`, `openFileViewer()`, and `closeFileViewer()`.
 - **static/js/login.js**: `isComingFromLogout()`, `checkAuthenticationStatus()`, and `checkAndRedirectIfLoggedIn()`.
 - **static/js/404.js**: the redirect countdown logic used by the custom 404 page.
+
+**🆕 Additional index.js functions confirmed present as of 2026-08-23** (not previously listed here — this is additive, the four functions above are still accurate, just incomplete):
+  - Upload queue / conflict handling: `_buildConflictDialog()`, `_promptOverwrite()`, `_promptFolderConflict()`, `_promptMoveOrCopyConflicts()`, `_findFreeName()`, `cleanupUnfinishedChunks()`, `cleanupSingleFile()`, `_spawnFileWorkersIfNeeded()`, `_runFileWorker()`, `_spawnFolderWorkersIfNeeded()`, `_runFolderWorker()`, `startBatchUpload()`, `startParallelUploads()`, `startSequentialUploads()`, `xhrUpload()`, `uploadSingleFile()`, `_resumeStalledUploads()`, `_startSessionKeepAlive()` — this whole conflict-prompt cluster talks to `/api/check_conflicts` and `/api/exists`, neither of which was in the routes table before this sync (see the new routes section below).
+  - Folder upload grouping: `_registerFolderGroup()`, `_scanSizeChunked()`, `_uploadFolderGroupLazy()`, `_maybeFinalizeGroup()`, `_finalizeGroupCleanup()`, `_cancelFolderGroup()`, `_stopFolderGroup()`, `_folderRowContent()`, `_createFolderGroupRow()`, `_updateGroupRowInPlace()`.
+  - Image preview/zoom: `_imgStartPreview()` (drives `/image_preview/<path>` + polls `/image_preview_status/<cache_key>`), `_initImageZoom()`, `_handleImgConvError()`.
+  - HLS video preview: `_hlsSkip()`, plus the HLS mount logic around `_mountHlsPlayer()` (talks to `/hls_start/<path>`, `/hls_status/<cache_key>`, and streams from `/hls_files/<cache_key>/...` — see corrected routes below).
+  - Office preview rendering: `_renderOfficePreview()`.
+  - Deep search / infinite scroll: `_dsAttachSentinel()`, `_dsAdvance()`, `_dsFetchNextPage()`, `_dsUpdateCount()`, `_parseSearchQuery()`, `displayDeepSearchResults()`, `createSearchResultsHeaderDiv()`, `createSearchResultRow()`.
+  - Move/copy folder browser modal: `showMoveModal()`, `showCopyModal()`, `initializeFolderBrowser()`, `loadFolderContents()`, `displayFolders()`, `navigateFolderBrowser()`, `createNewFolderInBrowser()`.
+  - Selection/rename UI: `toggleSelectAll()`, `updateSelection()`, `initializeRenameButtonVisibility()`, `clearSelection()`, `_populateSelectedItemsVT()` (virtualized selected-items list).
+  - `refreshFileTable()`, `handleDeleteClick()` — table refresh after mutating ops instead of a full page reload.
 
 This section is intentionally high-level: the detailed route behavior, storage logic, and protocol-specific implementation notes are covered elsewhere in this guide.
 
@@ -724,6 +737,18 @@ GET /api/search?q=mountain&ext=csv,txt&offset=0&limit=50
 }
 ```
 
+**🆕 Actual current `/api/health_check` response (2026-08-23)** — the shape above no longer matches `health_check()` in app.py; it now returns:
+```json
+{
+  "status": "ok",
+  "platform": "posix",
+  "has_statvfs": true,
+  "root_dir": "/path/to/storage",
+  "timestamp": 1693324800.5
+}
+```
+No `version`/`database`/`file_monitor`/`search_index` fields anymore — it's a lighter-weight liveness check, not a component-status check.
+
 **Speedtest Upload**:
 ```json
 {
@@ -741,6 +766,50 @@ GET /api/search?q=mountain&ext=csv,txt&offset=0&limit=50
 |-------|--------|------|---------|
 | `/cancel_bulk_zip` | POST | Required | Stop bulk ZIP download |
 | `/404` | GET | None | Custom 404 page |
+
+---
+
+## 🔄 Route Path Corrections & New Endpoints (2026-08-23)
+
+The tables above were written for an earlier route layout. Verified directly against the current `app.py` (grep on `@app.route`) and confirmed as actually called from `index.js` (grep on `fetch(`). None of the tables above were deleted — use this section for the real path, and the older section for general request/response shape.
+
+**Renamed / never matched the doc:**
+
+| Documented as | Actually is | Notes |
+|---|---|---|
+| `/api/create_folder` | `/mkdir` | POST, **form-encoded** (`foldername`, `path`), not JSON. Returns JSON `{success, message}` or `{error}`. |
+| `/api/rename` | `/rename` | POST, JSON body `{old_path, new_name}` (not `{path, new_name}`). Returns `{success, message, old_path, new_path, new_name}`. |
+| `/api/move` (singular) | *(doesn't exist)* | There is no single-item move route — the UI always goes through `/bulk_move`, even for one item. |
+| `/api/copy` (singular) | *(doesn't exist)* | Same — always `/bulk_copy`, even for one item. |
+| `/api/delete` | `/delete` | POST, **form-encoded** (`target_path`), not JSON — this one still uses flash-message + redirect, not a JSON success response, unlike its sibling `/bulk_delete`. |
+| `/api/bulk_copy` | `/bulk_copy` | No `/api` prefix. |
+| `/api/bulk_delete` | `/bulk_delete` | No `/api` prefix. |
+| `/api/bulk_move` | `/bulk_move` | No `/api` prefix. |
+| `/video/<cacheKey>/<filename>` | `/hls_files/<cache_key>/master.m3u8` | Master playlist path pattern changed; also serves per-rendition playlists at `/hls_files/<cache_key>/<profile>/index.m3u8` and subtitle VTTs at `/hls_files/<cache_key>/<sub_filename>`. |
+| `/segment/<segmentId>` | *(folded into `/hls_files/...`)* | Individual `.ts`/`.m4s` segments are just files under the same `/hls_files/<cache_key>/...` tree, not a separate `/segment/` route. |
+| `/video_status/<cacheKey>` | `/hls_status/<cache_key>` | |
+| *(missing entirely)* | `/hls_start/<path:video_path>` | GET, kicks off transcoding for a video and returns the initial status/track info — this is the actual entry point the player calls before polling `/hls_status`. |
+| `/image_proxy/<path:path>` | `/image_preview/<path:path>` | Route + underlying cache-key scheme both renamed (see `_img_cache_key()`, `_img_cached_path()` in app.py). |
+
+**New endpoints not documented anywhere above (all confirmed called from index.js unless noted):**
+
+| Route | Method | Auth | Purpose |
+|---|---|---|---|
+| `/api/check_conflicts` | POST | Required | Pre-flight check before move/copy/upload — tells the UI which of a batch of destination paths already exist, so it can show the conflict-resolution dialog (`_promptOverwrite`, `_promptFolderConflict`, `_promptMoveOrCopyConflicts` in index.js) before making the actual mutating call. |
+| `/api/exists` | GET | Required | `?path=...` — single-path existence check, used while auto-generating a free filename (`_findFreeName()`). |
+| `/api/storage_stats` | GET | Required | One-shot (non-streaming) storage stats fetch — separate from `/api/storage_stats_stream` and `/api/storage_stats_poll`, used for the initial page-load numbers before SSE/poll takes over. |
+| `/api/storage_stats_slow` | GET | Required | Slower/more thorough stats variant (exists in app.py; not currently called from index.js — likely a manual/debug endpoint). |
+| `/api/assembly_status` | GET | Required | List of all in-progress chunk-assembly jobs (plural form of the per-file one below). |
+| `/api/assembly_status/<file_id>` | GET | Required | Per-file assembly job status, polled by the upload queue UI. |
+| `/api/protect_assembly/<file_id>` | POST | Required | Marks an in-progress assembly job as "protected" so cleanup schedulers won't reap it mid-assembly. |
+| `/api/files/<path:path>` (and `/api/files/`) | GET | Required | Alternate JSON file-listing endpoint alongside the main `/<path:path>` HTML route — used where the UI wants just the JSON without a full page load. |
+| `/image_preview_status/<cache_key>` | GET | Required | Polled while a WebP conversion is running, mirrors the `/hls_status` pattern for images. |
+| `/image_info/<path:path>` | GET | Required | Metadata (dimensions etc.) for the image zoom/lightbox view (`_initImageZoom()`). |
+| `/admin/clear_media_preview` | POST | readwrite | Clears cached HLS/image preview artifacts (admin maintenance action; distinct from `/admin/rebuild_cache` and `/admin/cleanup_chunks`). |
+| `/csrf-token` | GET | None | Issues/returns the CSRF token used by `generate_csrf()`; referenced in the CSRF Protection section below by mechanism but the route itself wasn't listed in the tables. |
+| `/robots.txt`, `/.well-known/security.txt`, `/sitemap.xml` | GET | None | Dynamically generated (not static files) — `security.txt` content is also manageable via `manage.sh security-txt` per the Admin Tools section. |
+| `/debug/headers` | GET | None | Dumps request headers for debugging proxy/TLS header issues (see `_request_is_secure()`, `_request_via_trusted_tls()`) — dev/troubleshooting only, not called from the UI. |
+| `/<path:_cors_any_path>` and `/` | OPTIONS | None | CORS preflight handler (`_cors_preflight`), paired with `_apply_cors_headers()` / `_cors_origin_allowed()` — CORS support isn't mentioned elsewhere in this doc at all. |
 
 ---
 
@@ -2129,6 +2198,14 @@ Works at the database level only — it's a separate process, same constraint `m
 ---
 
 ## 📝 Changelog
+
+### Version 4.3+ — 2026-08-23 Doc Sync (route paths & undocumented endpoints)
+
+- No code changes — this is a documentation-only pass reconciling this file with the current `app.py`/`index.js`.
+- Added [Route Path Corrections & New Endpoints (2026-08-23)](#route-path-corrections--new-endpoints-2026-08-23) covering: `/mkdir`, `/rename`, `/delete`, `/bulk_copy`, `/bulk_delete`, `/bulk_move` losing their old `/api/*` names (and singular `/api/move` and `/api/copy` never having existed); the HLS routes moving to `/hls_start`, `/hls_status`, `/hls_files/...`; `/image_proxy` → `/image_preview`; and a batch of endpoints that existed in code but were never written up at all (`/api/check_conflicts`, `/api/exists`, `/api/storage_stats`, `/api/storage_stats_slow`, `/api/assembly_status[/​<file_id>]`, `/api/protect_assembly/<file_id>`, `/api/files/<path>`, `/image_preview_status/<cache_key>`, `/image_info/<path>`, `/admin/clear_media_preview`, `/csrf-token`, `/robots.txt`, `/.well-known/security.txt`, `/sitemap.xml`, `/debug/headers`, and the CORS preflight handler).
+- Corrected the `/api/health_check` response shape (no longer returns `version`/`database`/`file_monitor`/`search_index`; now returns `platform`, `has_statvfs`, `root_dir`, `timestamp`).
+- Expanded the `static/js/index.js` function list under Quick Reference — the original four-function list was accurate but far from complete; added the conflict-resolution, folder-upload-grouping, image-zoom, HLS-preview, deep-search, and move/copy-modal function clusters.
+- Nothing was removed from the original tables/sections; corrections are additive call-outs placed next to (or just after) the content they update.
 
 ### Version 4.3 — manage.sh security-txt Command
 
