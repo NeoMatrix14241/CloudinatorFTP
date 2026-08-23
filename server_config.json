@@ -33,9 +33,11 @@
   "SFTP_PORT": 2222,
   "FTP_ENABLED": true,
   "FTP_PORT": 2121,
+  "FTP_TLS_ENABLED": true,
+  "FTP_TLS_REQUIRE_DATA": true,
   "SMB_ENABLED": true,
   "SMB_PORT": 445,
   "SMB_FALLBACK_PORT": 8445,
   "SMB_SHARE_NAME": "SharedFolder",
-  "configured_at": "2026-08-12 12:01:53"
+  "configured_at": "2026-08-23 22:06:45"
 }
