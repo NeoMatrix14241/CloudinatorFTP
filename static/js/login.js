@@ -8,7 +8,7 @@ document.addEventListener('DOMContentLoaded', function () {
         return; // Don't check authentication status after logout
     }
 
-    // Only check authentication status if we're not coming from a logout
+    // Check Status
     // Check URL parameters and referrer to avoid loops
     if (!isComingFromLogout()) {
         checkAuthenticationStatus();
@@ -57,7 +57,6 @@ async function checkAuthenticationStatus() {
             window.location.replace('/');
         }
     } catch (error) {
-        // If fetch fails, user is probably not logged in, which is expected on login page
         console.log('User not logged in, staying on login page');
     }
 }
