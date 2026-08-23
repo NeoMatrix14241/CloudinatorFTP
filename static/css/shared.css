@@ -22,6 +22,7 @@ body {
     border-radius: 16px;
     padding: 36px 30px;
     text-align: center;
+    -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
 }
 

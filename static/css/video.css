@@ -83,6 +83,7 @@
 
 .media-default-skin .media-surface {
     background-color: var(--media-surface-background-color);
+    -webkit-backdrop-filter: var(--media-surface-backdrop-filter);
     backdrop-filter: var(--media-surface-backdrop-filter);
     box-shadow: 0 0 0 1px var(--media-surface-outer-border-color), 0 1px 3px 0 var(--media-surface-shadow-color), 0 1px 2px -1px var(--media-surface-shadow-color);
 
@@ -145,6 +146,7 @@
 
 .media-default-skin .media-overlay {
     border-radius: inherit;
+    -webkit-backdrop-filter: blur()saturate(1.5);
     backdrop-filter: blur()saturate(1.5);
     opacity: 0;
     pointer-events: none;
@@ -172,6 +174,7 @@
 }
 
 .media-default-skin .media-error[data-open]~.media-overlay {
+    -webkit-backdrop-filter: blur(16px)saturate(1.5);
     backdrop-filter: blur(16px)saturate(1.5)
 }
 
@@ -298,6 +301,7 @@
     color: oklch(0% 0 0);
     text-align: center;
     cursor: pointer;
+    -webkit-user-select: none;
     user-select: none;
     touch-action: manipulation;
     background: oklch(100% 0 0);
