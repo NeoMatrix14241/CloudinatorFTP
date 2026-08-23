@@ -30,13 +30,27 @@ body {
 }
 
 /* Scope the pdf.js viewer to sit inside the file-viewer modal instead
-   of owning the full page, and keep it hidden until a PDF is opened. */
+   of owning the full page, and keep it hidden until a PDF is opened.
+
+   .modal-content is already `display:flex; flex-direction:column` with
+   .modal-header as its first child. Making #pdfjsViewerRoot a normal flex
+   child (flex:1) — instead of position:absolute + inset:0 — means it fills
+   whatever space is LEFT after the header's own height, rather than
+   ignoring the header entirely and starting at the very top of the modal.
+   That's what was causing the header and pdf.js's toolbar to occupy the
+   same strip and fight over clicks: inset:0 doesn't know the header
+   exists. This way they simply stack, like any other flex layout, and
+   pdf.js's toolbar buttons work again because nothing is drawn on top of
+   them. #pdfjsViewerRoot still needs `position: relative` so that
+   #outerContainer/#mainContainer below (which use position:absolute +
+   inset:0 to fill their parent) have it as their containing block instead
+   of the whole modal. */
 #pdfjsViewerRoot {
     display: none;
-    position: absolute;
-    inset: 0;
+    position: relative;
+    flex: 1;
+    min-height: 0;
     width: 100%;
-    height: 100%;
 }
 
 #pdfjsViewerRoot #outerContainer,

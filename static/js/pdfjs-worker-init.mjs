@@ -12,6 +12,17 @@
 import { GlobalWorkerOptions } from "/static/js/pdf.mjs";
 GlobalWorkerOptions.workerSrc = "/static/js/pdf.worker.mjs";
 
+// NOTE: the assignment above only survives until viewer.mjs's own self-init
+// runs, which re-derives GlobalWorkerOptions.workerSrc from its internal
+// AppOptions default and overwrites it — so on every pdf.js update this
+// silently reverts to a stock relative path (e.g. "../build/pdf.worker.mjs",
+// which resolves to the wrong "/static/build/..." URL and breaks the worker
+// with "Failed to fetch dynamically imported module"). The real, durable fix
+// is below: push all our path overrides through AppOptions in the same
+// webviewerloaded hook we already use for defaultUrl, since that fires
+// before viewer.mjs applies its config to GlobalWorkerOptions. Keeping the
+// direct assignment above too doesn't hurt, but don't rely on it alone.
+
 // This particular viewer.mjs build is a dev/test build: it has
 // AppOptions.defaultUrl hardcoded to pdf.js's own sample PDF
 // ("compressed.tracemonkey-pldi-09.pdf") and auto-opens it on every page
@@ -32,5 +43,15 @@ GlobalWorkerOptions.workerSrc = "/static/js/pdf.worker.mjs";
 // in viewer.mjs's module body than that dispatch, so it's already available
 // by the time this listener fires.
 document.addEventListener('webviewerloaded', () => {
-    window.PDFViewerApplicationOptions?.set('defaultUrl', '');
+    const opts = window.PDFViewerApplicationOptions;
+    opts?.set('defaultUrl', '');
+    // Reassert our /static/js/ layout — required after every pdf.js update,
+    // since these five values live inside viewer.mjs's own AppOptions
+    // defaults and get reset to stock relative paths on every file swap.
+    opts?.set('workerSrc', '/static/js/pdf.worker.mjs');
+    opts?.set('cMapUrl', '/static/js/cmaps/');
+    opts?.set('iccUrl', '/static/js/iccs/');
+    opts?.set('standardFontDataUrl', '/static/js/standard_fonts/');
+    opts?.set('wasmUrl', '/static/js/wasm/');
+    opts?.set('imageResourcesPath', '/static/js/images/');
 }, { once: true });

@@ -731,6 +731,16 @@
             <div class="modal-body file-viewer-body" id="fileViewerBody"></div>
             <!-- ================= PDF.js official viewer (merged, no iframe) ================= -->
             <div id="pdfjsViewerRoot">
+                <!-- PDFJS-VIEWER-BODY:START — everything from here down to
+                     PDFJS-VIEWER-BODY:END is copied verbatim from the stock
+                     viewer.html of the pdf.js release (the <body> content,
+                     from <div id="outerContainer"> through
+                     <div id="printContainer"></div>). To update pdf.js,
+                     replace only what's between these two markers with the
+                     same span from the new viewer.html. Do not touch
+                     anything outside them (this includes the
+                     #pdfjsViewerRoot wrapper div itself, which is ours, not
+                     pdf.js's). -->
                 <div id="outerContainer">
                     <span id="viewer-alert" class="visuallyHidden" role="alert"></span>
 
@@ -790,6 +800,8 @@
                                                         hidden="true">
                                                         <span
                                                             data-l10n-id="pdfjs-views-manager-add-file-button-label"></span>
+                                                        <input id="viewsManagerAddFilePicker" type="file"
+                                                            accept="application/pdf,image/*" multiple />
                                                     </button>
                                                     <button id="viewsManagerCurrentOutlineButton"
                                                         class="toolbarButton viewsManagerButton" type="button"
@@ -1031,6 +1043,28 @@
                                     </div>
                                     <div id="toolbarViewerRight" class="toolbarHorizontalGroup">
                                         <div id="editorModeButtons" class="toolbarHorizontalGroup">
+                                            <div id="signatureProperties" class="toolbarButtonWithContainer"
+                                                hidden="true">
+                                                <button id="signaturePropertiesButton" class="toolbarButton"
+                                                    type="button" tabindex="0" aria-expanded="false"
+                                                    aria-haspopup="true" aria-controls="signaturePropertiesPanel"
+                                                    data-l10n-id="pdfjs-digital-signature-properties-button">
+                                                    <span
+                                                        data-l10n-id="pdfjs-digital-signature-properties-button-label"></span>
+                                                </button>
+                                                <div class="editorParamsToolbar hidden doorHangerRight"
+                                                    id="signaturePropertiesPanel" role="region">
+                                                    <div id="signaturePropertiesContainer"
+                                                        class="signaturePropertiesContainer">
+                                                        <div id="signaturePropertiesBanner" class="sigBanner"
+                                                            hidden="true" role="status"></div>
+                                                        <ul id="signaturePropertiesList" class="signaturePropertiesList"
+                                                            tabindex="-1"></ul>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div id="signaturePropertiesSeparator" class="verticalToolbarSeparator"
+                                                hidden="true"></div>
                                             <div id="editorComment" class="toolbarButtonWithContainer" hidden="true">
                                                 <button id="editorCommentButton" class="toolbarButton" type="button"
                                                     tabindex="0" disabled="disabled" aria-expanded="false"
@@ -1840,7 +1874,7 @@
                             </div>
                         </dialog>
 
-                        <dialog id="printServiceDialog" style="min-width: 200px">
+                        <dialog id="printServiceDialog">
                             <div class="row">
                                 <span data-l10n-id="pdfjs-print-progress-message"></span>
                             </div>
@@ -1877,6 +1911,7 @@
                 </div>
                 <!-- outerContainer -->
                 <div id="printContainer"></div>
+                <!-- PDFJS-VIEWER-BODY:END -->
             </div>
             <!-- ================= end PDF.js viewer ================= -->
         </div>
