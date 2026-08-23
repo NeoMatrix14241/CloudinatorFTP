@@ -947,6 +947,25 @@ async def validate_session():
 
         if session.get("username") or session.get("server_token"):
             session.clear()
+
+        # Only the bare site root ("/") redirects an anonymous visitor to
+        # /login. Every other URL under the generic directory browser
+        # ("index" endpoint, i.e. "/<path:path>") used to get the exact
+        # same 301-to-/login regardless of whether that path pointed at a
+        # real folder or was pure scanner noise — which is itself a
+        # "this endpoint is alive" oracle (a 301 vs. a flat 404 is a
+        # boolean-distinguishable response, the same class of issue as
+        # the earlier '%'/'static%' findings). Deep, non-root catch-all
+        # requests from an anonymous caller now just 404 instead.
+        #
+        # This only narrows the catch-all ("index"); every other
+        # login-required route — /download/*, /view/*, /api/*, /admin/*,
+        # bulk_*, upload, etc. — keeps its normal redirect-to-/login
+        # behavior below, so real deep links, bookmarks, and the
+        # frontend's own API calls are unaffected.
+        if request.endpoint == "index" and request.path != "/":
+            abort(404)
+
         return _lean_redirect(url_for("login"), code=301)
 
     # Verify the account still exists in users.json.
@@ -1707,7 +1726,19 @@ async def index(path):
     # here is both more correct and stops that false positive, without
     # touching the real is_safe_path()/is_valid_path() traversal guards
     # used everywhere else in this file.
-    if path == "static" or path.startswith("static/"):
+    #
+    # Broadened beyond the exact "static"/"static/..." match: scanners
+    # (e.g. sqlmap-style boolean-blind probes) also throw garbage directly
+    # onto the "static" prefix with no separating slash at all — "static%",
+    # "staticXYZABCDEFGHIJ", etc. None of those can ever be a legitimate
+    # top-level directory entry the app is supposed to serve (real folder
+    # browsing always goes through a "/"-separated path), so reject any
+    # path that starts with "static" and isn't cleanly followed by "/".
+    if (
+        path == "static"
+        or path.startswith("static/")
+        or (path.startswith("static") and not path[len("static") :].startswith("/"))
+    ):
         abort(404)
 
     # Comprehensive path validation: safety and existence
