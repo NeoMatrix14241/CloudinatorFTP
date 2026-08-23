@@ -13,6 +13,8 @@
 
 **🆕 2026-08-23 sync note**: `app.py` and `index.js` were diffed against this doc and found to have drifted further than the sections below reflect — mostly route-path renames and a batch of new endpoints that were never written up. Rather than rewrite the tables below (which still have useful response-shape examples), corrections and additions live in a new **[Route Path Corrections & New Endpoints (2026-08-23)](#route-path-corrections--new-endpoints-2026-08-23)** section right after the original "Quart Routes & API" section, and in the updated JS function list under Quick Reference. Treat that new section as authoritative for *paths*; treat the older tables as authoritative for general request/response shape except where the new section says otherwise.
 
+**🆕 2026-08-23 sync note, part 2**: a further pass against `index.html`/`index.js`/the new `pdfjs-worker-init.mjs`/`pdfjs-viewer-overlay.css` found the old `/pdfviewer` route entirely gone, replaced by pdf.js merged directly into `index.html`. See **[Embedded PDF.js Viewer (2026-08-23)](#embedded-pdfjs-viewer-2026-08-23)**, added right after the Route Path Corrections table.
+
 ---
 
 ## 📋 Table of Contents
@@ -66,6 +68,8 @@
 | **revoke_sharing.py** | Share-link revocation tool | Interactive menu + CLI subcommands to list/revoke individual or all share tokens, independent of the web UI |
 | **ftp_server.py** | FTP server | pyftpdlib, custom authorizer, passive ports 60000–60100 |
 | **ssl_cert.py** | TLS certificate manager | Self-signed cert generation, SAN detection, db/ storage; `prod_server.py` now prefers a real Tailscale-issued cert when available, falling back to this self-signed cert otherwise |
+| **static/js/pdfjs-worker-init.mjs** | pdf.js integration shim (new, undocumented until now — see [Embedded PDF.js Viewer](#embedded-pdfjs-viewer-2026-08-23)) | Sets `GlobalWorkerOptions.workerSrc` directly, then reasserts it (plus `cMapUrl`/`iccUrl`/`standardFontDataUrl`/`wasmUrl`/`imageResourcesPath`) via pdf.js's `webviewerloaded` hook so they survive viewer.mjs's own self-init; also clears the dev build's hardcoded sample-PDF `defaultUrl` |
+| **static/css/pdfjs-viewer-overlay.css** | pdf.js viewer scoping/theming fix (new, undocumented until now) | Loaded after the merged `viewer.css` to win cascade ties; undoes viewer.css's page-wide `:root`/`body` leaks and re-parents `#pdfjsViewerRoot` into a normal flex child of the file-viewer modal instead of a full-page absolute overlay; also fixes mobile toolbar overflow |
 
 ### Startup Order
 
@@ -810,6 +814,52 @@ The tables above were written for an earlier route layout. Verified directly aga
 | `/robots.txt`, `/.well-known/security.txt`, `/sitemap.xml` | GET | None | Dynamically generated (not static files) — `security.txt` content is also manageable via `manage.sh security-txt` per the Admin Tools section. |
 | `/debug/headers` | GET | None | Dumps request headers for debugging proxy/TLS header issues (see `_request_is_secure()`, `_request_via_trusted_tls()`) — dev/troubleshooting only, not called from the UI. |
 | `/<path:_cors_any_path>` and `/` | OPTIONS | None | CORS preflight handler (`_cors_preflight`), paired with `_apply_cors_headers()` / `_cors_origin_allowed()` — CORS support isn't mentioned elsewhere in this doc at all. |
+
+**Removed since the tables above were written:**
+
+| Documented as | Actually is | Notes |
+|---|---|---|
+| `/pdfviewer` (GET, "PDF viewer UI") | *(route no longer exists in app.py)* | PDF preview no longer has its own page/route at all — see [Embedded PDF.js Viewer (2026-08-23)](#embedded-pdfjs-viewer-2026-08-23) just below for what replaced it. |
+
+## 🆕 Embedded PDF.js Viewer (2026-08-23)
+
+Undocumented until this pass — reconstructed from `index.html`, `index.js`, `app.py`'s CSP comments, and the two new static files below. This replaces the old `/pdfviewer` route entirely; there is no PDF-related backend route anymore, only static assets plus the existing authenticated `/view/<path:path>` endpoint (unchanged) that pdf.js fetches the actual bytes from.
+
+**Why it changed**: the app's CSP sets `frame-src 'none'`, so any iframe-based viewer (the old `/pdfviewer` approach implies one) would have required loosening that directive. Merging pdf.js's official viewer UI directly into `index.html`'s own DOM avoids that — `worker-src 'self'` (already present for other reasons) is all `pdf.worker.mjs` needs.
+
+**New assets loaded unconditionally in `index.html`'s `<head>`** (cheap enough to always load; they only do anything once `#pdfjsViewerRoot` is shown):
+- `<link rel="resource" type="application/l10n" href=".../js/locale/locale.json">` — pdf.js localization data
+- `css/viewer.css` — pdf.js's own stock stylesheet, merged in as-is
+- `css/pdfjs-viewer-overlay.css` — this project's override/scoping layer, loaded after `viewer.css` (see below)
+- `js/pdfjs-worker-init.mjs` (module script) — **must** stay ordered before `js/viewer.mjs`'s `<script>` tag; both are non-async module scripts, so the HTML spec's document-order execution guarantee is what makes this reliable
+- `js/viewer.mjs` (module script) — the actual merged pdf.js viewer app; self-initializes against `#outerContainer` (inside `#pdfjsViewerRoot`) regardless of whether a PDF is open yet
+
+**`pdfjs-worker-init.mjs` in detail**:
+- Direct `GlobalWorkerOptions.workerSrc = "/static/js/pdf.worker.mjs"` assignment on import — only survives until viewer.mjs's self-init re-derives and overwrites it from its own `AppOptions` defaults, so this alone isn't durable across pdf.js updates.
+- The durable fix: listens once for pdf.js's synchronous `webviewerloaded` `CustomEvent` on `document` (fired strictly before pdf.js decides what to auto-open, specifically so host pages can override `AppOptions` first) and, via `window.PDFViewerApplicationOptions`, sets `workerSrc`, `cMapUrl`, `iccUrl`, `standardFontDataUrl`, `wasmUrl`, and `imageResourcesPath` to their `/static/js/...` equivalents. All five need reasserting on every pdf.js version bump since they live inside viewer.mjs's own bundled defaults.
+- Also sets `defaultUrl` to `''` in that same hook: this particular `viewer.mjs` build is a dev/test build with `AppOptions.defaultUrl` hardcoded to pdf.js's own sample PDF (`compressed.tracemonkey-pldi-09.pdf`), auto-opened whenever the page has no `?file=` param — which is always true here, since PDFs are opened via `PDFViewerApplication.open({url})` rather than a URL param. Left unfixed, this would fetch/render the sample PDF (and overwrite the tab title) on every load of `index.html`, not just when the viewer modal is actually open.
+- `AppOptions` itself can't be imported/called directly from this module — it's private to viewer.mjs's own module scope, and importing it would force viewer.mjs to fully evaluate (including self-init) before this code could run, i.e. too late. `window.PDFViewerApplicationOptions` + the `webviewerloaded` hook is pdf.js's own documented integration point for this.
+
+**`pdfjs-viewer-overlay.css` in detail**:
+- Undoes two page-wide leaks from the merged `viewer.css`, which was written assuming it owns the entire document (its stock deployment is a dedicated `viewer.html` in an iframe):
+  1. `:root { color-scheme: light dark; }` — `:root` always resolves to the page's real `<html>`, and `color-scheme` inherits, so this silently forced every native form control on the *whole app* (including its own checkboxes) into browser-default light/dark rendering instead of the app's intended theme. Reset to `normal` (the pre-viewer.css value) at the real root; pdf.js's intended `light dark` value is re-applied scoped to `#pdfjsViewerRoot` only.
+  2. `body { margin:0; background-color:...; scrollbar-color:...; }` — also targeted the real `<body>`, not a scoped copy. Restored to this app's own background gradient/margin/scrollbar-color.
+  - Both fixes work because this stylesheet is `<link>`ed after `viewer.css`, so it wins the cascade tie on the identical selectors/properties.
+- Re-parents `#pdfjsViewerRoot` from `display:none` (shown only while a PDF is open) + `position:relative; flex:1; min-height:0` — a normal flex child of `.modal-content` (which is already `display:flex; flex-direction:column` with `.modal-header` first) — instead of `position:absolute; inset:0`. The old absolute-positioning approach ignored the modal header's height entirely, so pdf.js's own toolbar and the modal header occupied the same strip and fought over clicks; as a flex child it simply fills whatever space is left after the header. `position:relative` on `#pdfjsViewerRoot` also gives pdf.js's internal `#outerContainer`/`#mainContainer` (which use `position:absolute; inset:0` to fill *their* parent) the right containing block.
+- `@media (max-width: 768px)` block: makes `#toolbarViewer`/`.toolbar`/`#toolbarContainer` horizontally scrollable (hidden scrollbar, touch-scrolling) instead of wrapping, shrinks toolbar button/input padding and font-size, and keeps `#toolbarViewerLeft/Middle/Right` from shrinking — mobile-only toolbar-overflow fix.
+
+**`index.js` integration** (`openFileViewer()` / `closeFileViewer()` in the file-viewer-modal code):
+- `getViewerType()`'s `'pdf'` case now hides `#fileViewerBody` and shows `#pdfjsViewerRoot` instead of writing viewer markup into the body — `#pdfjsViewerRoot` is a **sibling** of `#fileViewerBody`, not a child, so it survives the `body.innerHTML = ''` reset that runs at the top of every `openFileViewer()` call (that reset explicitly re-hides `#pdfjsViewerRoot` first, as the default state, before the switch/case runs).
+- `_pdfjsReady()`: module scripts execute asynchronously, so on a cold page load `window.PDFViewerApplication` may not be attached yet by the time a user clicks a PDF. Polls every 50ms for `window.PDFViewerApplication.initializedPromise` to exist, then resolves/rejects on that promise; rejects after a 15s timeout with `"PDF viewer failed to initialize"`.
+- On resolve, calls `app.open({ url: viewUrl })` where `viewUrl` is the same existing `/view/<path>` URL already used for images/video/audio/text — no new backend endpoint was needed for this feature.
+- `app.setTitle` is stubbed to a no-op immediately before `open()`. Reasoning (per the inline comment): the old iframe-based viewer never touched the real page title (iframes have an isolated `document.title`), but now that pdf.js shares this page's actual DOM, its normal `setTitle()` calls (on open, and again once the PDF's embedded metadata loads) would directly overwrite the app's own live connection-status title indicator (which continuously strips/re-adds an emoji prefix on `document.title` elsewhere in index.js), corrupting it until a full reload.
+- `_pdfViewerPrevTitle`: snapshots `document.title` right before `open()` is called and restores it both in `closeFileViewer()` and in the `.catch()` error path (viewer failed to initialize) — so the pre-PDF title is never permanently lost even on failure.
+- Error path: if `_pdfjsReady()` or `app.open()` rejects, `#pdfjsViewerRoot` is hidden, `#fileViewerBody` is shown again, the title is restored, and the body shows a `viewer-text-loading`-styled error message with the caught error text (escaped).
+- `closeFileViewer()` handles `#pdfjsViewerRoot` as a separate cleanup step from the rest of the modal teardown (again, because it's a sibling of `#fileViewerBody`, not covered by that element's own `innerHTML` reset): hides it, best-effort calls `window.PDFViewerApplication.close()` if present, and restores `_pdfViewerPrevTitle` if set.
+
+**Cross-reference**: `app.py`'s `Integrity-Policy-Report-Only` comment block (see [Authentication & Sessions](#-authentication--sessions) area of app.py, not this doc) notes that `viewer.mjs` does not yet have a computed SRI `integrity` attribute in `index.html`, unlike `login.js`/`404.js` — called out there as a blocker before that header can move from report-only to enforcing.
+
+**404.css** (undocumented, unrelated to the PDF viewer but found in the same file-review pass): a `@media (max-height: 700px)` block was added — shrinks `.error-container` padding, `.error-icon` size/margin, `.error-title`/`.error-subtitle` size/margin, and `.error-details` spacing on short viewports (small/laptop monitors), so the 404 card is less likely to need scrolling on those screens. Complements the existing `@media (max-width: 480px)` block, which handles narrow-but-tall (mobile) instead.
 
 ---
 
@@ -2198,6 +2248,15 @@ Works at the database level only — it's a separate process, same constraint `m
 ---
 
 ## 📝 Changelog
+
+### Version 4.4 — 2026-08-23 Doc Sync (embedded PDF.js viewer & 404.css tweak)
+
+- No code changes — another documentation-only pass, this time against `index.html`, `index.js`, `pdfjs-worker-init.mjs`, `pdfjs-viewer-overlay.css`, `404.css`, and `app.py`'s CSP/Integrity-Policy comments.
+- Added [Embedded PDF.js Viewer (2026-08-23)](#embedded-pdfjs-viewer-2026-08-23): the old `/pdfviewer` route no longer exists in `app.py` at all — PDF preview now uses the official pdf.js viewer merged directly into `index.html` (rooted at `#pdfjsViewerRoot`, avoids the app's `frame-src 'none'` CSP entirely by never using an iframe). Covers the two new static files (`pdfjs-worker-init.mjs`, `pdfjs-viewer-overlay.css`), the `webviewerloaded`/`AppOptions` integration hook, and the `index.js` open/close wiring (`_pdfjsReady()`, `_pdfViewerPrevTitle`, the `setTitle` no-op stub).
+- Noted the removed `/pdfviewer` row directly under the existing Route Path Corrections table.
+- Added a new row to Quick Reference's "Most Important Files" table for both new static files.
+- Documented an additional, unrelated `404.css` tweak found in the same pass: a `@media (max-height: 700px)` block that shrinks the 404 card's spacing on short viewports.
+- Nothing was removed from any earlier section; all of the above are additive.
 
 ### Version 4.3+ — 2026-08-23 Doc Sync (route paths & undocumented endpoints)
 
