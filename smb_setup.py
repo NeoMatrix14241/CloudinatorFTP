@@ -80,12 +80,17 @@ def detect_platform() -> str:
 # ── Windows ──────────────────────────────────────────────────────────────────
 
 
-def _relaunch_elevated_and_exit(resume_action: str):
+def _relaunch_elevated_and_exit(resume_action: str = None):
     """
     Relaunch THIS script elevated via a UAC prompt, passing --resume so the
     new instance skips straight to the action instead of re-showing the
     menu. The current (unelevated) process exits either way — the new
     elevated instance is the one that actually continues.
+
+    Pass resume_action to jump straight to a specific menu action after
+    elevating (used when the user already picked an option before we
+    detected we weren't elevated). Pass nothing (None) to relaunch the
+    whole script elevated from the start, before the menu is even shown.
 
     NOTE: this is the one piece of Windows handling that cannot be
     exercised end-to-end outside a real Windows session with a human
@@ -98,7 +103,12 @@ def _relaunch_elevated_and_exit(resume_action: str):
     import ctypes
 
     script = os.path.abspath(__file__)
-    params = f'"{script}" --resume {resume_action}'
+    if resume_action:
+        params = f'"{script}" --resume {resume_action}'
+    else:
+        # No specific action to resume — just relaunch the whole script
+        # elevated so the menu (and everything after it) runs as admin.
+        params = f'"{script}"'
     # ShellExecuteW return value contract (per Win32 docs): >32 means it
     # launched successfully; <=32 is an error code (most commonly the user
     # clicking "No" on the UAC prompt, or the file/path not being found).
@@ -109,6 +119,91 @@ def _relaunch_elevated_and_exit(resume_action: str):
         print()
         print("⚠️  Elevation request failed or was declined — nothing was changed.")
     sys.exit(0)
+
+
+def _get_defender_exclusion_paths() -> list:
+    """
+    Figure out which folders actually need to be excluded from Windows
+    Defender for THIS Python interpreter — not hardcoded to any one
+    user, so this works regardless of who runs the script.
+
+    Covers:
+      - The real, resolved folder containing sys.executable (handles
+        virtualenvs, since that's where the venv's own python.exe lives)
+      - sys.base_prefix (the underlying system Python a venv points back
+        to, if this is a venv at all — same folder as above otherwise)
+      - The standard per-user AppData locations Windows installs Python
+        into by default (Roaming\\Python holds user-installed packages'
+        compiled extensions; Local\\Programs\\Python is the default
+        install location for the python.org installer)
+    """
+    paths = set()
+
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    paths.add(exe_dir)
+
+    base_prefix_dir = os.path.abspath(sys.base_prefix)
+    paths.add(base_prefix_dir)
+
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        p = os.path.join(appdata, "Python")
+        if os.path.isdir(p):
+            paths.add(p)
+
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        p = os.path.join(local_appdata, "Programs", "Python")
+        if os.path.isdir(p):
+            paths.add(p)
+
+    return sorted(paths)
+
+
+def _add_defender_exclusions():
+    """
+    Adds this Python interpreter's folders to Windows Defender's
+    exclusion list, via Add-MpPreference. Must run elevated (already
+    guaranteed by the time this is called from windows_disable(), since
+    that function returns/relaunches before reaching this point if not).
+
+    Why: CloudinatorFTP's SMB server does raw socket / low-level SMB
+    protocol work (via impacket) that closely resembles techniques used
+    in real SMB exploits, so Defender's real-time heuristics tend to
+    flag or throttle the Python process even though this usage is
+    legitimate. This is a one-time setup step, same spirit as the
+    LanmanServer change above — no need to re-run it unless the Python
+    interpreter's install location changes later.
+    """
+    print()
+    print("Adding Windows Defender exclusions for this Python install so")
+    print("it isn't flagged/throttled once it starts doing SMB work...")
+
+    exclusion_paths = _get_defender_exclusion_paths()
+    if not exclusion_paths:
+        print("⚠️  Couldn't determine any Python install paths to exclude.")
+        return
+
+    any_failed = False
+    for path in exclusion_paths:
+        try:
+            lanman_guard.run_ps(f'Add-MpPreference -ExclusionPath "{path}"')
+            print(f"✅ Excluded: {path}")
+        except Exception as e:
+            any_failed = True
+            print(f"❌ Failed to exclude {path}: {e}")
+            print(f'   Manual fix: Add-MpPreference -ExclusionPath "{path}"')
+
+    if any_failed:
+        print()
+        print("   Some exclusions failed to apply automatically — add the")
+        print("   ones above manually via Windows Security > Virus & threat")
+        print("   protection > Manage settings > Exclusions.")
+
+    print()
+    print("Note: if you later switch Python interpreters (e.g. rebuild a")
+    print("virtualenv), you'll need to add exclusions for the new path —")
+    print("re-run this setup, or add it manually.")
 
 
 def windows_disable(skip_confirm: bool = False):
@@ -168,6 +263,9 @@ def windows_disable(skip_confirm: bool = False):
 
     print()
     print("✅ LanmanServer stopped and disabled.")
+
+    _add_defender_exclusions()
+
     print()
     print("━" * 68)
     print("  RESTART YOUR PC NOW — use Restart, not Shut Down.")
@@ -402,10 +500,39 @@ def main():
         return
 
     plat = detect_platform()
+
+    # Elevate the WHOLE session upfront on Windows, before the menu is
+    # even shown — not just when a specific action needs it. This is
+    # what actually guarantees LanmanServer gets stopped/disabled
+    # reliably: doing it reactively (only once the user picks option 1)
+    # meant status checks and the elevation check itself could still run
+    # unelevated, and a stray non-admin PowerShell call for
+    # Stop-Service/Set-Service fails without always surfacing a clear
+    # permissions error. Requesting elevation once, up front, removes
+    # that whole class of "it silently didn't take" failure.
+    if plat == "windows":
+        elevated = lanman_guard.is_elevated()
+        print(
+            f"  Admin check: {'elevated' if elevated else 'NOT elevated — requesting UAC'}"
+        )
+        if not elevated:
+            print()
+            print("🔐 CloudinatorFTP's SMB setup needs Administrator rights to")
+            print("   reliably manage the Server (LanmanServer) service. Requesting")
+            print("   elevation now — look for a UAC prompt (it can appear behind")
+            print("   this window, or in your taskbar as a flashing icon) — this")
+            print("   window will close and a NEW elevated console will open once")
+            print("   you approve it.")
+            input("   Press Enter to continue...")
+            _relaunch_elevated_and_exit()
+            return  # unreachable — _relaunch_elevated_and_exit always exits
+
     print("=" * 60)
     print("  CloudinatorFTP — SMB Port 445 Setup")
     print("=" * 60)
     print(f"  Platform detected: {plat}")
+    if plat == "windows":
+        print("  Running elevated: yes")
     print("=" * 60)
 
     if plat == "windows":
@@ -450,3 +577,10 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\n\nCancelled.")
+    finally:
+        # Keeps the console open when launched by double-click (which
+        # would otherwise close the window instantly on exit, before
+        # any of the output above — including elevation messages —
+        # could actually be read). Harmless when run from an already-
+        # open terminal; just press Enter to close as usual.
+        input("\nPress Enter to exit...")
