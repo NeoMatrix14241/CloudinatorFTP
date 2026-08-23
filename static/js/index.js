@@ -135,6 +135,23 @@ function escAttr(str) {
         .replace(/>/g, '&gt;');
 }
 
+// URL-encode a storage path for use in a route like /download/<path>,
+// /view/<path>, /office_preview/<path>, /image_preview/<path>. Encodes
+// each path segment individually (encodeURIComponent) so filenames
+// containing '%', '#', '?', etc. survive round-trip, while '/' segment
+// separators are preserved rather than becoming '%2F' (which would 404 —
+// the backend expects real slashes between folder/file segments).
+// Without this, a filename like "ReadMe%.txt" produces a raw unencoded
+// '%' in the href; browsers/Cloudflare treat that as the start of a
+// malformed percent-escape and reject the request with 400 before it
+// ever reaches the app (confirmed via Cloudflare support + direct testing).
+function encodePathForUrl(path) {
+    return String(path)
+        .split('/')
+        .map(encodeURIComponent)
+        .join('/');
+}
+
 // Build an HTML-attribute-safe, JSON-encoded argument list for data-args=""
 function dataArgs(args) {
     return escAttr(JSON.stringify(args));
@@ -3693,8 +3710,8 @@ function openFileViewer(itemPath, filename) {
     const titleEl = document.getElementById('viewerFileName');
     const dlLink = document.getElementById('viewerDownloadLink');
 
-    const viewUrl = `/view/${itemPath}`;
-    const dlUrl = `/download/${itemPath}`;
+    const viewUrl = `/view/${encodePathForUrl(itemPath)}`;
+    const dlUrl = `/download/${encodePathForUrl(itemPath)}`;
 
     titleEl.textContent = filename;
     dlLink.href = dlUrl;
@@ -3835,7 +3852,7 @@ function openFileViewer(itemPath, filename) {
         case 'office':
             body.classList.add('viewer-office');
             inner = `<div class="viewer-office-loading"><i class="fas fa-circle-notch fa-spin"></i> Generating preview…</div>`;
-            fetch(`/office_preview/${itemPath}`)
+            fetch(`/office_preview/${encodePathForUrl(itemPath)}`)
                 .then(r => r.json())
                 .then(data => {
                     if (data.error) {
@@ -3875,8 +3892,8 @@ async function _imgStartPreview(itemPath, filename) {
     const _NATIVE_IMG = new Set(['jpg', 'jpeg', 'jfif', 'png', 'gif', 'webp', 'svg', 'avif', 'ico']);
     const ext = filename.split('.').pop().toLowerCase();
     const isNative = _NATIVE_IMG.has(ext);
-    const previewUrl = `/image_preview/${itemPath}`;
-    const viewUrl = `/view/${itemPath}`;
+    const previewUrl = `/image_preview/${encodePathForUrl(itemPath)}`;
+    const viewUrl = `/view/${encodePathForUrl(itemPath)}`;
 
     const wrap = document.getElementById('img-conv-wrap');
     const spinner = document.getElementById('img-conv-spinner');
@@ -3912,7 +3929,7 @@ async function _imgStartPreview(itemPath, filename) {
     let info;
     try {
         _setLabel('Checking image…');
-        const r = await fetch(`/image_info/${itemPath}`);
+        const r = await fetch(`/image_info/${encodePathForUrl(itemPath)}`);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         info = await r.json();
     } catch (e) {
@@ -6962,7 +6979,7 @@ function downloadItem(itemPath) {
 
     // Create a temporary link to track when download completes
     const link = document.createElement('a');
-    link.href = `/download/${itemPath}`;
+    link.href = `/download/${encodePathForUrl(itemPath)}`;
     link.style.display = 'none';
     document.body.appendChild(link);
 
@@ -6975,7 +6992,7 @@ function downloadItem(itemPath) {
     }, 1000);
 
     // Trigger download
-    window.location.href = `/download/${itemPath}`;
+    window.location.href = `/download/${encodePathForUrl(itemPath)}`;
 }
 
 function downloadFolderAsZip(folderPath, folderName) {
@@ -10590,7 +10607,7 @@ document.addEventListener('visibilitychange', () => {
  * Called initially with password=null; retried with the user-supplied password.
  */
 function _loadArchivePreview(body, itemPath, password) {
-    const url = `/archive_preview/${itemPath}` +
+    const url = `/archive_preview/${encodePathForUrl(itemPath)}` +
         (password != null ? `?password=${encodeURIComponent(password)}` : '');
 
     fetch(url)
@@ -11110,7 +11127,7 @@ async function _hlsStartStream(itemPath, wrapperId) {
     if (rawBtn) {
         rawBtn.addEventListener('click', () => {
             _destroyCurrentPlayer();
-            _mountRawPlayer(`/view/${itemPath}`, false);
+            _mountRawPlayer(`/view/${encodePathForUrl(itemPath)}`, false);
             rawBtn.classList.add('hls-btn-active');
             const sb = $id('hls-btn-stream'); if (sb) sb.classList.remove('hls-btn-active');
             if (!_isWebNative) {
@@ -11127,13 +11144,13 @@ async function _hlsStartStream(itemPath, wrapperId) {
     let startData;
     try {
         _setStatus('Checking stream\u2026');
-        const r = await fetch(`/hls_start/${itemPath}`, { cache: 'no-store' });
+        const r = await fetch(`/hls_start/${encodePathForUrl(itemPath)}`, { cache: 'no-store' });
         startData = await r.json();
     } catch (err) {
         _setStatus('');
         _hideStreamBtn();
         // Fetch failed entirely — fall back to raw
-        _mountRawPlayer(`/view/${itemPath}`, true);
+        _mountRawPlayer(`/view/${encodePathForUrl(itemPath)}`, true);
         const rb = $id('hls-btn-raw'); if (rb) rb.classList.add('hls-btn-active');
         return;
     }
@@ -11145,7 +11162,7 @@ async function _hlsStartStream(itemPath, wrapperId) {
             // Non-native codec, no HLS — mount raw (audio only; video won't decode)
             const rb = $id('hls-btn-raw');
             if (rb) { rb.style.opacity = ''; rb.style.pointerEvents = ''; rb.title = 'Play without transcoding'; }
-            _mountRawPlayer(`/view/${itemPath}`, false);
+            _mountRawPlayer(`/view/${encodePathForUrl(itemPath)}`, false);
             if (rb) rb.classList.add('hls-btn-active');
             if (startData.reason === 'ffmpeg_not_installed') {
                 _setStatus('\u26a0\ufe0f ffmpeg not found \u2014 this format is not supported by the browser, audio only');
@@ -11155,7 +11172,7 @@ async function _hlsStartStream(itemPath, wrapperId) {
             }
         } else {
             _setStatus('');
-            _mountRawPlayer(`/view/${itemPath}`, true);
+            _mountRawPlayer(`/view/${encodePathForUrl(itemPath)}`, true);
             const rb = $id('hls-btn-raw'); if (rb) rb.classList.add('hls-btn-active');
         }
         return;
@@ -11185,7 +11202,7 @@ async function _hlsStartStream(itemPath, wrapperId) {
     // HLS is still transcoding — mount appropriate fallback while we wait
     if (_isWebNative) {
         // Web-native: raw plays fine while HLS processes in background
-        _mountRawPlayer(`/view/${itemPath}`, true);
+        _mountRawPlayer(`/view/${encodePathForUrl(itemPath)}`, true);
         const rb = $id('hls-btn-raw'); if (rb) rb.classList.add('hls-btn-active');
     } else {
         // Non-native: show placeholder — raw won't work, HLS will autoplay when ready

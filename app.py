@@ -901,6 +901,18 @@ def _lean_redirect(location, code=302):
 async def validate_session():
     if "//" in request.path:
         abort(404)
+    # Reject a literal '%' ONLY on the generic catch-all route ("index",
+    # matching "/<path:path>") — never on file-serving routes like
+    # download/view/shared_*, which legitimately need to accept filenames
+    # containing '%' (confirmed: ReadMe%.txt downloads fine via
+    # /download/ReadMe%25.txt for a logged-in user). The catch-all is
+    # where scanner probes like "/%" and "/%25" actually land (they don't
+    # match any real route), and letting those through used to fall to
+    # the generic redirect-to-/login below — telling scanners "this is a
+    # live endpoint" instead of a dead one. request.endpoint is already
+    # resolved by routing at this point, so this check is safe here.
+    if request.endpoint == "index" and "%" in request.path:
+        abort(404)
     # Skip validation for login-related routes and the public share-link
     # pages/downloads — those are meant to work for anyone with the link,
     # no account required.
@@ -953,17 +965,21 @@ async def validate_session():
 # Route to robots.txt
 @app.route("/robots.txt")
 async def robots_txt():
-    response = await send_from_directory(app.static_folder, 'robots.txt', mimetype='text/plain')
-    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response = await send_from_directory(
+        app.static_folder, "robots.txt", mimetype="text/plain"
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Cache-Control"] = "public, max-age=86400"
     return response
 
 
 # Route to security.txt for search engine crawlers and security researchers
-@app.route('/.well-known/security.txt')
+@app.route("/.well-known/security.txt")
 async def security_txt():
-    response = await send_from_directory(app.static_folder, '.well-known/security.txt', mimetype='text/plain')
-    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response = await send_from_directory(
+        app.static_folder, ".well-known/security.txt", mimetype="text/plain"
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Cache-Control"] = "public, max-age=86400"
     return response
 
