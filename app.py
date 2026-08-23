@@ -988,7 +988,7 @@ async def robots_txt():
         app.static_folder, "robots.txt", mimetype="text/plain"
     )
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Cache-Control"] = "public, max-age=86400"
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return response
 
 
@@ -999,7 +999,7 @@ async def security_txt():
         app.static_folder, ".well-known/security.txt", mimetype="text/plain"
     )
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Cache-Control"] = "public, max-age=86400"
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return response
 
 

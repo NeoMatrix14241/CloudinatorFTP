@@ -1,4 +1,4 @@
-// Check if user is already logged in and handle browser history
+// Check status if logged in and handle browser history
 document.addEventListener('DOMContentLoaded', function () {
     // If we have a logged_out parameter, clean up the URL
     const urlParams = new URLSearchParams(window.location.search);
@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 
 function isComingFromLogout() {
-    // Check if we have a logout parameter or if we're coming from logout
+    // Check if we have a logout parameter or not
     const urlParams = new URLSearchParams(window.location.search);
     const referrer = document.referrer;
 
