@@ -23,12 +23,13 @@ Host key:
   Back this file up — clients will see a host-key-changed warning if it
   is regenerated.
 
-Cipher hardening:
-  CBC-mode, 3DES, and arcfour/RC4 ciphers are stripped from every
-  connection's offered algorithm list (see _harden_transport_ciphers) —
-  paramiko offers them by default for legacy-client compatibility, but
-  this server doesn't need them and they're what OpenVAS's "Weak
-  Encryption Algorithm(s) Supported (SSH)" check flags.
+Cipher & MAC hardening:
+  CBC-mode, 3DES, and arcfour/RC4 ciphers, plus MD5-based and
+  truncated-SHA1 MACs, are stripped from every connection's offered
+  algorithm lists (see _harden_transport_ciphers) — paramiko offers them
+  by default for legacy-client compatibility, but this server doesn't
+  need them and they're what OpenVAS's "Weak Encryption Algorithm(s)
+  Supported (SSH)" and "Weak MAC Algorithm(s) Supported (SSH)" checks flag.
 """
 
 import errno
@@ -482,17 +483,21 @@ def _get_host_key():
 
 
 # ── Weak-algorithm hardening ───────────────────────────────────────────────
-# paramiko's Transport advertises a broad default cipher list for backward
-# compatibility, including CBC-mode and RC4/arcfour ciphers this server has
-# no need to offer. This is exactly what OpenVAS OID 1.3.6.1.4.1.25623.1.0.105611
-# ("Weak Encryption Algorithm(s) Supported (SSH)") flags on SFTP_PORT (2222,
-# real SSH — paramiko.Transport — not a false positive from another service):
-#   - CBC-mode ciphers are vulnerable to a padding/plaintext-recovery attack
-#   - arcfour (RC4) has known weak-key problems
-#   - "none" disables encryption entirely
+# paramiko's Transport advertises a broad default cipher/MAC list for backward
+# compatibility, including CBC-mode/RC4 ciphers and MD5/truncated-SHA1 MACs
+# this server has no need to offer. This is exactly what OpenVAS flags on
+# SFTP_PORT (2222, real SSH — paramiko.Transport — not a false positive
+# from another service):
+#   - OID 1.3.6.1.4.1.25623.1.0.105611 "Weak Encryption Algorithm(s)
+#     Supported (SSH)" — CBC-mode ciphers (padding/plaintext-recovery
+#     attack), arcfour/RC4 (weak-key problems), "none" (no encryption)
+#   - "Weak MAC Algorithm(s) Supported (SSH)" — hmac-md5/hmac-md5-96 (MD5
+#     is cryptographically broken) and hmac-sha1-96 (a truncated-to-96-bit
+#     tag weakens the forgery-resistance SHA1's own margin already relies on)
 # None of these are required for any client this server targets (WinSCP,
-# FileZilla, OpenSSH sftp/sshfs all support aes-ctr/gcm), so they're dropped
-# from the offered list before the handshake rather than merely deprioritized.
+# FileZilla, OpenSSH sftp/sshfs all support aes-ctr/gcm ciphers and
+# hmac-sha2 MACs), so they're dropped from the offered list before the
+# handshake rather than merely deprioritized.
 _WEAK_SSH_CIPHERS = frozenset(
     {
         "3des-cbc",
@@ -507,17 +512,31 @@ _WEAK_SSH_CIPHERS = frozenset(
         "none",
     }
 )
+_WEAK_SSH_MACS = frozenset(
+    {
+        "hmac-md5",
+        "hmac-md5-96",
+        "hmac-sha1-96",
+        "hmac-sha1",  # full SHA1 isn't broken as a MAC yet, but every client
+        # this server targets supports hmac-sha2-256/512 fine, so there's no
+        # reason to keep offering it either — same "drop, don't deprioritize" call.
+        "none",
+    }
+)
 
 
 def _harden_transport_ciphers(transport):
-    """Strip weak ciphers from a Transport's offered algorithm list in-place.
-    Must be called before transport.start_server(); get_security_options()
-    returns a live view backing the handshake, so mutating .ciphers here is
-    enough — no further wiring needed."""
+    """Strip weak ciphers/MACs from a Transport's offered algorithm lists
+    in-place. Must be called before transport.start_server();
+    get_security_options() returns a live view backing the handshake, so
+    mutating .ciphers/.digests here is enough — no further wiring needed."""
     opts = transport.get_security_options()
-    hardened = tuple(c for c in opts.ciphers if c not in _WEAK_SSH_CIPHERS)
-    if hardened:
-        opts.ciphers = hardened
+    hardened_ciphers = tuple(c for c in opts.ciphers if c not in _WEAK_SSH_CIPHERS)
+    if hardened_ciphers:
+        opts.ciphers = hardened_ciphers
+    hardened_macs = tuple(m for m in opts.digests if m not in _WEAK_SSH_MACS)
+    if hardened_macs:
+        opts.digests = hardened_macs
 
 
 # ── Per-connection handler ────────────────────────────────────────────────
