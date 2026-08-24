@@ -66,19 +66,23 @@ IMG_WEBP_QUALITY = 50  # default
 # Protocol servers — all loaded from / saved to server_config.json.
 # Set any ENABLED flag to False to disable that server without removing its code.
 # Ports must not conflict with the main Flask server (5000) or each other.
-WEBDAV_ENABLED = True  # http://HOST:8080/ — native drive mapping on all OSes
+WEBDAV_ENABLED = False  # http://HOST:8080/  ⚠️  plaintext — Basic Auth creds
+# travel unencrypted (this is what ZAP's "Cleartext Transmission of Sensitive
+# Information via HTTP" finding flags). Off by default, AND ignored outright
+# whenever WEBDAV_HTTPS_ENABLED is on and its cert loads fine — HTTPS runs
+# exclusively in that case, :8080 never opens alongside it, no matter what
+# this flag says. This only takes effect when HTTPS is disabled, or as an
+# automatic fallback if the HTTPS cert can't be prepared (e.g. the
+# `cryptography` package is missing) — set it True for either of those
+# cases, not to run both listeners at once, which webdav_server.py won't do.
 WEBDAV_PORT = 8080
-WEBDAV_HTTPS_ENABLED = True  # https://HOST:8443/ — no registry edit needed
+WEBDAV_HTTPS_ENABLED = True  # https://HOST:8443/ — no registry edit needed,
+# used by default instead of WEBDAV_ENABLED above; this is the one you want.
 WEBDAV_HTTPS_PORT = 8443  # cert auto-generated in db/webdav.crt on first run
 SFTP_ENABLED = True  # sftp://HOST:2222/ — WinSCP, FileZilla, sshfs
 SFTP_PORT = 2222
-FTP_ENABLED = True  # ftp://HOST:2121/  — legacy FTP clients
+FTP_ENABLED = True  # ftp://HOST:2121/  — legacy FTP clients (plaintext, LAN only)
 FTP_PORT = 2121
-FTP_TLS_ENABLED = True  # explicit FTPS (AUTH TLS), reuses the WebDAV HTTPS cert.
-# Auto-falls back to plaintext FTP if pyOpenSSL isn't installed — see ftp_server.py.
-FTP_TLS_REQUIRE_DATA = True  # False → allow plaintext data channel for a legacy
-# client that can't do TLS on the data connection (control channel/creds are
-# still always TLS-required whenever FTP_TLS_ENABLED and pyOpenSSL are both on).
 SMB_ENABLED = False  # \\HOST\ShareName — off by default even with impacket installed.
 # Unlike WebDAV/SFTP/FTP, having the library installed isn't enough to be useful —
 # port 445 needs a one-time machine setup first. Run `python smb_setup.py` (or
@@ -903,8 +907,6 @@ def save_server_config():
         "SFTP_PORT": SFTP_PORT,
         "FTP_ENABLED": FTP_ENABLED,
         "FTP_PORT": FTP_PORT,
-        "FTP_TLS_ENABLED": FTP_TLS_ENABLED,
-        "FTP_TLS_REQUIRE_DATA": FTP_TLS_REQUIRE_DATA,
         "SMB_ENABLED": SMB_ENABLED,
         "SMB_PORT": SMB_PORT,
         "SMB_FALLBACK_PORT": SMB_FALLBACK_PORT,
@@ -930,7 +932,7 @@ def load_server_config():
     global ENABLE_FFMPEG, ENABLE_LIBVIPS, ENABLE_SEARCH_INDEX
     global WEBDAV_ENABLED, WEBDAV_PORT, WEBDAV_HTTPS_ENABLED, WEBDAV_HTTPS_PORT
     global SFTP_ENABLED, SFTP_PORT
-    global FTP_ENABLED, FTP_PORT, FTP_TLS_ENABLED, FTP_TLS_REQUIRE_DATA
+    global FTP_ENABLED, FTP_PORT
     global SMB_ENABLED, SMB_PORT, SMB_FALLBACK_PORT, SMB_SHARE_NAME
 
     try:
@@ -977,10 +979,6 @@ def load_server_config():
             SFTP_PORT = config.get("SFTP_PORT", SFTP_PORT)
             FTP_ENABLED = config.get("FTP_ENABLED", FTP_ENABLED)
             FTP_PORT = config.get("FTP_PORT", FTP_PORT)
-            FTP_TLS_ENABLED = config.get("FTP_TLS_ENABLED", FTP_TLS_ENABLED)
-            FTP_TLS_REQUIRE_DATA = config.get(
-                "FTP_TLS_REQUIRE_DATA", FTP_TLS_REQUIRE_DATA
-            )
             SMB_ENABLED = config.get("SMB_ENABLED", SMB_ENABLED)
             SMB_PORT = config.get("SMB_PORT", SMB_PORT)
             SMB_FALLBACK_PORT = config.get("SMB_FALLBACK_PORT", SMB_FALLBACK_PORT)
@@ -1776,16 +1774,15 @@ def view_current_settings():
 
     print(f"\n🌐 Protocol Servers:")
     _yon = lambda v: "✅ Enabled" if v else "🚫 Disabled"
-    print(f"   WebDAV : {_yon(WEBDAV_ENABLED)}  →  http://HOST:{WEBDAV_PORT}/")
-    print(f"   SFTP   : {_yon(SFTP_ENABLED)}  →  sftp://HOST:{SFTP_PORT}/")
     print(
-        f"   FTP    : {_yon(FTP_ENABLED)}  →  ftp://HOST:{FTP_PORT}/  "
-        + (
-            f"🔒 FTPS ({'TLS on data+control' if FTP_TLS_REQUIRE_DATA else 'TLS on control only'})"
-            if FTP_TLS_ENABLED
-            else "⚠️  plaintext"
-        )
+        f"   WebDAV : {_yon(WEBDAV_ENABLED)}  →  http://HOST:{WEBDAV_PORT}/"
+        + ("  ⚠️  plaintext" if WEBDAV_ENABLED else "")
     )
+    print(
+        f"            {_yon(WEBDAV_HTTPS_ENABLED)}  →  https://HOST:{WEBDAV_HTTPS_PORT}/"
+    )
+    print(f"   SFTP   : {_yon(SFTP_ENABLED)}  →  sftp://HOST:{SFTP_PORT}/")
+    print(f"   FTP    : {_yon(FTP_ENABLED)}  →  ftp://HOST:{FTP_PORT}/  ⚠️  plaintext")
     print(
         f"   SMB    : {_yon(SMB_ENABLED)}  →  \\\\HOST\\{SMB_SHARE_NAME}  (port {SMB_PORT}, fallback {SMB_FALLBACK_PORT})"
     )
@@ -1802,18 +1799,16 @@ def configure_protocol_settings():
         _yon = lambda v: "✅ Enabled" if v else "🚫 Disabled"
         print(f"\nCurrent Settings:")
         print(f"1. WebDAV  : {_yon(WEBDAV_ENABLED)}   Port: {WEBDAV_PORT}")
-        print(f"   → native drive mapping on Windows / macOS / Linux")
+        print(
+            f"   → native drive mapping on Windows / macOS / Linux  ⚠️  plaintext Basic Auth"
+        )
+        print(
+            f"   → HTTPS runs separately on port {WEBDAV_HTTPS_PORT} ({_yon(WEBDAV_HTTPS_ENABLED)}) — that's the one to use"
+        )
         print(f"2. SFTP    : {_yon(SFTP_ENABLED)}   Port: {SFTP_PORT}")
         print(f"   → WinSCP, FileZilla, sshfs")
         print(f"3. FTP     : {_yon(FTP_ENABLED)}   Port: {FTP_PORT}")
-        print(
-            f"   → legacy FTP clients  "
-            + (
-                f"🔒 FTPS enabled ({'TLS on data+control' if FTP_TLS_REQUIRE_DATA else 'TLS on control only'})"
-                if FTP_TLS_ENABLED
-                else "⚠️  plaintext, LAN only"
-            )
-        )
+        print(f"   → legacy FTP clients  ⚠️  plaintext, LAN only")
         print(
             f"4. SMB     : {_yon(SMB_ENABLED)}   Port: {SMB_PORT} (fallback {SMB_FALLBACK_PORT})"
         )
@@ -1828,7 +1823,7 @@ def configure_protocol_settings():
         elif choice == "2":
             _toggle_protocol("SFTP", "SFTP")
         elif choice == "3":
-            _configure_ftp()
+            _toggle_protocol("FTP", "FTP")
         elif choice == "4":
             _configure_smb()
         elif choice == "5":
@@ -1837,49 +1832,6 @@ def configure_protocol_settings():
             break
         elif choice == "6":
             print("↩️  Cancelled")
-            break
-        else:
-            print("❌ Invalid option")
-
-
-def _configure_ftp():
-    """Dedicated FTP sub-menu — has a TLS knob the other protocols don't."""
-    global FTP_ENABLED, FTP_PORT, FTP_TLS_ENABLED, FTP_TLS_REQUIRE_DATA
-
-    while True:
-        _yon = lambda v: "✅ Enabled" if v else "🚫 Disabled"
-        print(f"\nFTP — currently {_yon(FTP_ENABLED)}  (port {FTP_PORT})")
-        print(f"1. Enable / Disable         (currently {_yon(FTP_ENABLED)})")
-        print(f"2. Change port              (currently {FTP_PORT})")
-        print(f"3. FTPS (TLS)               (currently {_yon(FTP_TLS_ENABLED)})")
-        print(f"4. Require TLS on data too  (currently {_yon(FTP_TLS_REQUIRE_DATA)})")
-        print(f"5. Back")
-        print()
-        print("💡 FTPS reuses the same cert as WebDAV HTTPS (db/webdav.crt) — ")
-        print(
-            "   import it once as a Trusted Root and it covers both. Needs "
-            "pyOpenSSL installed;"
-        )
-        print("   falls back to plaintext automatically if it isn't.")
-
-        choice = input("\nSelect (1-5): ").strip()
-
-        if choice == "1":
-            FTP_ENABLED = not FTP_ENABLED
-            print(f"{'✅ Enabled' if FTP_ENABLED else '🚫 Disabled'}")
-        elif choice == "2":
-            _set_protocol_port("FTP", "FTP", FTP_PORT)
-        elif choice == "3":
-            FTP_TLS_ENABLED = not FTP_TLS_ENABLED
-            print(
-                f"{'🔒 FTPS enabled' if FTP_TLS_ENABLED else '⚠️  FTPS disabled — plaintext FTP'}"
-            )
-        elif choice == "4":
-            FTP_TLS_REQUIRE_DATA = not FTP_TLS_REQUIRE_DATA
-            print(
-                f"{'🔒 Data channel now requires TLS' if FTP_TLS_REQUIRE_DATA else '⚠️  Data channel may fall back to plaintext'}"
-            )
-        elif choice == "5":
             break
         else:
             print("❌ Invalid option")

@@ -6,6 +6,15 @@ Exposes ROOT_DIR over HTTP/HTTPS WebDAV on WEBDAV_PORT/WEBDAV_HTTPS_PORT
 library as the main app, standardized on for every server in this project
 now that the main app moved off Flask/Waitress to Quart/Hypercorn.
 
+HTTPS is the default and runs exclusively when it's enabled and the cert
+loads fine (WEBDAV_ENABLED=False, WEBDAV_HTTPS_ENABLED=True in config.py) —
+WebDAV auth is HTTP Basic, which sends credentials in a reversible (base64,
+not encrypted) form on every request, so the plaintext :8080 listener never
+runs alongside a working HTTPS one, even if WEBDAV_ENABLED=True. It's only
+used when HTTPS is disabled outright, or as an automatic fallback if HTTPS
+can't start (missing `cryptography`, cert-write failure, etc.) — same
+graceful-degradation pattern as the FTP→FTPS TLS support.
+
 wsgidav's app is WSGI-only (no ASGI-native alternative exists), so
 asgiref.wsgi.WsgiToAsgi bridges it into something Hypercorn can serve.
 This is a dependency-consolidation move, not a performance one — the
@@ -458,8 +467,14 @@ def start() -> bool:
         print("   Install it: pip install asgiref")
         return False
 
-    http_port = WEBDAV_PORT if WEBDAV_ENABLED else None
+    # HTTPS wins exclusively when it's enabled and actually starts — WEBDAV_ENABLED's
+    # plaintext :8080 is only ever used when HTTPS is off entirely, or as an automatic
+    # fallback if the cert couldn't be prepared. It is never run *alongside* a working
+    # HTTPS listener, even if WEBDAV_ENABLED=True in server_config.json.
     https_port = WEBDAV_HTTPS_PORT if WEBDAV_HTTPS_ENABLED else None
+    http_port = None
+    http_is_fallback = False  # becomes True if we opened :8080 because HTTPS
+    # couldn't start, rather than because HTTPS was simply disabled
 
     cert_path = key_path = None
     if https_port:
@@ -472,8 +487,27 @@ def start() -> bool:
         except Exception as exc:
             print(f"❌ WebDAV HTTPS: could not prepare TLS cert: {exc}")
             https_port = None
-            if not http_port:
-                return False
+            # HTTPS was requested but couldn't start — fall back to plaintext
+            # so WebDAV still comes up, regardless of what WEBDAV_ENABLED says.
+            # Credentials are Basic Auth (weakly obscured, not encrypted) over
+            # this listener, so make that loud rather than silent.
+            print(
+                f"⚠️  Falling back to plaintext WebDAV on port {WEBDAV_PORT} — "
+                f"install 'cryptography' (pip install cryptography) to get "
+                f"HTTPS back and close this cleartext fallback."
+            )
+            http_port = WEBDAV_PORT
+            http_is_fallback = True
+        else:
+            if WEBDAV_ENABLED:
+                print(
+                    f"ℹ️  WebDAV: ignoring WEBDAV_ENABLED (plaintext :{WEBDAV_PORT}) — "
+                    f"HTTPS is enabled and started fine, so it's used exclusively."
+                )
+    else:
+        # HTTPS disabled outright in config — plaintext is the only option,
+        # so honor WEBDAV_ENABLED as-is.
+        http_port = WEBDAV_PORT if WEBDAV_ENABLED else None
 
     try:
         _webdav_thread = _start_hypercorn(
@@ -487,20 +521,16 @@ def start() -> bool:
         return False
 
     if http_port:
-        print(f"🌐 WebDAV HTTP:  http://{LOCAL_IP}:{http_port}/")
+        tag = " (fallback — HTTPS unavailable)" if http_is_fallback else ""
+        print(f"🌐 WebDAV HTTP:  http://{LOCAL_IP}:{http_port}/{tag}")
+        print(f"   ⚠️  plaintext Basic Auth — credentials are NOT encrypted here")
     if https_port:
         print(f"🔐 WebDAV HTTPS: https://{LOCAL_IP}:{https_port}/  (HTTP/2 enabled)")
-        if http_port:
-            print(f"   Import cert on any LAN PC — elevated PowerShell, one line:")
-            print(
-                f'   $f="$env:TEMP\\c.crt"; Invoke-WebRequest http://{LOCAL_IP}:{http_port}/webdav.crt -OutFile $f; Import-Certificate $f -CertStoreLocation Cert:\\LocalMachine\\Root; del $f'
-            )
-        else:
-            print(
-                f"   Import {cert_path} as a trusted root manually — the HTTP"
-                f" listener that normally serves it for the PowerShell"
-                f" one-liner above is disabled (WEBDAV_ENABLED=False)."
-            )
+        print(
+            f"   Import {cert_path} as a trusted root manually (or serve it "
+            f"yourself) — the plaintext HTTP listener that used to host it at "
+            f"/webdav.crt is disabled while HTTPS is running exclusively."
+        )
 
     return True
 
