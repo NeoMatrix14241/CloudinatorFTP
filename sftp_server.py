@@ -585,7 +585,7 @@ _stop_event = threading.Event()
 _accept_thread: threading.Thread | None = None
 
 
-def _accept_loop(host_key, port: int, sftp_class, ssh_class):
+def _accept_loop(host_key, port: int, sftp_class, ssh_class, ready_event, bind_error):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, True)
     try:
@@ -594,7 +594,12 @@ def _accept_loop(host_key, port: int, sftp_class, ssh_class):
         sock.settimeout(1.0)
     except OSError as e:
         print(f"❌ SFTP: cannot bind to port {port}: {e}")
+        bind_error.append(e)
+        ready_event.set()
         return
+
+    # Bind succeeded — safe for start() to report success now.
+    ready_event.set()
 
     print(f"🔒 SFTP:    sftp://{LOCAL_IP}:{port}/")
     print(f"   WinSCP  → Protocol: SFTP  Host: {LOCAL_IP}  Port: {port}")
@@ -668,13 +673,28 @@ def start(port: int = None) -> bool:
     ssh_class = _make_ssh_server_class()
 
     _stop_event.clear()
+    ready_event = threading.Event()
+    bind_error: list = []
     _accept_thread = threading.Thread(
         target=_accept_loop,
-        args=(host_key, port, sftp_class, ssh_class),
+        args=(host_key, port, sftp_class, ssh_class, ready_event, bind_error),
         name="sftp-accept",
         daemon=True,
     )
     _accept_thread.start()
+
+    # Wait for the accept loop to actually bind (or fail to) before
+    # reporting success — previously this returned True unconditionally
+    # right after starting the thread, so a bind failure (e.g. port
+    # still held by a not-yet-terminated previous instance) printed its
+    # error on a background thread but was invisible to protocol_manager,
+    # which logged "✅ started" anyway while the OLD process kept
+    # answering on the port.
+    if not ready_event.wait(timeout=5):
+        print(f"❌ SFTP: accept loop did not start within 5s on port {port}")
+        return False
+    if bind_error:
+        return False
     return True
 
 
