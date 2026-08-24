@@ -231,7 +231,6 @@ ingress:
       connectTimeout: 0s
       tlsTimeout: 0s
       tcpKeepAlive: 0s
-      http2Origin: false
       noTLSVerify: true
       disableChunkedEncoding: false
       keepAliveConnections: 100000000
@@ -244,12 +243,10 @@ ingress:
       connectTimeout: 0s
       tlsTimeout: 0s
       tcpKeepAlive: 0s
-      http2Origin: false
-      noTLSVerify: false
+      noTLSVerify: true
       disableChunkedEncoding: false
       keepAliveConnections: 100000000
       keepAliveTimeout: 0s
-      httpHostHeader: cloudinator.site
       proxyConnectTimeout: 0s
       expectContinueTimeout: 0s
   - service: http_status:404
