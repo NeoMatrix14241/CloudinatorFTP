@@ -22,6 +22,13 @@ Host key:
   Generated as RSA-2048 on first run, stored at db/sftp_host.rsa.
   Back this file up — clients will see a host-key-changed warning if it
   is regenerated.
+
+Cipher hardening:
+  CBC-mode, 3DES, and arcfour/RC4 ciphers are stripped from every
+  connection's offered algorithm list (see _harden_transport_ciphers) —
+  paramiko offers them by default for legacy-client compatibility, but
+  this server doesn't need them and they're what OpenVAS's "Weak
+  Encryption Algorithm(s) Supported (SSH)" check flags.
 """
 
 import errno
@@ -474,6 +481,45 @@ def _get_host_key():
     return key
 
 
+# ── Weak-algorithm hardening ───────────────────────────────────────────────
+# paramiko's Transport advertises a broad default cipher list for backward
+# compatibility, including CBC-mode and RC4/arcfour ciphers this server has
+# no need to offer. This is exactly what OpenVAS OID 1.3.6.1.4.1.25623.1.0.105611
+# ("Weak Encryption Algorithm(s) Supported (SSH)") flags on SFTP_PORT (2222,
+# real SSH — paramiko.Transport — not a false positive from another service):
+#   - CBC-mode ciphers are vulnerable to a padding/plaintext-recovery attack
+#   - arcfour (RC4) has known weak-key problems
+#   - "none" disables encryption entirely
+# None of these are required for any client this server targets (WinSCP,
+# FileZilla, OpenSSH sftp/sshfs all support aes-ctr/gcm), so they're dropped
+# from the offered list before the handshake rather than merely deprioritized.
+_WEAK_SSH_CIPHERS = frozenset(
+    {
+        "3des-cbc",
+        "aes128-cbc",
+        "aes192-cbc",
+        "aes256-cbc",
+        "blowfish-cbc",
+        "cast128-cbc",
+        "arcfour",
+        "arcfour128",
+        "arcfour256",
+        "none",
+    }
+)
+
+
+def _harden_transport_ciphers(transport):
+    """Strip weak ciphers from a Transport's offered algorithm list in-place.
+    Must be called before transport.start_server(); get_security_options()
+    returns a live view backing the handshake, so mutating .ciphers here is
+    enough — no further wiring needed."""
+    opts = transport.get_security_options()
+    hardened = tuple(c for c in opts.ciphers if c not in _WEAK_SSH_CIPHERS)
+    if hardened:
+        opts.ciphers = hardened
+
+
 # ── Per-connection handler ────────────────────────────────────────────────
 
 
@@ -483,6 +529,7 @@ def _handle_connection(conn, addr, host_key, sftp_interface_class, ssh_server_cl
     transport = None
     try:
         transport = paramiko.Transport(conn)
+        _harden_transport_ciphers(transport)
         transport.add_server_key(host_key)
         transport.set_subsystem_handler(
             "sftp", paramiko.SFTPServer, sftp_interface_class
