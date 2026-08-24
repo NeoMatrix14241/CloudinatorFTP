@@ -39,6 +39,7 @@ packages=(
     pynacl
     pyppmd
     impacket
+    pyOpenSSL
 )
 
 # Exception case 1: Termux. Maps a pip package name -> its Termux apt

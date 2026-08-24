@@ -20,4 +20,4 @@ psutil<8
 pynacl<2
 pyppmd<2
 impacket<1
-pyOpenSSL
+pyOpenSSL<27
