@@ -523,13 +523,31 @@ _WEAK_SSH_MACS = frozenset(
         "none",
     }
 )
+# Finite-field Diffie-Hellman ephemeral (DHE) KEX algorithms are dropped for
+# the same reason: they let an unauthenticated client force the server into
+# expensive modular-exponentiation work with almost no cost to itself (the
+# D(HE)ater DoS — CVE-2002-20001, CVE-2022-40735, CVE-2024-41996). The
+# elliptic-curve variants (curve25519-sha256@libssh.org, ecdh-sha2-nistp*)
+# aren't vulnerable to this and every client this server targets supports
+# them, so there's no compatibility reason to keep offering DHE either.
+_WEAK_SSH_KEX = frozenset(
+    {
+        "diffie-hellman-group14-sha256",
+        "diffie-hellman-group16-sha512",
+        "diffie-hellman-group18-sha512",
+        "diffie-hellman-group-exchange-sha256",
+        "diffie-hellman-group-exchange-sha1",
+        "diffie-hellman-group14-sha1",
+        "diffie-hellman-group1-sha1",
+    }
+)
 
 
 def _harden_transport_ciphers(transport):
-    """Strip weak ciphers/MACs from a Transport's offered algorithm lists
-    in-place. Must be called before transport.start_server();
+    """Strip weak ciphers/MACs/KEX algorithms from a Transport's offered
+    algorithm lists in-place. Must be called before transport.start_server();
     get_security_options() returns a live view backing the handshake, so
-    mutating .ciphers/.digests here is enough — no further wiring needed."""
+    mutating .ciphers/.digests/.kex here is enough — no further wiring needed."""
     opts = transport.get_security_options()
     hardened_ciphers = tuple(c for c in opts.ciphers if c not in _WEAK_SSH_CIPHERS)
     if hardened_ciphers:
@@ -537,6 +555,9 @@ def _harden_transport_ciphers(transport):
     hardened_macs = tuple(m for m in opts.digests if m not in _WEAK_SSH_MACS)
     if hardened_macs:
         opts.digests = hardened_macs
+    hardened_kex = tuple(k for k in opts.kex if k not in _WEAK_SSH_KEX)
+    if hardened_kex:
+        opts.kex = hardened_kex
 
 
 # ── Per-connection handler ────────────────────────────────────────────────
