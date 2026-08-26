@@ -1355,10 +1355,25 @@ async def before_request():
         session["session_id"] = str(uuid.uuid4())
 
     # Enhanced cleanup on page load/refresh - check for assembly jobs first
-    if request.endpoint in ["index", "upload"]:
+    #
+    # IMPORTANT: this must stay scoped to "index" only. It used to also match
+    # "upload", which is the same endpoint every chunk of a chunked upload
+    # POSTs to — that meant the background cleanup_thread below (a full
+    # os.listdir + per-directory timestamp-file scan over .chunks) was being
+    # spawned on *every chunk*, not once per page load. For a multi-hundred-
+    # chunk file that's hundreds of unbounded, un-throttled OS threads doing
+    # blocking filesystem work back-to-back, all contending for the GIL
+    # against the single asyncio event loop thread Hypercorn runs on (see
+    # prod_server.py's sys.setswitchinterval comment for the same class of
+    # issue with file_monitor's walk thread) — enough to stall the loop past
+    # keep_alive_timeout and drop the upload connection mid-transfer.
+    # start_enhanced_cleanup_scheduler() (every 15 min) already covers this
+    # exact cleanup_old_chunks(max_age_hours=1) call on a proper interval, so
+    # nothing is lost by not also doing it per-request.
+    if request.endpoint == "index":
         # Check for and cleanup any stale uploads from this session
         session_id = session.get("session_id")
-        if session_id and request.endpoint == "index":
+        if session_id:
             # This is a page load/refresh - check for abandoned uploads
             # IMPORTANT: Check for assembly jobs FIRST before cleaning up chunks
             try:
