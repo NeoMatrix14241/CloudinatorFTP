@@ -13,8 +13,18 @@
       own container so its internal controls still look right.
    2. `body { margin:0; background-color:...; scrollbar-color:...; }` —
       also targets the real <body>, not a scoped copy of it. Restored here.
-   This file is loaded after viewer.css, so these rules win the cascade
-   tie on the exact same selectors/properties. */
+
+      IMPORTANT: "restored" means back to what index.css actually gives
+      body - which is NO background property at all. index.css paints the
+      page background exclusively via body::before/::after so it can stay
+      pinned to the viewport (see the comment on `html` in index.css for
+      why). A hardcoded background value here, even a close-looking one,
+      is a second body background competing with that layer every time
+      this file loads - it's static (no scroll/cursor animation) and
+      wins the cascade tie since this file loads after index.css, which
+      is exactly why it was showing through as a flat, dead seam. Only
+      margin and scrollbar-color get restored; background is left unset
+      on purpose. */
 :root {
     color-scheme: normal;
 }
@@ -25,8 +35,67 @@
 
 body {
     margin: 0;
-    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    padding: 0;
     scrollbar-color: auto;
+    background-color: #1e3c72;
+}
+
+body::before {
+    content: "";
+    /* Kept in sync with index.css's body::before: absolute + explicit
+       --doc-height (JS-measured), not a bottom:0 stretch and not fixed.
+       See index.css for the full reasoning - this file loads after
+       index.css so any mismatch here silently wins the cascade and
+       undoes that. */
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--doc-height, 100vh);
+    z-index: -1;
+}
+
+body::after {
+    content: "";
+    /* Kept in sync with index.css's body::after - see the comment there.
+       Must stay absolute + --doc-height (document-spanning), not fixed,
+       or the glow silently reverts to cutting off after one viewport in
+       full-page screenshots even though index.css itself is correct. */
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--doc-height, 100vh);
+    z-index: -1;
+    pointer-events: none;
+    background:
+        radial-gradient(90vw circle at var(--mx, 50%) var(--my, 50%),
+            rgba(72, 20, 150, 0.50) 0%,
+            rgba(155, 35, 220, 0.24) 35%,
+            rgba(245, 100, 255, 0) 70%),
+        linear-gradient(to bottom,
+            rgba(255, 255, 255, 0) 0%,
+            rgba(255, 255, 255, var(--scroll-light, 0)) 100%);
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+    body::after {
+        background:
+            radial-gradient(180vw circle at var(--mx, 50%) var(--my, 50%),
+                rgba(72, 20, 150, 0.50) 0%,
+                rgba(155, 35, 220, 0.24) 35%,
+                rgba(245, 100, 255, 0) 70%),
+            linear-gradient(to bottom,
+                rgba(255, 255, 255, 0) 0%,
+                rgba(255, 255, 255, var(--scroll-light, 0)) 100%);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body::after {
+        display: none;
+    }
 }
 
 /* Scope the pdf.js viewer to sit inside the file-viewer modal instead

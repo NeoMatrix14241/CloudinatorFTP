@@ -8563,7 +8563,7 @@ function _manageRequestRowTemplate(req) {
             </div>
             <div class="manage-share-actions request-actions">
                 <label class="max-downloads-label">Downloads:
-                    <input type="number" class="form-control max-downloads-input" value="1" min="1" style="width:60px;">
+                    <input type="number" class="form-control max-downloads-input" value="1" min="1">
                 </label>
                 <button type="button" class="btn btn-primary btn-xs" data-fn="approveShareRequest"
                         data-args="${dataArgs([req.id])}"><i class="fas fa-check"></i> Approve</button>
@@ -12051,3 +12051,179 @@ function _hlsSleep(ms) { return new Promise(resolve => setTimeout(resolve, ms));
 // ─────────────────────────────────────────────────────────────────────────────
 // End HLS helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Background glow: drives --mx/--my (cursor position) and --scroll-light
+// (0..MAX_SCROLL_LIGHT, how much lighter the page gets as you scroll) on
+// body::after in index.css. Both are lerped toward their target each frame
+// instead of set directly, so the glow eases smoothly rather than snapping
+// to the mouse or jumping on scroll.
+//
+// body::before/::after are position:absolute and sized to --doc-height
+// (set below) rather than position:fixed/100vh, so the glow covers the
+// whole document instead of only the first viewport - fixed layers only
+// ever get captured for one viewport-height's worth of pixels by
+// full-page/scroll-stitched screenshot tools, which is what made the glow
+// vanish below the first screen in those captures even though it looked
+// fine live. Because the layer is absolute now, --doc-height has to be
+// measured and kept current explicitly (ResizeObserver + MutationObserver
+// below) rather than relying on the browser to notice a resize on its
+// own - that implicit-resize dependency is exactly what caused the
+// original "background stops partway down the page" bug, so it can't be
+// reintroduced here.
+//
+// The rAF loop only runs while values are still visibly converging, then
+// goes idle. Running it forever at 60fps - even once settled - forces
+// every backdrop-filter panel on the page to re-blur every frame, which
+// is the likely cause of both the background seam and the table flicker
+// seen under DevTools device-toolbar emulation. New pointermove/scroll
+// input restarts it on demand.
+// ─────────────────────────────────────────────────────────────────────────────
+(function () {
+    const root = document.documentElement;
+
+    // ── Explicit document-height tracking for --doc-height ─────────────────
+    // Drives body::before/::after's height in CSS. Updated on any real
+    // layout-size change (ResizeObserver covers reflow from content already
+    // in the DOM; MutationObserver covers nodes being added/removed, e.g.
+    // rows appended by the virtual-scroll loader, since a childList mutation
+    // doesn't always produce a ResizeObserver-visible size change on the
+    // observed element itself until the next frame). Both are cheap and
+    // idempotent - worst case is a redundant identical write to the var.
+    let lastDocHeight = -1;
+    function updateDocHeight() {
+        const h = document.documentElement.scrollHeight;
+        if (h !== lastDocHeight) {
+            lastDocHeight = h;
+            root.style.setProperty('--doc-height', h + 'px');
+        }
+    }
+
+    if (window.ResizeObserver) {
+        const ro = new ResizeObserver(updateDocHeight);
+        ro.observe(document.body);
+        ro.observe(document.documentElement);
+    }
+    if (window.MutationObserver) {
+        const mo = new MutationObserver(updateDocHeight);
+        mo.observe(document.body, { childList: true, subtree: true });
+    }
+    window.addEventListener('resize', updateDocHeight, { passive: true });
+    updateDocHeight();
+
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        return; // body::after is display:none in this case anyway; skip the rAF loop entirely.
+    }
+
+    // How light the page is allowed to get at full scroll (0 = no change,
+    // 1 = fully white). Kept well under 1 so it stays "lighter", not blown out.
+    const MAX_SCROLL_LIGHT = 0.10;
+    // Lerp factors: higher = snappier/less smoothing, lower = smoother/laggier.
+    const CURSOR_EASE = 0.08;
+    const SCROLL_EASE = 0.06;
+    // How close cur must get to target before the loop stops itself.
+    const SETTLE_PX = 0.5;
+    const SETTLE_SCROLL = 0.000;
+
+    // Document-space (not viewport-space) coordinates, since the glow layer
+    // now spans the whole document. lastClientX/Y remember the last real
+    // pointer position in viewport terms so a scroll event (mouse not
+    // moving) can still recompute the correct document-space target - see
+    // updateScrollTarget below.
+    let lastClientX = window.innerWidth / 2;
+    let lastClientY = window.innerHeight / 2;
+    let targetX = lastClientX + window.scrollX;
+    let targetY = lastClientY + window.scrollY;
+    let curX = targetX;
+    let curY = targetY;
+
+    let targetScroll = 0;
+    let curScroll = 0;
+
+    let rafId = null;
+
+    function lerp(a, b, t) {
+        return a + (b - a) * t;
+    }
+
+    function isSettled() {
+        return (
+            Math.abs(targetX - curX) < SETTLE_PX &&
+            Math.abs(targetY - curY) < SETTLE_PX &&
+            Math.abs(targetScroll - curScroll) < SETTLE_SCROLL
+        );
+    }
+
+    function applyVars() {
+        // body::before/::after are position:absolute and span the full
+        // document height via --doc-height (see CSS comment), so --mx/--my
+        // must be document-relative pointer coordinates, not plain
+        // viewport-relative ones - curX/curY already include the scroll
+        // offset (see onPointerMove/updateScrollTarget below).
+        root.style.setProperty('--mx', curX + 'px');
+        root.style.setProperty('--my', curY + 'px');
+        root.style.setProperty('--scroll-light', curScroll.toFixed(4));
+    }
+
+    function tick() {
+        curX = lerp(curX, targetX, CURSOR_EASE);
+        curY = lerp(curY, targetY, CURSOR_EASE);
+        curScroll = lerp(curScroll, targetScroll, SCROLL_EASE);
+
+        if (isSettled()) {
+            // Snap exactly to target instead of idling fractions of a px
+            // short of it, then stop the loop until something moves again.
+            curX = targetX;
+            curY = targetY;
+            curScroll = targetScroll;
+            applyVars();
+            rafId = null;
+            return;
+        }
+
+        applyVars();
+        rafId = requestAnimationFrame(tick);
+    }
+
+    function ensureRunning() {
+        if (rafId === null) {
+            rafId = requestAnimationFrame(tick);
+        }
+    }
+
+    function onPointerMove(e) {
+        lastClientX = e.clientX;
+        lastClientY = e.clientY;
+        targetX = lastClientX + window.scrollX;
+        targetY = lastClientY + window.scrollY;
+        ensureRunning();
+    }
+
+    function updateScrollTarget() {
+        const doc = document.documentElement;
+        const scrollable = Math.max(doc.scrollHeight - doc.clientHeight, 1);
+        const progress = Math.min(Math.max(window.scrollY / scrollable, 0), 1);
+        targetScroll = progress * MAX_SCROLL_LIGHT;
+
+        // Re-anchor the glow to the cursor's document position on scroll
+        // too, not just on pointermove - otherwise scrolling with the
+        // mouse stationary would leave the glow's document-space target
+        // unchanged while the page moves underneath it, making it drift
+        // out from under the cursor instead of tracking it.
+        targetX = lastClientX + window.scrollX;
+        targetY = lastClientY + window.scrollY;
+
+        ensureRunning();
+    }
+
+    // pointermove (not mousemove) so this also tracks correctly under
+    // touch/device-toolbar emulation, where plain hover mousemove mostly
+    // doesn't fire and the glow would otherwise get stuck at the last
+    // real coordinate it received.
+    window.addEventListener('pointermove', onPointerMove, { passive: true });
+    window.addEventListener('scroll', updateScrollTarget, { passive: true });
+    window.addEventListener('resize', updateScrollTarget, { passive: true });
+
+    applyVars();
+    updateScrollTarget();
+})();

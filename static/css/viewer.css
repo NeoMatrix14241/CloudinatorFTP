@@ -3098,6 +3098,7 @@
               max-height:-moz-fit-content;
               max-height:fit-content;
               -webkit-line-clamp:unset;
+              line-clamp:unset;
             }
 
             time::after{
@@ -3120,6 +3121,7 @@
           display:-webkit-box;
           -webkit-box-orient:vertical;
           -webkit-line-clamp:2;
+          line-clamp:2;
           overflow:hidden;
           overflow-wrap:break-word;
 
@@ -3133,6 +3135,7 @@
             max-height:-moz-fit-content;
             max-height:fit-content;
             -webkit-line-clamp:unset;
+            line-clamp:unset;
             -webkit-user-select:none;
                -moz-user-select:none;
                     user-select:none;
@@ -7245,6 +7248,7 @@ body{
 
 #pageNumber{
   -moz-appearance:textfield;
+  appearance:textfield;
   text-align:end;
   width:40px;
   background-size:0 0;

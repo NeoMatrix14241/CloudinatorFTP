@@ -245,40 +245,6 @@
         </div>
         {% endif %}
 
-        <!-- Bulk Actions (appears when files are selected) -->
-        <div class="bulk-actions" id="bulkActions">
-            <div class="bulk-info">
-                <i class="fas fa-check-square"></i>
-                <span id="selectedCount">0</span> item(s) selected
-            </div>
-            <div class="bulk-buttons">
-                <button class="btn btn-primary btn-sm" id="bulkDownloadBtn" data-fn="bulkDownload">
-                    <i class="fas fa-download"></i> Download
-                </button>
-                {% if role == 'readwrite' %}
-                <button class="btn btn-warning btn-sm" data-fn="showMoveModal">
-                    <i class="fas fa-cut"></i> Move
-                </button>
-                <button class="btn btn-success btn-sm" data-fn="showCopyModal">
-                    <i class="fas fa-copy"></i> Copy
-                </button>
-                <button class="btn btn-primary btn-sm" data-fn="showRenameModal">
-                    <i class="fas fa-edit"></i> Rename
-                </button>
-                <button class="btn btn-danger btn-sm" data-fn="bulkDelete">
-                    <i class="fas fa-trash"></i> Delete
-                </button>
-                <button class="btn btn-primary btn-sm" data-fn="showBulkShareModal">
-                    <i class="fas fa-share-nodes"></i> Share
-                </button>
-                {% endif %}
-                <button class="btn btn-outline btn-sm" data-fn="clearSelection"
-                    style="color: white; border-color: rgba(255,255,255,0.4);">
-                    <i class="fas fa-times"></i> Clear
-                </button>
-            </div>
-        </div>
-
         <!-- Mobile scroll hint (only visible on mobile) -->
         <div class="mobile-scroll-hint" style="display: none;">
             <div
@@ -362,6 +328,40 @@
                 <i class="fas fa-info-circle"></i> Click column headers to sort • Currently showing: <span
                     id="visibleCount">{{ items|length if items else 0 }}</span> items
                 <span id="currentSortInfo" style="margin-left: 15px; color: rgba(255,255,255,0.5);"></span>
+            </div>
+        </div>
+
+        <!-- Bulk Actions (appears when files are selected) -->
+        <div class="bulk-actions" id="bulkActions">
+            <div class="bulk-info">
+                <i class="fas fa-check-square"></i>
+                <span id="selectedCount">0</span> item(s) selected
+            </div>
+            <div class="bulk-buttons">
+                <button class="btn btn-primary btn-sm" id="bulkDownloadBtn" data-fn="bulkDownload">
+                    <i class="fas fa-download"></i> Download
+                </button>
+                {% if role == 'readwrite' %}
+                <button class="btn btn-warning btn-sm" data-fn="showMoveModal">
+                    <i class="fas fa-cut"></i> Move
+                </button>
+                <button class="btn btn-success btn-sm" data-fn="showCopyModal">
+                    <i class="fas fa-copy"></i> Copy
+                </button>
+                <button class="btn btn-primary btn-sm" data-fn="showRenameModal">
+                    <i class="fas fa-edit"></i> Rename
+                </button>
+                <button class="btn btn-danger btn-sm" data-fn="bulkDelete">
+                    <i class="fas fa-trash"></i> Delete
+                </button>
+                <button class="btn btn-primary btn-sm" data-fn="showBulkShareModal">
+                    <i class="fas fa-share-nodes"></i> Share
+                </button>
+                {% endif %}
+                <button class="btn btn-outline btn-sm" data-fn="clearSelection"
+                    style="color: white; border-color: rgba(255,255,255,0.4);">
+                    <i class="fas fa-times"></i> Clear
+                </button>
             </div>
         </div>
 

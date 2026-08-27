@@ -5,13 +5,103 @@
 }
 
 body {
-    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    position: relative;
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     min-height: 100vh;
     color: #333;
 }
 
-/* Header */
+body::before {
+    content: "";
+    /* Was position:absolute stretched via top/left/right/bottom:0 to match
+       <body>'s own (content-driven) height. On pages where the file table
+       grows tall - lots of items, or rows appended after the initial paint
+       by the virtual-scroll loader - that meant this layer's box only got
+       resized on the next full layout pass. Combined with dozens of other
+       backdrop-filter panels on this page (header, breadcrumb, buttons,
+       search box, the table card itself), the compositor would sometimes
+       never re-rasterize this large layer to the new, taller size: the
+       background then just stopped partway down the page and the plain
+       page canvas showed through beneath it (reported as "background color
+       doesn't work" further down the page).
+
+       Switched back to position:absolute, but height is no longer left to
+       implicit layout - index.js measures document.documentElement.scrollHeight
+       explicitly (ResizeObserver + MutationObserver, see the "Background
+       glow" block near the end of that file) and writes it into --doc-height
+       on every real content-size change. That's what the earlier fixed-size
+       approach was trying to avoid depending on: this way the resize is
+       driven by an explicit measurement instead of hoping the browser
+       notices and reflows this layer on its own. Height is intentionally
+       NOT 100% (that would depend on <body>'s own box, which is the same
+       implicit-layout dependency being avoided) or 100vh (that's exactly
+       the one-viewport limit this is trying to escape, needed so the
+       cursor-glow layer below covers the whole document instead of cutting
+       off after the first screen in full-page screenshots). */
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--doc-height, 100vh);
+    z-index: -1;
+    background-color: #1e3c72;
+}
+
+/* Cursor-follow glow + scroll lightening, layered on top of body::before.
+   Driven by --mx/--my/--scroll-light custom properties, updated every
+   frame from index.js (see the "Background glow" block near the end of
+   that file). Values are lerped in JS rather than relying on CSS
+   transitions on the custom properties themselves, so this degrades
+   gracefully in browsers without @property support. */
+body::after {
+    content: "";
+    /* Matches body::before - absolute + explicit --doc-height, not fixed,
+       so this layer spans the whole document rather than stopping after
+       one viewport (which is what made the glow vanish beyond the first
+       screen in full-page/scroll-stitched screenshots - those tools only
+       ever get pixels of a fixed layer for the single frame it was
+       captured in). --mx/--my are therefore document-relative pointer
+       coordinates now (clientX/clientY + scrollX/scrollY), not plain
+       viewport-relative ones - index.js adds the scroll offset itself and
+       recomputes it on scroll so the glow stays under the cursor's actual
+       document position instead of drifting with the page. */
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--doc-height, 100vh);
+    z-index: -1;
+    pointer-events: none;
+    background:
+        radial-gradient(90vw circle at var(--mx, 50%) var(--my, 50%),
+            rgba(72, 20, 150, 0.50) 0%,
+            rgba(155, 35, 220, 0.24) 35%,
+            rgba(245, 100, 255, 0) 70%),
+        linear-gradient(to bottom,
+            rgba(255, 255, 255, 0) 0%,
+            rgba(255, 255, 255, var(--scroll-light, 0)) 100%);
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+    body::after {
+        background:
+            radial-gradient(180vw circle at var(--mx, 50%) var(--my, 50%),
+                rgba(72, 20, 150, 0.50) 0%,
+                rgba(155, 35, 220, 0.24) 35%,
+                rgba(245, 100, 255, 0) 70%),
+            linear-gradient(to bottom,
+                rgba(255, 255, 255, 0) 0%,
+                rgba(255, 255, 255, var(--scroll-light, 0)) 100%);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body::after {
+        display: none;
+    }
+}
+
 .header {
     background: rgba(255, 255, 255, 0.1);
     -webkit-backdrop-filter: blur(20px);
@@ -100,7 +190,7 @@ body {
 
 /* Main container */
 .container {
-    max-width: 1200px;
+    max-width: 75%;
     margin: 0 auto;
     padding: 30px;
 }
@@ -220,7 +310,7 @@ body {
     display: none;
     align-items: center;
     gap: 15px;
-    margin-bottom: 15px;
+    margin-bottom: 25px;
 }
 
 .bulk-actions.show {
@@ -338,8 +428,11 @@ body {
 
 /* File table */
 .file-table {
-    background: rgba(48, 84, 140, 255);
-    /* Theme-matched light blue background */
+    background: rgba(255, 255, 255, 0.1);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    /* Same glass style as .breadcrumb / .bulk-actions so it blends into the
+       gradient instead of sitting on top of it as a flat, opaque block. */
     border-radius: 12px;
     overflow: hidden;
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
@@ -1833,6 +1926,7 @@ select.form-control option {
 }
 
 .max-downloads-input {
+    width: 60px !important;
     padding: 5px 8px !important;
     font-size: 12px !important;
 }
@@ -3057,6 +3151,20 @@ td .fa-file {
 
 /* Very small screens (phones in portrait) */
 @media (max-width: 480px) {
+
+    /* Fix: search-wrapper's inline min-width:250px (index.html) and this
+       input's min-width:200px force the whole document wider than the
+       viewport below ~250px, which overflows <body> horizontally. That
+       decouples the fixed body::before gradient from the (now wider,
+       scrollable) page content - see conversation. Clamp both here. */
+    .search-wrapper {
+        min-width: 0 !important;
+        max-width: 100% !important;
+    }
+
+    .create-folder-form input[type="text"] {
+        min-width: 0;
+    }
 
     /* Ensure theme background colors are maintained on very small screens */
     .file-table {
