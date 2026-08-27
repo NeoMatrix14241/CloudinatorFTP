@@ -29,10 +29,10 @@ Scanner: [OpenVAS](https://openvas.org/) (Scanner: OpenVAS Default, Scan Config:
 <img width="1794" height="893" alt="image" src="https://github.com/user-attachments/assets/083a1054-b1bd-446b-946c-a3dda29b459b" />
 
 ## 📷 Guest (READONLY)
-<img width="1794" height="1318" alt="image" src="https://github.com/user-attachments/assets/79fa8549-e69a-42df-a76f-c9fa612576a0" />
+<img width="1912" height="1470" alt="image" src="https://github.com/user-attachments/assets/f846ba53-d02f-4d3e-8e57-8f3069aad147" />
 
 ## 📷 Admin (READWRITE)
-<img width="1794" height="1648" alt="image" src="https://github.com/user-attachments/assets/d2fc0541-9004-4896-9693-ac67bf2a7b3f" />
+<img width="1912" height="1758" alt="image" src="https://github.com/user-attachments/assets/a1fcb95c-6284-46a2-aa2c-60d11f5e9456" />
 
 ## 📋 Table of Contents
 
