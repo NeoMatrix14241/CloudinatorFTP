@@ -1,6 +1,6 @@
 # CloudinatorFTP — Complete Codebase Reference for AI-Assisted Development
 
-**Version**: 4.3 (+ 2026-08-23 route-sync notes) | **Last Updated**: 2026-08-23  
+**Version**: 4.3 (+ 2026-08-28 protocol-hardening & route-sync notes) | **Last Updated**: 2026-08-28  
 **For**: AI assistants and developers modifying/extending CloudinatorFTP
 
 **Recent updates (2026-07-28)**:
@@ -14,6 +14,8 @@
 **🆕 2026-08-23 sync note**: `app.py` and `index.js` were diffed against this doc and found to have drifted further than the sections below reflect — mostly route-path renames and a batch of new endpoints that were never written up. Rather than rewrite the tables below (which still have useful response-shape examples), corrections and additions live in a new **[Route Path Corrections & New Endpoints (2026-08-23)](#route-path-corrections--new-endpoints-2026-08-23)** section right after the original "Quart Routes & API" section, and in the updated JS function list under Quick Reference. Treat that new section as authoritative for *paths*; treat the older tables as authoritative for general request/response shape except where the new section says otherwise.
 
 **🆕 2026-08-23 sync note, part 2**: a further pass against `index.html`/`index.js`/the new `pdfjs-worker-init.mjs`/`pdfjs-viewer-overlay.css` found the old `/pdfviewer` route entirely gone, replaced by pdf.js merged directly into `index.html`. See **[Embedded PDF.js Viewer (2026-08-23)](#embedded-pdfjs-viewer-2026-08-23)**, added right after the Route Path Corrections table.
+
+**🆕 2026-08-28 sync note**: `ssl_cert.py`, `config.py`, `index.css`, `pdfjs-viewer-overlay.css`, `index.js`, `index.html`, `app.py`, and `sftp_server.py` were all touched in the same edit pass. Re-verified `@app.route`/`fetch(` in `app.py`/`index.js` — no route-level drift beyond what the 2026-08-23 corrections already cover. Real deltas found: (1) `sftp_server.py` now hardens the SSH transport's offered ciphers/MACs/KEX on every connection (see the new bullet in [SFTP Implementation Notes](#sftp-implementation-notes)); (2) `config.py` adds `FTP_TLS_ENABLED`/`FTP_TLS_REQUIRE_DATA` (FTPS support) and flips `WEBDAV_ENABLED` (plaintext HTTP WebDAV) to `False` by default (see the updated [config.py Protocol Variables](#configpy-protocol-variables) block); (3) `ssl_cert.py`'s module docstring now documents macOS/Linux (davfs2) trust-import steps, not just Windows (see [SSL Certificate](#ssl-certificate-ssl_certpy)); (4) a likely-unintentional regression was found in `pdfjs-viewer-overlay.css` — see the callout in [Embedded PDF.js Viewer](#embedded-pdfjs-viewer-2026-08-23). `index.css`/`index.html` were reviewed and show no behavioral changes beyond what's already documented.
 
 ---
 
@@ -60,14 +62,14 @@
 | **realtime_shares.py** | Server-Sent Events (admin-only) | Live pending-share-request count + active-shares-changed nudges for the Manage Shared panel |
 | **protocol_manager.py** | Protocol server launcher | Starts/stops WebDAV, SFTP, FTP, SMB in background threads |
 | **webdav_server.py** | WebDAV server | wsgidav WSGI app bridged onto Hypercorn via `asgiref.WsgiToAsgi`; serves HTTP+HTTPS from one Hypercorn Config; role enforcement (no longer waitress/cheroot for serving — cheroot is now only a transitive wsgidav dependency) |
-| **sftp_server.py** | SFTP server | Paramiko SSH/SFTP, RSA host key, chrooted to ROOT_DIR |
+| **sftp_server.py** | SFTP server | Paramiko SSH/SFTP, RSA host key, chrooted to ROOT_DIR; now also hardens offered SSH ciphers/MACs/KEX per connection (see [SFTP Implementation Notes](#sftp-implementation-notes)) |
 | **smb_server.py** | SMB server | impacket SimpleSMBServer, Tree Connect role enforcement, Windows file-locking fixes |
 | **smb_setup.py** | SMB one-time setup | Standalone tool — Windows LanmanServer, Linux setcap, Android root check |
 | **lanman_guard.py** | SMB Windows state tracker | Passive pending-setup state file, read by smb_server.py, written by smb_setup.py |
 | **kick_sessions.py** | Access revocation tool | Rotate/delete a user, or instantly log out the web UI, for security incidents (replaced the older `revoke_session.py`) |
 | **revoke_sharing.py** | Share-link revocation tool | Interactive menu + CLI subcommands to list/revoke individual or all share tokens, independent of the web UI |
 | **ftp_server.py** | FTP server | pyftpdlib, custom authorizer, passive ports 60000–60100 |
-| **ssl_cert.py** | TLS certificate manager | Self-signed cert generation, SAN detection, db/ storage; `prod_server.py` now prefers a real Tailscale-issued cert when available, falling back to this self-signed cert otherwise |
+| **ssl_cert.py** | TLS certificate manager | Self-signed cert generation, SAN detection, db/ storage; `prod_server.py` now prefers a real Tailscale-issued cert when available, falling back to this self-signed cert otherwise; module docstring now covers Windows + macOS + Linux trust-import steps |
 | **static/js/pdfjs-worker-init.mjs** | pdf.js integration shim (new, undocumented until now — see [Embedded PDF.js Viewer](#embedded-pdfjs-viewer-2026-08-23)) | Sets `GlobalWorkerOptions.workerSrc` directly, then reasserts it (plus `cMapUrl`/`iccUrl`/`standardFontDataUrl`/`wasmUrl`/`imageResourcesPath`) via pdf.js's `webviewerloaded` hook so they survive viewer.mjs's own self-init; also clears the dev build's hardcoded sample-PDF `defaultUrl` |
 | **static/css/pdfjs-viewer-overlay.css** | pdf.js viewer scoping/theming fix (new, undocumented until now) | Loaded after the merged `viewer.css` to win cascade ties; undoes viewer.css's page-wide `:root`/`body` leaks and re-parents `#pdfjsViewerRoot` into a normal flex child of the file-viewer modal instead of a full-page absolute overlay; also fixes mobile toolbar overflow |
 
@@ -858,6 +860,17 @@ Undocumented until this pass — reconstructed from `index.html`, `index.js`, `a
 - `closeFileViewer()` handles `#pdfjsViewerRoot` as a separate cleanup step from the rest of the modal teardown (again, because it's a sibling of `#fileViewerBody`, not covered by that element's own `innerHTML` reset): hides it, best-effort calls `window.PDFViewerApplication.close()` if present, and restores `_pdfViewerPrevTitle` if set.
 
 **Cross-reference**: `app.py`'s `Integrity-Policy-Report-Only` comment block (see [Authentication & Sessions](#-authentication--sessions) area of app.py, not this doc) notes that `viewer.mjs` does not yet have a computed SRI `integrity` attribute in `index.html`, unlike `login.js`/`404.js` — called out there as a blocker before that header can move from report-only to enforcing.
+
+**⚠️ Regression found in the 2026-08-28 edit of `pdfjs-viewer-overlay.css`**: the file's own comment block above the `body` rule states, in bold, that `body`'s background is "left unset on purpose" because `index.css` paints the page background exclusively via `body::before`/`body::after` (so it can be sized to `--doc-height` instead of clipping to one viewport — see [index.css's own comment](#-media-handling) on this same layering). The current `body` rule contradicts that comment directly:
+```css
+body {
+    margin: 0;
+    padding: 0;
+    scrollbar-color: auto;
+    background-color: #1e3c72;   /* contradicts the comment immediately above this rule */
+}
+```
+`#1e3c72` is the exact same color `index.css` already sets on `body::before` — so this isn't a new color choice, it's that value copied one selector too high. Because this file `<link>`s after `index.css` and wins the cascade tie on `body`, it now paints a second, static copy of the page background directly on `<body>` any time the pdf.js assets are loaded (i.e. on every page load, since they're loaded unconditionally per the "New assets" list above) — competing with the properly `--doc-height`-sized, animated `body::before`/`body::after` layers underneath it. This was very likely an accidental copy-paste while editing the surrounding rule, not an intentional design change, since it directly reverses what the adjacent comment documents. Flagging here rather than silently "fixing" the docs to match: recommend either deleting the `background-color` line to match the stated intent, or updating the comment if the flat background turns out to be wanted after all.
 
 **404.css** (undocumented, unrelated to the PDF viewer but found in the same file-review pass): a `@media (max-height: 700px)` block was added — shrinks `.error-container` padding, `.error-icon` size/margin, `.error-title`/`.error-subtitle` size/margin, and `.error-details` spacing on short viewports (small/laptop monitors), so the 404 card is less likely to need scrolling on those screens. Complements the existing `@media (max-width: 480px)` block, which handles narrow-but-tall (mobile) instead.
 
@@ -1783,7 +1796,7 @@ SMB is architecturally different from the other three: it defaults to **disabled
 | WebDAV HTTP | 8080 | Native drive mapping; requires `BasicAuthLevel=2` registry on Windows |
 | WebDAV HTTPS | 8443 | Preferred; no registry edit; requires importing `db/webdav.crt` once |
 | SFTP | 2222 | WinSCP / FileZilla / sshfs |
-| FTP | 2121 | Legacy clients; plaintext; LAN only |
+| FTP | 2121 | Explicit FTPS (AUTH TLS) by default as of 2026-08-28 — see `FTP_TLS_ENABLED`; same port, no separate implicit-FTPS port. Falls back to plaintext if TLS is disabled or `pyOpenSSL` is missing; LAN use still recommended either way |
 | FTP passive data | 60000–60100 | Must be open in firewall for FTP transfers |
 | SMB | 445 | Disabled by default; needs `smb_setup.py` — Windows steals the port by default |
 | SMB fallback | 8445 | Used automatically until port 445 setup is done |
@@ -1811,12 +1824,18 @@ Request → _CertMiddleware (serves /webdav.crt unauthenticated)
 - **Windows path-join bug (fixed)**: The original implementation called `os.path.join(root, some_sftp_path)` directly. On Windows, `ntpath.join("C:\\Server\\Files", "\\subfolder")` returns `"C:\\subfolder"` — **not** `"C:\\Server\\Files\\subfolder"` — because a drive-less absolute path (which is exactly what an SFTP client sends, since SFTP paths are POSIX-style and start with `/`) resets `ntpath.join` back to the drive root. This silently clamped every subdirectory lookup back to `ROOT_DIR` on Windows — the SFTP root itself happened to still resolve correctly by coincidence, which is why it could look fine in a quick smoke test. Fix: split the SFTP path into individual segments and join them one at a time with `os.path.join(real, seg)`, so a bare segment name (never starting with a separator) can't trigger `ntpath`'s absolute-path-reset behavior on any OS.
 - **SFTPHandle**: Uses `paramiko.SFTPHandle` with `readfile`/`writefile` attributes — paramiko's default `read()`/`write()` methods use these. Do NOT monkeypatch instance attributes onto `SFTPHandle`; paramiko does not guarantee instance-attribute method dispatch.
 - **`transport.accept(30)`**: Required after `start_server()` to acknowledge the client's session channel. Without it, SFTP subsystem activation stalls.
+- **Cipher/MAC/KEX hardening (new)**: `_harden_transport_ciphers()` is called on every `paramiko.Transport` before `start_server()`, and strips weak algorithms from `transport.get_security_options()` in place (mutating `.ciphers`/`.digests`/`.kex` is enough — no other wiring needed, since `get_security_options()` returns a live view backing the handshake). Dropped, not merely deprioritized, because none of them are needed by any client this server targets (WinSCP, FileZilla, OpenSSH sftp/sshfs all support modern alternatives):
+  - **Ciphers** (`_WEAK_SSH_CIPHERS`): all CBC-mode ciphers (`3des-cbc`, `aes128/192/256-cbc`, `blowfish-cbc`, `cast128-cbc`), `arcfour`/`arcfour128`/`arcfour256` (RC4, broken), and `none`.
+  - **MACs** (`_WEAK_SSH_MACS`): `hmac-md5`, `hmac-md5-96`, `hmac-sha1-96` (truncated tag weakens SHA1's own forgery-resistance margin), `hmac-sha1` (not broken as a MAC, dropped anyway since every targeted client supports `hmac-sha2-256/512`), and `none`.
+  - **KEX** (`_WEAK_SSH_KEX`): all finite-field Diffie-Hellman group/group-exchange algorithms — dropped to close off the D(HE)ater DoS pattern (CVE-2002-20001, CVE-2022-40735, CVE-2024-41996), where an unauthenticated client can force expensive modular-exponentiation work on the server for almost no cost to itself. The elliptic-curve KEX variants (`curve25519-sha256@libssh.org`, `ecdh-sha2-nistp*`) aren't vulnerable to this and stay enabled.
+  - Written to satisfy OpenVAS's "Weak Encryption Algorithm(s) Supported (SSH)" and "Weak MAC Algorithm(s) Supported (SSH)" findings — the same category of scanner-driven hardening as the [ZAP Security Scan Fixes](#version-42-2026-08-18) already documented for `app.py`.
 
 ### FTP Implementation Notes
 
 - **`CloudinatorAuthorizer`**: Does NOT inherit from `DummyAuthorizer`. On Windows, `DummyAuthorizer.impersonate_user()` calls `win32security.LogonUser()`, which fails for DB-only users and blocks all file operations post-login. The standalone class has explicit no-op `impersonate_user()` and `terminate_impersonation()` methods.
 - **Passive ports**: `60000–60100`. These must be open in the Windows Firewall for file transfers to work.
 - **Credentials**: Same as web UI. `has_user()` queries `db.user_exists()`, `validate_authentication()` calls `db.check_login()`.
+- **FTPS / explicit TLS (new, via `config.py`)**: `FTP_TLS_ENABLED` (default `True`) turns on explicit FTPS (`AUTH TLS`), reusing the same cert `ssl_cert.py` generates for WebDAV HTTPS rather than issuing a separate one. If `pyOpenSSL` isn't installed, `ftp_server.py` auto-falls back to plaintext FTP rather than failing to start. `FTP_TLS_REQUIRE_DATA` (default `True`) additionally requires the *data* channel to be TLS too, not just the control channel/credentials (which are always TLS-required whenever `FTP_TLS_ENABLED` and `pyOpenSSL` are both available) — set it `False` only to accommodate a legacy client that can't negotiate TLS on the data connection. Configurable interactively via `python config.py` → option 13 → FTP sub-menu (options 3–4).
 
 ### SMB Implementation Notes
 
@@ -1854,13 +1873,14 @@ Request → _CertMiddleware (serves /webdav.crt unauthenticated)
 - `CA:TRUE` in BasicConstraints so it can be imported as a Trusted Root CA.
 - Served unauthenticated at `http://HOST:8080/webdav.crt` via `_CertMiddleware`.
 - **Regenerate** after IP change: `python ssl_cert.py --regenerate`.
+- **Cross-platform trust-import docs (new)**: `ssl_cert.py`'s module docstring now documents the one-time client-side trust step for all three desktop OSes, not just Windows — `security add-trusted-cert` for macOS, and `update-ca-certificates` (after copying the cert into `/usr/local/share/ca-certificates/`) for Linux `davfs2` mounts. The Windows `Import-Certificate` steps and the `net use` drive-mapping example were already documented and are unchanged.
 
 **Tailscale cert preference (prod_server.py)**: On startup, `prod_server.py` first tries `tailscale cert` to obtain a real, publicly-trusted certificate for the device's `*.ts.net` MagicDNS name, with a 12-hour background renewal loop running for the lifetime of the server. If Tailscale isn't installed, not logged in, or not enabled, it falls back to `ssl_cert.py`'s self-signed cert automatically — no configuration needed either way. This only applies to the certificate `prod_server.py` uses for its own Hypercorn HTTPS listener; `webdav_server.py`'s HTTPS listener still uses `ssl_cert.py`'s cert directly.
 
 ### config.py Protocol Variables
 
 ```python
-WEBDAV_ENABLED       = True   # WebDAV HTTP server
+WEBDAV_ENABLED       = False  # WebDAV HTTP server — 🆕 now off by default (was True)
 WEBDAV_PORT          = 8080
 WEBDAV_HTTPS_ENABLED = True   # WebDAV HTTPS server (TLS terminated by Hypercorn now; cheroot is only a transitive wsgidav dependency, not used for serving)
 WEBDAV_HTTPS_PORT    = 8443
@@ -1868,13 +1888,19 @@ SFTP_ENABLED         = True
 SFTP_PORT            = 2222
 FTP_ENABLED          = True
 FTP_PORT             = 2121
+FTP_TLS_ENABLED      = True   # 🆕 explicit FTPS (AUTH TLS); reuses the WebDAV HTTPS cert
+FTP_TLS_REQUIRE_DATA = True   # 🆕 False → allow a plaintext data channel for legacy clients
 SMB_ENABLED          = False  # off by default — needs smb_setup.py first, unlike the other three
 SMB_PORT             = 445
 SMB_FALLBACK_PORT    = 8445
 SMB_SHARE_NAME        = "SharedFolder"
 ```
 
-All keys are saved/loaded by `save_server_config()` / `load_server_config()` in `server_config.json`. Configurable interactively via `python config.py` → option 13 (Protocol Servers); SMB has its own sub-menu there. No `SMB_AUTO_MANAGE_LANMAN` toggle exists — an earlier design auto-stopped/restored Windows' LanmanServer on every server start/stop, but this was the wrong model: disabling LanmanServer to free port 445 doesn't take effect until an actual machine restart (a kernel driver binding, not just a service flag), so it was never a per-session toggle to begin with. Replaced with `smb_setup.py`, a rare, human-run, one-time setup — see below.
+**🆕 `WEBDAV_ENABLED` default flip (2026-08-28)**: now `False` by default (previously `True`). This is the plaintext-HTTP WebDAV listener — credentials travel unencrypted over Basic Auth, which is exactly what triggered ZAP's "Cleartext Transmission of Sensitive Information via HTTP" finding (see [Version 4.2 — ZAP Security Scan Fixes](#version-42-2026-08-18)). It's also ignored outright whenever `WEBDAV_HTTPS_ENABLED` is on and its cert loads fine — HTTPS then runs exclusively and `:8080` never opens alongside it, regardless of this flag. It only takes effect when HTTPS is disabled, or as an automatic fallback if the HTTPS cert can't be prepared (e.g. `cryptography` isn't installed) — set it `True` for either of those cases, not to run both listeners at once, which `webdav_server.py` won't do anyway.
+
+**🆕 `FTP_TLS_ENABLED` / `FTP_TLS_REQUIRE_DATA` (2026-08-28)**: see [FTP Implementation Notes](#ftp-implementation-notes) above for the full behavior (FTPS via `AUTH TLS`, shared cert with WebDAV HTTPS, `pyOpenSSL`-gated with a plaintext fallback).
+
+All keys are saved/loaded by `save_server_config()` / `load_server_config()` in `server_config.json`. Configurable interactively via `python config.py` → option 13 (Protocol Servers); SMB has its own sub-menu there, and FTP's sub-menu now has two additional options (3: toggle FTPS, 4: toggle "require TLS on data too"). No `SMB_AUTO_MANAGE_LANMAN` toggle exists — an earlier design auto-stopped/restored Windows' LanmanServer on every server start/stop, but this was the wrong model: disabling LanmanServer to free port 445 doesn't take effect until an actual machine restart (a kernel driver binding, not just a service flag), so it was never a per-session toggle to begin with. Replaced with `smb_setup.py`, a rare, human-run, one-time setup — see below.
 
 ### Required Dependencies (new)
 
@@ -1885,10 +1911,11 @@ asgiref    — bridges wsgidav's WSGI app onto Hypercorn (WsgiToAsgi)
 hypercorn  — ASGI server for the whole stack (web UI + WebDAV HTTP/HTTPS); replaced waitress
 paramiko   — SSH/SFTP implementation
 pyftpdlib  — FTP server
+pyOpenSSL  — 🆕 optional; enables FTPS (AUTH TLS) in ftp_server.py when FTP_TLS_ENABLED is True — plain FTP still works without it, just without TLS
 impacket   — SMB server
 ```
 
-Install: `pip install wsgidav asgiref hypercorn paramiko pyftpdlib impacket` (`waitress` and the explicit `cheroot` pin were dropped from requirements.txt as part of the Quart/Hypercorn migration — the project is now standardized on Hypercorn for every HTTP-speaking component, including WebDAV, which is served via `asgiref.WsgiToAsgi` bridging wsgidav's WSGI app onto the same Hypercorn Config/thread as `prod_server.py` uses, `bind=` for TLS and `insecure_bind=` for plain HTTP. Known caveat: `WsgiToAsgi` doesn't implement ASGI lifespan, so Hypercorn logs a harmless "continuing without Lifespan support" warning on WebDAV startup.)
+Install: `pip install wsgidav asgiref hypercorn paramiko pyftpdlib pyOpenSSL impacket` (`waitress` and the explicit `cheroot` pin were dropped from requirements.txt as part of the Quart/Hypercorn migration — the project is now standardized on Hypercorn for every HTTP-speaking component, including WebDAV, which is served via `asgiref.WsgiToAsgi` bridging wsgidav's WSGI app onto the same Hypercorn Config/thread as `prod_server.py` uses, `bind=` for TLS and `insecure_bind=` for plain HTTP. Known caveat: `WsgiToAsgi` doesn't implement ASGI lifespan, so Hypercorn logs a harmless "continuing without Lifespan support" warning on WebDAV startup.)
 
 Each is imported lazily inside `start()`. If a library is missing, that protocol server prints a warning and skips — the main Quart server is unaffected.
 
@@ -2249,6 +2276,25 @@ Works at the database level only — it's a separate process, same constraint `m
 
 ## 📝 Changelog
 
+### Version 4.5 — 2026-08-28 Doc Sync (SFTP hardening, FTPS, WebDAV HTTP off by default)
+
+- **Updated: `sftp_server.py`**
+  - New `_harden_transport_ciphers()`, called on every accepted connection before `transport.start_server()` — strips weak ciphers (CBC-mode, 3DES, arcfour/RC4), weak MACs (MD5-based, truncated/full SHA1), and DHE key-exchange algorithms (D(HE)ater DoS mitigation) from the offered lists, in place, via `get_security_options()`
+  - Addresses OpenVAS's "Weak Encryption Algorithm(s) Supported (SSH)" / "Weak MAC Algorithm(s) Supported (SSH)" findings — no client this server targets needs the dropped algorithms
+  - See [SFTP Implementation Notes](#sftp-implementation-notes) for the full breakdown
+
+- **Updated: `config.py`**
+  - `WEBDAV_ENABLED` (plaintext HTTP WebDAV) now defaults to `False`, closing off the same class of "cleartext credentials" finding [Version 4.2](#version-42-2026-08-18) fixed elsewhere in the stack; still available as a manual fallback if HTTPS can't be set up
+  - New `FTP_TLS_ENABLED` / `FTP_TLS_REQUIRE_DATA` variables add FTPS (explicit `AUTH TLS`) support to `ftp_server.py`, reusing the WebDAV HTTPS cert; gated on `pyOpenSSL` with an automatic plaintext fallback if it's missing
+  - New FTP sub-menu options (3, 4) in `python config.py` → option 13 to toggle the two settings above
+
+- **Updated: `ssl_cert.py`**
+  - Module docstring gained macOS (`security add-trusted-cert`) and Linux/`davfs2` (`update-ca-certificates`) one-time trust-import instructions alongside the existing Windows steps — documentation-only change, no behavior difference
+
+- **Reviewed, no behavioral change: `app.py`, `index.js`, `index.html`, `index.css`** — re-checked against the [Route Path Corrections](#-route-path-corrections--new-endpoints-2026-08-23) table and the [Embedded PDF.js Viewer](#-embedded-pdfjs-viewer-2026-08-23) section; both still accurate
+
+- **Regression found, not fixed here: `pdfjs-viewer-overlay.css`** — its `body` rule now sets `background-color: #1e3c72`, directly contradicting the file's own adjacent comment that this property is "left unset on purpose." See the callout in [Embedded PDF.js Viewer](#-embedded-pdfjs-viewer-2026-08-23) for detail and a suggested fix.
+
 ### Version 4.4 — 2026-08-23 Doc Sync (embedded PDF.js viewer & 404.css tweak)
 
 - No code changes — another documentation-only pass, this time against `index.html`, `index.js`, `pdfjs-worker-init.mjs`, `pdfjs-viewer-overlay.css`, `404.css`, and `app.py`'s CSP/Integrity-Policy comments.
@@ -2463,5 +2509,5 @@ Public, opaque-token share links per file/folder, with a "Manage Shared" admin p
 
 ---
 
-**Last Updated**: 2026-08-22  
+**Last Updated**: 2026-08-28  
 **For Questions**: Refer to source code comments marked with `###` or `# --`
