@@ -1524,9 +1524,25 @@ async def after_request(response):
     # falls back to default-src; anything NOT listed (workers, frames,
     # manifests, etc.) is now correctly blocked instead of silently
     # inheriting 'self' from the old default-src 'self'.
+    # Per-response nonce for Cloudflare's JavaScript Detections bootstrap
+    # (the __CF$cv$params/challenge-platform snippet injected into the HTML
+    # at Cloudflare's edge, after this response leaves origin — part of
+    # Bot Fight Mode / Super Bot Fight Mode; forced-on and non-disableable
+    # on the Free plan). We can never see or hash that snippet's contents
+    # since it isn't in our response body, and its contents differ per
+    # request anyway. Per Cloudflare's own docs for this feature: "If your
+    # CSP uses a nonce for script tags, Cloudflare will add these nonces to
+    # the scripts it injects by parsing your CSP response header." So we
+    # generate a fresh nonce every response and put it in script-src; the
+    # edge reads this header and stamps the same nonce onto the script tag
+    # it injects, before it reaches the browser. No hash, no hardcoding,
+    # and it keeps working across tunnel restarts since it's regenerated
+    # every single response. index.js/index.html have no inline <script>
+    # of their own, so nothing else needs a matching nonce attribute.
+    cf_jsd_nonce = _secrets.token_urlsafe(16)
     csp = (
         "default-src 'none'; "
-        "script-src 'self' https://static.cloudflareinsights.com; "
+        f"script-src 'self' 'nonce-{cf_jsd_nonce}' https://static.cloudflareinsights.com; "
         "script-src-attr 'none'; "
         # style-src is the fallback for browsers that don't understand
         # style-src-elem/style-src-attr (CSP3). No 'unsafe-inline' here —
