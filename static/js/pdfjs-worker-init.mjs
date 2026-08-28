@@ -44,6 +44,13 @@ GlobalWorkerOptions.workerSrc = "/static/js/pdf.worker.mjs";
 // by the time this listener fires.
 document.addEventListener('webviewerloaded', () => {
     const opts = window.PDFViewerApplicationOptions;
+    // We use pdf.js purely as a stateless viewer (open a URL, show it, done) -
+    // we never rely on it remembering zoom/sidebar/etc. between page loads.
+    // Setting this stops its Preferences layer from reading (and re-merging)
+    // anything out of localStorage on init, which is what was overriding the
+    // AppOptions set below and triggering viewer.mjs's own
+    // "manually set AppOptions" console warning on every load.
+    opts?.set('disablePreferences', true);
     opts?.set('defaultUrl', '');
     // Reassert our /static/js/ layout — required after every pdf.js update,
     // since these five values live inside viewer.mjs's own AppOptions

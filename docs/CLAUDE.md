@@ -1,6 +1,6 @@
 # CloudinatorFTP — Complete Codebase Reference for AI-Assisted Development
 
-**Version**: 4.3 (+ 2026-08-28 protocol-hardening & route-sync notes) | **Last Updated**: 2026-08-28  
+**Version**: 4.3 (+ 2026-08-28 protocol-hardening, route-sync, and video-skin-overrides.css notes) | **Last Updated**: 2026-08-28  
 **For**: AI assistants and developers modifying/extending CloudinatorFTP
 
 **Recent updates (2026-07-28)**:
@@ -16,6 +16,8 @@
 **🆕 2026-08-23 sync note, part 2**: a further pass against `index.html`/`index.js`/the new `pdfjs-worker-init.mjs`/`pdfjs-viewer-overlay.css` found the old `/pdfviewer` route entirely gone, replaced by pdf.js merged directly into `index.html`. See **[Embedded PDF.js Viewer (2026-08-23)](#embedded-pdfjs-viewer-2026-08-23)**, added right after the Route Path Corrections table.
 
 **🆕 2026-08-28 sync note**: `ssl_cert.py`, `config.py`, `index.css`, `pdfjs-viewer-overlay.css`, `index.js`, `index.html`, `app.py`, and `sftp_server.py` were all touched in the same edit pass. Re-verified `@app.route`/`fetch(` in `app.py`/`index.js` — no route-level drift beyond what the 2026-08-23 corrections already cover. Real deltas found: (1) `sftp_server.py` now hardens the SSH transport's offered ciphers/MACs/KEX on every connection (see the new bullet in [SFTP Implementation Notes](#sftp-implementation-notes)); (2) `config.py` adds `FTP_TLS_ENABLED`/`FTP_TLS_REQUIRE_DATA` (FTPS support) and flips `WEBDAV_ENABLED` (plaintext HTTP WebDAV) to `False` by default (see the updated [config.py Protocol Variables](#configpy-protocol-variables) block); (3) `ssl_cert.py`'s module docstring now documents macOS/Linux (davfs2) trust-import steps, not just Windows (see [SSL Certificate](#ssl-certificate-ssl_certpy)); (4) a likely-unintentional regression was found in `pdfjs-viewer-overlay.css` — see the callout in [Embedded PDF.js Viewer](#embedded-pdfjs-viewer-2026-08-23). `index.css`/`index.html` were reviewed and show no behavioral changes beyond what's already documented.
+
+**🆕 2026-08-28 sync note, part 3**: a later edit in the same day touched `index.js`, `app.py`, and added a brand-new file, `static/css/video-skin-overrides.css`. This is a real (not doc-only) change, and it revises the "no behavioral changes" verdict the note above gave `index.js`/`app.py`: `index.js`'s `_injectMobileSpeedHide()` no longer injects inline `<style>` template-literal elements into the `<video-skin>` shadow root (those were silently dropped once the CSP's `style-src-elem` stopped allowing `'unsafe-inline'`); it now `<link>`s the new external stylesheet instead, which satisfies `style-src-elem 'self'` with no CSP hash to maintain. See the new **[video-skin-overrides.css & the Inline-Style CSP Cleanup (2026-08-28)](#video-skin-overridescss--the-inline-style-csp-cleanup-2026-08-28)** section, added after [Embedded PDF.js Viewer](#embedded-pdfjs-viewer-2026-08-23). `login.html` was also uploaded in this pass and is now documented for the first time under [Login Flow](#login-flow) (its markup wasn't previously written up at all, only `login.js`'s function names). `pdfjs-worker-init.mjs` and `index.css` were re-checked and still match the existing [Embedded PDF.js Viewer](#embedded-pdfjs-viewer-2026-08-23) and `body::before`/`::after` documentation — no further changes found there.
 
 ---
 
@@ -72,6 +74,7 @@
 | **ssl_cert.py** | TLS certificate manager | Self-signed cert generation, SAN detection, db/ storage; `prod_server.py` now prefers a real Tailscale-issued cert when available, falling back to this self-signed cert otherwise; module docstring now covers Windows + macOS + Linux trust-import steps |
 | **static/js/pdfjs-worker-init.mjs** | pdf.js integration shim (new, undocumented until now — see [Embedded PDF.js Viewer](#embedded-pdfjs-viewer-2026-08-23)) | Sets `GlobalWorkerOptions.workerSrc` directly, then reasserts it (plus `cMapUrl`/`iccUrl`/`standardFontDataUrl`/`wasmUrl`/`imageResourcesPath`) via pdf.js's `webviewerloaded` hook so they survive viewer.mjs's own self-init; also clears the dev build's hardcoded sample-PDF `defaultUrl` |
 | **static/css/pdfjs-viewer-overlay.css** | pdf.js viewer scoping/theming fix (new, undocumented until now) | Loaded after the merged `viewer.css` to win cascade ties; undoes viewer.css's page-wide `:root`/`body` leaks and re-parents `#pdfjsViewerRoot` into a normal flex child of the file-viewer modal instead of a full-page absolute overlay; also fixes mobile toolbar overflow |
+| **static/css/video-skin-overrides.css** | video-skin shadow-root override stylesheet (new, 2026-08-28 — see [video-skin-overrides.css & the Inline-Style CSP Cleanup](#video-skin-overridescss--the-inline-style-csp-cleanup-2026-08-28)) | `<link>`ed by `index.js`'s `_injectMobileSpeedHide()` into the `<video-skin>` shadow root; hides the playback-rate button under `max-width: 600px`, and styles `::cue` (transparent caption background + black text-shadow outline + white text) for readability over video |
 
 ### Startup Order
 
@@ -115,7 +118,7 @@
   - Upload queue / conflict handling: `_buildConflictDialog()`, `_promptOverwrite()`, `_promptFolderConflict()`, `_promptMoveOrCopyConflicts()`, `_findFreeName()`, `cleanupUnfinishedChunks()`, `cleanupSingleFile()`, `_spawnFileWorkersIfNeeded()`, `_runFileWorker()`, `_spawnFolderWorkersIfNeeded()`, `_runFolderWorker()`, `startBatchUpload()`, `startParallelUploads()`, `startSequentialUploads()`, `xhrUpload()`, `uploadSingleFile()`, `_resumeStalledUploads()`, `_startSessionKeepAlive()` — this whole conflict-prompt cluster talks to `/api/check_conflicts` and `/api/exists`, neither of which was in the routes table before this sync (see the new routes section below).
   - Folder upload grouping: `_registerFolderGroup()`, `_scanSizeChunked()`, `_uploadFolderGroupLazy()`, `_maybeFinalizeGroup()`, `_finalizeGroupCleanup()`, `_cancelFolderGroup()`, `_stopFolderGroup()`, `_folderRowContent()`, `_createFolderGroupRow()`, `_updateGroupRowInPlace()`.
   - Image preview/zoom: `_imgStartPreview()` (drives `/image_preview/<path>` + polls `/image_preview_status/<cache_key>`), `_initImageZoom()`, `_handleImgConvError()`.
-  - HLS video preview: `_hlsSkip()`, plus the HLS mount logic around `_mountHlsPlayer()` (talks to `/hls_start/<path>`, `/hls_status/<cache_key>`, and streams from `/hls_files/<cache_key>/...` — see corrected routes below).
+  - HLS video preview: `_hlsSkip()`, plus the HLS mount logic around `_mountHlsPlayer()` (talks to `/hls_start/<path>`, `/hls_status/<cache_key>`, and streams from `/hls_files/<cache_key>/...` — see corrected routes below). `_injectMobileSpeedHide()` (called from the same mount path) links `static/css/video-skin-overrides.css` into the player's `<video-skin>` shadow root — see [video-skin-overrides.css & the Inline-Style CSP Cleanup (2026-08-28)](#video-skin-overridescss--the-inline-style-csp-cleanup-2026-08-28).
   - Office preview rendering: `_renderOfficePreview()`.
   - Deep search / infinite scroll: `_dsAttachSentinel()`, `_dsAdvance()`, `_dsFetchNextPage()`, `_dsUpdateCount()`, `_parseSearchQuery()`, `displayDeepSearchResults()`, `createSearchResultsHeaderDiv()`, `createSearchResultRow()`.
   - Move/copy folder browser modal: `showMoveModal()`, `showCopyModal()`, `initializeFolderBrowser()`, `loadFolderContents()`, `displayFolders()`, `navigateFolderBrowser()`, `createNewFolderInBrowser()`.
@@ -876,6 +879,33 @@ body {
 
 ---
 
+## 🆕 video-skin-overrides.css & the Inline-Style CSP Cleanup (2026-08-28)
+
+**Where it's used**: the HLS video player (video.js + media-chrome, mounted via `_mountHlsPlayer()`) renders its controls inside a `<video-skin>` custom element, which uses a shadow root — CSS in the main document can't reach inside it, so any override has to be injected directly into that shadow root at mount time. `_injectMobileSpeedHide(playerEl)` in `index.js` does this, called from both HLS mount call sites.
+
+**What changed**: `_injectMobileSpeedHide()` previously built its override rules as inline `<style>` elements (template literals) and appended them straight into the shadow root. Once this project's CSP tightened `style-src-elem` to `'self'` (no `'unsafe-inline'`), the browser started silently dropping both of those injected `<style>` blocks — no console error a casual test would necessarily catch, just the rules quietly not applying. The fix: the same two rules now live in a new external, same-origin stylesheet, `static/css/video-skin-overrides.css`, `<link>`ed into the shadow root instead of built inline:
+
+```js
+const HREF = '/static/css/video-skin-overrides.css';
+function _addLinkOnce(root) {
+    if (!root || root.querySelector('link[data-skin-overrides]')) return;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = HREF;
+    link.setAttribute('data-skin-overrides', '1');
+    root.appendChild(link);
+}
+```
+`<link>` elements are governed by `style-src-elem` too, but a same-origin stylesheet URL satisfies `'self'` directly — no `sha256-...` hash to compute or keep in sync with the file's contents. `_addLinkOnce()` guards against appending the `<link>` twice; the shadow root isn't guaranteed to exist yet at call time, so the function polls every 100ms (up to 40 attempts / 4s) for `playerEl.querySelector('video-skin')` (or, as a fallback, `playerEl.shadowRoot`'s own `video-skin` child) to appear before attaching.
+
+**`video-skin-overrides.css` contents**:
+- `@media (max-width: 600px)`: hides `.media-button--playback-rate` / `media-playback-rate-button` — the same mobile playback-speed-button hide this function's docstring already described.
+- `::cue`: makes the caption background fully transparent and adds a black multi-directional `text-shadow` outline around white caption text, instead of relying on the browser's default caption box — this rule is new; it wasn't present in any inline injection previously, so this is additional caption-readability styling introduced alongside the CSP fix, not just a straight port of old behavior.
+
+**`app.py` CSP comments updated to match**: the block documenting `_INLINE_STYLE_ELEMENT_HASHES` (SHA-256 hashes for inline `<style>` *elements*, as opposed to `_INLINE_STYLE_HASHES` for `style="..."` *attributes*) now notes that `index.js`'s `_injectMobileSpeedHide()` *and* `_initImageZoom()` both used to inject inline `<style>` elements this way; `_injectMobileSpeedHide()`'s moved to this new external stylesheet, and `_initImageZoom()`'s was separately converted to a fixed rule in the main stylesheet (`index.css`) — so `style-src-elem 'self'` alone now covers both, and the two hashes still listed in `_INLINE_STYLE_ELEMENT_HASHES` belong only to the vendored video.js/media-chrome bundle's own minified shadow-DOM style injections (functions `Bt`/`Ln`), which aren't this project's code to rewrite.
+
+---
+
 ## �🔐 Authentication & Sessions
 
 ### Login Flow
@@ -973,6 +1003,7 @@ User password (plaintext)
 - **Frontend fetch-wrapper** (index.js): auto-refreshes the token and retries once on a 400 CSRF failure, so a stale token (e.g. after a long-idle tab) doesn't surface as a user-facing error.
 - **`/bulk-download`'s real `<form>.submit()` POST** bypasses the fetch wrapper entirely (it's a native form submission, not `fetch()`) — this needed its own explicit fix to include the token.
 - **Anonymous share routes are exempted**: `/shared/<token>/passkey` and `/shared/<token>/request` are decorated `@csrf.exempt` — an anonymous visitor has no session-tied CSRF token to send, and without the exemption every visitor POST 400'd with "CSRF token missing" before ever reaching the database (this was the root cause of an earlier "pending access requests aren't being received" report).
+- **`templates/login.html`** (documented here for the first time — previously only `login.js`'s function names were listed, not the markup itself): a plain server-rendered `<form method="post">` with the CSRF token as a `<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">`, username/password fields, and Jinja's `get_flashed_messages()` rendered into a `.flash-messages` block for login errors (e.g. the rate-limit/bad-credentials cases `login()` returns with a 429/401 status — see the Login Flow diagram above). Also sets `<meta name="robots" content="noindex, nofollow">` and loads `login.js` via a `<script>` tag with a computed `integrity` (SRI) hash — matching the note elsewhere in this doc that `login.js`/`404.js` already have SRI hashes while `viewer.mjs` doesn't yet.
 
 ---
 
@@ -2275,6 +2306,30 @@ Works at the database level only — it's a separate process, same constraint `m
 ---
 
 ## 📝 Changelog
+
+### Version 4.6 — 2026-08-28 Doc Sync, cont'd (video-skin-overrides.css, inline-style CSP cleanup, login.html documented)
+
+- **New file: `static/css/video-skin-overrides.css`**
+  - Externalizes two CSS rules that `index.js`'s `_injectMobileSpeedHide()` used to inject as inline `<style>` elements into the HLS player's `<video-skin>` shadow root — those were being silently dropped once the CSP's `style-src-elem` tightened to `'self'` with no `'unsafe-inline'`
+  - Mobile playback-rate-button hide (`@media (max-width: 600px)`) — same behavior as before, just relocated
+  - New `::cue` rule (transparent caption background, black outline + white text) — not present in any prior inline injection, so this is new caption-readability styling, not just a straight port
+  - See the new [video-skin-overrides.css & the Inline-Style CSP Cleanup (2026-08-28)](#video-skin-overridescss--the-inline-style-csp-cleanup-2026-08-28) section for the full detail
+
+- **Updated: `index.js`**
+  - `_injectMobileSpeedHide()` rewritten: instead of building inline `<style>` template literals, it now `<link>`s `static/css/video-skin-overrides.css` into the shadow root (`_addLinkOnce()`, guarded by a `data-skin-overrides` attribute), polling up to 40× at 100ms intervals for the `<video-skin>` shadow root to exist before attaching
+  - This revises [Version 4.5](#version-45--2026-08-28-doc-sync-sftp-hardening-ftps-webdav-http-off-by-default)'s "reviewed, no behavioral change" verdict for `index.js` — that earlier pass evidently missed this CSP-driven refactor
+
+- **Updated: `app.py`**
+  - The `_INLINE_STYLE_ELEMENT_HASHES` CSP comment block now explains that `_injectMobileSpeedHide()`'s inline style moved to the new external stylesheet above, and that `_initImageZoom()`'s inline style was separately converted to a fixed rule in `index.css` — so the two hashes still listed there belong only to the vendored video.js/media-chrome bundle's own shadow-DOM style injections, not this project's own code
+  - Same revision note as `index.js` above: this is a real change, not just a documentation gap
+
+- **Documented for the first time: `templates/login.html`**
+  - Markup was never written up before (only `login.js`'s function names were listed in Quick Reference) — added under [Login Flow](#login-flow) in the Authentication & Sessions section: hidden `csrf_token` field, flashed-message rendering, `noindex, nofollow` robots meta, SRI-hashed `login.js` script tag
+  - No functional gap found versus what `app.py`'s `login()` route and the existing CSRF Protection section already describe
+
+- **Re-reviewed, no further changes found: `pdfjs-worker-init.mjs`, `index.css`** — both still match [Embedded PDF.js Viewer (2026-08-23)](#embedded-pdfjs-viewer-2026-08-23) and the existing `body::before`/`::after` layering documentation. The `pdfjs-viewer-overlay.css` regression flagged in Version 4.5 was not part of this pass's uploaded files and remains unfixed/undocumented-as-fixed.
+
+- Nothing was removed from any earlier section; all of the above are additive.
 
 ### Version 4.5 — 2026-08-28 Doc Sync (SFTP hardening, FTPS, WebDAV HTTP off by default)
 

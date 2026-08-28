@@ -4073,13 +4073,13 @@ function _initImageZoom(img, wrap) {
     //   ever throws before reaching img.style.visibility='visible'.  Instead we
     //   start the img at 0×0 (no unsized flash) and let CSS opacity handle reveal.
 
-    // Inject webkit scrollbar CSS once
-    if (!document.getElementById('_imgz_sb_css')) {
-        const st = document.createElement('style');
-        st.id = '_imgz_sb_css';
-        st.textContent = '#_imgz_scroller::-webkit-scrollbar{display:none}';
-        document.head.appendChild(st);
-    }
+    // Webkit scrollbar hiding for #_imgz_scroller now lives in the main
+    // stylesheet (static/css/index.css) instead of being injected here —
+    // this element goes into document.head (not a shadow root), so a
+    // plain CSS rule works with zero runtime cost and no CSP hash to
+    // maintain. Previously this was a `document.createElement('style')`
+    // + textContent injection, which style-src-elem 'self' silently
+    // blocks without a matching sha256 hash.
 
     // Build scroller + canvas
     const scroller = document.createElement('div');
@@ -10929,60 +10929,37 @@ function _initMobileDoubleTapSeek(area) {
  */
 function _injectMobileSpeedHide(playerEl) {
     if (!playerEl) return;
-    const css = `
-        @media (max-width: 600px) {
-            .media-button--playback-rate,
-            media-playback-rate-button {
-                display: none !important;
-            }
-        }
-    `;
-    const cueCss = `
-        ::cue {
-            background: transparent !important;
-            background-color: transparent !important;
-            text-shadow:
-                -1px -1px 0 #000,  1px -1px 0 #000,
-                -1px  1px 0 #000,  1px  1px 0 #000,
-                0 2px 8px rgba(0,0,0,0.9);
-            color: #fff;
-        }
-    `;
+    // Previously this built two inline <style> elements from template
+    // literals and appended them into the <video-skin> shadow root.
+    // style-src-elem 'self' (no inline hashes for this rule) silently
+    // dropped both. Loading the same rules from an external same-origin
+    // stylesheet via <link> satisfies 'self' directly, needs no CSP hash
+    // at all, and — unlike a hardcoded sha256 hash — keeps working if
+    // this CSS is ever edited later without touching app.py.
+    const HREF = '/static/css/video-skin-overrides.css';
+
+    function _addLinkOnce(root) {
+        if (!root || root.querySelector('link[data-skin-overrides]')) return;
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = HREF;
+        link.setAttribute('data-skin-overrides', '1');
+        root.appendChild(link);
+    }
+
     let attempts = 0;
     const iv = setInterval(() => {
         attempts++;
         const skin = playerEl.querySelector('video-skin');
         if (skin && skin.shadowRoot) {
-            if (!skin.shadowRoot.querySelector('style[data-speed-hide]')) {
-                const s = document.createElement('style');
-                s.setAttribute('data-speed-hide', '1');
-                s.textContent = css;
-                skin.shadowRoot.appendChild(s);
-            }
-            if (!skin.shadowRoot.querySelector('style[data-cue-style]')) {
-                const s = document.createElement('style');
-                s.setAttribute('data-cue-style', '1');
-                s.textContent = cueCss;
-                skin.shadowRoot.appendChild(s);
-            }
+            _addLinkOnce(skin.shadowRoot);
             clearInterval(iv);
             return;
         }
         if (playerEl.shadowRoot) {
             const skin2 = playerEl.shadowRoot.querySelector('video-skin');
             if (skin2 && skin2.shadowRoot) {
-                if (!skin2.shadowRoot.querySelector('style[data-speed-hide]')) {
-                    const s = document.createElement('style');
-                    s.setAttribute('data-speed-hide', '1');
-                    s.textContent = css;
-                    skin2.shadowRoot.appendChild(s);
-                }
-                if (!skin2.shadowRoot.querySelector('style[data-cue-style]')) {
-                    const s = document.createElement('style');
-                    s.setAttribute('data-cue-style', '1');
-                    s.textContent = cueCss;
-                    skin2.shadowRoot.appendChild(s);
-                }
+                _addLinkOnce(skin2.shadowRoot);
                 clearInterval(iv);
                 return;
             }
@@ -12092,7 +12069,21 @@ function _hlsSleep(ms) { return new Promise(resolve => setTimeout(resolve, ms));
     // idempotent - worst case is a redundant identical write to the var.
     let lastDocHeight = -1;
     function updateDocHeight() {
-        const h = document.documentElement.scrollHeight;
+        // Deliberately NOT document.documentElement.scrollHeight: body::before/
+        // ::after are position:absolute and sized from --doc-height, and since
+        // they aren't clipped by any ancestor they still overflow into (and get
+        // counted by) scrollHeight. Reading scrollHeight here would feed the
+        // pseudo-elements' own previous height back into the next measurement -
+        // a loop that can only ratchet the value upward, never shrink it back
+        // down when real content gets shorter (e.g. switching from a taller
+        // mobile layout back to desktop). Measuring the actual DOM children's
+        // bottom edge instead - body::before/::after are pseudo-elements, so
+        // they never appear in body.children - sidesteps that entirely.
+        let h = window.innerHeight;
+        for (const el of document.body.children) {
+            const bottom = el.offsetTop + el.offsetHeight;
+            if (bottom > h) h = bottom;
+        }
         if (h !== lastDocHeight) {
             lastDocHeight = h;
             root.style.setProperty('--doc-height', h + 'px');
@@ -12226,4 +12217,173 @@ function _hlsSleep(ms) { return new Promise(resolve => setTimeout(resolve, ms));
 
     applyVars();
     updateScrollTarget();
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Modal spotlight: the same cursor-glow as body::after (identical size/color
+// in index.css), painted a second time directly onto whichever .modal-content
+// is open, so it reads as one continuous light source sitting on the panel's
+// own glass surface rather than two different-looking effects. Same easing
+// speed as the page-level glow too (CURSOR_EASE = 0.08, matching the
+// "Background glow" block above) so both move in sync - only the coordinate
+// space differs: --hx/--hy here are panel-local px, not document-space.
+// ─────────────────────────────────────────────────────────────────────────────
+(function () {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        return; // .modal-content::before is display:none in this case; skip entirely.
+    }
+
+    // Same value as CURSOR_EASE in the "Background glow" block above -
+    // keep these in sync so the two glows move at the same speed.
+    const CURSOR_EASE = 0.08;
+    const SETTLE_PX = 0.5;
+
+    let activeEl = null;
+    let targetX = 0, targetY = 0, curX = 0, curY = 0;
+    let rafId = null;
+
+    // Last real pointer position in viewport coordinates. Needed because a
+    // modal can appear under a cursor that isn't moving (opened via click,
+    // keyboard shortcut, or triggered from code) - a pointermove-only check
+    // would leave the spotlight off until the person happens to nudge the
+    // mouse afterward. Keeping this updated lets the MutationObserver below
+    // re-evaluate against where the cursor already is the instant a modal
+    // becomes visible, instead of waiting for the next move.
+    let lastPointerX = window.innerWidth / 2;
+    let lastPointerY = window.innerHeight / 2;
+
+    function lerp(a, b, t) {
+        return a + (b - a) * t;
+    }
+
+    function applyVars() {
+        if (activeEl) {
+            activeEl.style.setProperty('--hx', curX + 'px');
+            activeEl.style.setProperty('--hy', curY + 'px');
+        }
+    }
+
+    function isSettled() {
+        return Math.abs(targetX - curX) < SETTLE_PX && Math.abs(targetY - curY) < SETTLE_PX;
+    }
+
+    function tick() {
+        if (!activeEl) {
+            rafId = null;
+            return;
+        }
+        curX = lerp(curX, targetX, CURSOR_EASE);
+        curY = lerp(curY, targetY, CURSOR_EASE);
+        if (isSettled()) {
+            curX = targetX;
+            curY = targetY;
+            applyVars();
+            rafId = null;
+            return;
+        }
+        applyVars();
+        rafId = requestAnimationFrame(tick);
+    }
+
+    function ensureRunning() {
+        if (rafId === null) {
+            rafId = requestAnimationFrame(tick);
+        }
+    }
+
+    function clearActive() {
+        if (activeEl) {
+            activeEl.classList.remove('spotlight-active');
+            activeEl = null;
+        }
+    }
+
+    // Core check, reused by real pointer movement AND by the modal-open
+    // observer below - elementFromPoint(x, y) is what e.target already
+    // resolves to for a real pointer event at that position, so both paths
+    // behave identically.
+    function evaluate(x, y) {
+        const el = document.elementFromPoint(x, y);
+        // .modal.show is the fullscreen backdrop (100vw/100vh), so a point
+        // can be "inside the open modal" without being over .modal-content
+        // itself - e.g. the letterboxed backdrop around a panel that isn't
+        // maximized. Resolve the open modal first, then grab its panel,
+        // instead of requiring the hit-tested element to be a descendant of
+        // .modal-content. localX/localY below can end up negative or past
+        // the panel's width/height when the cursor is over the backdrop -
+        // that's fine, it just positions the radial-gradient center outside
+        // the visible box, same as any off-panel gradient origin.
+        const openModal = el && el.closest && el.closest('.modal.show');
+        const target = openModal && openModal.querySelector('.modal-content');
+
+        if (!target) {
+            clearActive();
+            return;
+        }
+
+        const rect = target.getBoundingClientRect();
+        const localX = x - rect.left;
+        const localY = y - rect.top;
+
+        if (target !== activeEl) {
+            clearActive();
+            activeEl = target;
+            activeEl.classList.add('spotlight-active');
+            // Snap to the entry point instead of easing in from the panel's
+            // last position/center - matches how the page glow starts
+            // exactly under the cursor the first time it moves.
+            curX = localX;
+            curY = localY;
+        }
+
+        targetX = localX;
+        targetY = localY;
+        applyVars();
+        ensureRunning();
+    }
+
+    function onMove(e) {
+        lastPointerX = e.clientX;
+        lastPointerY = e.clientY;
+        evaluate(e.clientX, e.clientY);
+    }
+
+    // The main-page glow (body::after, "Background glow" block above) has
+    // no leave-clearing logic at all - it just holds its last position
+    // when the cursor exits the window, and picks back up on the next
+    // pointermove. This spotlight used to clear on pointerleave to handle
+    // the cursor exiting the viewport entirely (e.g. up into the tab bar),
+    // but that made it behave inconsistently with the main-page glow -
+    // vanishing instead of holding position. Dropped to match: no listener
+    // here means --hx/--hy simply stay wherever they last were, and the
+    // next pointermove (or the pointerup handler below, if the modal
+    // closed while the cursor was away) re-syncs it.
+    document.addEventListener('pointermove', onMove, { passive: true });
+
+    // A modal closing out from under the cursor (Esc, clicking the backdrop,
+    // a save/cancel button) should also clear the spotlight immediately
+    // rather than waiting for the next pointermove.
+    document.addEventListener('pointerup', () => {
+        if (activeEl && !activeEl.closest('.modal.show')) {
+            clearActive();
+        }
+    });
+
+    // Re-check the last known pointer position the instant any .modal gains
+    // the 'show' class, so a modal opening under an already-stationary
+    // cursor lights up immediately instead of waiting on the next move.
+    // rAF-deferred one frame so display:flex/centering has actually applied
+    // and getBoundingClientRect() reflects the modal's final layout.
+    const modalOpenObserver = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+            const el = mutation.target;
+            if (el.classList && el.classList.contains('modal') && el.classList.contains('show')) {
+                requestAnimationFrame(() => evaluate(lastPointerX, lastPointerY));
+                return;
+            }
+        }
+    });
+    document.querySelectorAll('.modal').forEach((modalEl) => {
+        modalOpenObserver.observe(modalEl, { attributes: true, attributeFilter: ['class'] });
+    });
 })();

@@ -73,7 +73,7 @@ body::after {
     z-index: -1;
     pointer-events: none;
     background:
-        radial-gradient(90vw circle at var(--mx, 50%) var(--my, 50%),
+        radial-gradient(100vw circle at var(--mx, 50%) var(--my, 50%),
             rgba(72, 20, 150, 0.50) 0%,
             rgba(155, 35, 220, 0.24) 35%,
             rgba(245, 100, 255, 0) 70%),
@@ -86,7 +86,7 @@ body::after {
 @media (max-width: 768px) {
     body::after {
         background:
-            radial-gradient(180vw circle at var(--mx, 50%) var(--my, 50%),
+            radial-gradient(200vw circle at var(--mx, 50%) var(--my, 50%),
                 rgba(72, 20, 150, 0.50) 0%,
                 rgba(155, 35, 220, 0.24) 35%,
                 rgba(245, 100, 255, 0) 70%),
@@ -99,6 +99,32 @@ body::after {
 @media (prefers-reduced-motion: reduce) {
     body::after {
         display: none;
+    }
+}
+
+/* Force every "glass" panel onto its own GPU compositing layer on mobile.
+   Desktop GPUs have enough headroom to keep every backdrop-filter panel on
+   this page (header, breadcrumb, file table, upload section, storage
+   stats, notifications, modals) properly blurred/translucent at once.
+   Mobile GPUs often don't, and when a browser runs low on compositing
+   budget it sheds backdrop-filter layers by painting them as a flat,
+   unblurred fill instead - which is what makes these panels look solid
+   instead of see-through and hides the cursor-glow behind them. Explicit
+   promotion removes the guesswork so mobile actually keeps the effect
+   instead of silently dropping it. */
+@media (max-width: 768px),
+(pointer: coarse) {
+
+    .header,
+    .breadcrumb,
+    .file-table,
+    .upload-section,
+    .storage-stats,
+    .upload-status[id^="notification-"],
+    .modal,
+    .modal-content {
+        transform: translateZ(0);
+        -webkit-transform: translateZ(0);
     }
 }
 
@@ -534,7 +560,7 @@ body::after {
 }
 
 .table tbody tr {
-    border-bottom: 1px solid rgba(48, 84, 140, 255);
+    border-bottom: 1px solid rgba(48, 84, 140, 0.55);
     transition: background-color 0.3s ease;
 }
 
@@ -1299,9 +1325,28 @@ i.fa-file {
     top: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.5);
+    /* Was rgba(0,0,0,0.5). At 50% black under a 97%-opaque .modal-content
+       on top of it (see below), the two stacked near-opaque layers left
+       only ~1.5% of the cursor-glow color visible through the blur -
+       imperceptible, which is why move/copy/rename/share/etc. all read
+       as flat opaque panels with no glow, same root cause as the preview
+       modal fix above it. Lowered so the glow the blur is already
+       computing actually reads through. */
+    background-color: rgba(0, 0, 0, 0.35);
     -webkit-backdrop-filter: blur(5px);
     backdrop-filter: blur(5px);
+    /* Mobile Safari/Chrome only promote an element to its own GPU
+       compositing layer for backdrop-filter when given a clear signal to
+       do so. Without it, on a page already running several other
+       backdrop-filter panels (header, breadcrumb, table, upload section,
+       storage stats), mobile browsers frequently skip the blur/see-through
+       entirely and just paint the flat background-color - the modal
+       backdrop then reads as a plain opaque-ish layer and the cursor-glow
+       behind it never shows through. translateZ(0) forces the dedicated
+       layer explicitly instead of leaving it to mobile-unreliable
+       heuristics. */
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
 }
 
 .modal.show {
@@ -1317,7 +1362,10 @@ i.fa-file {
 }
 
 .modal-content {
-    background: linear-gradient(145deg, rgba(30, 60, 114, 0.97) 0%, rgba(42, 82, 152, 0.97) 100%);
+    /* Was 0.97 alpha - see comment on .modal above for why that made the
+       glow invisible across every modal on the page, not just the preview
+       one. Lowered to match. */
+    background: linear-gradient(145deg, rgba(30, 60, 114, 0.55) 0%, rgba(42, 82, 152, 0.55) 100%);
     -webkit-backdrop-filter: blur(20px);
     backdrop-filter: blur(20px);
     border: 1px solid rgba(255, 255, 255, 0.15);
@@ -1334,6 +1382,73 @@ i.fa-file {
     position: relative;
     margin: auto;
     color: #fff;
+    /* Same GPU-layer promotion as .modal - see comment there. Without this,
+       this panel is one of the most likely to render fully flat with zero
+       blur on mobile, since a browser under compositing pressure sheds the
+       most expensive backdrop-filter layers first, and a 20px blur radius
+       is the most expensive one on this page. */
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+}
+
+/* ── Modal spotlight ──────────────────────────────────────────────────────
+   The body-level cursor-glow (body::after) sits behind the whole page, so
+   it only ever reads through a modal as a faint tint via backdrop-filter -
+   fine for ambient lighting, but it can never look like it's actually
+   sitting on the panel's own surface. This is that same glow, painted a
+   second time directly onto .modal-content's own background layer so it
+   reads as one continuous light source rather than two different ones -
+   same radial-gradient size/stops as body::after above (90vw / mobile
+   180vw, identical color stops), same easing speed (CURSOR_EASE = 0.08,
+   see the "Modal spotlight" block in index.js that drives --hx/--hy here -
+   panel-local px, not document-space, but eased identically to --mx/--my).
+
+   Ordering: this ::before is position:absolute with z-index:auto, which
+   paints ABOVE non-positioned in-flow content by default in CSS's stacking
+   order - i.e. above .modal-header/.modal-body/.modal-footer unless they're
+   explicitly lifted above it. That's why those three get position:relative
+   + z-index:1 below: it sandwiches this spotlight between the panel's
+   background and its actual content instead of covering the content. */
+.modal-content::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    background: radial-gradient(90vw circle at var(--hx, 50%) var(--hy, 50%),
+            rgba(72, 20, 150, 0.50) 0%,
+            rgba(155, 35, 220, 0.24) 35%,
+            rgba(245, 100, 255, 0) 70%);
+    opacity: 0;
+    transition: opacity 0.25s ease;
+}
+
+.modal-content.spotlight-active::before {
+    opacity: 1;
+}
+
+/* Mobile: match body::after's mobile radius so the two stay identical */
+@media (max-width: 768px) {
+    .modal-content::before {
+        background: radial-gradient(180vw circle at var(--hx, 50%) var(--hy, 50%),
+                rgba(72, 20, 150, 0.50) 0%,
+                rgba(155, 35, 220, 0.24) 35%,
+                rgba(245, 100, 255, 0) 70%);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .modal-content::before {
+        display: none;
+    }
+}
+
+.modal-header,
+.modal-body,
+.modal-footer {
+    position: relative;
+    z-index: 1;
 }
 
 /* Move/Copy modal needs extra width on desktop for the folder browser */
@@ -2247,7 +2362,7 @@ td .fa-file {
 
     /* Ensure file table maintains theme background on mobile */
     .file-table {
-        background: rgba(48, 84, 140, 255) !important;
+        background: rgba(255, 255, 255, 0.1) !important;
         /* Force theme-matched light blue background */
         border-radius: 12px;
         overflow: hidden !important;
@@ -2257,7 +2372,7 @@ td .fa-file {
 
     /* Ensure table rows maintain theme styling on mobile */
     .table tbody tr {
-        border-bottom: 1px solid rgba(48, 84, 140, 255) !important;
+        border-bottom: 1px solid rgba(48, 84, 140, 0.55) !important;
         /* Light blue border to complement theme */
         background: transparent !important;
         /* Allow parent background to show through */
@@ -2384,7 +2499,7 @@ td .fa-file {
         border-radius: 12px !important;
         overflow-x: auto;
         width: 100%;
-        background: rgba(48, 84, 140, 255) !important;
+        background: rgba(255, 255, 255, 0.1) !important;
     }
 
     .table {
@@ -2396,8 +2511,8 @@ td .fa-file {
 
     /* Ensure table rows have theme background on mobile */
     .table tbody tr {
-        background: rgba(48, 84, 140, 255) !important;
-        border-bottom: 1px solid rgba(48, 84, 140, 255) !important;
+        background: transparent !important;
+        border-bottom: 1px solid rgba(48, 84, 140, 0.55) !important;
     }
 
     /* Ensure file icons are white on mobile */
@@ -2421,7 +2536,7 @@ td .fa-file {
 
     /* Only table body cells get the blue theme background */
     .table td {
-        background: rgba(48, 84, 140, 255) !important;
+        background: transparent !important;
     }
 
     /* Override specific file name and folder colors on mobile */
@@ -2943,12 +3058,23 @@ td .fa-file {
         gap: 8px;
     }
 
-    /* Modal adjustments for mobile */
+    /* Modal adjustments for mobile - sizing only. Background/blur
+       intentionally NOT overridden here so mobile renders the exact same
+       color theme as desktop (see base .modal / .modal-content rules) -
+       any apparent mismatch is a rendering issue (backdrop-filter not
+       actually taking effect on-device), not a different intended color,
+       so diverging the values here would just mask that instead of
+       fixing it. */
     .modal-content {
         width: 95%;
         max-height: calc(100dvh - 24px);
         padding: 18px;
         border-radius: 12px;
+    }
+
+    .modal {
+        /* intentionally inherits desktop's blur(5px) / rgba(0,0,0,0.5) */
+        border: 0px;
     }
 
     .modal-header {
@@ -3078,18 +3204,18 @@ td .fa-file {
 
     /* Ensure theme background colors are maintained on medium mobile screens */
     .file-table {
-        background: rgba(48, 84, 140, 255) !important;
+        background: rgba(255, 255, 255, 0.1) !important;
     }
 
     .table tbody tr {
-        background: rgba(48, 84, 140, 255) !important;
-        border-bottom: 1px solid rgba(48, 84, 140, 255) !important;
+        background: transparent !important;
+        border-bottom: 1px solid rgba(48, 84, 140, 0.55) !important;
     }
 
     /* Ensure white text color for table cells on medium mobile */
     .table td {
         color: white !important;
-        background: rgba(48, 84, 140, 255) !important;
+        background: transparent !important;
     }
 
     .table th {
@@ -3168,18 +3294,18 @@ td .fa-file {
 
     /* Ensure theme background colors are maintained on very small screens */
     .file-table {
-        background: rgba(48, 84, 140, 255) !important;
+        background: rgba(255, 255, 255, 0.1) !important;
     }
 
     .table tbody tr {
-        background: rgba(48, 84, 140, 255) !important;
-        border-bottom: 1px solid rgba(48, 84, 140, 255) !important;
+        background: transparent !important;
+        border-bottom: 1px solid rgba(48, 84, 140, 0.55) !important;
     }
 
     /* Ensure white text color for table cells on very small screens */
     .table td {
         color: white !important;
-        background: rgba(48, 84, 140, 255) !important;
+        background: transparent !important;
     }
 
     .table th {
@@ -3274,7 +3400,7 @@ td .fa-file {
         /* Changed from negative margins to positive */
         overflow-x: auto;
         border-radius: 10px !important;
-        background: rgba(48, 84, 140, 255) !important;
+        background: rgba(255, 255, 255, 0.1) !important;
         /* Ensure theme background on very small screens */
     }
 
@@ -3288,7 +3414,7 @@ td .fa-file {
 
     /* Ensure table rows maintain theme styling on very small screens */
     .table tbody tr {
-        border-bottom: 1px solid rgba(48, 84, 140, 255) !important;
+        border-bottom: 1px solid rgba(48, 84, 140, 0.55) !important;
         background: transparent !important;
     }
 
@@ -3932,7 +4058,7 @@ td .fa-file {
 }
 
 .search-result-row {
-    background: rgba(48, 84, 140, 255) !important;
+    background: rgba(48, 84, 140, 0.55) !important;
     border-left: 4px solid #4caf50 !important;
     transition: all 0.2s ease;
     color: white !important;
@@ -4675,7 +4801,40 @@ td .fa-file {
 
 /* Image viewer */
 .file-viewer-body.viewer-image {
-    background: rgba(0, 0, 0, 0.5);
+    /* Was 0.5, stacked on top of .modal-content's own 0.55-alpha layer
+       (z-index:1 over the spotlight's z-index:0 ::before), so the two
+       combined left only ~22% transmission - close enough to invisible
+       that the spotlight effectively didn't read through the letterboxed
+       area around the image. Matched to the 0.35 alpha .modal's own
+       backdrop already settled on for the same reason (see comment there),
+       which keeps enough black tint for image contrast while actually
+       letting the glow show. */
+    background: rgba(0, 0, 0, 0.35);
+}
+
+/* #img-conv-wrap and #hls-player-area both get a solid `background:#111`
+   from an inline style="" (see index.js: the innerHTML template around
+   img-conv-wrap, and the .style.cssText assignment for the transcoding
+   placeholder). This page's CSP locks style-src-attr to a hash allowlist
+   computed from the exact original inline-style strings - editing that
+   string's color value directly (tried first) changes its hash and makes
+   the browser reject the ENTIRE attribute, not just recolor it, which
+   silently broke the wrapper's display:flex/width/height too and collapsed
+   the image viewer to a blank area. Overriding from this external
+   stylesheet (same-origin, unaffected by style-src-attr) avoids touching
+   the inline attribute at all: the inline #111 still satisfies CSP and
+   applies normally, and this !important rule only recolors it afterward.
+   #hls-player-area is safe to make translucent unconditionally - once an
+   actual <video-player> mounts inside it, that element's own opaque
+   background (see .hls-player-outer video-player below) fully covers it
+   during real playback; this only shows during the "Preparing stream…"
+   placeholder state. */
+#img-conv-wrap {
+    background: rgba(17, 17, 17, 0.55) !important;
+}
+
+#hls-player-area {
+    background: rgba(17, 17, 17, 0.55) !important;
 }
 
 .viewer-img {
@@ -4684,9 +4843,19 @@ td .fa-file {
     object-fit: contain;
     border-radius: 4px;
     display: block;
-    /* Prevent GPU compositing layer from downsampling on HiDPI/Retina screens */
+    /* Prevent GPU compositing layer from downsampling on HiDPI/Retina screens.
+       image-rendering hints alone weren't reliable, which is why the modal
+       used to disable backdrop-filter globally instead (see comment on
+       #fileViewerModal .file-viewer-modal-content). Promoting the image to
+       its OWN compositing layer, separate from the modal's blur layer,
+       fixes the actual downsampling cause directly so the modal can keep
+       its backdrop-filter (and the cursor-glow it lets show through). */
     image-rendering: -webkit-optimize-contrast;
     image-rendering: high-quality;
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
 }
 
 /* ── Image preview loading state ─────────────────────────────────────────── */
@@ -4741,7 +4910,13 @@ td .fa-file {
 
 /* Video viewer */
 .file-viewer-body.viewer-video {
-    background: #0d1e3d;
+    /* Was solid #0d1e3d - a plain hex color has no alpha channel at all,
+       so it painted fully opaque over the spotlight's z-index:0 ::before
+       on .modal-content underneath, blocking it completely regardless of
+       cursor position. Same rgb value, translucent, matching the alpha
+       convention the rest of the fixed panels use (see .modal-content
+       comment). */
+    background: rgba(13, 30, 61, 0.55);
     border-radius: 0;
     overflow: hidden;
 }
@@ -5205,7 +5380,11 @@ td .fa-file {
     flex-direction: column;
     padding: 0;
     overflow: hidden;
-    background: #1a1a2e;
+    /* Was solid #1a1a2e - same opaque-hex issue as .viewer-video above:
+       no alpha channel meant it fully blocked the spotlight's ::before
+       layer underneath. Same rgb value, translucent, matching the rest of
+       the fixed panels. */
+    background: rgba(26, 26, 46, 0.55);
 }
 
 .viewer-archive-loading {
@@ -5562,7 +5741,12 @@ td .fa-file {
 
 /* Video viewer — site-themed dark navy instead of pure black */
 .file-viewer-body.viewer-video {
-    background: #0d1e3d;
+    /* Was solid #0d1e3d again here - this rule appears later in the
+       cascade than the .viewer-video fix earlier in the file and has the
+       same specificity, so it was silently winning and re-opaquing the
+       panel, blocking the spotlight a second time. Same rgb value,
+       translucent, matching the earlier fix. */
+    background: rgba(13, 30, 61, 0.55);
     padding: 5px;
     align-items: stretch;
     justify-content: stretch;
@@ -6012,10 +6196,16 @@ td .fa-file {
 #fileViewerModal .file-viewer-modal-content,
 #fileViewerModal .modal-content {
     border-radius: 12px !important;
-    /* backdrop-filter on modal-content forces a GPU compositing layer that
-       downsamples child images on HiDPI screens — disable it for the viewer */
-    -webkit-backdrop-filter: none !important;
-    backdrop-filter: none !important;
+    /* This used to also force backdrop-filter: none here, to work around
+       parent-layer downsampling of child images on HiDPI screens. That
+       killed the glassy cursor-glow/transparency effect this modal should
+       have same as every other one on the page (see .modal / .modal-content
+       base rules above, which now carry the correctly-lowered opacity that
+       makes the glow actually visible - this modal just inherits that).
+       The HiDPI fix now lives on .viewer-img instead: it's promoted to its
+       own compositing layer, isolated from the modal's blur layer, so IT
+       doesn't inherit the parent's downsampled raster - without needing to
+       sacrifice backdrop-filter on the modal itself. */
 }
 
 #fileViewerModal .file-viewer-body {
@@ -6115,11 +6305,11 @@ td .fa-file {
 
     /* Match desktop row/cell colors */
     .table tbody tr {
-        background: rgba(48, 84, 140, 255) !important;
+        background: transparent !important;
     }
 
     .table td {
-        background: rgba(48, 84, 140, 255) !important;
+        background: transparent !important;
         color: white !important;
         padding: 6px 8px !important;
         line-height: 1.2 !important;
@@ -6231,5 +6421,50 @@ body:has(#fileViewerModal.show) {
     .file-viewer-body.viewer-pdf iframe {
         max-width: 100vw !important;
         width: 100% !important;
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Fallback for browsers where backdrop-filter genuinely doesn't apply at
+   all (not just under GPU/compositing pressure - actual lack of support,
+   e.g. some Android WebViews and in-app browsers). In that case the
+   backdrop-filter declarations above are simply dropped by the parser and
+   only the flat background/alpha is ever painted - which is what makes a
+   panel authored to look "glassy" (i.e. tuned assuming blur is doing most
+   of the visual work) read as a plain, highly-opaque solid box instead,
+   with the cursor-glow completely hidden behind it.
+   This block only fires when backdrop-filter truly isn't supported, and
+   drops these panels' opacity further so the theme colour/glow still
+   reads through via plain alpha blending - the one thing every browser
+   can render - instead of relying on blur to carry the "glass" look.
+   Placed at the end of the file so it wins the cascade over the
+   unconditional per-breakpoint rules above it. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+
+    .modal {
+        background-color: rgba(15, 30, 58, 0.55);
+    }
+
+    .modal-content {
+        background: linear-gradient(145deg, rgba(30, 60, 114, 0.78) 0%, rgba(42, 82, 152, 0.78) 100%);
+    }
+
+    .header,
+    .breadcrumb,
+    .upload-section,
+    .storage-stats {
+        background: rgba(255, 255, 255, 0.18);
+    }
+
+    .file-table {
+        background: rgba(255, 255, 255, 0.15) !important;
+    }
+
+    .table tbody tr {
+        background: transparent !important;
+    }
+
+    .table td {
+        background: transparent !important;
     }
 }

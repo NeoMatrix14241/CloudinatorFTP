@@ -533,6 +533,32 @@ _INLINE_STYLE_HASHES = (
     "'sha256-CFz7XUx3dO7TOX4RcnZ+osqCc+Owc1o8JNUiD0DGKqQ='"
 )
 
+# CSP: SHA-256 hashes of inline <style>...</style> ELEMENTS (not
+# attributes) that the vendored video.js/media-chrome player bundle
+# injects into its own shadow-DOM components at runtime — as opposed to
+# _INLINE_STYLE_HASHES above, which covers style="..." ATTRIBUTES from
+# our own templates/JS and is governed by style-src-attr.
+#
+# This project's own JS (index.js: _injectMobileSpeedHide,
+# _initImageZoom) used to inject inline <style> elements too, but those
+# were converted to an external stylesheet
+# (static/css/video-skin-overrides.css, loaded via <link>) and a rule in
+# the main stylesheet respectively — so 'self' alone covers them now and
+# they no longer need a hash here.
+#
+# These two remaining hashes come from the player library's minified
+# bundle (functions `Bt` / `Ln`), not from our code, so we can't remove
+# the injection — only pin its known-good output. They correspond to
+# that library's fixed per-component shadow-root templates rather than
+# any per-video computed value, so they should stay stable across
+# different videos/screen sizes for a given pinned bundle version. If
+# static/js/video.js is ever upgraded, these WILL break (console will
+# show the new correct hash — swap it in here).
+_INLINE_STYLE_ELEMENT_HASHES = (
+    "'sha256-59zjj0xxtVIRnqPtzjuu1HKYGZQR57lKieZWIsMUmFA=' "
+    "'sha256-uvVKilsI7vU78t7JP2zAYfRbql0CeUoAO9EWf76oFTc='"
+)
+
 app = Quart(__name__)
 
 # ---------------------------------------------------------------------------
@@ -1507,9 +1533,15 @@ async def after_request(response):
         # those older browsers will load external stylesheets fine but will
         # NOT apply the inline style="..." attributes below.
         "style-src 'self'; "
-        # <link rel="stylesheet"> / <style> elements — just 'self', no
-        # inline <style> blocks exist in this project.
-        "style-src-elem 'self'; "
+        # <link rel="stylesheet"> external files (including
+        # video-skin-overrides.css, loaded dynamically into a shadow
+        # root by index.js) load fine under plain 'self'. On top of
+        # that, the vendored video.js/media-chrome bundle injects a
+        # couple of inline <style> elements of its own into its
+        # shadow-DOM components — see _INLINE_STYLE_ELEMENT_HASHES
+        # above for what these are and the upgrade caveat. Unlike
+        # style-src-attr, element hashes don't need 'unsafe-hashes'.
+        f"style-src-elem 'self' {_INLINE_STYLE_ELEMENT_HASHES}; "
         # Exact allow-list of this project's static inline style="..."
         # attribute values (see _INLINE_STYLE_HASHES above for regeneration
         # instructions and the Safari-support caveat).
