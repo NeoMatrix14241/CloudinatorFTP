@@ -1526,7 +1526,7 @@ async def after_request(response):
     # inheriting 'self' from the old default-src 'self'.
     csp = (
         "default-src 'none'; "
-        "script-src 'self' https://static.cloudflareinsights.com; "
+        "script-src 'self' https://static.cloudflareinsights.com 'sha256-mXhozn1O0vM6nRIfF64n5798B/Pge5zsGWeOtxPs0ec='; "
         "script-src-attr 'none'; "
         # style-src is the fallback for browsers that don't understand
         # style-src-elem/style-src-attr (CSP3). No 'unsafe-inline' here —
