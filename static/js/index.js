@@ -10191,9 +10191,17 @@ function connectToStorageStream() {
 
         // Keep connection alive by preventing premature closure
         storageEventSource.addEventListener('error', function (event) {
-            console.warn('⚠️ SSE error event:', event);
-            console.warn('⚠️ EventSource readyState:', storageEventSource.readyState);
-            console.warn('⚠️ EventSource url:', storageEventSource.url);
+            // A backgrounded/frozen tab getting its HTTP/2 stream reset by
+            // the browser itself (not the server) is expected — the
+            // reconnect/polling-fallback logic below already recovers from
+            // it, so it's not actually an error condition when it happens
+            // while hidden. Keep it at debug level in that case so it
+            // doesn't read as something broken; still warn when visible,
+            // since then it's more likely a real connectivity issue.
+            const logFn = document.hidden ? console.debug : console.warn;
+            logFn('⚠️ SSE error event:', event);
+            logFn('⚠️ EventSource readyState:', storageEventSource.readyState);
+            logFn('⚠️ EventSource url:', storageEventSource.url);
             // Don't immediately close on errors - let the reconnect logic handle it
         });
 
@@ -10238,7 +10246,13 @@ function connectToStorageStream() {
         };
 
         storageEventSource.onerror = function (event) {
-            console.error('❌ Storage stats stream error:', event);
+            // Same reasoning as the 'error' listener above: while hidden,
+            // this is almost always the browser itself resetting the
+            // stream on a backgrounded/frozen tab, not a real failure —
+            // log it quietly and let the existing reconnect/polling
+            // fallback below do its job.
+            const logFn = document.hidden ? console.debug : console.error;
+            logFn('❌ Storage stats stream error:', event);
             console.log('🔴 SSE onerror fired - connection failed');
             console.log('🔴 EventSource readyState:', storageEventSource.readyState);
             connectionStatus = 'error';
@@ -10262,7 +10276,7 @@ function connectToStorageStream() {
                     connectToStorageStream();
                 }, reconnectDelay);
             } else {
-                console.error('💀 SSE reconnection failed, switching to polling fallback...');
+                (document.hidden ? console.debug : console.error)('💀 SSE reconnection failed, switching to polling fallback...');
                 sseFailedPermanently = true;
 
                 if (storageEventSource) {
