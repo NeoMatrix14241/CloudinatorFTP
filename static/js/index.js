@@ -904,15 +904,16 @@ function highlightSearchTerm(row, term) {
         nameCell.dataset.originalText = originalText;
 
         const regex = new RegExp(`(${term})`, 'gi');
-        const highlightedText = originalText.replace(regex, '<span class="search-highlight">$1</span>');
+        const safeOriginalText = escapeHtml(originalText);
+        const highlightedText = safeOriginalText.replace(regex, '<span class="search-highlight">$1</span>');
 
         // Only update if we have a match and it's different
-        if (highlightedText !== originalText) {
+        if (highlightedText !== safeOriginalText) {
             const linkElement = nameCell.querySelector('a');
             if (linkElement) {
-                linkElement.innerHTML = linkElement.textContent.replace(regex, '<span class="search-highlight">$1</span>');
+                linkElement.innerHTML = escapeHtml(linkElement.textContent).replace(regex, '<span class="search-highlight">$1</span>');
             } else {
-                nameCell.innerHTML = nameCell.innerHTML.replace(originalText, highlightedText);
+                nameCell.innerHTML = highlightedText;
             }
         }
     }
@@ -1081,8 +1082,8 @@ function createSearchResultRow(result, searchTerm) {
     row.innerHTML = `
         <td class="search-checkbox-cell">
             <input type="checkbox" class="file-checkbox item-checkbox" 
-                   data-path="${result.path}"
-                   data-name="${result.name}"
+                   data-path="${escapeHtml(result.path)}"
+                   data-name="${escapeHtml(result.name)}"
                    data-is-dir="${result.is_dir}"
                    data-fn-change="updateSelection">
         </td>
@@ -1963,8 +1964,8 @@ function createFileTableRow(item, currentPath) {
     row.innerHTML = `
         <td>
             <input type="checkbox" class="file-checkbox item-checkbox" 
-                   data-path="${itemPath}" 
-                   data-name="${item.name}"
+                   data-path="${escapeHtml(itemPath)}" 
+                   data-name="${escapeHtml(item.name)}"
                    data-is-dir="${item.is_dir ? 'true' : 'false'}"
                    data-fn-change="updateSelection" ${selectedItems.has(itemPath) ? 'checked' : ''}>
         </td>
@@ -6695,7 +6696,7 @@ function displayFolders(folders) {
 
         folderItem.innerHTML = `
             <i class="fas fa-folder" style="color: #f39c12; margin-right: 10px; font-size: 14px;"></i>
-            <span style="flex: 1;">${folder.name}</span>
+            <span style="flex: 1;">${escapeHtml(folder.name)}</span>
             <i class="fas fa-chevron-right" style="color: rgba(255,255,255,0.5); font-size: 12px;"></i>
         `;
 
@@ -6851,7 +6852,7 @@ function showRenameModal() {
     }
 
     if (currentItemNameDiv) {
-        currentItemNameDiv.innerHTML = `<i class="fas fa-file"></i> ${itemName}`;
+        currentItemNameDiv.innerHTML = `<i class="fas fa-file"></i> ${escapeHtml(itemName)}`;
     }
 
     if (modal) modal.classList.add('show');
