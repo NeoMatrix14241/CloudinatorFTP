@@ -21,10 +21,16 @@ This is a dependency-consolidation move, not a performance one — the
 underlying wsgidav app is still synchronous, and WsgiToAsgi still runs it
 in a thread pool under the hood, same as waitress/cheroot did before.
 The concrete win: one server library everywhere instead of three
-(waitress + cheroot + Hypercorn), and HTTP/2 on the HTTPS listener.
-Verified directly: PROPFIND, GET, PUT, and auth enforcement (401/207/201)
-all behave identically to the old waitress+cheroot setup, including over
-HTTP/2.
+(waitress + cheroot + Hypercorn). Verified directly: PROPFIND, GET, PUT,
+and auth enforcement (401/207/201) all behave identically to the old
+waitress+cheroot setup.
+
+Deliberately HTTP/1.1-only (unlike the main app's HTTPS listener, which is
+h2-only) — see the alpn_protocols comment in _start_hypercorn(). WebDAV is
+mounted by OS-level clients (Windows WebClient/mrxdav.sys, davfs2, etc.)
+that are almost universally HTTP/1.1-only; offering h2 here causes
+mid-transfer connection resets ("SSL connection closed") on those clients,
+worst on downloads.
 
 Native drive mapping:
   Windows → This PC → Map Network Drive → http://HOST:8080/
@@ -402,7 +408,18 @@ def _start_hypercorn(wsgi_app, http_port, https_port, cert_path, key_path):
     if https_port:
         cfg.certfile = cert_path
         cfg.keyfile = key_path
-        cfg.alpn_protocols = ["h2", "http/1.1"]
+        # HTTP/1.1 only — deliberately NOT offering "h2" here.
+        # WebDAV is mounted by OS-level clients (Windows WebClient/mrxdav.sys,
+        # davfs2, Cyberduck, etc.), almost all of which are HTTP/1.1-only.
+        # If TLS negotiates h2 with one of these (their TLS layer can claim
+        # ALPN h2 support even though the WebDAV component can't actually
+        # speak HTTP/2 framing), the connection breaks below the HTTP layer —
+        # surfacing as "SSL connection closed" rather than a clean HTTP
+        # error, and repeating forever as the OS driver auto-retries the
+        # mount/download. Unlike prod_server.py's main app (browser-only,
+        # h2 is safe and desired there), WebDAV gains nothing from h2 and
+        # loses broad client compatibility, so it stays HTTP/1.1-only.
+        cfg.alpn_protocols = ["http/1.1"]
     # keep_alive_max_requests intentionally left at Hypercorn's default
     # (1000) — see prod_server.py's comment on this exact setting. 0 does
     # NOT mean unlimited, it means "close after the very first request".
@@ -525,7 +542,7 @@ def start() -> bool:
         print(f"🌐 WebDAV HTTP:  http://{LOCAL_IP}:{http_port}/{tag}")
         print(f"   ⚠️  plaintext Basic Auth — credentials are NOT encrypted here")
     if https_port:
-        print(f"🔐 WebDAV HTTPS: https://{LOCAL_IP}:{https_port}/  (HTTP/2 enabled)")
+        print(f"🔐 WebDAV HTTPS: https://{LOCAL_IP}:{https_port}/  (HTTP/1.1 only)")
         print(
             f"   Import {cert_path} as a trusted root manually (or serve it "
             f"yourself) — the plaintext HTTP listener that used to host it at "
