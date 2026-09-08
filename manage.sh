@@ -59,6 +59,13 @@ logpath_file_for() {
     esac
 }
 
+# WebDAV runs as its own OS process (see protocol_manager.py), separate
+# from the main server process this script tracks in prod.pid/dev.pid.
+# protocol_manager.py writes its real PID here on every (re)spawn.
+webdav_pid_file() {
+    echo "${PID_DIR}/webdav.pid"
+}
+
 script_for() {
     case "$1" in
         prod) echo "prod_server.py" ;;
@@ -411,6 +418,81 @@ cmd_restart() {
     cmd_start "$(display_name_for "$type")"
 }
 
+# ── cmd_restart_webdav ───────────────────────────────────────────────────────
+# Recovers a wedged-but-alive WebDAV listener (e.g. the Hypercorn/asyncio
+# write-retry loop after a large cancelled download — see webdav_server.py's
+# module docstring) WITHOUT restarting the main server. WebDAV runs as its
+# own OS process; this kills that process directly by PID and relies on the
+# watchdog thread inside the already-running server process (prod_server.py
+# via protocol_manager.py) to notice the exit and respawn it automatically —
+# this script can't call protocol_manager.restart_webdav() itself, since
+# that function only knows about the Popen handle held in the SERVER's
+# memory, not in this separate manage.sh process.
+cmd_restart_webdav() {
+    local type
+    type=$(active_server)
+    if [[ -z "$type" ]]; then
+        error "No server is running — WebDAV only runs alongside a started server."
+        return 1
+    fi
+    
+    local pf
+    pf=$(webdav_pid_file)
+    if [[ ! -f "$pf" ]]; then
+        warn "No WebDAV PID file found — it may not have started (check config.py's"
+        warn "WEBDAV_ENABLED / WEBDAV_HTTPS_ENABLED, or the server's log)."
+        return 1
+    fi
+    
+    local old_pid
+    old_pid=$(<"$pf")
+    if [[ -z "$old_pid" ]]; then
+        error "WebDAV PID file is empty: ${pf}"
+        return 1
+    fi
+    
+    info "Restarting WebDAV (PID ${old_pid})… main server keeps running unaffected."
+    
+    if is_windows; then
+        taskkill //F //PID "$old_pid" &>/dev/null || true
+    else
+        kill "$old_pid" 2>/dev/null || true
+        local i=0
+        while kill -0 "$old_pid" 2>/dev/null && (( i < 10 )); do
+            sleep 0.5
+            (( i++ ))
+        done
+        if kill -0 "$old_pid" 2>/dev/null; then
+            warn "WebDAV did not exit gracefully — sending SIGKILL…"
+            kill -9 "$old_pid" 2>/dev/null || true
+        fi
+    fi
+    
+    # The running server's watchdog thread respawns WebDAV automatically —
+    # poll the PID file for a new (different) PID to confirm it happened.
+    info "Waiting for the server's watchdog to respawn WebDAV…"
+    local i=0
+    local new_pid=""
+    while (( i < 20 )); do
+        sleep 0.5
+        if [[ -f "$pf" ]]; then
+            new_pid=$(<"$pf")
+            if [[ -n "$new_pid" ]] && [[ "$new_pid" != "$old_pid" ]]; then
+                break
+            fi
+        fi
+        (( i++ ))
+    done
+    
+    if [[ -n "$new_pid" ]] && [[ "$new_pid" != "$old_pid" ]]; then
+        success "WebDAV restarted (new PID ${new_pid})."
+    else
+        error "WebDAV did not come back within 10s — check the server log"
+        error "(./manage.sh logs $(display_name_for "$type") ) for the actual failure."
+        return 1
+    fi
+}
+
 # ── cmd_status ────────────────────────────────────────────────────────────────
 cmd_status() {
     header "Server Status"
@@ -641,7 +723,7 @@ _security_txt_apply() {
     # args: contact expires expires_days preferred_lang canonical
     local contact="$1" expires="$2" expires_days="$3" plang="$4" canonical="$5"
     mkdir -p "$(dirname "$SECURITY_TXT_PATH")"
-
+    
     local ec=0
     "$PYTHON" - "$SECURITY_TXT_PATH" "$contact" "$expires" "$expires_days" "$plang" "$canonical" << 'PYEOF' || ec=$?
 import sys, os, re
@@ -745,18 +827,18 @@ _security_txt_interactive() {
         cur_plang=$(grep -m1 '^Preferred-Languages:' "$SECURITY_TXT_PATH" | cut -d: -f2- | sed 's/^ *//') || true
         cur_canonical=$(grep -m1 '^Canonical:' "$SECURITY_TXT_PATH" | cut -d: -f2- | sed 's/^ *//') || true
     fi
-
+    
     header "security.txt — Interactive Update"
     divider
     info "Leave a field blank to keep its current value (shown in [brackets])."
     echo ""
-
+    
     local contact expires plang canonical
     read -rp "  Contact (email or mailto:/https: URL) [${cur_contact:-none}]: " contact
     read -rp "  Expires (YYYY-MM-DD or full ISO datetime) [${cur_expires:-none}]: " expires
     read -rp "  Preferred-Languages, comma separated [${cur_plang:-none}]: " plang
     read -rp "  Canonical URL [${cur_canonical:-none}]: " canonical
-
+    
     _security_txt_apply "$contact" "$expires" "" "$plang" "$canonical"
 }
 
@@ -770,7 +852,7 @@ cmd_security_txt() {
         _security_txt_show
         return $?
     fi
-
+    
     local contact="" expires="" expires_days="" plang="" canonical=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -782,13 +864,13 @@ cmd_security_txt() {
             *) error "Unknown option: $1"; return 1 ;;
         esac
     done
-
+    
     if [[ -z "$contact$expires$expires_days$plang$canonical" ]]; then
         error "Specify at least one of --contact --expires --expires-in-days --preferred-lang --canonical"
         info  "Or run without args for the interactive prompt, or 'show' to print the current file."
         return 1
     fi
-
+    
     _security_txt_apply "$contact" "$expires" "$expires_days" "$plang" "$canonical"
 }
 
@@ -871,20 +953,21 @@ cmd_menu() {
         echo "   5) Server status"
         echo "   6) Follow logs"
         echo "   7) Clean log files"
+        echo "   8) Restart WebDAV only  — recover a wedged WebDAV listener"
         echo ""
         echo -e "  ${BOLD}Utilities${NC}"
-        echo "   8) smb_setup.py        — Configure SMB storage"
-        echo "   9) kick_sessions.py    — Force logout of all active sessions"
-        echo "  10) config.py           — Edit configuration"
-        echo "  11) manage_users.py     — Manage user credentials"
-        echo "  12) debug_passwords.py  — Debug passwords"
-        echo "  13) reset_db.py         — Reset database"
-        echo "  14) setup_storage.py    — Configure storage"
-        echo "  15) setup_pymodules.sh  — Setup and Update Python packages"
-        echo "  16) revoke_sharing.py   — Share link management (links, passkeys, approvals)"
-        echo "  17) security.txt        — Update static/.well-known/security.txt"
+        echo "   9) smb_setup.py        — Configure SMB storage"
+        echo "  10) kick_sessions.py    — Force logout of all active sessions"
+        echo "  11) config.py           — Edit configuration"
+        echo "  12) manage_users.py     — Manage user credentials"
+        echo "  13) debug_passwords.py  — Debug passwords"
+        echo "  14) reset_db.py         — Reset database"
+        echo "  15) setup_storage.py    — Configure storage"
+        echo "  16) setup_pymodules.sh  — Setup and Update Python packages"
+        echo "  17) revoke_sharing.py   — Share link management (links, passkeys, approvals)"
+        echo "  18) security.txt        — Update static/.well-known/security.txt"
         if is_termux; then
-            echo "  18) termux_setup.sh    — Termux initial setup (Android only)"
+            echo "  19) termux_setup.sh    — Termux initial setup (Android only)"
         fi
         echo ""
         echo "   q) Quit"
@@ -911,17 +994,18 @@ cmd_menu() {
                 fi
             ;;
             7)  cmd_clean_logs || true ;;
-            8)  run_utility "smb_setup.py" || true ;;
-            9)  run_utility "kick_sessions.py" || true ;;
-            10) run_utility "config.py" || true ;;
-            11) run_utility "manage_users.py" || true ;;
-            12) run_utility "debug_passwords.py" || true ;;
-            13) run_utility "reset_db.py" || true ;;
-            14) run_utility "setup_storage.py" || true ;;
-            15) cmd_setup_modules || true ;;
-            16) run_utility "revoke_sharing.py" || true ;;
-            17) cmd_security_txt || true ;;
-            18) cmd_termux_setup || true ;;
+            8)  cmd_restart_webdav || true ;;
+            9)  run_utility "smb_setup.py" || true ;;
+            10) run_utility "kick_sessions.py" || true ;;
+            11) run_utility "config.py" || true ;;
+            12) run_utility "manage_users.py" || true ;;
+            13) run_utility "debug_passwords.py" || true ;;
+            14) run_utility "reset_db.py" || true ;;
+            15) run_utility "setup_storage.py" || true ;;
+            16) cmd_setup_modules || true ;;
+            17) run_utility "revoke_sharing.py" || true ;;
+            18) cmd_security_txt || true ;;
+            19) cmd_termux_setup || true ;;
             q|Q) echo ""; success "Goodbye!"; exit 0 ;;
             *) warn "Invalid option: ${choice}" ;;
         esac
@@ -945,6 +1029,12 @@ ${BOLD}SERVER COMMANDS${NC}  (mutually exclusive — only one server at a time)
   start  dev_server     Start dev server (flask) in the background
   stop                  Gracefully stop the running server
   restart               Restart the currently active server
+  restart-webdav         Restart ONLY WebDAV (recovers a wedged/stuck WebDAV
+                           listener without touching the main server — see
+                           webdav_server.py's module docstring for why this
+                           exists: a known Hypercorn/asyncio issue where
+                           cancelling a large in-flight download can wedge
+                           WebDAV's event loop)
   status                Show current server status + recent log tail
   logs   [server|dev_server] [-f]
                         Print logs; -f to follow in real time
@@ -992,6 +1082,7 @@ ${BOLD}EXAMPLES${NC}
   ./manage.sh clean-logs         # delete old log files
   ./manage.sh revoke-shares list # list active share links
   ./manage.sh revoke-shares      # interactive share-management menu
+  ./manage.sh restart-webdav     # recover a wedged WebDAV without touching the main server
   ./manage.sh stop               # gracefully stop the server
   ./manage.sh menu               # interactive mode
   ./manage.sh security-txt show  # print the current security.txt
@@ -1024,6 +1115,7 @@ main() {
         start)          cmd_start "$@" ;;
         stop)           cmd_stop ;;
         restart)        cmd_restart ;;
+        restart-webdav) cmd_restart_webdav ;;
         status)         cmd_status ;;
         logs)           cmd_logs "$@" ;;
         clean-logs)     cmd_clean_logs ;;

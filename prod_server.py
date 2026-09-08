@@ -218,7 +218,19 @@ if _BG:
 # ensure_dirs() is called inside app.py before anything else loads.
 from app import app
 
-# Start WebDAV / SFTP / FTP / SMB protocol servers in background threads.
+# Patch a real, still-open Hypercorn bug (hypercorn#202) before any
+# Hypercorn server in THIS process starts — see hypercorn_ssl_fix.py's
+# module docstring. Must run before the `await serve(...)` call in
+# _run() below; applying it here at import time is the simplest way to
+# guarantee that. NOTE: WebDAV runs as its own separate OS process (see
+# protocol_manager.py) with its own Hypercorn instance, so this call does
+# NOT cover it — webdav_server.py applies the identical patch for itself.
+import hypercorn_ssl_fix
+
+hypercorn_ssl_fix.apply()
+
+# Start WebDAV / SFTP / FTP / SMB protocol servers (WebDAV as its own
+# process, SFTP/FTP/SMB as background threads — see protocol_manager.py).
 import protocol_manager
 
 protocol_manager.start_all()

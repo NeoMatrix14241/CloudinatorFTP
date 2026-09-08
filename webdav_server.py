@@ -60,6 +60,15 @@ import threading
 import time
 from app import get_local_ip
 
+# Patch the same real, still-open Hypercorn bug (hypercorn#202) that
+# prod_server.py patches for the main app — see hypercorn_ssl_fix.py's
+# module docstring. WebDAV runs as its own separate OS process with its
+# own independent Hypercorn instance (see protocol_manager.py), so it
+# needs this call too; prod_server.py's own call does not cover it.
+import hypercorn_ssl_fix
+
+hypercorn_ssl_fix.apply()
+
 LOCAL_IP = get_local_ip()
 
 log = logging.getLogger(__name__)
@@ -562,3 +571,69 @@ def stop():
             pass
     _webdav_loop = None
     _webdav_shutdown_event = None
+
+
+# ── Standalone process entrypoint ───────────────────────────────────────────
+# WebDAV is launched as its own OS process by protocol_manager.py (see
+# _spawn_webdav_process there), NOT as a thread inside the main app's
+# process like SFTP/FTP/SMB still are. Reason: Hypercorn/asyncio has a known
+# failure mode where a large in-flight download that the client cancels
+# mid-transfer can leave the event loop stuck retrying a write to a dead SSL
+# transport in a tight, non-terminating loop ("SSL connection closed",
+# flooding the log, CPU pegged on that thread) — with no clean way to
+# recover except killing the whole process. Running WebDAV in its own
+# process means that failure mode now only costs a WebDAV restart (see
+# protocol_manager.restart_webdav()), not a full-server restart — the main
+# app keeps serving on :5000 throughout.
+
+
+def _run_standalone():
+    """
+    Entrypoint used when this module is launched as `python webdav_server.py`
+    (a subprocess of the main app, not imported). Starts WebDAV and then
+    blocks in the foreground so the process stays alive for the parent to
+    supervise, until it receives SIGTERM/SIGINT (normal shutdown, exit code
+    0 — see protocol_manager.stop_all()/restart_webdav()) or start() fails
+    (exit code 1, so the parent's watchdog knows to retry).
+
+    Exits 0 immediately, without starting anything, if both WEBDAV_ENABLED
+    and WEBDAV_HTTPS_ENABLED are off — this is treated as an intentional
+    "nothing to do" exit, distinct from a real failure, so the parent's
+    watchdog does NOT try to respawn it in that case.
+    """
+    import signal
+
+    try:
+        from config import WEBDAV_ENABLED, WEBDAV_HTTPS_ENABLED
+    except ImportError:
+        WEBDAV_ENABLED, WEBDAV_HTTPS_ENABLED = True, True
+
+    if not WEBDAV_ENABLED and not WEBDAV_HTTPS_ENABLED:
+        print("ℹ️  WebDAV disabled in config.py — subprocess exiting cleanly.")
+        return  # exit code 0, watchdog will not respawn
+
+    if not start():
+        # start() already printed the specific reason (missing dependency,
+        # port bind failure, etc.) — exit non-zero so the parent knows this
+        # was a real failure, not an intentional no-op.
+        raise SystemExit(1)
+
+    stop_requested = threading.Event()
+
+    def _handle_signal(signum, frame):
+        print(f"\n🛑 WebDAV process received signal {signum}, shutting down...")
+        stop()
+        stop_requested.set()
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
+    # The actual Hypercorn server runs in _webdav_thread (a daemon thread
+    # started by start()) — just block the main thread here until told to
+    # stop, so the process (and its daemon thread) stays alive.
+    while not stop_requested.is_set():
+        stop_requested.wait(timeout=1)
+
+
+if __name__ == "__main__":
+    _run_standalone()
