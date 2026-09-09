@@ -62,8 +62,8 @@
 | **search_index.py** | Full-text search engine | FTS5 indexing, query processing |
 | **realtime_stats.py** | Server-Sent Events | Live storage stats broadcasting |
 | **realtime_shares.py** | Server-Sent Events (admin-only) | Live pending-share-request count + active-shares-changed nudges for the Manage Shared panel |
-| **protocol_manager.py** | Protocol server launcher | Starts/stops WebDAV, SFTP, FTP, SMB in background threads |
-| **webdav_server.py** | WebDAV server | wsgidav WSGI app bridged onto Hypercorn via `asgiref.WsgiToAsgi`; serves HTTP+HTTPS from one Hypercorn Config; role enforcement (no longer waitress/cheroot for serving — cheroot is now only a transitive wsgidav dependency) |
+| **protocol_manager.py** | Protocol server launcher | Starts/stops WebDAV, SFTP, FTP, SMB. 🆕 (2026-09-09) WebDAV now runs as its own isolated OS **subprocess** (not a thread) with a watchdog that auto-respawns it on crash — see [WebDAV Process Isolation, Watchdog & restart-webdav](#webdav-process-isolation-watchdog-restart-webdav-2026-09-09); SFTP/FTP/SMB remain background threads, unchanged |
+| **webdav_server.py** | WebDAV server | wsgidav WSGI app bridged onto Hypercorn via `asgiref.WsgiToAsgi`; serves HTTP+HTTPS from one Hypercorn Config; role enforcement (no longer waitress/cheroot for serving — cheroot is now only a transitive wsgidav dependency). 🆕 (2026-09-09) HTTPS listener is now HTTP/1.1-only (h2 dropped from ALPN — see Troubleshooting); also applies `hypercorn_ssl_fix.py`'s patch |
 | **sftp_server.py** | SFTP server | Paramiko SSH/SFTP, RSA host key, chrooted to ROOT_DIR; now also hardens offered SSH ciphers/MACs/KEX per connection (see [SFTP Implementation Notes](#sftp-implementation-notes)) |
 | **smb_server.py** | SMB server | impacket SimpleSMBServer, Tree Connect role enforcement, Windows file-locking fixes |
 | **smb_setup.py** | SMB one-time setup | Standalone tool — Windows LanmanServer, Linux setcap, Android root check |
@@ -177,7 +177,7 @@ app.py (Quart entry point, ASGI routes, incl. share-link routes)
 │
 ├─ Protocol Layer (started from dev_server.py / prod_server.py):
 │   └─→ protocol_manager.py
-│       ├─→ webdav_server.py → wsgidav, bridged onto Hypercorn via asgiref.WsgiToAsgi, ssl_cert.py (or Tailscale cert)
+│       ├─→ webdav_server.py (🆕 2026-09-09: own OS subprocess, not a thread — see Protocol Servers) → wsgidav, bridged onto Hypercorn via asgiref.WsgiToAsgi, ssl_cert.py (or Tailscale cert), hypercorn_ssl_fix.py (🆕 patches a real Hypercorn bug — see Troubleshooting)
 │       ├─→ sftp_server.py  → paramiko
 │       ├─→ ftp_server.py   → pyftpdlib
 │       └─→ smb_server.py   → impacket
@@ -1803,13 +1803,16 @@ img_cache_path: /tmp/cloudinator_img     (can recreate)
 
 Four additional servers start alongside the Quart app, launched by `protocol_manager.start_all()` (called from both `dev_server.py` and `prod_server.py` after `from app import app`). All four share the same authentication database (`database.db`) and role system (`readwrite` / `readonly`).
 
+🆕 **(2026-09-09)** WebDAV now runs as its own isolated OS **process** rather than a background thread — see [WebDAV Process Isolation, Watchdog & restart-webdav](#webdav-process-isolation-watchdog-restart-webdav-2026-09-09) below. SFTP/FTP/SMB are unchanged, still threads.
+
 SMB is architecturally different from the other three: it defaults to **disabled** (`SMB_ENABLED = False`) even with `impacket` installed, because port 445 needs a one-time, human-run machine setup (`smb_setup.py`) before it's actually usable — see its own section below.
 
 ### New Files
 
 | File | Purpose |
 |------|---------|
-| `protocol_manager.py` | Imports and starts all four protocol servers; prints startup summary |
+| `protocol_manager.py` | Imports and starts all four protocol servers; prints startup summary. 🆕 (2026-09-09) Also supervises WebDAV's subprocess (spawn, watchdog, `restart_webdav()`) |
+| `hypercorn_ssl_fix.py` | 🆕 (2026-09-09) Patches a real, still-open Hypercorn bug (`TCPServer._close()` doesn't catch `TimeoutError`; asyncio's default 30s SSL-shutdown wait has no cap) — see Troubleshooting. Applied by both `prod_server.py` and `webdav_server.py`, since each runs its own separate Hypercorn instance |
 | `webdav_server.py` | wsgidav WSGI app with auth cache, role middleware, HTTP+HTTPS, cert serving — bridged onto Hypercorn via `asgiref.WsgiToAsgi` (no longer waitress/cheroot for serving; see Changelog) |
 | `sftp_server.py` | Paramiko SSH accept loop, chrooted SFTPServerInterface |
 | `ftp_server.py` | pyftpdlib with standalone CloudinatorAuthorizer (no Windows LogonUser) |
@@ -1847,6 +1850,36 @@ Request → _CertMiddleware (serves /webdav.crt unauthenticated)
 **`is_share_anonymous`**: Takes `(share, environ=None)` — `environ` is optional because wsgidav 4.3.x dropped it from the call site.
 
 **Domain controller**: Must be passed as a **class** to `WsgiDAVApp`, not an instance. wsgidav 4.3.x checks `isinstance(dc, type)` and raises if given an instance.
+
+### WebDAV Process Isolation, Watchdog & `restart-webdav` (2026-09-09)
+
+Triggered by a real production report: cancelling a large in-flight WebDAV download could wedge the WebDAV listener badly enough that the *entire server* — main Web UI included — had to be restarted to recover, even though the main Web UI on :5000 was otherwise unaffected the whole time.
+
+**Root cause** was two-fold — see the matching Troubleshooting entries below for the full detail:
+1. A real, still-open Hypercorn bug (patched by `hypercorn_ssl_fix.py` — see below and Troubleshooting)
+2. WebDAV ran as a background **thread** inside the same OS process as the main app, so a wedged WebDAV listener had no independent recovery path short of killing that whole process
+
+**Fix — WebDAV now runs as its own OS process:**
+- `webdav_server.py` gained a `_run_standalone()` entrypoint (`if __name__ == "__main__":`) — the file can now run as `python webdav_server.py`, not just be imported. It starts WebDAV, then blocks in the foreground until a shutdown signal arrives. `SIGTERM`/`SIGINT` are handled gracefully (calls `stop()`, exits code `0`); a genuine startup failure (missing dependency, port bind failure, etc.) exits code `1`. If `WEBDAV_ENABLED` and `WEBDAV_HTTPS_ENABLED` are both off, it exits `0` immediately without starting anything, treated as an intentional no-op.
+- `protocol_manager.py`'s `_spawn_webdav_process()` launches this via `subprocess.Popen([sys.executable, "webdav_server.py"], cwd=<project dir>)` instead of `import webdav_server; webdav_server.start()` in-thread. SFTP/FTP/SMB are unchanged — still background threads in this same process, since they have no known equivalent issue.
+- A watchdog thread (`_webdav_watchdog`) polls the subprocess: exit code `0` (config-disabled, or a graceful stop) is left stopped; any other exit code is treated as a crash and respawned automatically after a short delay.
+- `protocol_manager.restart_webdav()` — force-kills and respawns the WebDAV subprocess on demand. This only works when called **from within the running server process** (it needs the in-memory `Popen` handle) — see the `manage.sh` mechanism below for how an external command achieves the same thing.
+- The WebDAV subprocess's real PID is written to `.manage_pids/webdav.pid` — the same directory `manage.sh` already uses for `prod.pid`/`dev.pid` — every time it's (re)spawned, and cleared on a graceful stop.
+- `stop_all()` now terminates the WebDAV subprocess (graceful `terminate()`, `wait(timeout=5)`, then `kill()` if it doesn't exit in time) in addition to signaling the SFTP/FTP/SMB threads. `status()` reports the subprocess's `process_pid`/`process_alive`.
+
+**New `manage.sh restart-webdav` command** (also menu option **8** — utility menu options 8–18 shifted to 9–19 to make room): since `manage.sh` runs as its own separate, short-lived process, it **cannot** call `protocol_manager.restart_webdav()` directly — that function only knows about the `Popen` handle held in the *server's* memory, and a fresh Python invocation from `manage.sh` would have no idea a WebDAV process already exists (it would just launch a second one on top of the wedged one, failing to bind the port). Instead:
+1. Reads the real PID from `.manage_pids/webdav.pid`
+2. Signals that PID directly — graceful `kill`/`SIGTERM` first (Python's signal handling happens on the WebDAV subprocess's main thread, which stays responsive even if its Hypercorn event-loop thread is wedged, since the latter is a daemon thread and doesn't block the main thread's signal handling), escalating to `SIGKILL`/`taskkill //F` after ~5s if it doesn't exit
+3. Relies on the **already-running server's own watchdog thread** to notice the exit and respawn WebDAV automatically — `manage.sh` itself never spawns the replacement
+4. Polls the PID file for a few seconds afterward, confirming a *new*, different PID shows up, and reports success/failure accordingly
+
+New `webdav_pid_file()` helper in `manage.sh`, alongside the existing `pid_file_for()`/`logpath_file_for()`. See [WebDAV Recovery (manage.sh restart-webdav)](#webdav-recovery-managesh-restart-webdav) under Admin Tools & Utilities for usage.
+
+### WebDAV HTTPS Listener — HTTP/1.1 Only (2026-09-09)
+
+`webdav_server.py`'s HTTPS listener's TLS ALPN changed from `["h2", "http/1.1"]` to **`["http/1.1"]` only**. Real-world WebDAV clients — Windows' native WebClient service (`mrxdav.sys`), `davfs2`, and most other OS-level WebDAV mounters — are almost universally HTTP/1.1-only implementations. If TLS negotiated `h2` with one of these (their TLS layer can claim ALPN `h2` support even when the WebDAV component itself can't actually speak HTTP/2 framing), the connection could break at the protocol level — surfacing as "SSL connection closed" rather than a clean HTTP error, and repeating as the OS driver auto-retried the mount/download. Downloads were hit hardest, since a file GET is a longer, flow-control-sensitive stream compared to a short PROPFIND.
+
+The main Web UI's own HTTPS listener (`prod_server.py`) is **unaffected** and still advertises `h2` — it's accessed exclusively by browsers, which negotiate HTTP/2 correctly, and gains real benefit from it (see the existing SSE/HTTP-2 Troubleshooting entries).
 
 ### SFTP Implementation Notes
 
@@ -1978,6 +2011,16 @@ New `manage.sh` subcommand — updates `static/.well-known/security.txt` (RFC 91
 - Menu option **17** in `cmd_menu`; the Termux-only setup option shifted from 17 → **18** to make room.
 - File path is fixed at `${SCRIPT_DIR}/static/.well-known/security.txt`; the directory is created automatically if it doesn't exist yet.
 
+### WebDAV Recovery (manage.sh restart-webdav)
+
+🆕 (2026-09-09) Recovers a wedged-but-alive WebDAV listener (e.g. the Hypercorn SSL-shutdown-timeout issue — see Troubleshooting — after a large cancelled download) **without restarting the main server**. Also available as interactive menu option **8**.
+
+```bash
+./manage.sh restart-webdav
+```
+
+Reads WebDAV's real PID from `.manage_pids/webdav.pid`, signals it directly (graceful-then-forceful, same pattern `cmd_stop` uses), and relies on the already-running server's own watchdog thread to notice the exit and respawn WebDAV automatically — `manage.sh` itself never spawns the replacement, it only confirms a new PID appeared. Requires a server (`prod` or `dev`) to already be running — errors out otherwise, since there'd be no watchdog to do the respawning. See [WebDAV Process Isolation, Watchdog & restart-webdav](#webdav-process-isolation-watchdog-restart-webdav-2026-09-09) under Protocol Servers for the full mechanism and why this can't just call `protocol_manager.restart_webdav()` directly.
+
 ### User Management (manage_users.py — renamed from create_user.py)
 
 > ⚠️ The file itself still has a stale self-reference (`Run: python create_user.py` in its own docstring) — that's a leftover from the rename, not a typo here. The actual filename and the correct command are `manage_users.py`.
@@ -2085,7 +2128,8 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 | SFTP file transfer | O(n) | Sequential reads | paramiko transport |
 | SMB credential refresh | O(n) diff | ~every 30s | Skips unchanged users, no UID churn |
 | Concurrent web UI requests | Single event loop (Hypercorn) | One blocking sync call stalls every user, not just one — see Troubleshooting → Quart/Hypercorn Migration Issues | `asyncio.to_thread` for all heavy sync work |
-| Web UI / WebDAV HTTPS connection | HTTP/1.1, HTTP/2, or HTTP/3 | Client-negotiated, no config needed | Hypercorn ALPN |
+| Web UI HTTPS connection | HTTP/1.1, HTTP/2, or HTTP/3 | Client-negotiated, no config needed | Hypercorn ALPN |
+| WebDAV HTTPS connection | HTTP/1.1 only 🆕 (2026-09-09) | Deliberately not offering h2 — most real WebDAV clients can't speak it; see Troubleshooting | Hypercorn ALPN, `webdav_server.py` |
 
 ---
 
@@ -2208,6 +2252,20 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 **Cause**: The `<script src="...404.js">` tag's hardcoded `integrity` (SRI) hash was stale — didn't match 404.js's actual current content — so browsers silently refused to execute the script at all under the site's `script-src 'self'` CSP (no `unsafe-inline`)  
 **Fix**: Recomputed and updated the SRI hash. The "Go Back" button was later removed from the 404 page entirely (design decision, not a further bug) — `history.back()` was a no-op anyway for a visitor with no prior page in that tab's session history, and "Go Home" already covers that case
 
+### WebDAV Resilience Issues (2026-09-09)
+
+**Problem**: WebDAV clients (Windows Map Network Drive, davfs2, etc.) get "SSL connection closed" repeatedly, especially on downloads, and it loops/retries without resolving  
+**Cause**: WebDAV's HTTPS listener advertised HTTP/2 in its TLS ALPN list; real WebDAV client stacks are almost universally HTTP/1.1-only and can break at the protocol level if TLS negotiates h2 with them  
+**Fix**: `webdav_server.py`'s HTTPS listener ALPN is now `["http/1.1"]` only — h2 remains unaffected (and beneficial) for the main Web UI, which browsers negotiate correctly. See [WebDAV HTTPS Listener — HTTP/1.1 Only](#webdav-https-listener-http11-only-2026-09-09)
+
+**Problem**: Cancelling a large in-progress WebDAV download wedges or crash-loops the WebDAV listener, requiring a full server restart to recover — main Web UI on :5000 keeps working fine throughout  
+**Cause**: A real, still-open Hypercorn bug (see the next entry) combined with WebDAV previously running as a background thread inside the same process as the main app — a wedged thread had no independent recovery path short of killing the whole process  
+**Fix**: Two parts — (1) `hypercorn_ssl_fix.py` patches the actual Hypercorn bug (see below), and (2) WebDAV now runs as its own OS subprocess with a watchdog, so `./manage.sh restart-webdav` (or `protocol_manager.restart_webdav()` from in-process) recovers it alone. See [WebDAV Process Isolation, Watchdog & restart-webdav](#webdav-process-isolation-watchdog-restart-webdav-2026-09-09)
+
+**Problem**: `TimeoutError: SSL shutdown timed out` / "Unhandled exception in client_connected_cb" spam in the server log, especially right after a client abruptly resets a connection (e.g. cancelling a download — `ConnectionResetError: [WinError 10054]` on Windows)  
+**Cause**: Since Python 3.11, asyncio's SSL transport waits a default **30 seconds** for a clean TLS `close_notify` on every connection close. A peer that already forcibly reset the connection can never complete that handshake, so the wait runs the full 30s before raising `TimeoutError`. Hypercorn's own `TCPServer._close()` (verified directly against the installed 0.18.0 source, not just the bug report) catches `ConnectionResetError`/`BrokenPipeError`/etc. for exactly this "already closed" case, but **not** the resulting `TimeoutError` — so it escapes as an unhandled exception. This is a real, still-open upstream bug: [hypercorn#202](https://github.com/pgjones/hypercorn/issues/202) (unresolved as of the last activity found; an open, unmerged PR #342 exists)  
+**Fix**: New `hypercorn_ssl_fix.py`, applied at startup in **both** `prod_server.py` and `webdav_server.py` (each is a separate Hypercorn instance/process, so both need it). Monkeypatches `TCPServer._close()` to (1) actually catch `TimeoutError`, and (2) cap the close-wait at 2 seconds via `asyncio.wait_for(...)` instead of asyncio's 30s default. Defensive: if Hypercorn's internals change in a future version and the patch no longer applies cleanly, it logs a warning and leaves Hypercorn's original (buggy but functional) behavior in place rather than crashing the server — re-check this patch after any Hypercorn upgrade, and remove it entirely if Hypercorn ships an official fix for #202
+
 ### Edge Cases Handled
 
 1. **Symlinks**: Followed by default (can disable with follow_symlinks=False)
@@ -2306,6 +2364,38 @@ Works at the database level only — it's a separate process, same constraint `m
 ---
 
 ## 📝 Changelog
+
+### Version 4.7 — 2026-09-09 WebDAV Resilience, Legacy-Client Fix & Hypercorn SSL-Shutdown-Timeout Patch
+
+Triggered by a real production report: WebDAV downloads failing with "SSL connection closed" (looping on retry), and separately, cancelling a large in-flight download wedging the WebDAV listener badly enough to require restarting the whole server (main Web UI included, even though it kept working throughout).
+
+- **Updated: `webdav_server.py`**
+  - HTTPS listener's TLS ALPN changed from `["h2", "http/1.1"]` to `["http/1.1"]` only — real WebDAV clients (Windows WebClient/`mrxdav.sys`, davfs2, etc.) are almost universally HTTP/1.1-only, and negotiating h2 with one could break the connection at the protocol level. The main Web UI's listener is unaffected and still speaks h2 — browsers handle it fine
+  - New `_run_standalone()` entrypoint (`if __name__ == "__main__":`) — lets this file run as its own OS process (`python webdav_server.py`), not just be imported. Handles `SIGTERM`/`SIGINT` for a graceful shutdown (exit code `0`); a genuine startup failure exits `1`; exits `0` immediately without starting anything if both `WEBDAV_ENABLED`/`WEBDAV_HTTPS_ENABLED` are off
+  - Now calls `hypercorn_ssl_fix.apply()` before starting its own Hypercorn instance (see below)
+
+- **Updated: `protocol_manager.py`**
+  - WebDAV now launched via `subprocess.Popen` (`_spawn_webdav_process()`) instead of being imported and started in a thread inside this process — SFTP/FTP/SMB are unchanged, still threads
+  - New watchdog thread (`_webdav_watchdog`) — respawns the WebDAV subprocess if it exits with a non-zero code (crash); a clean exit (code `0` — config-disabled, or a graceful stop) is not respawned
+  - New `restart_webdav()` — force-kills and respawns the WebDAV subprocess on demand, recovering it independently of the main app (callable from in-process only — see `manage.sh`'s mechanism below for external use)
+  - Writes the WebDAV subprocess's real PID to `.manage_pids/webdav.pid` (same directory `manage.sh` already uses for `prod.pid`/`dev.pid`) on every (re)spawn, cleared on graceful stop
+  - `stop_all()`/`status()` updated for the new subprocess model
+
+- **Updated: `manage.sh`**
+  - New `restart-webdav` command (also menu option **8** — utility menu options 8–18 shifted to **9–19** to make room): reads `.manage_pids/webdav.pid`, signals that PID directly (graceful-then-forceful, same pattern as `cmd_stop`), and relies on the already-running server's own watchdog to notice the exit and respawn WebDAV automatically — then polls the PID file for a new PID to confirm. Can't call `protocol_manager.restart_webdav()` directly, since that function only knows about the `Popen` handle held in the *server's* memory, not in this separate, short-lived script process
+  - New `webdav_pid_file()` helper alongside the existing `pid_file_for()`/`logpath_file_for()`
+  - See [WebDAV Recovery](#webdav-recovery-managesh-restart-webdav) under Admin Tools & Utilities for usage
+
+- **New file: `hypercorn_ssl_fix.py`**
+  - Patches a real, still-open Hypercorn bug (verified directly against the installed 0.18.0 source, not just the bug report): `TCPServer._close()` doesn't catch `TimeoutError`, and asyncio's own default 30-second SSL-shutdown-close wait has no cap — so any abruptly-reset connection (e.g. a cancelled download) stalls its cleanup task for a full 30s and then throws an unhandled exception. See [hypercorn#202](https://github.com/pgjones/hypercorn/issues/202) (open since March 2024, unresolved; PR #342 exists but is unmerged)
+  - Monkeypatches `TCPServer._close()` in-process: catches `TimeoutError` properly, and caps the close-wait at 2 seconds via `asyncio.wait_for(...)`
+  - Applied via `apply()`, called once at startup in **both** `prod_server.py` and `webdav_server.py` — each runs its own independent Hypercorn instance (and, as of this version, its own OS process for WebDAV), so both need the patch
+  - Defensive: logs a warning and leaves Hypercorn's original behavior in place (doesn't crash the server) if the patch can't be applied — e.g. after a future Hypercorn upgrade changes `TCPServer._close()`'s internals. Re-check after any Hypercorn upgrade; remove entirely if Hypercorn ships an official fix for #202
+
+- **Updated: `prod_server.py`**
+  - Now calls `hypercorn_ssl_fix.apply()` at import time, before `protocol_manager.start_all()` and before its own `await serve(...)` call
+
+- Nothing was removed from any earlier section; all of the above are additive. See [WebDAV Process Isolation, Watchdog & restart-webdav](#webdav-process-isolation-watchdog-restart-webdav-2026-09-09), [WebDAV HTTPS Listener — HTTP/1.1 Only](#webdav-https-listener-http11-only-2026-09-09), and the new [WebDAV Resilience Issues](#webdav-resilience-issues-2026-09-09) Troubleshooting entries for full detail.
 
 ### Version 4.6 — 2026-08-28 Doc Sync, cont'd (video-skin-overrides.css, inline-style CSP cleanup, login.html documented)
 
