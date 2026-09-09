@@ -139,10 +139,37 @@ def _spawn_webdav_process() -> "subprocess.Popen | None":
     its own asyncio loop) instead of a thread in this process — so it can
     be killed/restarted without touching the main app. Returns the Popen
     handle, or None if the launch itself failed (rare — e.g. python
-    executable/script not found)."""
+    executable/script not found).
+
+    stdout/stderr are explicitly inherited from THIS process (not left to
+    default) for two reasons:
+      1. So WebDAV's own output (startup banner, hypercorn_ssl_fix's log
+         line, errors) lands in the SAME log manage.sh's `follow logs`
+         already tails, instead of going nowhere or to a fresh console.
+      2. On Windows specifically: this process (prod_server.py) may itself
+         be fully detached with NO console at all (see manage.sh's
+         _launch_detached — CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS).
+         A console-subsystem child (python.exe) spawned from a
+         console-less parent with no stdout/stderr redirection gets a
+         BRAND NEW, VISIBLE console window auto-allocated by Windows —
+         that's the "separate python window opens" bug this fixes.
+         CREATE_NO_WINDOW below is the belt-and-suspenders second half of
+         the same fix — it works together with explicit stdio redirection
+         to guarantee no window appears, on a detached parent or not.
+    """
     script = os.path.join(_PROJECT_DIR, "webdav_server.py")
+    kw = {}
+    if sys.platform == "win32":
+        kw["creationflags"] = subprocess.CREATE_NO_WINDOW
     try:
-        proc = subprocess.Popen([sys.executable, script], cwd=_PROJECT_DIR)
+        proc = subprocess.Popen(
+            [sys.executable, script],
+            cwd=_PROJECT_DIR,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+            stdin=subprocess.DEVNULL,
+            **kw,
+        )
     except Exception as e:
         print(f"❌ WebDAV: failed to launch subprocess: {e}")
         return None
