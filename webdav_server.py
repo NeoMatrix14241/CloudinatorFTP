@@ -399,6 +399,116 @@ def _build_hypercorn_logger(name: str) -> logging.Logger:
     return logger
 
 
+# ── ASGI-level disconnect guard (fixes a real, verified silent-flood bug) ──
+
+
+class _DisconnectAbortMiddleware:
+    """
+    ASGI-level middleware wrapping WsgiToAsgi(wsgi_app). Fixes a real,
+    silent, fast-flood bug — confirmed by reading the actual source of
+    CPython's asyncio.sslproto, asgiref 3.12.1, and Hypercorn 0.18.0, not
+    guessed:
+
+    1. Once a client abruptly resets a connection (e.g. cancelling a large
+       download), asyncio's own SSL transport (asyncio/sslproto.py's
+       _SSLProtocol._write_appdata) NEVER raises on further write() calls —
+       by design, per asyncio's documented Transport contract (write() is
+       "fire and forget", errors surface via connection_lost(), not
+       exceptions). Once past an internal grace threshold (5 writes), it
+       just logs "SSL connection is closed" and silently no-ops — for
+       EVERY remaining write, forever, with no way for calling code to
+       detect this via a normal try/except.
+    2. asgiref's WsgiToAsgiInstance.run_wsgi_app() streams a WSGI response
+       body via an *unguarded* loop — `for output in wsgi_application(...):
+       ... self.sync_send(...)` — with no try/except around sync_send() and
+       no check of the ASGI receive() channel for a disconnect signal
+       during that loop (verified directly against asgiref's actual
+       wsgi.py source).
+    3. wsgidav's FilesystemProvider just keeps yielding the next chunk of
+       whatever file is being served, with no idea the client is gone.
+
+    Combined: once a client cancels a large download, nothing in this
+    chain ever stops — it silently "succeeds" (per point 1) and logs once
+    per chunk, for every remaining chunk of the file, as fast as the rest
+    of the file can be read from disk. For a large file cancelled early,
+    that's thousands of log lines in a few seconds.
+
+    Fix: watch the ASGI `receive()` channel for `http.disconnect` — which
+    Hypercorn DOES deliver once its read-side loop detects the connection
+    is gone (confirmed in hypercorn/protocol/http_stream.py) — for the
+    full lifetime of the request, including during the response-streaming
+    phase when neither wsgidav nor asgiref ever call receive() again
+    themselves. Once disconnect is observed, the wrapped `send()` starts
+    raising instead of silently succeeding — which DOES propagate, since
+    asgiref's sync_send() call is unguarded (point 2 above) — breaking the
+    WSGI response loop on the very next chunk instead of continuing
+    through the rest of the file.
+
+    Careful to avoid a receive() race with the inner app: WsgiToAsgiInstance
+    reads the full request body via its own receive() loop before ever
+    calling the wrapped WSGI app. This middleware's own background watcher
+    does not start pulling from receive() itself until AFTER it has
+    observed (via wrapping the SAME receive() calls the inner app makes)
+    that the inner app's body-read loop has completed — so the two never
+    compete for the same message.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        disconnected = False
+        body_fully_received = asyncio.Event()
+
+        async def watched_receive():
+            nonlocal disconnected
+            message = await receive()
+            if message.get("type") == "http.disconnect":
+                disconnected = True
+            elif message.get("type") == "http.request" and not message.get(
+                "more_body", False
+            ):
+                body_fully_received.set()
+            return message
+
+        async def watch_after_body():
+            nonlocal disconnected
+            await body_fully_received.wait()
+            try:
+                while not disconnected:
+                    message = await receive()
+                    if message.get("type") == "http.disconnect":
+                        disconnected = True
+            except Exception:
+                # Any failure here just means we stop watching — worst
+                # case we fall back to the pre-fix (slow) behavior for
+                # this one request, never worse.
+                pass
+
+        async def guarded_send(message):
+            if disconnected:
+                raise ConnectionResetError(
+                    "WebDAV client disconnected mid-response "
+                    "(_DisconnectAbortMiddleware guard)"
+                )
+            await send(message)
+
+        watcher = asyncio.ensure_future(watch_after_body())
+        try:
+            await self.app(scope, watched_receive, guarded_send)
+        finally:
+            disconnected = True  # lets the watcher's own loop condition exit
+            watcher.cancel()
+            try:
+                await watcher
+            except (asyncio.CancelledError, Exception):
+                pass
+
+
 def _start_hypercorn(wsgi_app, http_port, https_port, cert_path, key_path):
     """Runs WebDAV (HTTP and/or HTTPS) via Hypercorn in a background thread.
     Returns the Thread object."""
@@ -406,7 +516,7 @@ def _start_hypercorn(wsgi_app, http_port, https_port, cert_path, key_path):
     from hypercorn.config import Config
     from hypercorn.asyncio import serve
 
-    asgi_app = WsgiToAsgi(wsgi_app)
+    asgi_app = _DisconnectAbortMiddleware(WsgiToAsgi(wsgi_app))
 
     cfg = Config()
     cfg.bind = [f"0.0.0.0:{https_port}"] if https_port else []

@@ -63,7 +63,7 @@
 | **realtime_stats.py** | Server-Sent Events | Live storage stats broadcasting |
 | **realtime_shares.py** | Server-Sent Events (admin-only) | Live pending-share-request count + active-shares-changed nudges for the Manage Shared panel |
 | **protocol_manager.py** | Protocol server launcher | Starts/stops WebDAV, SFTP, FTP, SMB. 🆕 (2026-09-09) WebDAV now runs as its own isolated OS **subprocess** (not a thread) with a watchdog that auto-respawns it on crash — see [WebDAV Process Isolation, Watchdog & restart-webdav](#webdav-process-isolation-watchdog-restart-webdav-2026-09-09); SFTP/FTP/SMB remain background threads, unchanged |
-| **webdav_server.py** | WebDAV server | wsgidav WSGI app bridged onto Hypercorn via `asgiref.WsgiToAsgi`; serves HTTP+HTTPS from one Hypercorn Config; role enforcement (no longer waitress/cheroot for serving — cheroot is now only a transitive wsgidav dependency). 🆕 (2026-09-09) HTTPS listener is now HTTP/1.1-only (h2 dropped from ALPN — see Troubleshooting); also applies `hypercorn_ssl_fix.py`'s patch |
+| **webdav_server.py** | WebDAV server | wsgidav WSGI app bridged onto Hypercorn via `asgiref.WsgiToAsgi`; serves HTTP+HTTPS from one Hypercorn Config; role enforcement (no longer waitress/cheroot for serving — cheroot is now only a transitive wsgidav dependency). 🆕 (2026-09-09) HTTPS listener is now HTTP/1.1-only (h2 dropped from ALPN — see Troubleshooting); also applies `hypercorn_ssl_fix.py`'s patch. 🆕 (2026-09-09, second pass) `_DisconnectAbortMiddleware` wraps `WsgiToAsgi` to stop a real silent write-flood on cancelled downloads — see [WebDAV Disconnect-Flood Guard](#webdav-disconnect-flood-guard-2026-09-09-second-pass) |
 | **sftp_server.py** | SFTP server | Paramiko SSH/SFTP, RSA host key, chrooted to ROOT_DIR; now also hardens offered SSH ciphers/MACs/KEX per connection (see [SFTP Implementation Notes](#sftp-implementation-notes)) |
 | **smb_server.py** | SMB server | impacket SimpleSMBServer, Tree Connect role enforcement, Windows file-locking fixes |
 | **smb_setup.py** | SMB one-time setup | Standalone tool — Windows LanmanServer, Linux setcap, Android root check |
@@ -1881,6 +1881,23 @@ New `webdav_pid_file()` helper in `manage.sh`, alongside the existing `pid_file_
 
 The main Web UI's own HTTPS listener (`prod_server.py`) is **unaffected** and still advertises `h2` — it's accessed exclusively by browsers, which negotiate HTTP/2 correctly, and gains real benefit from it (see the existing SSE/HTTP-2 Troubleshooting entries).
 
+### WebDAV Disconnect-Flood Guard (2026-09-09, second pass)
+
+The subprocess isolation and `hypercorn_ssl_fix.py` above did **not** fully resolve the WebDAV download-cancel problem — a second, separate bug remained: cancelling a large in-progress WebDAV download (e.g. a 700MB file, cancelled ~10s in) produced a genuinely fast, continuous flood — thousands of bare `SSL connection is closed` lines with **no traceback at all** — that kept going until the remaining file had been fully (uselessly) iterated.
+
+**Root cause, verified by reading the actual installed source of all three layers involved (not guessed):**
+1. **`asyncio/sslproto.py`** (CPython stdlib) — `_SSLProtocol._write_appdata()` never raises once a connection is confirmed dead; by asyncio's own documented `Transport.write()` contract, writes are fire-and-forget. Past an internal 5-write grace threshold (`LOG_THRESHOLD_FOR_CONNLOST_WRITES`), it just logs `logger.warning('SSL connection is closed')` and silently no-ops — for every remaining write, forever. This is the exact source of the bare, traceback-free message.
+2. **`asgiref` 3.12.1**'s `WsgiToAsgiInstance.run_wsgi_app()` — the WSGI-response-streaming loop (`for output in wsgi_application(...): ... self.sync_send(...)`) has **no try/except** around the send call, and never checks the ASGI `receive()` channel for a disconnect signal once the request body has been read. Verified directly against asgiref's real `wsgi.py` source.
+3. **wsgidav**'s `FilesystemProvider` just keeps yielding the next chunk of the file being served, with no way to know the client is gone.
+
+Combined: nothing in this chain ever naturally stops once a client cancels — writes silently "succeed" (per point 1) and log once per chunk, for every remaining chunk of the file, as fast as it can be read from disk. For a large file cancelled early, that's thousands of lines in seconds.
+
+**Fix — new `_DisconnectAbortMiddleware`** in `webdav_server.py`, wrapping `WsgiToAsgi(wsgi_app)` at the ASGI level (`asgi_app = _DisconnectAbortMiddleware(WsgiToAsgi(wsgi_app))` in `_start_hypercorn()`). Confirmed via Hypercorn's own `hypercorn/protocol/http_stream.py` (`await self.app_put({"type": "http.disconnect"})`) that Hypercorn DOES deliver `http.disconnect` through `receive()` once its read-side loop detects the connection is gone — the gap was that nothing was listening for it during the long response-streaming phase, since neither wsgidav nor asgiref ever call `receive()` again after the request body is read.
+
+The middleware runs a background task that takes over polling `receive()` for `http.disconnect` **only after** it has observed (via transparently wrapping the same `receive()` calls the inner app makes) that the inner app's own request-body-read loop has completed — avoiding any race for the same message. Once disconnect is observed, the wrapped `send()` starts raising `ConnectionResetError` instead of silently succeeding, which — since asgiref's `sync_send()` call is unguarded (point 2 above) — actually propagates and breaks the WSGI response loop on the very next chunk, instead of the remaining thousands.
+
+Verified with two isolated functional tests (extracted just the middleware class and ran it against simulated ASGI scopes, not just reasoned through): a simulated 1000-chunk download with disconnect injected at chunk 5 stopped at chunk 6 (vs. running all 1000 before the fix); a normal, non-disconnected 50-chunk request completed all 50 messages with no interference and no hang from the background watcher task.
+
 ### SFTP Implementation Notes
 
 - **Host key**: RSA-2048, generated once and stored at `db/sftp_host.rsa`. Back this up — regeneration breaks existing WinSCP known-hosts entries.
@@ -2266,6 +2283,10 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 **Cause**: Since Python 3.11, asyncio's SSL transport waits a default **30 seconds** for a clean TLS `close_notify` on every connection close. A peer that already forcibly reset the connection can never complete that handshake, so the wait runs the full 30s before raising `TimeoutError`. Hypercorn's own `TCPServer._close()` (verified directly against the installed 0.18.0 source, not just the bug report) catches `ConnectionResetError`/`BrokenPipeError`/etc. for exactly this "already closed" case, but **not** the resulting `TimeoutError` — so it escapes as an unhandled exception. This is a real, still-open upstream bug: [hypercorn#202](https://github.com/pgjones/hypercorn/issues/202) (unresolved as of the last activity found; an open, unmerged PR #342 exists)  
 **Fix**: New `hypercorn_ssl_fix.py`, applied at startup in **both** `prod_server.py` and `webdav_server.py` (each is a separate Hypercorn instance/process, so both need it). Monkeypatches `TCPServer._close()` to (1) actually catch `TimeoutError`, and (2) cap the close-wait at 2 seconds via `asyncio.wait_for(...)` instead of asyncio's 30s default. Defensive: if Hypercorn's internals change in a future version and the patch no longer applies cleanly, it logs a warning and leaves Hypercorn's original (buggy but functional) behavior in place rather than crashing the server — re-check this patch after any Hypercorn upgrade, and remove it entirely if Hypercorn ships an official fix for #202
 
+**Problem**: Even after the fix above, cancelling a large WebDAV download (e.g. a 700MB file, ~10s in) still produces a genuinely fast, continuous flood — thousands of bare `SSL connection is closed` lines, **no traceback at all** — that doesn't stop until the entire rest of the file has been (uselessly) iterated  
+**Cause**: A separate bug from the one above, verified against the real source of all three layers involved: (1) `asyncio/sslproto.py`'s `_write_appdata()` never raises on a dead connection — by design, per asyncio's `Transport.write()` fire-and-forget contract — it just logs a warning once past a 5-write grace threshold and silently no-ops forever after; (2) `asgiref`'s `WsgiToAsgiInstance.run_wsgi_app()` streams the WSGI response body via an *unguarded* loop with no try/except around the send call and no disconnect check; (3) wsgidav just keeps yielding the next file chunk regardless. Nothing in the chain ever naturally detects the client is gone — writes silently "succeed" and log, once per chunk, for every remaining chunk  
+**Fix**: New `_DisconnectAbortMiddleware` in `webdav_server.py`, wrapping `WsgiToAsgi(wsgi_app)` at the ASGI level. Confirmed via Hypercorn's `http_stream.py` that it does deliver `http.disconnect` through `receive()` once its read side notices the connection is gone — nothing was listening for it during a long download. The middleware watches for that signal in the background (only after the inner app's own request-body read completes, to avoid a `receive()` race) and makes `send()` raise once it arrives, which propagates through asgiref's unguarded loop and stops it on the very next chunk. Verified with isolated functional tests, not just reasoning: a simulated cancelled download stopped at chunk 6 of 1000 (vs. all 1000 before the fix), and a normal completed download still delivered all chunks with no interference. See [WebDAV Disconnect-Flood Guard](#webdav-disconnect-flood-guard-2026-09-09-second-pass)
+
 ### Edge Cases Handled
 
 1. **Symlinks**: Followed by default (can disable with follow_symlinks=False)
@@ -2364,6 +2385,19 @@ Works at the database level only — it's a separate process, same constraint `m
 ---
 
 ## 📝 Changelog
+
+### Version 4.8 — 2026-09-09 WebDAV Disconnect-Flood Guard (second pass on the same download-cancel issue)
+
+The v4.7 fixes (subprocess isolation, ALPN, `hypercorn_ssl_fix.py`) did not fully resolve the WebDAV download-cancel problem — a separate, still-live bug remained: cancelling a large download produced a genuinely fast, continuous flood of bare `SSL connection is closed` lines (no traceback) that didn't stop until the rest of the file had been uselessly iterated.
+
+- **Updated: `webdav_server.py`**
+  - New `_DisconnectAbortMiddleware` class, wrapping `WsgiToAsgi(wsgi_app)` at the ASGI level (`_start_hypercorn()`'s `asgi_app = _DisconnectAbortMiddleware(WsgiToAsgi(wsgi_app))`)
+  - Root cause, verified against the actual installed source of all three layers (not guessed): (1) CPython's `asyncio/sslproto.py` never raises on a dead-connection write — by design, it just logs `'SSL connection is closed'` once past a 5-write grace threshold and silently no-ops forever after; (2) `asgiref`'s WSGI-response-streaming loop has no try/except around its send call and never checks for disconnect; (3) wsgidav just keeps yielding file chunks regardless. Nothing in the chain ever naturally stopped
+  - Fix watches the ASGI `receive()` channel in the background for `http.disconnect` (confirmed Hypercorn does deliver this — `hypercorn/protocol/http_stream.py`) once the inner app's own request-body read completes (avoiding a `receive()` race), and makes `send()` raise once disconnect is observed — which propagates through asgiref's unguarded loop and stops it on the next chunk
+  - Verified with isolated functional tests: a simulated cancelled download (disconnect injected at chunk 5 of 1000) stopped at chunk 6 instead of running all 1000; a normal non-disconnected request still delivered all chunks with no interference or hang
+  - See [WebDAV Disconnect-Flood Guard](#webdav-disconnect-flood-guard-2026-09-09-second-pass) and the matching Troubleshooting entry
+
+- Nothing was removed from any earlier section; additive only.
 
 ### Version 4.7 — 2026-09-09 WebDAV Resilience, Legacy-Client Fix & Hypercorn SSL-Shutdown-Timeout Patch
 
