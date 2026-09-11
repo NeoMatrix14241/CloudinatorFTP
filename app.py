@@ -15,6 +15,7 @@ bulk_zip_cancelled = {}
 # Move this endpoint below app initialization
 from quart import (
     Quart,
+    g,
     render_template,
     request,
     redirect,
@@ -560,6 +561,46 @@ _INLINE_STYLE_ELEMENT_HASHES = (
 )
 
 app = Quart(__name__)
+
+# ---------------------------------------------------------------------------
+# Slow-request logging — catches intermittent stalls (e.g. the ~45s-131s
+# /login hangs seen on mobile Chrome, Sept 2026) passively, without needing
+# to catch one live with curl/DevTools. Registered as the very FIRST
+# before_request and the very FIRST after_request in the file on purpose:
+# Quart/Flask run before_request hooks in registration order (so this one
+# starts the clock before validate_session/before_request/route code runs)
+# and after_request hooks in REVERSE registration order (so being first
+# registered means it runs LAST, after every other after_request hook has
+# finished) — together that means the measured duration covers the entire
+# request lifecycle, not just this app's own overhead.
+#
+# Only requests slower than SLOW_REQUEST_THRESHOLD_SECONDS are logged, to
+# avoid spamming every normal request. Grep the log for "SLOW REQUEST" to
+# find recurrences.
+# ---------------------------------------------------------------------------
+SLOW_REQUEST_THRESHOLD_SECONDS = 2.0
+
+
+@app.before_request
+async def _start_request_timer():
+    g.request_start_time = time.monotonic()
+
+
+@app.after_request
+async def _log_slow_requests(response):
+    start = g.get("request_start_time")
+    if start is not None:
+        duration = time.monotonic() - start
+        if duration > SLOW_REQUEST_THRESHOLD_SECONDS:
+            app.logger.warning(
+                "SLOW REQUEST: %s %s took %.1fs (status %s)",
+                request.method,
+                request.path,
+                duration,
+                response.status_code,
+            )
+    return response
+
 
 # ---------------------------------------------------------------------------
 # CORS allowlist — localhost, any private LAN address, and your public domain.
