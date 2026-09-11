@@ -554,7 +554,7 @@ Public share links let an unauthenticated visitor view/download a file or folder
 {
   "success": true,
   "token": "aB3xQ...",
-  "share_url": "https://cloudinatorftp.win/shared/aB3xQ...",
+  "share_url": "https://customdomain.com/shared/aB3xQ...",
   "name": "vacation.jpg",
   "security_mode": "passkey",
   "expires_at": 1699999999.0,
@@ -567,7 +567,7 @@ Public share links let an unauthenticated visitor view/download a file or folder
 {
   "shared": true,
   "token": "aB3xQ...",
-  "share_url": "https://cloudinatorftp.win/shared/aB3xQ...",
+  "share_url": "https://customdomain.com/shared/aB3xQ...",
   "security_mode": "approval",
   "has_passkey": false,
   "expires_at": null,

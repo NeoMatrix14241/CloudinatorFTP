@@ -1663,10 +1663,32 @@ async def after_request(response):
     # device out entirely the next time it needs a fresh TLS handshake
     # (e.g. right after logout's Clear-Site-Data wipes the connection/cache
     # state). See _request_via_trusted_tls()'s docstring for the full story.
+    #
+    # TEMPORARY (started 2026-09-10) — HSTS CLEANUP IN PROGRESS.
+    # _request_via_trusted_tls() was found to fire on requests that were
+    # NOT actually terminated by Cloudflare's trusted cert (it only checks
+    # forwarded headers, not the real cert), which pinned
+    # "max-age=31536000; includeSubDomains" onto devices that later hit
+    # Hypercorn's self-signed cert directly under the same public hostname
+    # — a year-long HSTS lockout with no bypass, only fixable by the user
+    # clearing all site data. Sending max-age=0 here tells any browser that
+    # still has that bad entry to delete it the moment it makes one
+    # successful trusted-path request (mobile data / anywhere Cloudflare's
+    # real cert is actually served). This does NOT disable HSTS protection
+    # going forward — Cloudflare's edge HSTS setting (SSL/TLS > Edge
+    # Certificates) is the permanent replacement for this origin-side
+    # header and should be doing the real enforcement instead.
+    #
+    # REVERT PLAN: once the public hostname can no longer resolve to the
+    # self-signed origin under any network path (see hostname-separation
+    # fix — public domain reserved for Cloudflare only; use the Tailscale
+    # *.ts.net hostname for direct/LAN access instead), and Cloudflare's
+    # edge HSTS has been verified on for a few days, remove this whole
+    # `if _request_via_trusted_tls(): ...` block entirely rather than
+    # restoring the max-age=31536000 value — origin-side HSTS shouldn't
+    # come back at all once the edge is handling it.
     if _request_via_trusted_tls():
-        response.headers["Strict-Transport-Security"] = (
-            "max-age=31536000; includeSubDomains"
-        )
+        response.headers["Strict-Transport-Security"] = "max-age=0"
 
     return response
 
