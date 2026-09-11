@@ -1477,6 +1477,7 @@ async def after_request(response):
             response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
+            response.headers["Vary"] = "Content-Security-Policy, User-Agent"
 
     # ── Security headers — applied to every response, on localhost, LAN, ──
     # and the public domain alike. These are all response headers Flask

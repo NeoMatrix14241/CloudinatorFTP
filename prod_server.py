@@ -277,9 +277,6 @@ async def _run():
 
     hyper_cfg = HyperConfig()
     hyper_cfg.bind = [f"{HOST}:{PORT}"]
-    hyper_cfg.additional_headers = [
-        ("Vary", "Content-Security-Policy, User-Agent, Origin")
-    ]
     hyper_cfg.quic_bind = [
         f"{HOST}:{PORT}"
     ]  # HTTP/3 — same port number, UDP instead of TCP
