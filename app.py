@@ -1688,7 +1688,7 @@ async def after_request(response):
     # restoring the max-age=31536000 value — origin-side HSTS shouldn't
     # come back at all once the edge is handling it.
     if _request_via_trusted_tls():
-        response.headers["Strict-Transport-Security"] = "max-age=0"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
 
     return response
 
