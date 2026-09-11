@@ -578,7 +578,7 @@ app = Quart(__name__)
 # avoid spamming every normal request. Grep the log for "SLOW REQUEST" to
 # find recurrences.
 # ---------------------------------------------------------------------------
-SLOW_REQUEST_THRESHOLD_SECONDS = 0.5
+SLOW_REQUEST_THRESHOLD_SECONDS = 0.1
 
 
 @app.before_request
