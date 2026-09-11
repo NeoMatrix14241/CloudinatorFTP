@@ -62,7 +62,30 @@ import subprocess
 import sys
 import threading
 import time
+import logging
 from app import get_local_ip
+
+# ---------------------------------------------------------------------------
+# This module's own logger. Previously `logging.getLogger(__name__).debug(...)`
+# was called at two call sites below with no handler configured anywhere in
+# the project (no logging.basicConfig() call exists) — combined with DEBUG
+# being below the default WARNING threshold, those lines were dead code that
+# never produced output anywhere, console or file. Giving it an explicit
+# handler here, using the same timestamp format as prod_server.py's
+# _build_hypercorn_logger and app.py's request_logger, fixes that and keeps
+# every log line across the project consistent.
+# ---------------------------------------------------------------------------
+_pm_logger = logging.getLogger(__name__)
+if not _pm_logger.handlers:
+    _pm_handler = logging.StreamHandler()
+    _pm_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
+        )
+    )
+    _pm_logger.addHandler(_pm_handler)
+_pm_logger.setLevel(logging.DEBUG)
+_pm_logger.propagate = False
 
 LOCAL_IP = get_local_ip()
 
@@ -370,9 +393,7 @@ def stop_all():
         except subprocess.TimeoutExpired:
             proc.kill()
         except Exception as e:
-            import logging
-
-            logging.getLogger(__name__).debug(f"Stop error for webdav subprocess: {e}")
+            _pm_logger.debug(f"Stop error for webdav subprocess: {e}")
     _clear_webdav_pidfile()
 
     for mod_name in ("sftp_server", "ftp_server", "smb_server"):
@@ -385,9 +406,7 @@ def stop_all():
         except ImportError:
             pass
         except Exception as e:
-            import logging
-
-            logging.getLogger(__name__).debug(f"Stop error for {mod_name}: {e}")
+            _pm_logger.debug(f"Stop error for {mod_name}: {e}")
 
 
 def status() -> dict:

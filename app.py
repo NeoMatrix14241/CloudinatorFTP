@@ -563,22 +563,51 @@ _INLINE_STYLE_ELEMENT_HASHES = (
 app = Quart(__name__)
 
 # ---------------------------------------------------------------------------
-# Slow-request logging — catches intermittent stalls (e.g. the ~45s-131s
-# /login hangs seen on mobile Chrome, Sept 2026) passively, without needing
-# to catch one live with curl/DevTools. Registered as the very FIRST
-# before_request and the very FIRST after_request in the file on purpose:
-# Quart/Flask run before_request hooks in registration order (so this one
-# starts the clock before validate_session/before_request/route code runs)
-# and after_request hooks in REVERSE registration order (so being first
-# registered means it runs LAST, after every other after_request hook has
-# finished) — together that means the measured duration covers the entire
-# request lifecycle, not just this app's own overhead.
+# Request logger — every request gets one line with its duration; anything
+# over SLOW_REQUEST_THRESHOLD_SECONDS is additionally escalated to WARNING
+# with a "SLOW REQUEST" prefix so it's easy to grep for. Logging EVERY
+# request (not just slow ones) is deliberate: it lets a recurrence be
+# correlated against everything else that was happening at the same
+# moment (a periodic background job, another route also going slow at
+# the same timestamp, etc.), not just seen in isolation.
 #
-# Only requests slower than SLOW_REQUEST_THRESHOLD_SECONDS are logged, to
-# avoid spamming every normal request. Grep the log for "SLOW REQUEST" to
-# find recurrences.
+# Uses the exact same timestamp format as prod_server.py's
+# _build_hypercorn_logger ("%(asctime)s [%(levelname)s] %(message)s",
+# "%Y-%m-%d %H:%M:%S") for consistency across every log this project
+# produces. Deliberately does NOT use app.logger / Quart's default
+# logger — that one's default format includes %(module)s, which is what
+# produced the "(unknown file)" glitch (same class of issue as the
+# Python 3.14 %(process)d logging bug already documented for Hypercorn's
+# own errorlog above).
+#
+# Writes to BOTH the console (StreamHandler) and a persistent file
+# (logs/requests.log, next to this file) — so entries survive even when
+# the server runs detached (systemd/Docker/screen/tmux you're not
+# attached to) and nobody was watching the console when it happened.
 # ---------------------------------------------------------------------------
 SLOW_REQUEST_THRESHOLD_SECONDS = 2.0
+
+_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(_LOG_DIR, exist_ok=True)
+
+request_logger = logging.getLogger("cloudinatorftp.requests")
+if not request_logger.handlers:
+    _req_log_formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
+    )
+
+    _req_log_stream_handler = logging.StreamHandler()
+    _req_log_stream_handler.setFormatter(_req_log_formatter)
+    request_logger.addHandler(_req_log_stream_handler)
+
+    _req_log_file_handler = logging.FileHandler(
+        os.path.join(_LOG_DIR, "requests.log"), encoding="utf-8"
+    )
+    _req_log_file_handler.setFormatter(_req_log_formatter)
+    request_logger.addHandler(_req_log_file_handler)
+
+request_logger.setLevel(logging.INFO)
+request_logger.propagate = False
 
 
 @app.before_request
@@ -587,18 +616,20 @@ async def _start_request_timer():
 
 
 @app.after_request
-async def _log_slow_requests(response):
+async def _log_request_duration(response):
     start = g.get("request_start_time")
     if start is not None:
         duration = time.monotonic() - start
-        if duration > SLOW_REQUEST_THRESHOLD_SECONDS:
-            app.logger.warning(
-                "SLOW REQUEST: %s %s took %.1fs (status %s)",
-                request.method,
-                request.path,
-                duration,
-                response.status_code,
-            )
+        is_slow = duration > SLOW_REQUEST_THRESHOLD_SECONDS
+        request_logger.log(
+            logging.WARNING if is_slow else logging.INFO,
+            "%s%s %s took %.3fs (status %s)",
+            "SLOW REQUEST: " if is_slow else "",
+            request.method,
+            request.path,
+            duration,
+            response.status_code,
+        )
     return response
 
 
@@ -1730,7 +1761,9 @@ async def after_request(response):
     # restoring the max-age=31536000 value — origin-side HSTS shouldn't
     # come back at all once the edge is handling it.
     if _request_via_trusted_tls():
-        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
 
     return response
 
