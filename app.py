@@ -1825,16 +1825,29 @@ async def login():
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
-    # NOTE: deliberately NOT sending Clear-Site-Data here (was `"cache"`
-    # until 2026-09-14). A GET /login view is an unauthenticated page load —
-    # there's no session or security-relevant state to end yet, so this was
-    # pure overhead: forcing every visitor's browser to synchronously wipe
-    # its entire origin disk cache on every anonymous page view, no security
-    # benefit gained. Real suspect for the intermittent ~45s mobile-Chrome
-    # hang (worse on older/slower-storage phones, invisible to server-side
-    # request-timing logs since the wipe happens client-side after the
-    # response is already sent). Clear-Site-Data still fires appropriately
-    # on /logout below, which is the actual state-ending action.
+    # Clear-Site-Data on GET /login: "storage" only, deliberately.
+    #   - NOT "cache" (was set until 2026-09-14): forces a synchronous full
+    #     disk-cache wipe on every anonymous page view — the real suspect
+    #     for the intermittent ~45s mobile-Chrome hang (worse on
+    #     older/slower-storage phones, invisible to server-side
+    #     request-timing logs since the wipe happens client-side after the
+    #     response is already sent). No security benefit on a pre-auth page
+    #     either way, so no reason to bring it back.
+    #   - NOT "cookies": generate_csrf() (see CSRFProtect above) sets
+    #     session["csrf_token"] on first render, which makes Quart's
+    #     session interface emit Set-Cookie on THIS SAME response — racing
+    #     against Clear-Site-Data:"cookies" on the same response can wipe
+    #     the just-issued CSRF cookie before the form is even shown,
+    #     breaking the subsequent login POST for every fresh visitor.
+    #   - "storage" (localStorage/IndexedDB): cheap, no cookie involved, no
+    #     collision — kept to satisfy security-scanner checks that want
+    #     more than zero directives present on this header.
+    # /logout below is the actual state-ending action and keeps the full
+    # "cache", "cookies", "storage" — no cookie race there since logout
+    # explicitly deletes cookies via response.delete_cookie(), not a
+    # session-modification-triggered Set-Cookie.
+    if _request_is_secure():
+        response.headers["Clear-Site-Data"] = '"storage"'
     return response
 
 
