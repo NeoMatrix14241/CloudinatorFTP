@@ -1825,8 +1825,16 @@ async def login():
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
-    if _request_is_secure():
-        response.headers["Clear-Site-Data"] = '"cache"'
+    # NOTE: deliberately NOT sending Clear-Site-Data here (was `"cache"`
+    # until 2026-09-14). A GET /login view is an unauthenticated page load —
+    # there's no session or security-relevant state to end yet, so this was
+    # pure overhead: forcing every visitor's browser to synchronously wipe
+    # its entire origin disk cache on every anonymous page view, no security
+    # benefit gained. Real suspect for the intermittent ~45s mobile-Chrome
+    # hang (worse on older/slower-storage phones, invisible to server-side
+    # request-timing logs since the wipe happens client-side after the
+    # response is already sent). Clear-Site-Data still fires appropriately
+    # on /logout below, which is the actual state-ending action.
     return response
 
 
