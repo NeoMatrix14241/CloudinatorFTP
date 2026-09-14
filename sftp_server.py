@@ -577,8 +577,22 @@ def _handle_connection(conn, addr, host_key, sftp_interface_class, ssh_server_cl
         server = ssh_server_class()
         transport.start_server(server=server)
 
-        # Accept the session channel (required for SFTP subsystem to activate)
-        chan = transport.accept(30)
+        # Send keepalive packets so idle sessions (e.g. a mobile client that's
+        # authenticated but just sitting in its file browser with no active
+        # transfer) aren't silently dropped by a carrier/Wi-Fi NAT's idle
+        # timeout. This only affects the post-channel-open session below —
+        # it has no bearing on the accept() wait right below it.
+        transport.set_keepalive(30)
+
+        # Accept the session channel (required for SFTP subsystem to activate).
+        # NOTE: some mobile SFTP apps (e.g. Android clients) show "connected"
+        # immediately after auth but don't actually open the SFTP channel
+        # until the user navigates into the file browser or starts an
+        # action. A short timeout here closes the transport before the user
+        # gets a chance to do that, surfacing as a generic "connection
+        # closed" error in the client. 120s gives real slack for that UI
+        # delay while still bounding a stalled/dead connection.
+        chan = transport.accept(120)
         if chan is None:
             return
 

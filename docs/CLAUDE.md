@@ -1,6 +1,6 @@
 # CloudinatorFTP — Complete Codebase Reference for AI-Assisted Development
 
-**Version**: 4.3 (+ 2026-08-28 protocol-hardening, route-sync, and video-skin-overrides.css notes) | **Last Updated**: 2026-09-11  
+**Version**: 4.9 (+ 2026-08-28 protocol-hardening, route-sync, and video-skin-overrides.css notes) | **Last Updated**: 2026-09-14  
 **For**: AI assistants and developers modifying/extending CloudinatorFTP
 
 **Recent updates (2026-07-28)**:
@@ -64,7 +64,7 @@
 | **realtime_shares.py** | Server-Sent Events (admin-only) | Live pending-share-request count + active-shares-changed nudges for the Manage Shared panel |
 | **protocol_manager.py** | Protocol server launcher | Starts/stops WebDAV, SFTP, FTP, SMB. 🆕 (2026-09-09) WebDAV now runs as its own isolated OS **subprocess** (not a thread) with a watchdog that auto-respawns it on crash — see [WebDAV Process Isolation, Watchdog & restart-webdav](#webdav-process-isolation-watchdog-restart-webdav-2026-09-09); SFTP/FTP/SMB remain background threads, unchanged |
 | **webdav_server.py** | WebDAV server | wsgidav WSGI app bridged onto Hypercorn via `asgiref.WsgiToAsgi`; serves HTTP+HTTPS from one Hypercorn Config; role enforcement (no longer waitress/cheroot for serving — cheroot is now only a transitive wsgidav dependency). 🆕 (2026-09-09) HTTPS listener is now HTTP/1.1-only (h2 dropped from ALPN — see Troubleshooting); also applies `hypercorn_ssl_fix.py`'s patch. 🆕 (2026-09-09, second pass) `_DisconnectAbortMiddleware` wraps `WsgiToAsgi` to stop a real silent write-flood on cancelled downloads — see [WebDAV Disconnect-Flood Guard](#webdav-disconnect-flood-guard-2026-09-09-second-pass) |
-| **sftp_server.py** | SFTP server | Paramiko SSH/SFTP, RSA host key, chrooted to ROOT_DIR; now also hardens offered SSH ciphers/MACs/KEX per connection (see [SFTP Implementation Notes](#sftp-implementation-notes)) |
+| **sftp_server.py** | SFTP server | Paramiko SSH/SFTP, RSA host key, chrooted to ROOT_DIR; hardens offered SSH ciphers/MACs/KEX per connection; 🆕 (2026-09-14) channel-accept window raised `30s`→`120s` + added a 30s transport keepalive to stop mobile clients from getting disconnected (see [SFTP Implementation Notes](#sftp-implementation-notes)) |
 | **smb_server.py** | SMB server | impacket SimpleSMBServer, Tree Connect role enforcement, Windows file-locking fixes |
 | **smb_setup.py** | SMB one-time setup | Standalone tool — Windows LanmanServer, Linux setcap, Android root check |
 | **lanman_guard.py** | SMB Windows state tracker | Passive pending-setup state file, read by smb_server.py, written by smb_setup.py |
@@ -1904,7 +1904,8 @@ Verified with two isolated functional tests (extracted just the middleware class
 - **Chroot**: All SFTP paths are mapped to `ROOT_DIR` via a segment-by-segment path resolver (`_make_realpath()`), not a single `os.path.join(root, sftp_path)` call — see the Windows bug below for why. Final resolution goes through `os.path.realpath()`, with a clamp back to root if a symlink inside root points outside it.
 - **Windows path-join bug (fixed)**: The original implementation called `os.path.join(root, some_sftp_path)` directly. On Windows, `ntpath.join("C:\\Server\\Files", "\\subfolder")` returns `"C:\\subfolder"` — **not** `"C:\\Server\\Files\\subfolder"` — because a drive-less absolute path (which is exactly what an SFTP client sends, since SFTP paths are POSIX-style and start with `/`) resets `ntpath.join` back to the drive root. This silently clamped every subdirectory lookup back to `ROOT_DIR` on Windows — the SFTP root itself happened to still resolve correctly by coincidence, which is why it could look fine in a quick smoke test. Fix: split the SFTP path into individual segments and join them one at a time with `os.path.join(real, seg)`, so a bare segment name (never starting with a separator) can't trigger `ntpath`'s absolute-path-reset behavior on any OS.
 - **SFTPHandle**: Uses `paramiko.SFTPHandle` with `readfile`/`writefile` attributes — paramiko's default `read()`/`write()` methods use these. Do NOT monkeypatch instance attributes onto `SFTPHandle`; paramiko does not guarantee instance-attribute method dispatch.
-- **`transport.accept(30)`**: Required after `start_server()` to acknowledge the client's session channel. Without it, SFTP subsystem activation stalls.
+- **`transport.accept(120)`** (raised from `30`): Required after `start_server()` to acknowledge the client's session channel. Without it, SFTP subsystem activation stalls. The original 30s window was too tight for some mobile SFTP clients (e.g. Android apps) that show "connected" immediately after auth but don't actually open the SFTP channel until the user navigates into the file browser — if that took longer than 30s, the server closed the transport first, surfacing to the client as a generic "connection closed" error. 120s gives real slack for that UI delay while still bounding a stalled/dead connection.
+- **`transport.set_keepalive(30)`** (new): Called right after `start_server()`, alongside the `accept()` change above. Sends keepalive packets so an idle-but-open session (authenticated, channel open, just sitting in the client's file browser with no active transfer) isn't silently dropped by a mobile carrier's or Wi-Fi router's NAT idle timeout. Unrelated to the `accept()` timeout above — this only affects the session after the channel is already open.
 - **Cipher/MAC/KEX hardening (new)**: `_harden_transport_ciphers()` is called on every `paramiko.Transport` before `start_server()`, and strips weak algorithms from `transport.get_security_options()` in place (mutating `.ciphers`/`.digests`/`.kex` is enough — no other wiring needed, since `get_security_options()` returns a live view backing the handshake). Dropped, not merely deprioritized, because none of them are needed by any client this server targets (WinSCP, FileZilla, OpenSSH sftp/sshfs all support modern alternatives):
   - **Ciphers** (`_WEAK_SSH_CIPHERS`): all CBC-mode ciphers (`3des-cbc`, `aes128/192/256-cbc`, `blowfish-cbc`, `cast128-cbc`), `arcfour`/`arcfour128`/`arcfour256` (RC4, broken), and `none`.
   - **MACs** (`_WEAK_SSH_MACS`): `hmac-md5`, `hmac-md5-96`, `hmac-sha1-96` (truncated tag weakens SHA1's own forgery-resistance margin), `hmac-sha1` (not broken as a MAC, dropped anyway since every targeted client supports `hmac-sha2-256/512`), and `none`.
@@ -2402,6 +2403,17 @@ Works at the database level only — it's a separate process, same constraint `m
 
 ## 📝 Changelog
 
+### Version 4.9 — 2026-09-14 SFTP Mobile-Client Disconnect Fix
+
+Triggered by a real report: a mobile Android SFTP app ("Admin Hands") showing "connection closed"/"SSL connection closed" shortly after connecting, requiring a reconnect-and-immediately-download workaround.
+
+- **Updated: `sftp_server.py`**
+  - `_handle_connection()`'s `transport.accept(30)` raised to `transport.accept(120)` — root cause was this 30s window to open the SFTP channel after auth. Some mobile SFTP clients show "connected" immediately post-auth but don't actually open the channel until the user navigates into the file browser; if that took longer than 30s, the server tore down the transport first, which the client surfaced as a generic connection-closed error
+  - Added `transport.set_keepalive(30)` right after `start_server()` — secondary fix so an idle-but-open browsing session (channel already open, no active transfer) isn't separately dropped by a mobile carrier/Wi-Fi NAT's idle timeout
+  - See [SFTP Implementation Notes](#sftp-implementation-notes) for the updated detail
+
+- Nothing was removed from any earlier section; additive only.
+
 ### Version 4.8 — 2026-09-09 WebDAV Disconnect-Flood Guard (second pass on the same download-cancel issue)
 
 The v4.7 fixes (subprocess isolation, ALPN, `hypercorn_ssl_fix.py`) did not fully resolve the WebDAV download-cancel problem — a separate, still-live bug remained: cancelling a large download produced a genuinely fast, continuous flood of bare `SSL connection is closed` lines (no traceback) that didn't stop until the rest of the file had been uselessly iterated.
@@ -2704,5 +2716,5 @@ Public, opaque-token share links per file/folder, with a "Manage Shared" admin p
 
 ---
 
-**Last Updated**: 2026-09-11  
+**Last Updated**: 2026-09-14  
 **For Questions**: Refer to source code comments marked with `###` or `# --`
