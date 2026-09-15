@@ -8,31 +8,31 @@ A lightweight FTP-like file transfer server that runs on **Termux (Android), Lin
 
 ## 📷 Properly Configured Cloudflare Tunnel (Deployed on Windows 10 22H2 Build 19045)
 Scanner: [SiteSecurityScore](https://sitesecurityscore.com)
-<img width="1336" height="425" alt="image" src="https://github.com/user-attachments/assets/5834c1ad-ea66-483b-9636-08d2bf895824" />
+<img width="1336" height="425" alt="image" src="images/scanner/sitesecurityscore.png" />
 
 Scanner: [SecurityHeaders](https://securityheaders.com/)
-<img width="1206" height="316" alt="image" src="https://github.com/user-attachments/assets/fefd930c-4108-4118-84f4-6b57968f41ad" />
+<img width="1206" height="316" alt="image" src="images/scanner/securityheaders.png" />
 
 Scanner: [HTTP Observatory Report (Mozilla)](https://developer.mozilla.org/en-US/observatory)
-<img width="1051" height="334" alt="image" src="https://github.com/user-attachments/assets/20a797d3-7de1-4c72-93dc-8bce6491e458" />
+<img width="1051" height="334" alt="image" src="images/scanner/http-observatory-report-mozilla.png" />
 
 Scanner: [SecureMonk](https://securemonk.io)
-<img width="1344" height="630" alt="image" src="https://github.com/user-attachments/assets/3a10cee0-76c4-48f9-bb7d-01939d4631c3" />
+<img width="1344" height="630" alt="image" src="images/scanner/securemonk.png" />
 
 Scanner: [OWASP ZAP](https://www.zaproxy.org/) (Attack Strengty: Insane, Alert Thresold: Low)
-<img width="871" height="748" alt="image" src="https://github.com/user-attachments/assets/a57501c5-f8bc-477b-a081-3ffd39ad7183" />
+<img width="871" height="748" alt="image" src="images/scanner/owasp_zap.png" />
 
 Scanner: [OpenVAS](https://openvas.org/) (Scanner: OpenVAS Default, Scan Config: Full and fast) - Found vulnerabilities for SFTP/FTP/WebDAV
-<img width="1430" height="298" alt="image" src="https://github.com/user-attachments/assets/41bad81a-f77f-4d89-bac4-3e5a8356fa9c" />
+<img width="1430" height="298" alt="image" src="images/scanner/openvas.png" />
 
 ## 📷 Login
-<img width="1794" height="893" alt="image" src="https://github.com/user-attachments/assets/083a1054-b1bd-446b-946c-a3dda29b459b" />
+<img width="1794" height="893" alt="image" src="images/page/login-page.png" />
 
 ## 📷 Guest (READONLY)
-<img width="1912" height="1470" alt="image" src="https://github.com/user-attachments/assets/f846ba53-d02f-4d3e-8e57-8f3069aad147" />
+<img width="1912" height="1470" alt="image" src="images/page/guest-page.png" />
 
 ## 📷 Admin (READWRITE)
-<img width="1912" height="1758" alt="image" src="https://github.com/user-attachments/assets/a1fcb95c-6284-46a2-aa2c-60d11f5e9456" />
+<img width="1912" height="1758" alt="image" src="images/page/admin-page.png" />
 
 ## 📋 Table of Contents
 
