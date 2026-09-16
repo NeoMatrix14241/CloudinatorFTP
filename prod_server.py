@@ -43,6 +43,7 @@ import shutil
 import signal
 import asyncio
 import logging
+import logging_setup
 
 # Lower the GIL switch interval (default 0.005s) BEFORE anything else runs.
 # `from app import app` below triggers file_monitor.init_file_monitor() at
@@ -80,19 +81,15 @@ def _build_hypercorn_logger(name: str) -> logging.Logger:
     skip its own crashing formatter construction entirely rather than
     hitting this bug and needing us to catch/suppress the resulting
     per-request logging errors.
+
+    `name` is kept as a parameter for compatibility with existing call
+    sites, but is no longer used to name the actual logger — this now
+    returns a child of logging_setup's shared "cloudinatorftp" logger
+    (via get_logger("hypercorn")), so Hypercorn's errorlog lands in the
+    same console + daily-dated log file as every other logger in the
+    project instead of its own separately-configured stream.
     """
-    logger = logging.getLogger(name)
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
-            )
-        )
-        logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    return logger
+    return logging_setup.get_logger("hypercorn")
 
 
 # ---------------------------------------------------------------------------

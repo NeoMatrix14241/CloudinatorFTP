@@ -50,15 +50,6 @@ pid_file_for() {
     esac
 }
 
-logpath_file_for() {
-    # Stores the active log file path so we can find it by server type
-    case "$1" in
-        prod) echo "${PID_DIR}/prod.logpath" ;;
-        dev)  echo "${PID_DIR}/dev.logpath"  ;;
-        *) error "Unknown type: $1"; exit 1 ;;
-    esac
-}
-
 # WebDAV runs as its own OS process (see protocol_manager.py), separate
 # from the main server process this script tracks in prod.pid/dev.pid.
 # protocol_manager.py writes its real PID here on every (re)spawn.
@@ -91,26 +82,18 @@ display_name_for() {
     esac
 }
 
-# ── Log path helpers ──────────────────────────────────────────────────────────
-# Each server start creates a new log file stamped with the datetime.
-# Example: logs/prod_server_2026-06-09_10-32-01.log
-new_log_path_for() {
-    local type="$1"
-    local dt
-    dt=$(date '+%Y-%m-%d_%H-%M-%S')
-    echo "${LOG_DIR}/${type}_server_${dt}.log"
-}
-
-# Return the log file for a running server (from .logpath) or the most recent one.
+# ── Log path helper ───────────────────────────────────────────────────────────
+# The log file is now fully deterministic from type + today's date — it's
+# the SAME file logging_setup.py's DailyDatedFileHandler is writing to from
+# inside the Python process (app.py/prod_server.py/protocol_manager.py all
+# funnel their logger output there). No more per-start timestamped files or
+# a .logpath tracking file to keep in sync — "today's file for this type"
+# is always just this one computation, whether the server has been running
+# for five minutes or five days.
+# Example: logs/prod_server_2026-09-15.log
 current_log_for() {
     local type="$1"
-    local lp
-    lp=$(logpath_file_for "$type")
-    if [[ -f "$lp" ]]; then
-        cat "$lp"
-    else
-        ls -t "${LOG_DIR}/${type}_server_"*.log 2>/dev/null | head -1 || echo ""
-    fi
+    echo "${LOG_DIR}/${type}_server_$(date '+%Y-%m-%d').log"
 }
 
 # ── Process helpers ───────────────────────────────────────────────────────────
@@ -153,16 +136,35 @@ ensure_dirs() {
 #   Layer 2 — signal handler hardening inside the child
 #     The child is launched as `python -c <wrapper>` which sets
 #     signal.SIGINT = SIG_IGN *before* importing or running the server
-#     script.  This defeats any framework (Flask reloader, Werkzeug,
-#     Waitress) that might otherwise reinstall its own SIGINT handler.
+#     script.  This defeats any framework (Flask/Quart reloader, Werkzeug,
+#     Hypercorn) that might otherwise reinstall its own SIGINT handler.
 #     The env var CLOUDINATOR_BG=1 tells dev_server.py to disable
 #     use_reloader (the reloader spawns a watchdog subprocess that has
 #     its own signal wiring and can't be silenced any other way).
 #
 # Prints the real native PID (Windows PID on Windows, Unix PID elsewhere).
+#
+# stdout+stderr both -> /dev/null (2026-09-15, final iteration — this went
+# through two earlier variants same day: devnull-stdout/file-stderr, then
+# full dual capture into log_path, before landing here). Nothing from this
+# process's raw output is captured by manage.sh anymore, on purpose: this
+# is now a pure-Python-logger setup. logging_setup.py's DailyDatedFileHandler
+# writes every structured log line directly to logs/{type}_server_YYYY-MM-DD.log
+# from inside the process (app.py's request logger, Hypercorn's errorlog,
+# protocol_manager's logger), with correct midnight rotation. Uncaught
+# exceptions — main thread and background threads both — are caught by
+# logging_setup.py's sys.excepthook/threading.excepthook and logged
+# through that same mechanism, so crash tracebacks get the same correct
+# rotation too, without needing any OS-level redirect. current_log_for()
+# below computes that same file path independently, which is what
+# `manage.sh logs -f` tails — so following logs still works exactly the
+# same as before; only the (redundant, duplicate-line-causing) raw
+# redirect capture is gone. Remaining plain print() calls not yet
+# converted to logger calls (the ~267 across the project — see CLAUDE.md)
+# are genuinely unobserved output in background mode now; convert them to
+# logger calls if/when they turn out to matter.
 _launch_detached() {
     local script_path="$1"
-    local log_path="$2"
     
     local tmp
     tmp=$(mktemp "${TMPDIR:-/tmp}/manage_launcher_XXXXXX")
@@ -171,7 +173,6 @@ _launch_detached() {
 import subprocess, sys, os
 
 script_path = sys.argv[1]
-log_path    = sys.argv[2]
 
 # ── env for the child ────────────────────────────────────────────────────────
 env = dict(os.environ)
@@ -208,10 +209,10 @@ else:
     kw['preexec_fn'] = os.setsid
     kw['close_fds']  = True
 
-with open(log_path, 'a', encoding='utf-8', errors='replace') as lf:
+with open(os.devnull, 'w') as devnull:
     p = subprocess.Popen(
         [sys.executable, '-c', wrapper],
-        stdout=lf, stderr=lf,
+        stdout=devnull, stderr=devnull,
         **kw
     )
 
@@ -220,7 +221,7 @@ sys.exit(0)
 PYEOF
     
     local pid
-    pid=$("$PYTHON" "$tmp" "$script_path" "$log_path" 2>/dev/null)
+    pid=$("$PYTHON" "$tmp" "$script_path" 2>/dev/null)
     rm -f "$tmp"
     echo "$pid"
 }
@@ -319,11 +320,10 @@ cmd_start() {
     
     ensure_dirs
     
-    local script pid_file lp_file log
+    local script pid_file log
     script=$(script_for "$type")
     pid_file=$(pid_file_for "$type")
-    lp_file=$(logpath_file_for "$type")
-    log=$(new_log_path_for "$type")
+    log=$(current_log_for "$type")
     
     if [[ ! -f "${SCRIPT_DIR}/${script}" ]]; then
         error "Script not found: ${SCRIPT_DIR}/${script}"
@@ -335,7 +335,7 @@ cmd_start() {
     info "Log     → ${log}"
     
     local pid
-    pid=$(_launch_detached "${SCRIPT_DIR}/${script}" "$log")
+    pid=$(_launch_detached "${SCRIPT_DIR}/${script}")
     
     if [[ -z "$pid" ]]; then
         error "Launcher returned no PID — check ${log} for details."
@@ -343,7 +343,6 @@ cmd_start() {
     fi
     
     echo "$pid" > "$pid_file"
-    echo "$log" > "$lp_file"
     
     # Brief pause to catch immediate crashes
     sleep 0.8
@@ -357,10 +356,47 @@ cmd_start() {
         info "Follow logs: ./manage.sh logs $(display_name_for "$type") -f"
         info "Stop server: ./manage.sh stop"
     else
-        rm -f "$pid_file" "$lp_file"
+        rm -f "$pid_file"
         error "${script} crashed immediately. Check ${log} for details."
         return 1
     fi
+}
+
+# ── WebDAV child cleanup ─────────────────────────────────────────────────────
+# WebDAV runs as its OWN OS process (see protocol_manager.py), a child of
+# the main server process but tracked under its own PID/pidfile — killing
+# the main PID (below) does NOT touch it: `taskkill //F //PID` has no `//T`
+# (kill-tree) flag, and plain `kill "$pid"`/SIGTERM on POSIX only signals
+# that one PID, not its children, even though _launch_detached put the main
+# process in its own session via os.setsid(). Left uncleaned, that orphaned
+# WebDAV process keeps its port bound (and, once running, its own log file
+# handle open) — every subsequent `start` then spawns a brand-new WebDAV
+# subprocess that immediately fails to bind (port already in use) and exits
+# 1, which protocol_manager.py's watchdog dutifully respawns every 3s
+# forever, always failing the same way, since the real occupant of the port
+# is never touched. Same escalation (kill → wait → SIGKILL) as
+# cmd_restart_webdav below, extracted here so both call sites share it.
+_kill_webdav_child() {
+    local pf pid
+    pf=$(webdav_pid_file)
+    [[ -f "$pf" ]] || return 0
+    pid=$(<"$pf")
+    [[ -n "$pid" ]] || { rm -f "$pf"; return 0; }
+    
+    if is_windows; then
+        taskkill //F //PID "$pid" &>/dev/null || true
+    else
+        kill "$pid" 2>/dev/null || true
+        local i=0
+        while kill -0 "$pid" 2>/dev/null && (( i < 10 )); do
+            sleep 0.5
+            (( i++ ))
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+    fi
+    rm -f "$pf"
 }
 
 # ── cmd_stop ──────────────────────────────────────────────────────────────────
@@ -373,11 +409,10 @@ cmd_stop() {
         return 0
     fi
     
-    local pid_file pid script lp_file
+    local pid_file pid script
     pid_file=$(pid_file_for "$type")
     pid=$(<"$pid_file")
     script=$(script_for "$type")
-    lp_file=$(logpath_file_for "$type")
     
     info "Stopping ${BOLD}${script}${NC} (PID ${pid})…"
     
@@ -400,7 +435,11 @@ cmd_stop() {
         fi
     fi
     
-    rm -f "$pid_file" "$lp_file"
+    rm -f "$pid_file"
+    
+    # Clean up the orphaned WebDAV child — see _kill_webdav_child above.
+    _kill_webdav_child
+    
     success "${script} stopped."
 }
 
@@ -946,8 +985,8 @@ cmd_menu() {
         
         echo ""
         echo -e "  ${BOLD}Servers${NC}"
-        echo "   1) Start prod server (waitress)"
-        echo "   2) Start dev server  (flask)"
+        echo "   1) Start prod server (hypercorn)"
+        echo "   2) Start dev server  (quart)"
         echo "   3) Stop server"
         echo "   4) Restart server"
         echo "   5) Server status"
@@ -1025,8 +1064,8 @@ ${BOLD}USAGE${NC}
   ./manage.sh <command> [args]
 
 ${BOLD}SERVER COMMANDS${NC}  (mutually exclusive — only one server at a time)
-  start  server         Start production server (waitress) in the background
-  start  dev_server     Start dev server (flask) in the background
+  start  server         Start production server (hypercorn) in the background
+  start  dev_server     Start dev server (quart) in the background
   stop                  Gracefully stop the running server
   restart               Restart the currently active server
   restart-webdav         Restart ONLY WebDAV (recovers a wedged/stuck WebDAV
@@ -1075,8 +1114,8 @@ ${BOLD}OTHER${NC}
   help                  Show this help
 
 ${BOLD}EXAMPLES${NC}
-  ./manage.sh start server       # launch waitress server in background
-  ./manage.sh start dev_server   # launch flask dev server in background
+  ./manage.sh start server       # launch hypercorn server in background
+  ./manage.sh start dev_server   # launch quart dev server in background
   ./manage.sh manage-users       # run tool while server is still up
   ./manage.sh logs server -f     # follow live output; Ctrl-C to detach only
   ./manage.sh clean-logs         # delete old log files
@@ -1089,10 +1128,14 @@ ${BOLD}EXAMPLES${NC}
   ./manage.sh security-txt --contact you@example.com --expires 2030-09-03 --preferred-lang en,fil --canonical https://yourdomain.com/.well-known/security.txt
 
 ${BOLD}LOG FILES${NC}
-  Saved to logs/ with datetime stamps — each start creates a new file:
-    logs/prod_server_2026-06-09_10-32-01.log
-    logs/dev_server_2026-06-09_10-45-00.log
-  Use clean-logs to remove old files.
+  One file per day per server type, shared with the app's own logger —
+  automatically rolls onto a new file at midnight even without a restart:
+    logs/prod_server_2026-09-15.log
+    logs/dev_server_2026-09-15.log
+  Routine console output (print() banners) is discarded in background
+  mode; everything diagnostically useful (request timing, errors,
+  protocol events) is in these files already. Use clean-logs to remove
+  old ones.
 
 ${BOLD}CTRL-C AND LOGS${NC}
   The server runs in its own detached process group. Pressing Ctrl-C while

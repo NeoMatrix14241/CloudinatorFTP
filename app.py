@@ -571,43 +571,26 @@ app = Quart(__name__)
 # moment (a periodic background job, another route also going slow at
 # the same timestamp, etc.), not just seen in isolation.
 #
-# Uses the exact same timestamp format as prod_server.py's
-# _build_hypercorn_logger ("%(asctime)s [%(levelname)s] %(message)s",
-# "%Y-%m-%d %H:%M:%S") for consistency across every log this project
-# produces. Deliberately does NOT use app.logger / Quart's default
-# logger — that one's default format includes %(module)s, which is what
-# produced the "(unknown file)" glitch (same class of issue as the
-# Python 3.14 %(process)d logging bug already documented for Hypercorn's
-# own errorlog above).
-#
-# Writes to BOTH the console (StreamHandler) and a persistent file
-# (logs/requests.log, next to this file) — so entries survive even when
-# the server runs detached (systemd/Docker/screen/tmux you're not
-# attached to) and nobody was watching the console when it happened.
+# Previously had its own console+file handlers writing to a separate
+# logs/requests.log. Now a child of logging_setup's shared
+# "cloudinatorftp" logger instead, so these lines land in the same daily
+# rotating file (logs/prod_server_YYYY-MM-DD.log) as everything else in
+# the project rather than a separate file — see logging_setup.py.
 # ---------------------------------------------------------------------------
 SLOW_REQUEST_THRESHOLD_SECONDS = 2.0
 
-_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
-os.makedirs(_LOG_DIR, exist_ok=True)
+import logging_setup
 
-request_logger = logging.getLogger("cloudinatorftp.requests")
-if not request_logger.handlers:
-    _req_log_formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
-    )
+request_logger = logging_setup.get_logger("requests")
 
-    _req_log_stream_handler = logging.StreamHandler()
-    _req_log_stream_handler.setFormatter(_req_log_formatter)
-    request_logger.addHandler(_req_log_stream_handler)
-
-    _req_log_file_handler = logging.FileHandler(
-        os.path.join(_LOG_DIR, "requests.log"), encoding="utf-8"
-    )
-    _req_log_file_handler.setFormatter(_req_log_formatter)
-    request_logger.addHandler(_req_log_file_handler)
-
-request_logger.setLevel(logging.INFO)
-request_logger.propagate = False
+# General-purpose logger for events not tied to a specific HTTP request
+# (background jobs like reconcile, startup/shutdown notices, etc.) — added
+# 2026-09-15 alongside converting the one identified print()-based error
+# (background reconcile failures) that would otherwise have gone silently
+# unobserved once manage.sh stopped capturing raw stdout/stderr. The many
+# remaining cosmetic print() calls elsewhere are left as-is; convert more
+# of them here if a specific one turns out to matter later.
+app_logger = logging_setup.get_logger("app")
 
 
 @app.before_request
@@ -962,7 +945,7 @@ def _trigger_reconcile(settle=False):
                 f"{getattr(new_snap, 'file_count', '?')} files"
             )
         except Exception as e:
-            print(f"\u26a0\ufe0f Background reconcile error: {e}")
+            app_logger.error(f"Background reconcile error: {e}", exc_info=True)
 
     threading.Thread(target=_run, daemon=True).start()
 

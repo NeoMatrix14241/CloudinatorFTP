@@ -35,6 +35,20 @@ if _BG:
         signal.signal(signal.SIGBREAK, signal.SIG_IGN)
 
 # ensure_dirs() is called inside app.py before anything else loads.
+# NOTE (2026-09-15): app.py's module-level code sets up logging_setup's
+# shared "cloudinatorftp" logger (console + logs/prod_server_YYYY-MM-DD.log)
+# on import — this line is what pulls that in, so request logging and the
+# daily-dated log file both apply here too, same as under prod_server.py.
+# Not changed here: Quart's app.run() below builds its own internal
+# Hypercorn Config for the dev server and doesn't expose a documented way
+# to hand it a custom errorlog logger the way prod_server.py's manual
+# hyper_cfg.errorlog assignment does — so Hypercorn's own dev-mode startup
+# banner/error output still only goes to the console here, same as
+# dev_server.py's own print()-based banner below. Low priority to fix:
+# this file runs single-process, in the foreground, for local iteration —
+# the "did I miss it because nobody was watching the console" problem the
+# daily log file solves doesn't really apply the same way it does to a
+# detached prod_server.py process.
 from app import app
 
 # Start WebDAV / SFTP / FTP protocol servers in background threads.

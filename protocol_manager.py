@@ -62,30 +62,18 @@ import subprocess
 import sys
 import threading
 import time
-import logging
+import logging_setup
 from app import get_local_ip
 
 # ---------------------------------------------------------------------------
 # This module's own logger. Previously `logging.getLogger(__name__).debug(...)`
 # was called at two call sites below with no handler configured anywhere in
-# the project (no logging.basicConfig() call exists) — combined with DEBUG
-# being below the default WARNING threshold, those lines were dead code that
-# never produced output anywhere, console or file. Giving it an explicit
-# handler here, using the same timestamp format as prod_server.py's
-# _build_hypercorn_logger and app.py's request_logger, fixes that and keeps
-# every log line across the project consistent.
+# the project — that logger never produced output anywhere, console or
+# file. Now a child of logging_setup's shared "cloudinatorftp" logger, so
+# these lines land in the same console + daily-dated log file
+# (logs/prod_server_YYYY-MM-DD.log) as every other logger in the project.
 # ---------------------------------------------------------------------------
-_pm_logger = logging.getLogger(__name__)
-if not _pm_logger.handlers:
-    _pm_handler = logging.StreamHandler()
-    _pm_handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
-        )
-    )
-    _pm_logger.addHandler(_pm_handler)
-_pm_logger.setLevel(logging.DEBUG)
-_pm_logger.propagate = False
+_pm_logger = logging_setup.get_logger("protocol")
 
 LOCAL_IP = get_local_ip()
 
@@ -118,6 +106,43 @@ _webdav_watchdog_stop = threading.Event()
 _webdav_proc_lock = threading.Lock()
 
 
+def _pump_child_output(stream, tag: str) -> None:
+    """Background-thread reader for one of the WebDAV subprocess's PIPE'd
+    streams (see _spawn_webdav_process). Relays each line through THIS
+    process's own print() — which already goes through logging_setup's
+    tee into the console + shared daily log file — instead of relying on
+    the OS to hand the child a directly-usable, inheritable stdout/stderr
+    handle.
+
+    Added 2026-09-15 after inherited-handle stdio (both the original
+    stdout=sys.stdout/stderr=sys.stderr, and later the default/omitted
+    inherit-real-fd-1/2 approach) both failed to surface ANY output from
+    a crashing WebDAV child on one user's Windows machine — not even a
+    raw Python traceback — despite webdav_server.py working perfectly
+    when run as a fully standalone process with its own real console.
+    Something about handle inheritance specifically wasn't getting the
+    child's writes back to the parent/console at all on that machine;
+    piping and reading the bytes ourselves sidesteps that entirely,
+    regardless of root cause.
+
+    Runs until the pipe closes (child exited and both ends drained).
+    Best-effort: any decode/read error just ends this thread quietly, it
+    should never take down the watchdog or main app.
+    """
+    try:
+        for line in iter(stream.readline, ""):
+            if not line:
+                break
+            print(f"[webdav:{tag}] {line.rstrip()}")
+    except Exception:
+        pass
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+
 def _cfg(key: str, default):
     """Read a config key with a fallback default (avoids ImportError)."""
     try:
@@ -126,6 +151,64 @@ def _cfg(key: str, default):
         return getattr(config, key, default)
     except ImportError:
         return default
+
+
+def _webdav_target_ports() -> list:
+    """Ports webdav_server.py may try to bind, per config.py — used only
+    for the pre-flight occupancy check and diagnostic message below, not
+    to actually connect to WebDAV itself."""
+    ports = []
+    if _cfg("WEBDAV_ENABLED", False):
+        ports.append(_cfg("WEBDAV_PORT", 8080))
+    if _cfg("WEBDAV_HTTPS_ENABLED", True):
+        ports.append(_cfg("WEBDAV_HTTPS_PORT", 8443))
+    return ports or [8080, 8443]
+
+
+def _port_occupied(port: int) -> bool:
+    """True if something is already accepting TCP connections on `port`
+    on this machine — checked via connect_ex against loopback, which
+    succeeds against a live listener before any TLS/HTTP handshake even
+    starts (webdav_server.py binds all interfaces, so loopback always
+    reaches it), so this catches both the plaintext and HTTPS WebDAV
+    listeners equally. Best-effort only: a false negative here just means
+    we attempt the (harmless) spawn anyway and let it fail on its own."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(0.5)
+    try:
+        return s.connect_ex(("127.0.0.1", port)) == 0
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def _port_conflict_message() -> str:
+    ports = _webdav_target_ports()
+    port_list = ", ".join(str(p) for p in ports)
+    if sys.platform == "win32":
+        find_cmd = "  netstat -ano | findstr :" + " :".join(str(p) for p in ports)
+        kill_cmd = "  taskkill /F /PID <pid_from_above>"
+    else:
+        find_cmd = (
+            "  lsof -i :"
+            + ",".join(str(p) for p in ports)
+            + "   (or: ss -ltnp | grep -E '"
+            + "|".join(str(p) for p in ports)
+            + "')"
+        )
+        kill_cmd = "  kill -9 <pid_from_above>"
+    return (
+        f"❌ WebDAV port(s) {port_list} already occupied by another process on "
+        f"this machine — NOT respawning blindly. This is almost always a "
+        f"leftover WebDAV process from a previous run that manage.sh/this "
+        f"watchdog never managed to reach (its real PID isn't necessarily "
+        f"the one in .manage_pids/webdav.pid — that file gets overwritten "
+        f"by every spawn attempt, including ones that immediately fail, so "
+        f"it can't be trusted to point at the actual occupant).\n"
+        f"   Find and kill the real owner manually, then WebDAV will come "
+        f"back up on its own within a few seconds:\n{find_cmd}\n{kill_cmd}"
+    )
 
 
 def get_local_ip() -> str:
@@ -184,51 +267,164 @@ def _spawn_webdav_process() -> "subprocess.Popen | None":
     kw = {}
     if sys.platform == "win32":
         kw["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+    # Tell the child's own logging_setup.py which prefix to log under —
+    # webdav_server.py is its own separate __main__ in its own interpreter,
+    # so logging_setup's __main__-based detection can never recognize it as
+    # "prod_server"/"dev_server" and would otherwise fall back to writing a
+    # second, separate logs/app_YYYY-MM-DD.log. logging_setup._LOG_PREFIX
+    # here is THIS (parent) process's own already-resolved prefix — reuse
+    # it directly instead of re-deriving it, so WebDAV's log lines land in
+    # the exact same daily file as everything else.
+    env = dict(os.environ)
+    env["CLOUDINATOR_LOG_PREFIX"] = logging_setup._LOG_PREFIX
+
+    # Force UTF-8 for this subprocess's own stdout/stderr, unconditionally.
+    #
+    # Root cause of the actual crash-loop bug (2026-09-15, found via the
+    # PIPE+relay diagnostic below once it finally surfaced a real
+    # traceback): paths.py's ensure_dirs() prints an emoji ("\U0001f4c2
+    # DB dir ready: ..."), pulled in transitively by webdav_server.py's
+    # own `from app import get_local_ip`. When a process's stdout is
+    # attached to a real console, Windows uses the console's codepage and
+    # this just works. When stdout is redirected — piped (as
+    # stdout=subprocess.PIPE below now does) or otherwise not a tty —
+    # Python instead falls back to locale.getpreferredencoding(), which
+    # on the affected machine is cp1252, and cp1252 can't encode that
+    # emoji at all: UnicodeEncodeError, raised at import time, before
+    # webdav_server.py's own code — or even its own logging setup — has a
+    # chance to run. That's also why it was totally silent before this
+    # subprocess switched to PIPE+relay: the same exception was very
+    # likely already happening under plain fd inheritance too, just with
+    # the traceback lost somewhere in Windows' handle-inheritance
+    # behavior rather than reaching us.
+    #
+    # manage.sh's OWN detached launcher already sets PYTHONUTF8=1 for
+    # whatever it spawns (prod_server.py/dev_server.py) — which is
+    # inherited down into this env dict via os.environ when launched that
+    # way, masking the bug entirely under manage.sh. Running `python
+    # prod_server.py` directly never sets it, so this subprocess is the
+    # first thing in that path to hit a genuinely non-console stdout and
+    # trip over it. Setting it explicitly here — rather than relying on
+    # it having been set somewhere further up the process chain — makes
+    # WebDAV's own launch correct regardless of how the parent was
+    # started.
+    env["PYTHONUTF8"] = "1"
+
+    # stdout/stderr: PIPE'd and actively read by _pump_child_output threads
+    # below, rather than inherited via an OS-level handle.
+    #
+    # History: this originally passed stdout=sys.stdout / stderr=sys.stderr
+    # explicitly, which depends on Popen resolving a usable fileno() off
+    # logging_setup's _TeeStream wrapper. Removing that in favor of
+    # Popen's default (inherit fd 1/2 directly, no Python object involved)
+    # was the first fix attempt — but on the machine that surfaced this
+    # bug, NEITHER approach ever produced a single byte of the crashing
+    # child's output, console or log file, not even a raw interpreter
+    # traceback — while `python webdav_server.py` run as a fully
+    # standalone process (own console, no parent involved at all) worked
+    # perfectly and printed its full startup banner. Something about
+    # handle inheritance itself wasn't getting the child's writes back to
+    # this process on that setup, for reasons that didn't matter enough
+    # to keep chasing once there was a strictly more reliable option:
+    # PIPE + explicit read-and-relay, entirely in Python code we control,
+    # with no dependency on OS handle-inheritance semantics either way.
     try:
         proc = subprocess.Popen(
             [sys.executable, script],
             cwd=_PROJECT_DIR,
-            stdout=sys.stdout,
-            stderr=sys.stderr,
             stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            # Explicit encoding — text=True alone decodes with
+            # locale.getpreferredencoding() (cp1252 on the machine that
+            # surfaced this whole investigation), which mangles anything
+            # non-ASCII the child writes (e.g. "ðŸ“‹" instead of "📋")
+            # even though the child itself is now writing proper UTF-8
+            # thanks to PYTHONUTF8=1 above. Must match on both ends.
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,  # line-buffered — pump threads read line by line
+            env=env,
             **kw,
         )
     except Exception as e:
         print(f"❌ WebDAV: failed to launch subprocess: {e}")
         return None
+    threading.Thread(
+        target=_pump_child_output, args=(proc.stdout, "OUT"), daemon=True
+    ).start()
+    threading.Thread(
+        target=_pump_child_output, args=(proc.stderr, "ERR"), daemon=True
+    ).start()
     _write_webdav_pidfile(proc.pid)
     return proc
 
 
 def _webdav_watchdog():
     """
-    Background loop: respawns the WebDAV subprocess if it exits
-    unexpectedly (crash, exit code != 0). A clean exit (code 0 — either
-    WEBDAV disabled in config, or a graceful stop via stop_all()/
-    restart_webdav()) is NOT respawned.
+    Background loop: (re)spawns the WebDAV subprocess whenever it isn't
+    currently running — whether because it just exited unexpectedly
+    (crash, exit code != 0) or because start_all() found the port already
+    occupied and skipped the initial spawn entirely (_webdav_proc left as
+    None). A clean/intentional exit (code 0 — WEBDAV disabled in config,
+    or a graceful stop via stop_all()/restart_webdav(), both of which set
+    _webdav_watchdog_stop before clearing _webdav_proc) stops this loop.
 
     Does NOT detect a wedged-but-still-running process (e.g. the
     Hypercorn/asyncio write-retry loop on a cancelled large download) —
     that process never exits, it just stops making progress. For that
     case use restart_webdav() to force a kill + respawn.
+
+    Before every (re)spawn attempt, checks whether WebDAV's own port is
+    already occupied by something else first (see _port_occupied). Found
+    the hard way (2026-09-15): blindly respawning every 3s when the real
+    problem is a leftover process still squatting the port doesn't just
+    fail forever — it also destroys the ability to *find* that leftover
+    process, since _write_webdav_pidfile() overwrites
+    .manage_pids/webdav.pid on every attempt, including ones that
+    immediately fail. A few cycles in, the pidfile only ever points at the
+    latest (already-dead) attempt, not the actual occupant. So: if the
+    port is occupied, skip the spawn entirely (leaves the pidfile alone)
+    and back off to a slower, print-once-per-streak cadence instead of a
+    tight 3s loop, with a message that tells the user how to find and
+    kill the real occupant.
     """
     global _webdav_proc
+    _conflict_warned = False
     while not _webdav_watchdog_stop.wait(timeout=2):
         with _webdav_proc_lock:
             proc = _webdav_proc
-        if proc is None:
+
+        crashed = False
+        if proc is not None:
+            ret = proc.poll()
+            if ret is None:
+                continue  # still running, nothing to do
+            if ret == 0:
+                break  # intentional/clean exit — don't respawn
+            crashed = True
+
+        if any(_port_occupied(p) for p in _webdav_target_ports()):
+            if not _conflict_warned:
+                print(_port_conflict_message())
+                _conflict_warned = True
+            # Slow poll instead of a tight loop — nothing productive to do
+            # until the port frees up, and pidfile/log spam from repeated
+            # doomed spawns is exactly what made this hard to diagnose.
+            if _webdav_watchdog_stop.wait(timeout=15):
+                break
             continue
-        ret = proc.poll()
-        if ret is None:
-            continue  # still running, nothing to do
-        if ret == 0:
-            break  # intentional/clean exit — don't respawn
-        print(
-            f"⚠️  WebDAV process exited unexpectedly (code {ret}) — respawning in 3s..."
-        )
-        time.sleep(3)
-        if _webdav_watchdog_stop.is_set():
-            break
+
+        _conflict_warned = False
+        if crashed:
+            print(
+                f"⚠️  WebDAV process exited unexpectedly (code {ret}) — respawning in 3s..."
+            )
+            time.sleep(3)
+            if _webdav_watchdog_stop.is_set():
+                break
         with _webdav_proc_lock:
             _webdav_proc = _spawn_webdav_process()
 
@@ -298,13 +494,27 @@ def start_all():
     # WEBDAV_ENABLED/WEBDAV_HTTPS_ENABLED check decides whether it actually
     # binds anything; it exits cleanly (code 0) if both are off, in which
     # case the watchdog won't respawn it.
+    #
+    # Pre-flight port check first: if something is already listening on
+    # WebDAV's port (almost always a leftover process from a previous run
+    # that was never actually killed — see _port_conflict_message), don't
+    # even attempt the spawn. It would just fail to bind and exit 1
+    # immediately, and — worse — overwrite .manage_pids/webdav.pid with
+    # that doomed attempt's PID, burying the real occupant's PID and
+    # making it harder to find manually.
     global _webdav_proc
-    _webdav_proc = _spawn_webdav_process()
-    if _webdav_proc is not None:
-        results["WebDAV"] = f"✅ started (pid {_webdav_proc.pid}, isolated process)"
-        _start_webdav_watchdog()
+    if any(_port_occupied(p) for p in _webdav_target_ports()):
+        print(_port_conflict_message())
+        results["WebDAV"] = "❌ not started: port already occupied (see message above)"
+        _webdav_proc = None
+        _start_webdav_watchdog()  # will keep polling and retry once the port frees up
     else:
-        results["WebDAV"] = "❌ error: failed to launch subprocess"
+        _webdav_proc = _spawn_webdav_process()
+        if _webdav_proc is not None:
+            results["WebDAV"] = f"✅ started (pid {_webdav_proc.pid}, isolated process)"
+            _start_webdav_watchdog()
+        else:
+            results["WebDAV"] = "❌ error: failed to launch subprocess"
 
     # ── SFTP ──────────────────────────────────────────────────────────────
     if _cfg("SFTP_ENABLED", True):
