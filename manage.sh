@@ -320,6 +320,14 @@ cmd_start() {
     
     ensure_dirs
     
+    # Defensive cleanup (2026-09-15) — catches a WebDAV orphan left behind
+    # by a crash, a stop that predates this fix, or anything else that
+    # left webdav.pid stale/missing, before it can lock out this start's
+    # own WebDAV spawn (port conflict) or its log file (see
+    # _kill_webdav_child's own comment for the full story). Safe to call
+    # unconditionally — a no-op when nothing's actually orphaned.
+    _kill_webdav_child
+    
     local script pid_file log
     script=$(script_for "$type")
     pid_file=$(pid_file_for "$type")
@@ -376,27 +384,73 @@ cmd_start() {
 # forever, always failing the same way, since the real occupant of the port
 # is never touched. Same escalation (kill → wait → SIGKILL) as
 # cmd_restart_webdav below, extracted here so both call sites share it.
+#
+# Port-based fallback added 2026-09-15: the pidfile-based kill above only
+# works when webdav.pid is accurate, and it's been observed pointing at an
+# already-dead PID while the REAL orphan (predating this fix, or from a
+# crash, or anything else that desynced the pidfile) keeps holding the
+# port and its log file handle open — the "stale python process locking
+# the log file, have to kill it in Task Manager" symptom. Rather than
+# trust the pidfile alone, this now also actively finds whatever's bound
+# to WebDAV's ports (8080/8443, matching protocol_manager.py's own
+# _webdav_target_ports() fallback) and kills that directly — a no-op on
+# any port nothing is actually listening on. Called both from cmd_stop
+# and defensively from cmd_start before spawning, so this self-heals
+# without needing a manual netstat/taskkill step going forward.
 _kill_webdav_child() {
     local pf pid
     pf=$(webdav_pid_file)
-    [[ -f "$pf" ]] || return 0
-    pid=$(<"$pf")
-    [[ -n "$pid" ]] || { rm -f "$pf"; return 0; }
-    
-    if is_windows; then
-        taskkill //F //PID "$pid" &>/dev/null || true
-    else
-        kill "$pid" 2>/dev/null || true
-        local i=0
-        while kill -0 "$pid" 2>/dev/null && (( i < 10 )); do
-            sleep 0.5
-            (( i++ ))
-        done
-        if kill -0 "$pid" 2>/dev/null; then
-            kill -9 "$pid" 2>/dev/null || true
+    if [[ -f "$pf" ]]; then
+        pid=$(<"$pf")
+        if [[ -n "$pid" ]]; then
+            if is_windows; then
+                taskkill //F //PID "$pid" &>/dev/null || true
+            else
+                kill "$pid" 2>/dev/null || true
+                local i=0
+                while kill -0 "$pid" 2>/dev/null && (( i < 10 )); do
+                    sleep 0.5
+                    (( i++ ))
+                done
+                if kill -0 "$pid" 2>/dev/null; then
+                    kill -9 "$pid" 2>/dev/null || true
+                fi
+            fi
         fi
+        rm -f "$pf"
     fi
-    rm -f "$pf"
+    
+    # Port-based fallback sweep (2026-09-15) — the pidfile-based kill above
+    # only works when webdav.pid is accurate. It's been observed pointing
+    # at an already-dead PID while the REAL orphan (from an earlier crash,
+    # or a stop that predates this fix, or any other way the pidfile could
+    # get out of sync) keeps holding the port — and, once running, its log
+    # file handle — open indefinitely. That's the "stale python process
+    # locking the log file, have to kill it in Task Manager" symptom.
+    # Rather than trust the pidfile at all, actively find whatever's bound
+    # to WebDAV's ports and kill that directly — matches the ports
+    # protocol_manager.py's own _webdav_target_ports() checks
+    # (WEBDAV_PORT/WEBDAV_HTTPS_PORT from config.py, falling back to
+    # 8080/8443 same as that function does). Harmless no-op on every port
+    # nothing is actually listening on.
+    local port webdav_pid
+    for port in 8080 8443; do
+        if is_windows; then
+            webdav_pid=$(netstat -ano 2>/dev/null | grep ":${port} " | grep LISTENING | awk '{print $NF}' | head -1)
+            if [[ -n "$webdav_pid" && "$webdav_pid" != "0" ]]; then
+                taskkill //F //PID "$webdav_pid" &>/dev/null || true
+            fi
+        else
+            if command -v lsof &>/dev/null; then
+                webdav_pid=$(lsof -ti tcp:"${port}" -sTCP:LISTEN 2>/dev/null | head -1)
+            else
+                webdav_pid=""
+            fi
+            if [[ -n "$webdav_pid" ]]; then
+                kill -9 "$webdav_pid" 2>/dev/null || true
+            fi
+        fi
+    done
 }
 
 # ── cmd_stop ──────────────────────────────────────────────────────────────────
