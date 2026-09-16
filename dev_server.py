@@ -112,6 +112,24 @@ if __name__ == "__main__":
 
         print("\n🛑 Stopping development server…")
 
+        # 2026-09-16: ignore further Ctrl+C for the rest of this cleanup
+        # block. Quart's app.run() above already handled the FIRST Ctrl+C
+        # internally (its own graceful async teardown, then it re-raises
+        # KeyboardInterrupt to us here) — this only takes over AFTER that,
+        # so it can't conflict with app.run()'s own signal handling. What
+        # it protects against: a second/third rapid Ctrl+C landing while
+        # protocol_manager.stop_all() below is still mid-cleanup (e.g.
+        # during its terminate()+wait(timeout=5) for the WebDAV
+        # subprocess) would otherwise raise a fresh, uncaught
+        # KeyboardInterrupt right there, aborting stop_all() before it
+        # reaches WebDAV — which, unlike the SFTP/FTP/SMB threads, is a
+        # genuinely separate OS process that survives as an orphan if
+        # never explicitly told to stop. Worst case with this in place:
+        # a few seconds of Ctrl+C not doing anything while cleanup
+        # finishes, rather than a silently orphaned process needing a
+        # manual Task Manager kill.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+
         # Stop WebDAV / SFTP / FTP / SMB protocol servers cleanly. SMB itself
         # never touches Windows' native file sharing (LanmanServer) — that's
         # a separate, one-time, manually-run setup (smb_setup.py), not

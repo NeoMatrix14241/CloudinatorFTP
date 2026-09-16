@@ -367,6 +367,23 @@ async def _run():
                 shutdown_event.set()
             else:
                 print("\n⚡ Force quitting — terminating immediately…", flush=True)
+                # 2026-09-16: os._exit() below skips the finally: block
+                # further down (the one that calls protocol_manager.
+                # stop_all()) entirely — including its WebDAV kill step.
+                # SFTP/FTP/SMB are in-process threads and die automatically
+                # when this process does, but WebDAV is a genuinely
+                # separate OS process (subprocess.Popen) that does NOT die
+                # just because its parent did — it survives as an orphan,
+                # still holding its port and log file open, needing a
+                # manual Task Manager kill. force_kill_webdav() is a fast,
+                # no-wait kill (unlike stop_all()'s graceful terminate()+
+                # wait(timeout=5), which is exactly the window this second
+                # Ctrl+C could otherwise interrupt) — fast enough to call
+                # here without meaningfully delaying the force-quit.
+                try:
+                    protocol_manager.force_kill_webdav()
+                except Exception:
+                    pass
                 os._exit(0)
 
         loop = asyncio.get_running_loop()

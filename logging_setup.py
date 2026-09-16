@@ -42,6 +42,13 @@ instead achieved entirely inside this process:
 Net effect: every line the process ever produces, logger-based or plain
 print(), ends up in exactly one place, with correct rotation, exactly
 once — no duplication, nothing silently lost.
+
+Component tag (2026-09-15): every line also carries [component] — e.g.
+[prod_server] or [webdav_server] — identifying which OS process actually
+wrote it. Needed because CLOUDINATOR_LOG_PREFIX (above) deliberately
+makes the WebDAV subprocess share the main process's log FILE, which
+means the filename alone can no longer answer "which process wrote this
+line" once they're interleaved together — this tag is what does.
 """
 
 import logging
@@ -82,8 +89,23 @@ _LOG_PREFIX = os.environ.get("CLOUDINATOR_LOG_PREFIX") or (
     _main_name if _main_name in ("prod_server", "dev_server") else "app"
 )
 
+# Per-line component tag (2026-09-15) — distinct from _LOG_PREFIX above.
+# _LOG_PREFIX picks which FILE to write to, and is deliberately overridden
+# for the WebDAV subprocess so it joins the parent's file instead of
+# writing its own. But that override means _LOG_PREFIX can no longer be
+# used to tell WHICH process actually wrote a given line once several
+# processes share one file — a line from the port-5000 web UI and a line
+# from the separate webdav_server.py process were structurally
+# indistinguishable, same [INFO]/[WARNING] tags, nothing identifying the
+# source. _main_name above is NOT overridden by the env var — it's
+# whatever script genuinely is __main__ in *this* process ("webdav_server"
+# in that subprocess, "prod_server"/"dev_server" in the main one) — so
+# it's the right thing to tag every line with instead.
+_COMPONENT = _main_name or "unknown"
+
 _FORMATTER = logging.Formatter(
-    "%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
+    "%(asctime)s [%(levelname)s] [" + _COMPONENT + "] %(message)s",
+    "%Y-%m-%d %H:%M:%S",
 )
 
 
@@ -175,7 +197,9 @@ class _TeeStream:
             line, self._buffer = self._buffer.split("\n", 1)
             if line:  # skip the empty tail from print()'s trailing \n
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                self._file_handler.write_line(f"{ts} [{self._tag}] {line}")
+                self._file_handler.write_line(
+                    f"{ts} [{self._tag}] [{_COMPONENT}] {line}"
+                )
         return len(s)
 
     def flush(self) -> None:
@@ -201,6 +225,14 @@ class _TeeStream:
 
 
 _root = logging.getLogger("cloudinatorftp")
+
+# Real, pre-tee streams — set below, but declared here so get_real_stdout()/
+# get_real_stderr() always have a sane fallback (sys.__stdout__/__stderr__)
+# even in the unlikely case this module's setup block doesn't run (e.g. a
+# second import after some other code already tore down _root's handlers).
+_real_stdout = sys.__stdout__
+_real_stderr = sys.__stderr__
+
 if not _root.handlers:
     # Targets the real, original stdout — captured here BEFORE sys.stdout
     # gets replaced by the tee below, so this handler's own writes go
@@ -215,6 +247,21 @@ if not _root.handlers:
     _file_handler.setFormatter(_FORMATTER)
     _root.addHandler(_file_handler)
 
+    # Save the real streams BEFORE replacing them, and expose them via
+    # get_real_stdout()/get_real_stderr() below — added 2026-09-16 for
+    # protocol_manager.py's WebDAV-subprocess-output relay (_pump_child_
+    # output), which was calling plain print() to show the relayed lines
+    # on screen. That print() went through THIS process's own tee, which
+    # wrote a second copy of every WebDAV line into the shared log file —
+    # on top of the WebDAV subprocess's own direct write via its own
+    # logging_setup instance — duplicating every line. Writing to the
+    # real stream directly instead keeps the "show it on screen live"
+    # value (and the crash-diagnosis value for the narrow case of a
+    # WebDAV crash so early that even ITS OWN logging_setup import hasn't
+    # finished yet) without the second file-write.
+    _real_stdout = sys.stdout
+    _real_stderr = sys.stderr
+
     # Install the tee AFTER the console handler above has already captured
     # its reference to the real stdout. PRINT tags plain print() output,
     # STDERR tags anything written directly to stderr outside the logging
@@ -225,6 +272,20 @@ if not _root.handlers:
 
 _root.setLevel(logging.DEBUG)
 _root.propagate = False
+
+
+def get_real_stdout():
+    """The original stdout, from before the tee replaced sys.stdout — for
+    callers that need to write directly to the console without it being
+    captured (and duplicated) into the shared log file a second time.
+    See protocol_manager.py's _pump_child_output for the motivating case.
+    """
+    return _real_stdout
+
+
+def get_real_stderr():
+    """See get_real_stdout() — same idea, for stderr."""
+    return _real_stderr
 
 
 def _log_uncaught_exception(exc_type, exc_value, exc_tb):

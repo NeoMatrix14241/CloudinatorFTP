@@ -108,11 +108,10 @@ _webdav_proc_lock = threading.Lock()
 
 def _pump_child_output(stream, tag: str) -> None:
     """Background-thread reader for one of the WebDAV subprocess's PIPE'd
-    streams (see _spawn_webdav_process). Relays each line through THIS
-    process's own print() — which already goes through logging_setup's
-    tee into the console + shared daily log file — instead of relying on
-    the OS to hand the child a directly-usable, inheritable stdout/stderr
-    handle.
+    streams (see _spawn_webdav_process). Relays each line straight to
+    THIS process's real console (bypassing logging_setup's tee — see
+    below for why) instead of relying on the OS to hand the child a
+    directly-usable, inheritable stdout/stderr handle.
 
     Added 2026-09-15 after inherited-handle stdio (both the original
     stdout=sys.stdout/stderr=sys.stderr, and later the default/omitted
@@ -125,15 +124,36 @@ def _pump_child_output(stream, tag: str) -> None:
     piping and reading the bytes ourselves sidesteps that entirely,
     regardless of root cause.
 
+    Writes via logging_setup.get_real_stdout()/get_real_stderr(), NOT
+    print() (2026-09-16 fix): print() goes through THIS process's own
+    tee, which would write a second copy of every relayed line into the
+    shared log file — on top of the WebDAV subprocess's own direct write
+    via its own logging_setup instance (proven reliable by that point;
+    this relay's file-writing purpose is now redundant, only its
+    console-visibility purpose — and its value for a WebDAV crash so
+    early that even ITS OWN logging_setup import hasn't finished — still
+    matter). get_real_stdout()/get_real_stderr() return the streams from
+    before the tee replaced sys.stdout/sys.stderr, so writing there shows
+    up on a real console live without looping back through the tee.
+
     Runs until the pipe closes (child exited and both ends drained).
     Best-effort: any decode/read error just ends this thread quietly, it
     should never take down the watchdog or main app.
     """
+    real_stream = (
+        logging_setup.get_real_stdout()
+        if tag == "OUT"
+        else logging_setup.get_real_stderr()
+    )
     try:
         for line in iter(stream.readline, ""):
             if not line:
                 break
-            print(f"[webdav:{tag}] {line.rstrip()}")
+            try:
+                real_stream.write(f"[webdav:{tag}] {line.rstrip()}\n")
+                real_stream.flush()
+            except Exception:
+                pass
     except Exception:
         pass
     finally:
@@ -579,6 +599,32 @@ def start_all():
 
     print("─" * 56)
     print()
+
+
+def force_kill_webdav():
+    """Fast, best-effort, no-wait kill of the WebDAV subprocess only.
+
+    Added 2026-09-16 for prod_server.py's force-quit path (second Ctrl+C):
+    stop_all() below does a graceful proc.terminate() then
+    proc.wait(timeout=5) — exactly the kind of window an impatient second
+    Ctrl+C can land inside and interrupt, before the wait/fallback kill()
+    completes. Since WebDAV runs as a genuinely separate OS process
+    (unlike SFTP/FTP/SMB, which are in-process threads that die
+    automatically the instant the parent exits via os._exit()), it's the
+    one thing that can actually survive as an orphan if force-quit
+    doesn't explicitly handle it — this does a plain proc.kill() (SIGKILL/
+    TerminateProcess) with no wait at all, fast enough to call right
+    before os._exit() without meaningfully delaying the force-quit the
+    user asked for. Does NOT touch the watchdog stop event or clear the
+    pidfile — the whole process is about to hard-exit anyway.
+    """
+    try:
+        with _webdav_proc_lock:
+            proc = _webdav_proc
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+    except Exception:
+        pass
 
 
 def stop_all():
