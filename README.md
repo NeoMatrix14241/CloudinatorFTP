@@ -20,7 +20,7 @@ Scanner: [SecureMonk](https://securemonk.io)
 <img width="1344" height="630" alt="image" src="images/scanner/securemonk.png" />
 
 Scanner: [OWASP ZAP](https://www.zaproxy.org/) (Attack Strengty: Insane, Alert Thresold: Low)
-<img width="871" height="748" alt="image" src="images/scanner/owasp_zap.png" />
+<img width="871" height="748" alt="image" src="images/scanner/http-observatory-report-mozilla.png" />
 
 Scanner: [OpenVAS](https://openvas.org/) (Scanner: OpenVAS Default, Scan Config: Full and fast) - Found vulnerabilities for SFTP/FTP/WebDAV
 <img width="1430" height="298" alt="image" src="images/scanner/openvas.png" />
