@@ -1,4 +1,3 @@
-Bash Beautify - Ahmed Hamdy
 Better Jinja - Samuel Colvin
 Black Formatter - Microsoft
 HTML CSS Support - ecmel
@@ -7,4 +6,4 @@ Python - Microsoft
 Python Debugger - Microsoft
 Python Environments - Microsoft
 Python Indent - Kevin Rose
-shell-format - foxundermoon
+shfmt - Martin Kühl

@@ -485,7 +485,14 @@ def run_interactive_menu():
             print(f"  {i}) {label}")
         print("  0) Exit")
 
-        choice = input("\nChoose an option: ").strip()
+        try:
+            choice = input("\nChoose an option: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            # Ctrl+C / Ctrl+D / closed stdin at the top-level prompt is just
+            # another way of saying "I'm done" — leave quietly with exit code 0
+            # (same as choosing 0) instead of dumping a traceback.
+            print("\nBye.")
+            return
         if choice == "0" or choice.lower() in ("q", "quit", "exit"):
             print("Bye.")
             return
@@ -501,7 +508,7 @@ def run_interactive_menu():
 
         try:
             fn()
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, EOFError):
             print("\nCancelled.")
         except SystemExit:
             # A cmd_* helper called sys.exit() on a hard failure (e.g. bad
@@ -512,7 +519,11 @@ def run_interactive_menu():
         except Exception as e:
             print(f"❌ Unexpected error: {e}")
 
-        input("\nPress Enter to continue...")
+        try:
+            input("\nPress Enter to continue...")
+        except (KeyboardInterrupt, EOFError):
+            # Skip the pause and go straight back to the menu.
+            print()
 
 
 # ------------------------------------------------------------------
@@ -599,4 +610,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        # Ctrl+C during a one-shot CLI command (or any prompt outside the menu
+        # loop). 130 = 128 + SIGINT, the conventional "interrupted" exit code.
+        print("\nCancelled.", file=sys.stderr)
+        sys.exit(130)
+    except EOFError:
+        # stdin closed while a prompt was waiting (e.g. piped/non-interactive run).
+        print("\nInput closed — cancelled.", file=sys.stderr)
+        sys.exit(1)

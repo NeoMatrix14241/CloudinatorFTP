@@ -1,12 +1,12 @@
 # CloudinatorFTP — Complete Codebase Reference for AI-Assisted Development
 
-**Version**: 4.15 (+ 2026-08-28 protocol-hardening, route-sync, and video-skin-overrides.css notes) | **Last Updated**: 2026-09-16  
+**Version**: 4.17 (+ 2026-09-22 database.py verification pass; 2026-09-21 ops-tooling sync: manage.sh, setup_pymodules.sh, revoke_sharing.py; earlier 2026-08-28 protocol-hardening, route-sync, and video-skin-overrides.css notes) | **Last Updated**: 2026-09-22  
 **For**: AI assistants and developers modifying/extending CloudinatorFTP
 
 **Recent updates (2026-07-28)**:
 - The web UI now uses a client-side logout entrypoint that still routes through the server-side `/logout` handler for session cleanup and cookie invalidation.
 - Real-time storage stats now use the authenticated SSE endpoint `/api/storage_stats_stream`, with `/api/storage_stats_poll` available as a fallback when the stream is unavailable.
-- The management shell now suppresses Ctrl-C while launching nested utility scripts so `manage.sh` remains in control and the underlying script can exit normally.
+- The management shell now suppresses Ctrl-C while launching nested utility scripts so `manage.sh` remains in control and the underlying script can exit normally. ⚠️ **Superseded (2026-09-21)**: it no longer *ignores* Ctrl-C — that made child scripts uninterruptible. It now installs a *handled* trap (`trap ':' INT`) so `manage.sh` survives while the child still receives and reacts to Ctrl-C. See [manage.sh Internals & Editing Rules](#managesh-internals--editing-rules).
 - SMB server hardening now includes additional Windows-specific save/delete compatibility fixes for Office-style file writes and transient lock handling.
 
 **⚠️ Major update since the above (see the Changelog for full detail)**: The server was migrated **from Flask (WSGI) + Waitress to Quart (ASGI) + Hypercorn**, adding native HTTP/2 and HTTP/3 support across the web UI and WebDAV HTTPS. A full public **Share Links** feature was also added (opaque-token links, passkey/approval protection, expiry, bulk share/unshare, a "Manage Shared" admin panel, `revoke_sharing.py` CLI). Anywhere below that still says "Flask" is describing the pre-migration behavior/history — the live server is Quart/Hypercorn. See the [Sharing Routes](#sharing-routes) and Changelog sections for details.
@@ -18,6 +18,10 @@
 **🆕 2026-08-28 sync note**: `ssl_cert.py`, `config.py`, `index.css`, `pdfjs-viewer-overlay.css`, `index.js`, `index.html`, `app.py`, and `sftp_server.py` were all touched in the same edit pass. Re-verified `@app.route`/`fetch(` in `app.py`/`index.js` — no route-level drift beyond what the 2026-08-23 corrections already cover. Real deltas found: (1) `sftp_server.py` now hardens the SSH transport's offered ciphers/MACs/KEX on every connection (see the new bullet in [SFTP Implementation Notes](#sftp-implementation-notes)); (2) `config.py` adds `FTP_TLS_ENABLED`/`FTP_TLS_REQUIRE_DATA` (FTPS support) and flips `WEBDAV_ENABLED` (plaintext HTTP WebDAV) to `False` by default (see the updated [config.py Protocol Variables](#configpy-protocol-variables) block); (3) `ssl_cert.py`'s module docstring now documents macOS/Linux (davfs2) trust-import steps, not just Windows (see [SSL Certificate](#ssl-certificate-ssl_certpy)); (4) a likely-unintentional regression was found in `pdfjs-viewer-overlay.css` — see the callout in [Embedded PDF.js Viewer](#embedded-pdfjs-viewer-2026-08-23). `index.css`/`index.html` were reviewed and show no behavioral changes beyond what's already documented.
 
 **🆕 2026-08-28 sync note, part 3**: a later edit in the same day touched `index.js`, `app.py`, and added a brand-new file, `static/css/video-skin-overrides.css`. This is a real (not doc-only) change, and it revises the "no behavioral changes" verdict the note above gave `index.js`/`app.py`: `index.js`'s `_injectMobileSpeedHide()` no longer injects inline `<style>` template-literal elements into the `<video-skin>` shadow root (those were silently dropped once the CSP's `style-src-elem` stopped allowing `'unsafe-inline'`); it now `<link>`s the new external stylesheet instead, which satisfies `style-src-elem 'self'` with no CSP hash to maintain. See the new **[video-skin-overrides.css & the Inline-Style CSP Cleanup (2026-08-28)](#video-skin-overridescss--the-inline-style-csp-cleanup-2026-08-28)** section, added after [Embedded PDF.js Viewer](#embedded-pdfjs-viewer-2026-08-23). `login.html` was also uploaded in this pass and is now documented for the first time under [Login Flow](#login-flow) (its markup wasn't previously written up at all, only `login.js`'s function names). `pdfjs-worker-init.mjs` and `index.css` were re-checked and still match the existing [Embedded PDF.js Viewer](#embedded-pdfjs-viewer-2026-08-23) and `body::before`/`::after` documentation — no further changes found there.
+
+**🆕 2026-09-21 sync note**: `manage.sh`, `setup_pymodules.sh`, and `revoke_sharing.py` were re-read in full and compared against this doc. No earlier copies of those files were available, so this was a doc-vs-code comparison, not a diff — anything below dated 2026-09-21 means "present in the files as reviewed", not "changed on that day". No app-code files (`app.py`, `database.py`, `logging_setup.py`, `protocol_manager.py`, …) were part of this pass. Real gaps found and fixed in this doc: (1) `setup_pymodules.sh` and `constraints.txt` were not documented anywhere → new [Package Management (setup_pymodules.sh)](#package-management-setup_pymodulessh) section; (2) `revoke_sharing.py` has 9 subcommands (list, revoke, revoke-path, revoke-all, edit, edit-path, requests, approve, deny) and this doc listed only 3 (list, revoke, revoke-all) → updated under [Database Tools](#database-tools); (3) `manage.sh`'s Ctrl-C handling changed from *ignore* to *handle*, and its menu is 19 entries with security.txt now at **18** → corrected, plus a new [manage.sh Internals & Editing Rules](#managesh-internals--editing-rules) section. **Problems found but deliberately not fixed here** (they are code changes, not doc changes): `setup_pymodules.sh` strips the `Quart>=0.21.0,<1` floor pin; `revoke_sharing.py`'s `--passkey`/`--generate-passkey` silently no-op without `--mode passkey`; a print()-capture contradiction between `manage.sh` and the logging section below. Each is spelled out in the sections linked above.
+
+**🆕 2026-09-22 sync note**: `database.py` (755 lines) was read in full to verify the four items the 2026-09-21 pass had flagged as inferred-but-unchecked. Result: three of the four `revoke_sharing.py` share/request method signatures guessed on 2026-09-21 were exactly right (`list_active_shares`, `revoke_share_by_token`, `revoke_all_shares`, `list_pending_requests`, `approve_access_request`, `deny_access_request`, `get_share_by_token`, `get_share_by_path`, `revoke_share_by_path`, `create_share`, `update_share_settings`, `verify_share_passkey`, `get_shares_for_paths`, `bulk_revoke_by_paths`, `record_share_download`, `create_access_request`, `get_access_request_by_access_token`, `count_pending_requests`, `record_access_request_download` all present, all matching). **Gotcha #2 in [Database Tools](#database-tools) is now confirmed, not inferred**: `update_share_settings()` only clears `passkey_hash` when the caller passes `clear_passkey=True` explicitly — it does not happen automatically on a mode change, in `database.py` or anywhere else in this file. Whatever clears it for the web UI (if anything does) lives in `app.py`, which still wasn't part of any pass to date. Also confirmed while in there: the double-checked-locking-plus-`conn.commit()` bootstrap fix described under Troubleshooting → Quart/Hypercorn Migration Issues matches `_connect()`/`_do_bootstrap()` line for line, including the exact failure mode described (`sqlite3.OperationalError: no such table: users` from the naive version, a quiet "invalid credentials" from the commit-less version). Share tokens (`create_share`) and access-request tokens (`create_access_request`) both use `secrets.token_urlsafe` — cryptographically fine; this does not extend to the *passkey* itself, which `revoke_sharing.py` still generates with `random`, not `secrets`, as noted in gotcha #3. `app.py`, `auth.py`, and every protocol server remain unread by any pass to date; do not treat statements about them elsewhere in this doc as re-verified.
 
 ---
 
@@ -53,7 +57,7 @@
 |------|---------|----------------------|
 | **app.py** | Quart (ASGI) server & route handlers, incl. share-link routes | HTTP endpoints, session mgmt, response building — migrated from Flask/WSGI, see Changelog |
 | **storage.py** | File system operations | List dirs, chunks, assembly, cleanup |
-| **database.py** | SQLite + encryption | Users, passwords, server tokens, sessions, share tokens/requests |
+| **database.py** | SQLite + encryption (read in full 2026-09-22) | Users, passwords, server tokens, sessions, share tokens/requests. `_connect()` does double-checked-locking bootstrap + explicit `conn.commit()` before releasing the lock (see Troubleshooting) — confirmed to match this file exactly. `update_share_settings()` never clears `passkey_hash` implicitly, only via explicit `clear_passkey=True` — see [Database Tools](#database-tools) gotcha #2 |
 | **auth.py** | Authentication helpers | Login/logout, session validation, role checking |
 | **config.py** | Settings & feature toggles | Paths, sizes, feature flags |
 | **paths.py** | Configurable directory resolver | db_path, cache_path, storage_path resolution |
@@ -69,7 +73,9 @@
 | **smb_setup.py** | SMB one-time setup | Standalone tool — Windows LanmanServer, Linux setcap, Android root check |
 | **lanman_guard.py** | SMB Windows state tracker | Passive pending-setup state file, read by smb_server.py, written by smb_setup.py |
 | **kick_sessions.py** | Access revocation tool | Rotate/delete a user, or instantly log out the web UI, for security incidents (replaced the older `revoke_session.py`) |
-| **revoke_sharing.py** | Share-link revocation tool | Interactive menu + CLI subcommands to list/revoke individual or all share tokens, independent of the web UI |
+| **revoke_sharing.py** | Share-link management CLI (not just revocation any more) | Interactive 8-item menu + 9 CLI subcommands: list, revoke (by token or path), revoke-all, **edit** security mode/passkey/expiry, and work the approval queue (**requests / approve / deny**) — talks straight to `database.db`, no running server needed. See [Database Tools](#database-tools) for the flags and two verified gotchas |
+| **manage.sh** | Server & utility launcher (bash) | Start/stop/restart/status/logs, `restart-webdav`, and a wrapper for every utility script; 19-entry interactive menu. Runs under `set -euo pipefail`, which has caused real bugs — read [manage.sh Internals & Editing Rules](#managesh-internals--editing-rules) before editing it |
+| **setup_pymodules.sh** | Python dependency ceiling generator + installer (bash) | Regenerates `constraints.txt` and rewrites managed lines of `requirements.txt` with `<next-major>` ceilings, dry-run-checks for conflicts, then optionally installs. Run via `./manage.sh update-modules`. Windows: self-elevates and adds a Defender exclusion. See [Package Management](#package-management-setup_pymodulessh) |
 | **ftp_server.py** | FTP server | pyftpdlib, custom authorizer, passive ports 60000–60100 |
 | **ssl_cert.py** | TLS certificate manager | Self-signed cert generation, SAN detection, db/ storage; `prod_server.py` now prefers a real Tailscale-issued cert when available, falling back to this self-signed cert otherwise; module docstring now covers Windows + macOS + Linux trust-import steps |
 | **static/js/pdfjs-worker-init.mjs** | pdf.js integration shim (new, undocumented until now — see [Embedded PDF.js Viewer](#embedded-pdfjs-viewer-2026-08-23)) | Sets `GlobalWorkerOptions.workerSrc` directly, then reasserts it (plus `cMapUrl`/`iccUrl`/`standardFontDataUrl`/`wasmUrl`/`imageResourcesPath`) via pdf.js's `webviewerloaded` hook so they survive viewer.mjs's own self-init; also clears the dev build's hardcoded sample-PDF `defaultUrl` |
@@ -106,6 +112,7 @@
 - **file_index.py**: `_scan_folder_entries()` and `FileIndexManager.load()`, `save()`, `build_from_walk()`, `update_folder()`, `remove_folder()`, `rename_folder()`, `get_entries()`, and `is_indexed()`.
 - **search_index.py**: `SearchIndexManager.add()`, `remove()`, `rename()`, `query()`, and the background indexing workflow.
 - **realtime_shares.py**: `ShareEventManager.broadcast()` (pending-request count), `broadcast_active_shares_changed()` (nudges the Active Shares tab to refetch), and `share_events_sse()` — same call-from-any-thread pattern as `realtime_stats.py`.
+- **revoke_sharing.py**: `cmd_list()`, `cmd_revoke()`, `cmd_revoke_path()`, `cmd_revoke_all()`, `cmd_edit()`, `cmd_edit_path()`, `_apply_edit()` (shared by both edit commands and the interactive menu), `cmd_requests()`, `cmd_approve()`, `cmd_deny()`, `run_interactive_menu()`, and helpers `_parse_duration()`, `_generate_passkey()`, `_operator_id()`, `_fmt_expiry()`. It calls into `database.py`'s share/request API — `list_active_shares()`, `revoke_share_by_token()`, `revoke_share_by_path()`, `revoke_all_shares()`, `get_share_by_token()`, `get_share_by_path()`, `update_share_settings()`, `list_pending_requests()`, `approve_access_request()`, `deny_access_request()` — all confirmed present with matching signatures as of the 2026-09-22 `database.py` read.
 - **webdav_server.py**, **sftp_server.py**, **ftp_server.py**, and **smb_server.py**: their protocol-specific startup and auth hooks, including the middleware and role enforcement entry points used by each server.
 
 ### JavaScript modules
@@ -186,7 +193,7 @@ app.py (Quart entry point, ASGI routes, incl. share-link routes)
    ├─→ manage_users.py (user management — renamed from create_user.py)
    ├─→ reset_db.py (database reset)
    ├─→ kick_sessions.py (session/user revocation — replaced revoke_session.py)
-   ├─→ revoke_sharing.py (share-link revocation)
+   ├─→ revoke_sharing.py (share-link revocation, editing, approval queue — imports only database.db)
    └─→ debug_passwords.py (auth testing)
 ```
 
@@ -1990,7 +1997,7 @@ All keys are saved/loaded by `save_server_config()` / `load_server_config()` in 
 wsgidav    — WebDAV WSGI server
 cheroot    — pulled in transitively by wsgidav; no longer used directly for serving (see below)
 asgiref    — bridges wsgidav's WSGI app onto Hypercorn (WsgiToAsgi)
-hypercorn  — ASGI server for the whole stack (web UI + WebDAV HTTP/HTTPS); replaced waitress
+hypercorn  — ASGI server for the whole stack (web UI + WebDAV HTTP/HTTPS); replaced waitress. setup_pymodules.sh installs it as `hypercorn[h3]` (the HTTP/3 extra)
 paramiko   — SSH/SFTP implementation
 pyftpdlib  — FTP server
 pyOpenSSL  — 🆕 optional; enables FTPS (AUTH TLS) in ftp_server.py when FTP_TLS_ENABLED is True — plain FTP still works without it, just without TLS
@@ -2001,11 +2008,105 @@ Install: `pip install wsgidav asgiref hypercorn paramiko pyftpdlib pyOpenSSL imp
 
 Each is imported lazily inside `start()`. If a library is missing, that protocol server prints a warning and skips — the main Quart server is unaffected.
 
+**Where the full package list actually lives (2026-09-21)**: the list above covers only the protocol servers. The authoritative, complete set of managed packages is the `packages=(...)` array in `setup_pymodules.sh` — it also covers Quart, Werkzeug, watchdog, bcrypt, cryptography, zipstream-new, mammoth, openpyxl, python-pptx, rarfile, pyzipper, py7zr, pyvips, psutil, pynacl, and pyppmd. See [Package Management (setup_pymodules.sh)](#package-management-setup_pymodulessh). ⚠️ That script currently rewrites `Quart>=0.21.0,<1` to `Quart<1`, undoing the floor pin documented under Troubleshooting → Quart/Hypercorn Migration Issues.
+
 ---
 
 ## 🛠️ Admin Tools & Utilities
 
-`manage.sh` remains the primary launcher for the server and utility commands. Recent updates also made it more resilient when running nested helpers, because it now suppresses Ctrl-C while a utility script is executing so the shell wrapper does not exit prematurely.
+`manage.sh` remains the primary launcher for the server and utility commands. It runs every utility script through a wrapper that keeps `manage.sh` alive on Ctrl-C **while still letting the child script be interrupted** (a *handled* SIGINT trap — earlier versions *ignored* SIGINT, which made child scripts uninterruptible; see [manage.sh Internals & Editing Rules](#managesh-internals--editing-rules) for why that matters). `setup_pymodules.sh` (package updates) is documented under [Package Management](#package-management-setup_pymodulessh).
+
+### manage.sh Internals & Editing Rules
+
+Reviewed 2026-09-21 against the 1,536-line `manage.sh` (`bash -n` clean and `./manage.sh help` executes — both run on a CR-stripped copy under bash 5.2). Everything marked *verified* below was run, not just read.
+
+**Conventions**
+- Runs under `set -euo pipefail` on Git Bash (Windows), Linux, and Termux. Platform helpers: `is_windows()` (`OSTYPE` msys*/cygwin*), `is_termux()`. The interpreter is `$PYTHON` (env override; else `python`, else `python3`).
+- Style is tab-indented (shfmt-like). Print helpers: `info` / `success` / `warn` / `error` / `header` / `divider`. Prompt helpers: `_confirm "q?"` (y/N; **returns 1 on Ctrl-C, Ctrl-D, or closed stdin**, so callers can cancel cleanly), `_ask VAR "prompt"` (same EOF behavior), `_read_line`.
+- Colors are ANSI-C quoted (`$'\033[0;31m'`) — real escape bytes, not the four characters `\033`. This is required because `cmd_help` prints through an **unquoted** heredoc (`cat <<EOF`), so `${BOLD}`/`${NC}` expand there — and so does any other `$…`, backtick, or backslash you put in the help text. Escape or avoid them.
+- **Line endings**: all four files uploaded for this pass (including `CLAUDE.md`) had CRLF endings. A CRLF `.sh` file fails on Linux/Termux/macOS (`set: pipefail\r: invalid option name`, `$'\r': command not found`). Whether the repo copies are really CRLF or that came from the upload path wasn't determined — check with `git ls-files --eol manage.sh setup_pymodules.sh`, and consider `*.sh text eol=lf` in `.gitattributes`. AI assistants: keep whatever ending a file already has; don't normalize unasked. The scripts already defend against CRs *in tool output* (`read_pid` keeps digits only; `tr -d '\r'` on netstat/PowerShell output).
+
+**`set -e` rules — each of these fixed a real bug**
+1. **Never run a command that may legitimately exit non-zero as a bare statement.** Use `cmd || ec=$?` (see `run_utility` / `run_bash_script`). A bare failing utility used to abort the whole `manage.sh` before the menu could redraw — and every Python utility exits non-zero on a cancelled or failed action (`revoke_sharing.py` included), so this is ordinary use, not an edge case.
+2. **A `$(pipeline)` where "no match" is a normal result needs `|| true`.** With `pipefail`, `grep`/`lsof` finding nothing fails the assignment, and `set -e` then kills `manage.sh` silently — `start server`, `stop`, and `restart` printed nothing and exited 1 whenever WebDAV wasn't orphaned. That is why every lookup in `_kill_webdav_child` ends in `|| true`. Don't "tidy" them away.
+3. **Increment with `i=$((i + 1))`, not `((i++))`** — post-increment from 0 returns status 1. (`cmd_clean_logs` uses `((deleted++)) || true`, the other accepted form.)
+
+**Ctrl-C model** (*verified* on bash 5.2 — see the experiment below)
+
+| Where | Mechanism |
+|---|---|
+| `run_utility` / `run_bash_script` | `trap ':' INT` before the child, `trap - INT` after. `_report_exit` treats exit **130** as "interrupted" (a warning, not an error). |
+| `_follow_log` (`logs -f`) | Same handled trap, plus a Python follower that exits on KeyboardInterrupt — `tail -f` doesn't release the terminal reliably on Git Bash. |
+| `cmd_menu` | One `trap ':' INT` for the whole loop. Each action runs through `_menu_run` — a subshell with its own INT trap that prints "Cancelled", exits 130, and returns to the menu. The top-level prompt is read by `_read_line` in a subshell (a plain `read` in the parent just re-enters after the trap runs); Ctrl-C/Ctrl-D there quits the menu. |
+| `_launch_detached` (servers) | Fully detached (Windows: `CREATE_NEW_PROCESS_GROUP \| DETACHED_PROCESS`; POSIX: `setsid`) **and** SIGINT/SIGBREAK set to `SIG_IGN` inside the child *before* `runpy.run_path`, so no framework can re-arm Ctrl-C. Ignoring is correct here — the server must never die to a stray Ctrl-C. |
+
+Why the utility wrappers must **handle**, not **ignore**: an ignored signal is inherited by children. *Verified*: with a parent running `trap '' INT`, a bash child's own `trap … INT` never fired, and a Python child saw its SIGINT disposition as `SIG_IGN` (so no `KeyboardInterrupt`); with `trap ':' INT` the child's trap fired and Python kept its default handler. This is exactly why Ctrl-C used to skip one pip call and let `setup_pymodules.sh` carry on to the next step. **Do not change `trap ':' INT` back to `trap '' INT`** in either wrapper.
+
+**Menu ↔ command map** (*verified*: the menu's `echo` lines, the `case` dispatch, and `cmd_help`'s "MENU ↔ COMMAND MAP" all agree on 1–19)
+
+| # | Command | Runs |
+|---|---|---|
+| 1 / 2 | `start server` / `start dev_server` | prod (Hypercorn) / dev (Quart), detached |
+| 3 / 4 / 5 | `stop` / `restart` / `status` | |
+| 6 / 7 | `logs [server or dev_server] [-f]` / `clean-logs` | |
+| 8 | `restart-webdav` | see [WebDAV Recovery](#webdav-recovery-managesh-restart-webdav) |
+| 9 | `setup-smb` | `smb_setup.py` |
+| 10 | `kick-sessions` | `kick_sessions.py` |
+| 11 / 12 / 13 / 14 / 15 | `config` / `manage-users` / `debug-pw` / `reset-db` / `setup-storage` | `config.py`, `manage_users.py`, `debug_passwords.py`, `reset_db.py`, `setup_storage.py` |
+| 16 | `update-modules` (alias `setup-modules`) | `setup_pymodules.sh`, after a confirmation |
+| 17 | `revoke-shares` | `revoke_sharing.py` — all extra args pass straight through |
+| 18 | `security-txt` | see [security.txt Management](#securitytxt-management-managesh-security-txt) |
+| 19 | `termux-setup` | `termux_setup.sh` — always listed so numbers match `help`; dimmed off Termux |
+
+**Adding a command — touch all of these** (this doc's own menu numbers have already had to be shifted twice by mid-list inserts):
+1. A `cmd_<name>()` function (or a `run_utility "<script>.py"` call).
+2. The `case "$cmd"` dispatch in `main()`.
+3. `cmd_menu`: the `echo` line, the `case` arm wrapped in `_menu_run`, and a renumber of everything below if you insert mid-list.
+4. `cmd_help`: the command's own description, the MENU ↔ COMMAND MAP, and an EXAMPLES line.
+
+**`_kill_webdav_child` — caveats** (background: the 2026-09-15 orphan saga under Troubleshooting → Quart/Hypercorn Migration Issues)
+- It only ever kills a **python** process (`_pid_is_python`), never whatever unrelated program owns 8080/8443.
+- The port sweep **hardcodes `8080 8443`** (the `for port in` loop), even though its comment says it matches `protocol_manager._webdav_target_ports()`. A customized `WEBDAV_PORT`/`WEBDAV_HTTPS_PORT` in `config.py` is **not** swept — the pidfile-based kill is then the only protection.
+- It takes only the first listener per port (`head -1`), and on POSIX needs `lsof` — without it the sweep is a silent no-op.
+- In `cmd_start` it runs *after* the "a tracked server is already running" check, so it never fires against a live tracked server. It cannot see a server launched *outside* `manage.sh` (e.g. `python prod_server.py` in another terminal); that server's WebDAV child is a python process on those ports, so a `manage.sh start` would likely kill it. *(Inferred from the code, not tested.)*
+
+**⚠️ Unresolved discrepancy — is `print()` output captured in background mode?** `_launch_detached`'s comment (and `./manage.sh help`'s LOG FILES text) say background-mode stdout/stderr go to `/dev/null` and that remaining plain `print()` calls are "genuinely unobserved" — only logger output and crash tracebacks reach `logs/{prod|dev}_server_YYYY-MM-DD.log`. The logging-unification entry under Troubleshooting says `logging_setup.py`'s `_TeeStream` captures `print()` into that same file (tagged `[PRINT]`). Both can't be fully true. `logging_setup.py` wasn't part of the 2026-09-21 pass — read it before relying on `print()` output appearing in the log under `./manage.sh start`.
+
+### Package Management (setup_pymodules.sh)
+
+Not documented anywhere before 2026-09-21. Reviewed against the 342-line script (`bash -n` clean on a CR-stripped copy); the rewrite logic below was *verified* by running the script's own `regex_escape` / `grep` / `sed` against a seeded `requirements.txt`. The full dependency-resolution run needs network and wasn't executed.
+
+**Invocation**: `./manage.sh update-modules [-y|--yes]` (alias `setup-modules`; menu **16**) → `cmd_setup_modules` explains what will happen, asks `_confirm`, then `run_bash_script setup_pymodules.sh`. `-y` skips **only** `manage.sh`'s question — the script's own "install now? (y/n)" prompt, and on Windows the UAC prompt, still appear. Also runnable directly: `bash setup_pymodules.sh`.
+
+**What it does, in order**
+1. `cd`s to its own directory, so the files land next to the script even after the Windows elevated relaunch (which opens a login shell in the home folder).
+2. **Windows (Git Bash/MSYS) only**: checks for Administrator via PowerShell. If not elevated, it relaunches itself elevated (PowerShell `Start-Process bash -ArgumentList '--login','-i','-c',<this script> -Verb RunAs`, paraphrased) **in a new window and exits 0 immediately** — so under `manage.sh` you'll see "setup_pymodules.sh finished" while the real work is still running in the other window. Once elevated it adds a Windows Defender `-ExclusionPath` for the **entire Python install directory** (the folder containing `sys.executable`, errors silenced). That is broad — it exempts all Python code there, not only `impacket` — and is the automation of the AV-exclusion advice under Troubleshooting → SMB. `manage.sh` warns before launching it. Don't copy or extend this without the operator's say-so.
+3. Backs up the current `requirements.txt` / `constraints.txt` to temp files and enters `PHASE="generate"`.
+4. **`constraints.txt` is truncated and rewritten** (its header comment says so). **`requirements.txt` is not** — it is only `touch`ed, and then each managed package's line is replaced in place with `sed` or appended if absent. Comments and lines for unmanaged packages survive. The "truncated and rewritten from scratch" header text is written into `constraints.txt` only; it does not describe `requirements.txt`. Treat `constraints.txt` as a build artifact; edits to a *managed* package's line in `requirements.txt` are overwritten on the next run.
+5. For each entry in `packages=(...)`:
+   - **Termux and the package is in `SYSTEM_MANAGED`** (`bcrypt`→`python-bcrypt`, `cryptography`→`python-cryptography`, `pyppmd`→`python-pyppmd`, `psutil`→`python-psutil`, `pynacl`→`""`): strip any stale line from `requirements.txt`, run `pkg upgrade -y <termux-name>`, then lock `pkg==<installed version>` into `constraints.txt`. Never pip-built — PyPI has no Android wheels and a from-source build breaks against bionic libc (same failure family as pynacl/libsodium). `pynacl` has no Termux package; it is only locked (built once by `termux_setup.sh` with `SODIUM_INSTALL=system`).
+   - **Otherwise**: `pip index versions <pkg_base>` → newest version → written as `pkg<next_major>` — a **ceiling only, no floor**, on purpose (the script's comment: a floor at "newest today" removes pip's only way to resolve a conflict, backing off to an older compatible version). If `COMPAT_CEILING[pkg]` is set, that string is used verbatim instead. If the version can't be fetched: `[WARN]` and skip, leaving the existing line untouched.
+   - **Extras** (`"hypercorn[h3]"`): written verbatim; `pkg_base` (extras stripped) is used for `pip` queries; `pkg_regex` (regex-escaped) is used in every `grep`/`sed` pattern. Never put a raw `$pkg` inside a pattern — `[` `]` would be parsed as a character class.
+6. Dry-run resolve: `pip install -r … -c … --upgrade --dry-run`. On failure it prints the conflict lines and the log path, then **`exit 1`**.
+7. Prompts "install/update now? (y/n)". On `y`: `python -m pip install -r … -c … --upgrade --no-cache-dir`, then `pip check` (warns only).
+
+**Managed package list** (single source of truth — post-ASGI-migration: no Flask/waitress/cheroot): Quart, bcrypt, zipstream-new, Werkzeug, watchdog, `hypercorn[h3]`, cryptography, mammoth, openpyxl, python-pptx, rarfile, pyzipper, py7zr, pyvips, wsgidav, asgiref, paramiko, pyftpdlib, psutil, pynacl, pyppmd, impacket, pyOpenSSL. Add a package by adding it to `packages=(...)`; add a Termux-managed one to `SYSTEM_MANAGED` as well; record a known cross-package cap in `COMPAT_CEILING`.
+
+**Ctrl-C contract** — pairs with `manage.sh`'s handled trap (above): `trap _on_interrupt INT TERM` → exit **130**; `trap _cleanup_backups EXIT` removes the temp backups.
+
+| `PHASE` when Ctrl-C lands | Result |
+|---|---|
+| `init` | Nothing was touched, nothing to undo. |
+| `generate` | Both files restored from backup (or deleted, if they didn't exist before). "Nothing was changed." |
+| `prompt` | Files stay regenerated; prints the manual `pip install -r … -c …` command. |
+| `install` | Files stay; warns the install was interrupted and to re-run or `pip check`. |
+
+*From reading the code:* `PHASE` stays `generate` through the dry-run resolve, so Ctrl-C during that (slow) step also rolls back — but a dry-run **conflict** (`exit 1`) does **not** roll back. The regenerated, unresolvable files are left in place.
+
+**⚠️ Known issues — flagged, not fixed** (they are code changes; this pass only updated docs)
+1. **Floor pins are erased.** *Verified*: `Quart>=0.21.0,<1` becomes `Quart<1`. The Troubleshooting entry "`Quart<1` (unpinned) resolves an old pre-0.19 Quart…" documents that floor as the fix for a real production crash. The script's ceiling-only philosophy is defensible, but as written it silently reverts that fix. The mechanism already exists to keep a floor without changing the philosophy: `COMPAT_CEILING[Quart]=">=0.21.0,<1"` — *verified* that the value is appended verbatim.
+2. **GNU/bash-4 only.** Uses `declare -A`, `grep -oP`, and GNU-style `sed -i -E`. Fine on Linux, Git Bash, and Termux; stock macOS (bash 3.2, BSD grep/sed) would fail — `pip index` lookups would all report "Could not fetch version" and be skipped. *(Inferred from the constructs; not run on macOS.)*
+3. **Interpreter mismatch is possible.** `pip index`, `pip show`, the dry-run, and `pip check` use bare `pip`; the real install uses `python -m pip`; the Defender step uses bare `python`. `PYTHON=… ./manage.sh update-modules` is **not** passed through. If `pip` and `python` resolve to different installations, the conflict check and the real install run against different environments.
 
 ### security.txt Management (manage.sh security-txt)
 
@@ -2026,7 +2127,7 @@ New `manage.sh` subcommand — updates `static/.well-known/security.txt` (RFC 91
 - **`--expires`**: normalized to the exact `YYYY-MM-DDTHH:MM:SS.sssZ` format RFC 9116 expects (also what the person originally specified) — `YYYY-MM-DD` alone becomes that date at `23:00:00.000Z` UTC, a datetime missing milliseconds/`Z` gets them appended, and an already-exact value passes through unchanged.
 - **`--expires-in-days N`**: convenience alternative to `--expires` — computes `now (UTC) + N days` and formats it the same way, mirroring the `--expires-in` convention `revoke_sharing.py` already uses for share links.
 - **`--preferred-lang`**: comma-separated codes are re-joined with `", "` regardless of the spacing typed in (`en,fil` and `en, fil` produce the same output line).
-- Menu option **17** in `cmd_menu`; the Termux-only setup option shifted from 17 → **18** to make room.
+- Menu option **18** in `cmd_menu` (it was 17 when added; `restart-webdav` later took slot 8 and shifted everything below it by one — see the [menu map](#managesh-internals--editing-rules)); the Termux-only setup option is now **19**.
 - File path is fixed at `${SCRIPT_DIR}/static/.well-known/security.txt`; the directory is created automatically if it doesn't exist yet.
 
 ### WebDAV Recovery (manage.sh restart-webdav)
@@ -2037,7 +2138,7 @@ New `manage.sh` subcommand — updates `static/.well-known/security.txt` (RFC 91
 ./manage.sh restart-webdav
 ```
 
-Reads WebDAV's real PID from `.manage_pids/webdav.pid`, signals it directly (graceful-then-forceful, same pattern `cmd_stop` uses), and relies on the already-running server's own watchdog thread to notice the exit and respawn WebDAV automatically — `manage.sh` itself never spawns the replacement, it only confirms a new PID appeared. Requires a server (`prod` or `dev`) to already be running — errors out otherwise, since there'd be no watchdog to do the respawning. See [WebDAV Process Isolation, Watchdog & restart-webdav](#webdav-process-isolation-watchdog-restart-webdav-2026-09-09) under Protocol Servers for the full mechanism and why this can't just call `protocol_manager.restart_webdav()` directly.
+Reads WebDAV's real PID from `.manage_pids/webdav.pid`, signals it directly (POSIX: `SIGTERM`, then `SIGKILL` after ~5s; **Windows: `taskkill //F` immediately — there is no graceful phase on Windows**, which corrects the "after ~5s" wording elsewhere in this doc), then waits up to 10s (20 × 0.5s) for a *different* PID to appear in the pidfile, and relies on the already-running server's own watchdog thread to notice the exit and respawn WebDAV automatically — `manage.sh` itself never spawns the replacement, it only confirms a new PID appeared. Requires a server (`prod` or `dev`) to already be running — errors out otherwise, since there'd be no watchdog to do the respawning. See [WebDAV Process Isolation, Watchdog & restart-webdav](#webdav-process-isolation-watchdog-restart-webdav-2026-09-09) under Protocol Servers for the full mechanism and why this can't just call `protocol_manager.restart_webdav()` directly.
 
 ### User Management (manage_users.py — renamed from create_user.py)
 
@@ -2076,14 +2177,35 @@ python revoke_session.py
 # Use: security incident, force re-login
 ```
 
-**revoke_sharing.py** - Revoke share links from the command line, without the web UI:
+**revoke_sharing.py** - Manage share links from the command line, without the web UI. Despite the name it now also **edits** shares and works the **approval queue** (reviewed 2026-09-21):
 ```bash
-python revoke_sharing.py            # interactive menu, loops until Exit
-python revoke_sharing.py list       # list all active shares
-python revoke_sharing.py revoke <token>
-python revoke_sharing.py revoke-all # requires its own typed confirmation (mirrors the web UI's random-10-digit-code flow)
+python revoke_sharing.py                          # interactive 8-item menu, loops until Exit (0)
+python revoke_sharing.py list                     # active shares (token, name, type, mode, expiry, creator, downloads, path)
+python revoke_sharing.py revoke <token> [--yes]
+python revoke_sharing.py revoke-path <path> [--yes]
+python revoke_sharing.py revoke-all [--yes]       # ALWAYS requires typing back a fresh random 10-digit code; --yes skips only the y/N
+python revoke_sharing.py edit <token>             [--mode public|passkey|approval]
+                                                  [--passkey KEY | --generate-passkey | --clear-passkey]
+                                                  [--expires-in 1h|2d|30m|7d|SECONDS | --never-expire]
+python revoke_sharing.py edit-path <path>         # same flags as edit
+python revoke_sharing.py requests                 # pending approval-mode access requests
+python revoke_sharing.py approve <request_id> [--max-downloads N]   # default 1
+python revoke_sharing.py deny <request_id>
 ```
-Also wired into `manage.sh` as a menu option, same convention as the other utility scripts.
+Via `manage.sh`: `./manage.sh revoke-shares [args]` (menu **17**) — every argument passes straight through to the script.
+
+**Behavior**
+- Talks directly to the `database.py` `db` singleton — no HTTP, no running server required. Its docstring still says "the Flask app" (stale since the Quart migration); the script only imports `database`.
+- `approve`/`deny` record `decided_by = "cli:<os-username>"` (falls back to `"cli"`), so the admin UI's history shows the CLI as the source. *(Verified.)*
+- `--expires-in` accepts `^\d+\s*[smhdw]?$` (a bare number is seconds) and is converted to an absolute epoch (now + N). If `--never-expire` is also given, it wins.
+- **Interactive menu**: Ctrl-C / Ctrl-D / closed stdin at the top prompt exits **0** quietly; inside an action it prints "Cancelled." and returns to the menu. A `sys.exit()` from a `cmd_*` helper (e.g. wrong revoke-all code) is swallowed by the loop, and other exceptions print `❌ Unexpected error` — neither ends the menu. Menu-driven revokes never pass `--yes`.
+- **One-shot exit codes**: `0` success or cancelled-at-prompt · `1` not found / failed / wrong revoke-all code / stdin closed mid-prompt · `130` Ctrl-C. Under `manage.sh`, `run_utility` reports 130 as "interrupted", not "failed".
+
+**Gotchas** (1–2 *verified by running the script against a stubbed `db`*; 3–4 read from the code)
+1. **`--passkey` and `--generate-passkey` silently do nothing unless the *resulting* mode is `passkey`** — i.e. `--mode passkey` was also passed, or the share is already in passkey mode. On a public or approval share they are dropped; if nothing else was passed the script prints "Nothing to change" and exits **0**. The flag's own `--help` ("implies --mode passkey") is wrong. Always pass `--mode passkey` explicitly; in scripts, exit code 0 hides the no-op.
+2. **Leaving passkey mode doesn't clear the passkey from the CLI side — confirmed 2026-09-22.** `edit --mode approval` sends only `security_mode` to `db.update_share_settings()`, never `clear_passkey`. Read directly in `database.py`: `update_share_settings()` only clears `passkey_hash` when `clear_passkey=True` is passed explicitly — nothing in it clears a passkey automatically on a mode change. The doc text under [Sharing Routes](#sharing-routes) claiming `/api/share/settings` "also handles clearing a passkey when switching away from passkey mode" must therefore be implemented in `app.py`'s route handler itself, not in `database.py` — `app.py` is still unread by any pass to date, so that claim remains unverified, and until it is, assume the CLI and the web UI behave differently here. **Always pass `--clear-passkey` explicitly when moving a share off passkey mode via `revoke_sharing.py`.**
+3. **Non-cryptographic RNG.** `_generate_passkey()` (8 chars from an ambiguity-free alphabet) and the revoke-all confirmation code both use Python's `random`, not `secrets`. Harmless for the confirmation code (it only guards against accidents); a *passkey* should come from `secrets.choice`. Whether the web UI's "generate" path uses `secrets` wasn't checked.
+4. **No live push to the admin UI.** The CLI writes to the database from a separate process and never touches `realtime_shares.py`'s event manager, which lives in the server's memory. An open Manage Shared panel therefore won't update by itself after a CLI approve/deny/revoke/edit until it refetches. *(Inferred from the code; not tested against a live server.)*
 
 **debug_passwords.py** - Test login credentials:
 ```bash
@@ -2252,7 +2374,7 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
 **Fix**: Pass a pre-built `logging.Logger` via `Config.errorlog` instead of the default string target, so Hypercorn's `_create_logger()` skips its own crashing formatter construction. Applied in both `prod_server.py` and `webdav_server.py`
 
 **Problem**: `Quart<1` (unpinned) resolves an old pre-0.19 Quart on a fresh install, which crashes importing `werkzeug.urls.url_quote` (removed in modern Werkzeug)  
-**Fix**: requirements.txt pins `Quart>=0.21.0,<1`
+**Fix**: requirements.txt pins `Quart>=0.21.0,<1`. ⚠️ **As of the 2026-09-21 review, running `setup_pymodules.sh` (`./manage.sh update-modules`) rewrites that line to `Quart<1`** — it writes ceilings only, by design — which removes this fix. Verified by running the script's own grep/sed against a seeded file. To keep the floor, add `[Quart]=">=0.21.0,<1"` to the script's `COMPAT_CEILING` table (its value is appended verbatim after the package name). See [Package Management](#package-management-setup_pymodulessh).
 
 **Problem**: Ctrl+C doesn't cleanly stop `prod_server.py` on Windows  
 **Cause**: The custom shutdown-trigger signal handler called `loop.add_signal_handler()` unconditionally — Windows' `ProactorEventLoop` never implements it, raising `NotImplementedError`  
@@ -2330,7 +2452,8 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
   4. Re-check with the same `netstat` command — once no `LISTENING` rows remain on 8080/8443, the watchdog (polling every 15s while blocked) picks it up on its own and spawns a fresh WebDAV process; no restart of `prod_server.py`/`manage.sh` needed.
   Not yet confirmed whether killing those PID(s) fully resolved the user's loop — pending confirmation.
 
-**Fully automated (2026-09-15, later same day)**: the manual `netstat`/`taskkill` dance above is no longer needed going forward. `manage.sh`'s `_kill_webdav_child()` no longer trusts `webdav.pid` alone — it now also actively finds whatever's bound to WebDAV's ports (8080/8443, matching `protocol_manager.py`'s own `_webdav_target_ports()` fallback) via `netstat`/`taskkill` (Windows) or `lsof`/`kill` (POSIX) and kills that directly, regardless of what the pidfile says. Called from `cmd_stop` as before, and now *also* defensively from `cmd_start` before every spawn — so an orphan left behind by a crash, an interrupted stop, or anything else that desynced the pidfile gets cleared automatically on the next `start`, without needing to open Task Manager. Not yet confirmed against a live repeat of the scenario, but directly closes the exact gap the three entries above spent the day chasing.
+**Fully automated (2026-09-15, later same day)**: the manual `netstat`/`taskkill` dance above is no longer needed going forward. `manage.sh`'s `_kill_webdav_child()` no longer trusts `webdav.pid` alone — it now also actively finds whatever's bound to WebDAV's ports (8080/8443, matching `protocol_manager.py`'s own `_webdav_target_ports()` fallback) via `netstat`/`taskkill` (Windows) or `lsof`/`kill` (POSIX) and kills that directly, regardless of what the pidfile says. Called from `cmd_stop` as before, and now *also* defensively from `cmd_start` before every spawn — so an orphan left behind by a crash, an interrupted stop, or anything else that desynced the pidfile gets cleared automatically on the next `start`, without needing to open Task Manager. Not yet confirmed against a live repeat of the scenario, but directly closes the exact gap the three entries above spent the day chasing.  
+**Later hardening + caveats (present in the `manage.sh` reviewed 2026-09-21; date of these changes isn't recorded in the file)**: the sweep only kills *python* processes; every lookup ends `|| true` because, under `set -eo pipefail`, "nothing listening" used to kill `manage.sh` silently; and the ports are hardcoded `8080 8443` rather than read from `config.py`. Full list in [manage.sh Internals & Editing Rules](#managesh-internals--editing-rules).
 
 **Follow-up (same day, Version 4.12)**: a *different* trigger for the same `⚠️ WebDAV process exited unexpectedly (code 1) — respawning in 3s...` symptom, this time with no port conflict involved. `python prod_server.py` run directly in a terminal crash-looped; the identical code path via `manage.sh` (detached, stdout/stderr → `/dev/null`) and `python webdav_server.py` run completely standalone were both fine.  
 **Cause**: `_spawn_webdav_process()` passed `stdout=sys.stdout, stderr=sys.stderr` explicitly to `Popen`. By that point `logging_setup.py` has already replaced those names with `_TeeStream` instances (see the logging-unification entry above), which have no `fileno()` of their own and forward to the *original* real stream's `fileno()` via `__getattr__`. That resolves fine when the parent's real fd 1/2 are plain files (`manage.sh`'s detached launch → devnull) or aren't involved at all (`webdav_server.py` run standalone, no tee). Attached to a terminal emulator that doesn't back `sys.stdout` with a normal, directly-inheritable OS handle (e.g. Git Bash/MSYS/MinTTY-style consoles on Windows), `Popen` can end up handing the child a bad/non-inheritable handle, and `webdav_server.py` exits immediately (code 1) before reaching its own startup code — reproducing exactly as an infinite 3s respawn loop with no port ever actually contested.  
@@ -2488,6 +2611,32 @@ Works at the database level only — it's a separate process, same constraint `m
 ---
 
 ## 📝 Changelog
+
+### Version 4.17 — 2026-09-22 database.py Verification Pass
+
+Documentation-only — **no code changed**. `database.py` (755 lines) was read in full for the first time, to check items the 2026-09-21 ops-tooling pass had flagged as inferred rather than confirmed.
+
+- **Confirmed**: all `revoke_sharing.py`-called `database.py` share/request methods exist with the guessed signatures (see the updated [Database Tools](#database-tools) and Key Functions entries).
+- **Confirmed**: the double-checked-locking + `conn.commit()` bootstrap fix under Troubleshooting → Quart/Hypercorn Migration Issues matches `_connect()`/`_do_bootstrap()` exactly, including the specific failure symptom described.
+- **Confirmed, and gotcha #2 strengthened**: `update_share_settings()` never clears `passkey_hash` on a mode change unless `clear_passkey=True` is passed explicitly. This is now a direct finding, not an inference — see [Database Tools](#database-tools).
+- **Still open**: whether `/api/share/settings` in `app.py` clears the passkey itself on a mode switch (as the [Sharing Routes](#sharing-routes) section claims) is unverified — `app.py` has not been read in any pass to date.
+- Nothing was removed from any earlier section.
+
+### Version 4.16 — 2026-09-21 Ops-Tooling Doc Sync (manage.sh, setup_pymodules.sh, revoke_sharing.py)
+
+Documentation-only pass — **no code was changed**. Compared this doc against the three scripts (no earlier copies of them were available, so this is doc-vs-code, not a diff). Behaviors were exercised where feasible (stubbed `db` for `revoke_sharing.py`; the script's own regex/sed against a seeded `requirements.txt`; a bash SIGINT-inheritance experiment; a programmatic menu/case/help numbering check) rather than only read.
+
+- **New: [Package Management (setup_pymodules.sh)](#package-management-setup_pymodulessh)** — the script and its `constraints.txt` output were entirely undocumented. Covers invocation via `manage.sh update-modules`, the generate → dry-run → install flow, Termux `SYSTEM_MANAGED` locking, the `COMPAT_CEILING` table, the `PHASE`-based Ctrl-C rollback, and the Windows self-elevation + Defender exclusion of the whole Python directory. Note: `requirements.txt` is edited in place, **not** truncated; only `constraints.txt` is rewritten from scratch.
+- **New: [manage.sh Internals & Editing Rules](#managesh-internals--editing-rules)** — the `set -e` rules behind two real silent-exit bugs, the ignore-vs-handle Ctrl-C model (experimentally confirmed), the 19-entry menu map, a "touch all of these" checklist for adding a command, `_kill_webdav_child` caveats, and the CRLF/heredoc gotchas.
+- **Updated: `revoke_sharing.py`** — 3 documented subcommands → the real 9 (added `revoke-path`, `edit`, `edit-path`, `requests`, `approve`, `deny`), with flags, exit codes, and interactive-menu behavior.
+- **Corrected**: manage.sh "suppresses Ctrl-C" (now a handled trap); security.txt menu number 17 → **18** (Termux 18 → **19**); `restart-webdav` on Windows is an immediate `taskkill //F`, not graceful-then-forceful; Quick Reference table (+ `manage.sh`, `setup_pymodules.sh` rows); Key Functions; dependency graph; `hypercorn` → `hypercorn[h3]`.
+- **Found, deliberately not fixed** (each needs a code change and a decision from the owner):
+  1. `setup_pymodules.sh` rewrites `Quart>=0.21.0,<1` → `Quart<1`, undoing the documented Quart floor fix. Suggested: `COMPAT_CEILING[Quart]=">=0.21.0,<1"`.
+  2. `revoke_sharing.py edit --passkey/--generate-passkey` is a silent no-op (exit 0) without `--mode passkey`, contradicting its own help text; switching away from passkey mode doesn't pass `clear_passkey`; passkeys are generated with `random`, not `secrets`.
+  3. `manage.sh`/`help` say background-mode `print()` output is discarded; the logging-unification section says `logging_setup.py` captures it. Needs a look at `logging_setup.py`.
+  4. `_kill_webdav_child` hardcodes ports 8080/8443 instead of reading `config.py`.
+  5. `setup_pymodules.sh` mixes bare `pip`, `python -m pip`, and bare `python`, and ignores `manage.sh`'s `PYTHON` override.
+- Nothing was removed from any earlier section; two historical statements were annotated as superseded rather than deleted.
 
 ### Version 4.15 — 2026-09-15 (seventh pass) Pipe-Decode Encoding + Console-Handler Write-Size Limit
 
@@ -2729,7 +2878,7 @@ Public, opaque-token share links per file/folder, with a "Manage Shared" admin p
 
 - Web UI logout now goes through a client-side entrypoint that still calls the server-side `/logout` handler for session cleanup and cookie invalidation
 - Real-time storage stats moved to the authenticated SSE endpoint `/api/storage_stats_stream`, with `/api/storage_stats_poll` as a fallback
-- `manage.sh` now suppresses Ctrl-C while a nested utility script runs, so the shell wrapper stays in control instead of exiting prematurely
+- `manage.sh` now suppresses Ctrl-C while a nested utility script runs, so the shell wrapper stays in control instead of exiting prematurely *(superseded 2026-09-21: now a handled trap, not an ignore — see [manage.sh Internals & Editing Rules](#managesh-internals--editing-rules))*
 - Additional SMB Windows-specific save/delete compatibility fixes for Office-style file writes and transient lock handling
 
 ### Version 3.3 (2026-07-10)
@@ -2853,5 +3002,5 @@ Public, opaque-token share links per file/folder, with a "Manage Shared" admin p
 
 ---
 
-**Last Updated**: 2026-09-16  
+**Last Updated**: 2026-09-22  
 **For Questions**: Refer to source code comments marked with `###` or `# --`
