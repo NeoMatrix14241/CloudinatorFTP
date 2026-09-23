@@ -150,6 +150,52 @@ _SHARE_UNLOCK_MAX_AGE = 30 * 24 * 3600  # 30 days
 
 
 # ------------------------------------------------------------------
+# Client IP resolution — shared by RateLimiter and the per-request logger
+# below, so both agree on "who sent this" instead of RateLimiter having
+# its own private copy that only fired on failed logins.
+#
+# Deployment: this app sits behind a Cloudflare Tunnel (cloudflared,
+# orange-cloud/proxied). That means two things for IP trust:
+#   1. There's no open inbound port on this box at all — cloudflared
+#      makes an OUTBOUND connection to Cloudflare's edge, so nobody can
+#      reach this process directly and forge headers the way they could
+#      against a plain reverse-proxy with an exposed port. Every request
+#      that reaches this app genuinely came through Cloudflare.
+#   2. request.remote_addr is therefore useless here — it's cloudflared's
+#      local connection to this process, so it reads the same
+#      loopback-ish address for every request, real traffic and attack
+#      traffic alike.
+# CF-Connecting-IP is what to trust instead: Cloudflare sets this itself
+# at the edge with the real connecting client's IP and overwrites/strips
+# whatever the client tried to put there — unlike X-Forwarded-For, which
+# Cloudflare only APPENDS to. A client-forged "X-Forwarded-For: 1.2.3.4"
+# arrives at Cloudflare, which appends the real IP after it
+# ("1.2.3.4, <real ip>") rather than replacing it — so blindly taking
+# XFF's first entry (the old behavior here) would have logged the
+# attacker's chosen fake IP, not their real one. CF-Connecting-IP doesn't
+# have that hole. X-Forwarded-For is kept only as a fallback for local/
+# direct access (e.g. hitting dev_server.py on the LAN with no tunnel in
+# front of it, where there's no CF-Connecting-IP to read).
+#
+# This trust chain assumes the app is ONLY reachable through the tunnel.
+# If this port is also directly reachable (bound to 0.0.0.0 with the
+# firewall open, port-forwarded, etc.) rather than solely through
+# cloudflared, someone could connect directly and set CF-Connecting-IP
+# themselves, and it would be trusted here just as wrongly as XFF was.
+# Worth double-checking that's not the case if this matters to you.
+# ------------------------------------------------------------------
+def get_client_ip() -> str:
+    cf_ip = request.headers.get("CF-Connecting-IP", "").strip()
+    if cf_ip:
+        return cf_ip
+    return (
+        request.headers.get("X-Forwarded-For", request.remote_addr or "")
+        .split(",")[0]
+        .strip()
+    )
+
+
+# ------------------------------------------------------------------
 # Brute-force protection — tracks failed login attempts per IP
 # ------------------------------------------------------------------
 class RateLimiter:
@@ -170,11 +216,7 @@ class RateLimiter:
         self._lock = threading.Lock()
 
     def _get_ip(self) -> str:
-        return (
-            request.headers.get("X-Forwarded-For", request.remote_addr or "")
-            .split(",")[0]
-            .strip()
-        )
+        return get_client_ip()
 
     def is_blocked(self) -> bool:
         ip = self._get_ip()
@@ -604,10 +646,32 @@ async def _log_request_duration(response):
     if start is not None:
         duration = time.monotonic() - start
         is_slow = duration > SLOW_REQUEST_THRESHOLD_SECONDS
+        # Client IP is included on every line (not just login-lockout
+        # events) so an attack shows up in context — same IP hitting many
+        # paths in a short window, correlated against everything else in
+        # the daily log. See get_client_ip()'s docstring for the
+        # X-Forwarded-For spoofing caveat if this server sits directly on
+        # the internet with no reverse proxy in front of it.
+        client_ip = get_client_ip()
+
+        # Also surface the raw X-Forwarded-For value when it disagrees
+        # with the resolved (trusted) IP — this only happens if a client
+        # sent Cloudflare a pre-populated/forged X-Forwarded-For header,
+        # since Cloudflare appends the real IP rather than replacing it.
+        # A mismatch here isn't noise to filter out — it's evidence
+        # someone was actively trying to spoof their IP, which is worth
+        # keeping visible rather than silently discarding.
+        raw_xff = request.headers.get("X-Forwarded-For", "").strip()
+        xff_tag = ""
+        if raw_xff and raw_xff != client_ip:
+            xff_tag = f" [XFF: {raw_xff}]"
+
         request_logger.log(
             logging.WARNING if is_slow else logging.INFO,
-            "%s%s %s took %.3fs (status %s)",
+            "%s%s%s %s %s took %.3fs (status %s)",
             "SLOW REQUEST: " if is_slow else "",
+            client_ip,
+            xff_tag,
             request.method,
             request.path,
             duration,
