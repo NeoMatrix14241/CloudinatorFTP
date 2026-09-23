@@ -1,7 +1,9 @@
 # CloudinatorFTP — Complete Codebase Reference for AI-Assisted Development
 
-**Version**: 4.17 (+ 2026-09-22 database.py verification pass; 2026-09-21 ops-tooling sync: manage.sh, setup_pymodules.sh, revoke_sharing.py; earlier 2026-08-28 protocol-hardening, route-sync, and video-skin-overrides.css notes) | **Last Updated**: 2026-09-22  
+**Version**: 4.18 (+ 2026-09-23 app.py client-IP logging change; 2026-09-22 database.py verification pass; 2026-09-21 ops-tooling sync: manage.sh, setup_pymodules.sh, revoke_sharing.py; earlier 2026-08-28 protocol-hardening, route-sync, and video-skin-overrides.css notes) | **Last Updated**: 2026-09-23  
 **For**: AI assistants and developers modifying/extending CloudinatorFTP
+
+**🆕 2026-09-23 sync note**: `app.py` gained a shared `get_client_ip()` helper (defined right above `RateLimiter`), replacing `RateLimiter`'s own private `_get_ip()`. Behind the project's Cloudflare Tunnel (`cloudflared`, orange-cloud/proxied) deployment, `request.remote_addr` only ever shows cloudflared's local connection — useless for identifying a real client — so `get_client_ip()` now reads `CF-Connecting-IP` first (set by Cloudflare's edge itself from the true connecting client, not spoofable by the client since there's no direct inbound path to this box) and falls back to the old `X-Forwarded-For`-first-entry/`remote_addr` logic only for non-tunneled access (e.g. `dev_server.py` on the LAN). The per-request logger (`_log_request_duration`, see [request-timing diagnostic tooling](#troubleshooting--edge-cases)) now logs this resolved IP on every line, plus a `[XFF: ...]` tag whenever the raw `X-Forwarded-For` header disagrees with it — that mismatch only happens if a client pre-populated `X-Forwarded-For` before Cloudflare appended the real IP, i.e. an active spoofing attempt, so it's surfaced rather than silently dropped. `RateLimiter._get_ip()` is now a one-line delegate to `get_client_ip()`, so login-lockout decisions get the same trust fix. **Caveat carried over into the code comments**: this trust chain assumes the app is reachable *only* through the tunnel — if the port is also directly exposed (firewall hole, port-forward), `CF-Connecting-IP` becomes spoofable again exactly like `X-Forwarded-For` was.
 
 **Recent updates (2026-07-28)**:
 - The web UI now uses a client-side logout entrypoint that still routes through the server-side `/logout` handler for session cleanup and cookie invalidation.
@@ -920,7 +922,7 @@ function _addLinkOnce(root) {
 ```
 1. User submits POST /login {username, password}
    ↓
-2. RateLimiter checks IP address
+2. RateLimiter checks IP address (via shared `get_client_ip()` — see 2026-09-23 sync note above: trusts `CF-Connecting-IP` over `X-Forwarded-For` behind the Cloudflare Tunnel deployment)
    - MAX_ATTEMPTS=5 failures in 60s → 300s lockout
    - In-memory state (resets on server restart)
    ↓
@@ -2400,6 +2402,7 @@ python ssl_cert.py --regenerate  # Force regenerate (use after IP change)
   - *Cloudflare bot-challenge* (`/cdn-cgi/challenge-platform/...`, seen in a chrome://net-export capture) — ruled out because the hang reproduced identically on direct LAN IP access, which never touches Cloudflare.
   - *A genuine server-side TTFB stall* — an early `curl -w` timing test appeared to show a ~131s stall inside app.py/Hypercorn, but was later found to have been run against the wrong IP by mistake. The final request-timing log (0.000–0.016s across the board during a live recurrence) is the real evidence that the server side was never the problem.
 **Diagnostic tooling added while investigating** (kept permanently, not just for this bug): request logging in `app.py`, registered as the first `before_request`/`after_request` pair (right after `app = Quart(__name__)`) so the timer wraps the entire request lifecycle. Logs **every** request — `<method> <path> took X.XXXs (status N)` at INFO, escalating to `SLOW REQUEST: ...` at WARNING over `SLOW_REQUEST_THRESHOLD_SECONDS` (default 2.0s) — via its own logger (`cloudinatorftp.requests`, project-standard timestamp format, not Quart's default `app.logger` — that default's `%(module)s` field caused a cosmetic `(unknown file)` glitch, same class of issue as the Python 3.14 `%(process)d` bug documented above). Writes to both console and a persistent `logs/requests.log`. This log is what ultimately solved the bug — worth keeping for whatever comes next.  
+**2026-09-23 addition**: each line now also carries the client IP (via `get_client_ip()`) ahead of `<method> <path>`, plus a `[XFF: ...]` tag when the raw `X-Forwarded-For` header disagrees with the trusted `CF-Connecting-IP` value — see the 2026-09-23 sync note near the top of this doc for the full reasoning. Originally added after a suspected-attack review of these logs turned up no source IP to investigate.  
 **Longer-term fix, still open, unrelated to this bug**: reserve the public hostname exclusively for the Cloudflare-fronted trusted-cert path; never let the self-signed origin answer under that same hostname (use the Tailscale `*.ts.net` hostname for direct/LAN access instead). Closes off the HSTS design issue above permanently.
 
 **Problem**: `protocol_manager.py`'s two `logging.getLogger(__name__).debug(...)` calls (subprocess/thread stop-error logging) never produced output anywhere, console or file  
@@ -3002,5 +3005,5 @@ Public, opaque-token share links per file/folder, with a "Manage Shared" admin p
 
 ---
 
-**Last Updated**: 2026-09-22  
+**Last Updated**: 2026-09-23  
 **For Questions**: Refer to source code comments marked with `###` or `# --`
