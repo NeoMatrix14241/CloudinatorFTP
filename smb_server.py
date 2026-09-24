@@ -31,11 +31,18 @@ import logging
 import os
 import platform
 import threading
+import logging_setup
 from app import get_local_ip
 
 LOCAL_IP = get_local_ip()
 
-log = logging.getLogger(__name__)
+# Was logging.getLogger(__name__), a plain stdlib logger with no handler
+# ever attached — same dead-end as the pre-fix loggers in ftp_server.py
+# and sftp_server.py. Now a child of logging_setup's shared
+# "cloudinatorftp" logger, so both the pre-existing login line in
+# _auth_callback() and the new file-operation AUDIT lines below actually
+# land in the unified log file.
+log = logging_setup.get_logger("smb")
 
 _IS_WINDOWS = platform.system() == "Windows"
 
@@ -399,6 +406,231 @@ def _install_file_lifecycle_diagnostics(server):
 
     close_orig_holder[0] = inner.hookSmb2Command(smb2.SMB2_CLOSE, close_hook)
     print("🔍 SMB-FILES: file lifecycle diagnostics ENABLED (SMB_DEBUG_FILES=1)")
+
+
+def _install_audit_logging(server):
+    """
+    Success-path audit logging for SMB file operations — upload, mkdir,
+    rename, delete — matching the same user+action+path+ip shape already
+    used in sftp_server.py's _audit() and ftp_server.py's AUDIT lines, so
+    all three protocols' logs are greppable the same way. Before this,
+    SMB had a login audit line (_auth_callback, pre-existing) but zero
+    logging for what an authenticated session actually did to files.
+
+    Deliberately does NOT log plain read-opens (unlike SFTP/FTP's
+    download logging). In SFTP/FTP, "opened for reading" reliably means
+    "the client is downloading this file" — there's no other reason to
+    open a file for read over those protocols. Over SMB, Windows
+    Explorer issues a CREATE with read access for routine directory
+    browsing, thumbnail generation, and property lookups — every folder
+    view generates several — so treating every read-access CREATE as a
+    "download" would flood the log with browsing noise rather than
+    reflect actual file transfers. Given the choice between missing SMB
+    downloads and burying every real audit event under browsing chatter,
+    this logs write/create/delete/rename only.
+
+    Installed via hookSmb2Command like every other hook in this file.
+    Each wrapper calls the ORIGINAL handler (captured before this
+    function replaces it — same one impacket / the earlier fixes in this
+    file installed) and only logs after confirming STATUS_SUCCESS, so a
+    denied or failed operation never produces a false "it happened" line.
+    """
+    from impacket import smb3structs as smb2
+    from impacket.nt_errors import STATUS_SUCCESS
+
+    inner = server.getServer()
+
+    # ── CREATE: covers new-file upload, overwrite-open, and mkdir ──────
+    # All three happen through SMB2_CREATE, not a separate command — see
+    # this file's own module docstring / the rename-fix docstring above
+    # for how impacket structures file creation. One hook call per file
+    # or directory opened, same granularity as SFTP's open()-based
+    # _audit() calls (not per WRITE chunk), so this logs once per
+    # upload/mkdir regardless of how many SMB2_WRITE calls follow it.
+
+    create_orig_holder = [None]
+
+    def create_audit_hook(*args, **kwargs):
+        connId, smbServer, recvPacket = args[0], args[1], args[2]
+
+        # Re-derive what the real handler is about to decide, so we can
+        # tell "new file created" from "existing file opened for write"
+        # from "plain read" — mirrors impacket's own smb2Create logic
+        # (see the rename-fix docstring above for the source reference)
+        # rather than guessing from the response alone.
+        pre_existed = None
+        pathName = None
+        is_dir_create = False
+        is_write = False
+        try:
+            connData = smbServer.getConnectionData(connId)
+            tid = recvPacket["TreeID"]
+            if (
+                tid in connData.get("ConnectedShares", {})
+                and "path" in connData["ConnectedShares"][tid]
+            ):
+                share_path = connData["ConnectedShares"][tid]["path"]
+                ntCreateRequest = smb2.SMB2Create(recvPacket["Data"])
+                fileName = ntCreateRequest["Buffer"][
+                    : ntCreateRequest["NameLength"]
+                ].decode("utf-16le")
+                pathName = os.path.join(share_path, fileName)
+                pre_existed = os.path.exists(pathName)
+
+                createDisposition = ntCreateRequest["CreateDisposition"]
+                createOptions = ntCreateRequest["CreateOptions"]
+                desiredAccess = ntCreateRequest["DesiredAccess"]
+
+                is_dir_create = bool(createOptions & smb2.FILE_DIRECTORY_FILE) and bool(
+                    createDisposition & (smb2.FILE_CREATE | smb2.FILE_OPEN_IF)
+                )
+                is_write = bool(
+                    desiredAccess
+                    & (smb2.FILE_WRITE_DATA | smb2.GENERIC_WRITE | smb2.GENERIC_ALL)
+                )
+        except Exception:
+            # Audit-logging is best-effort — never let a parsing slip
+            # break the actual file operation. The real handler below
+            # still runs unconditionally either way.
+            pass
+
+        result = create_orig_holder[0](*args, **kwargs)
+
+        try:
+            _, _, errorCode = result
+            if errorCode != STATUS_SUCCESS or pathName is None:
+                return result
+            username = connData.get("user_name") if connData else None
+            ip = connData.get("ClientIP") if connData else None
+            if is_dir_create and not pre_existed:
+                log.info(
+                    "SMB AUDIT: user=%r action=mkdir path=%r ip=%s",
+                    username,
+                    pathName,
+                    ip,
+                )
+            elif is_write and not is_dir_create:
+                action = "overwrite" if pre_existed else "upload"
+                log.info(
+                    "SMB AUDIT: user=%r action=%s path=%r ip=%s",
+                    username,
+                    action,
+                    pathName,
+                    ip,
+                )
+        except Exception:
+            pass
+
+        return result
+
+    create_orig_holder[0] = inner.hookSmb2Command(smb2.SMB2_CREATE, create_audit_hook)
+
+    # ── SET_INFO: covers rename ─────────────────────────────────────────
+    # Delete is requested here too (FileDispositionInformation sets a
+    # DeleteOnClose flag) but the actual os.remove()/shutil.rmtree() call
+    # doesn't happen until CLOSE — see that hook below for why delete is
+    # logged there instead of here.
+
+    setinfo_orig_holder = [None]
+
+    def setinfo_audit_hook(*args, **kwargs):
+        connId, smbServer, recvPacket = args[0], args[1], args[2]
+
+        old_name = None
+        fileID = None
+        try:
+            connData = smbServer.getConnectionData(connId)
+            setInfo = smb2.SMB2SetInfo(recvPacket["Data"])
+            fid_raw = setInfo["FileID"].getData()
+            if fid_raw == b"\xff" * 16 and "SMB2_CREATE" in connData.get(
+                "LastRequest", {}
+            ):
+                fileID = connData["LastRequest"]["SMB2_CREATE"]["FileID"]
+            else:
+                fileID = fid_raw
+            if fileID in connData.get("OpenedFiles", {}):
+                old_name = connData["OpenedFiles"][fileID]["FileName"]
+        except Exception:
+            pass
+
+        result = setinfo_orig_holder[0](*args, **kwargs)
+
+        try:
+            _, _, errorCode = result
+            if errorCode == STATUS_SUCCESS and old_name is not None:
+                connData = smbServer.getConnectionData(connId)
+                new_name = (
+                    connData.get("OpenedFiles", {}).get(fileID, {}).get("FileName")
+                )
+                if new_name and new_name != old_name:
+                    username = connData.get("user_name")
+                    ip = connData.get("ClientIP")
+                    log.info(
+                        "SMB AUDIT: user=%r action=rename path=%r -> %r ip=%s",
+                        username,
+                        old_name,
+                        new_name,
+                        ip,
+                    )
+        except Exception:
+            pass
+
+        return result
+
+    setinfo_orig_holder[0] = inner.hookSmb2Command(
+        smb2.SMB2_SET_INFO, setinfo_audit_hook
+    )
+
+    # ── CLOSE: covers delete (DeleteOnClose is only actually acted on
+    # here — see smb2Close's own source for the os.remove()/rmtree() call
+    # this is confirming happened) ──────────────────────────────────────
+
+    close_orig_holder = [None]
+
+    def close_audit_hook(*args, **kwargs):
+        connId, smbServer, recvPacket = args[0], args[1], args[2]
+
+        pending_delete = None
+        try:
+            connData = smbServer.getConnectionData(connId)
+            closeReq = smb2.SMB2Close(recvPacket["Data"])
+            fileID = closeReq["FileID"].getData()
+            if fileID == b"\xff" * 16 and "SMB2_CREATE" in connData.get(
+                "LastRequest", {}
+            ):
+                fileID = connData["LastRequest"]["SMB2_CREATE"]["FileID"]
+            info = connData.get("OpenedFiles", {}).get(fileID)
+            if info and info.get("DeleteOnClose"):
+                pending_delete = (
+                    info.get("FileName"),
+                    os.path.isdir(info.get("FileName", "")),
+                )
+        except Exception:
+            pass
+
+        result = close_orig_holder[0](*args, **kwargs)
+
+        try:
+            _, _, errorCode = result
+            if errorCode == STATUS_SUCCESS and pending_delete is not None:
+                path, was_dir = pending_delete
+                username = connData.get("user_name") if connData else None
+                ip = connData.get("ClientIP") if connData else None
+                log.info(
+                    "SMB AUDIT: user=%r action=%s path=%r ip=%s",
+                    username,
+                    "rmdir" if was_dir else "delete",
+                    path,
+                    ip,
+                )
+        except Exception:
+            pass
+
+        return result
+
+    close_orig_holder[0] = inner.hookSmb2Command(smb2.SMB2_CLOSE, close_audit_hook)
+
+    log.info("SMB: file-operation audit logging installed")
 
 
 def _install_command_safety_net(server):
@@ -855,6 +1087,7 @@ def start() -> bool:
         _install_create_share_delete_fix(server)
         _install_quiet_netbios_timeout()
         _install_role_enforcement(server)
+        _install_audit_logging(server)
 
         if os.environ.get("SMB_DEBUG_SIGNING") == "1":
             _install_signing_diagnostics(server)

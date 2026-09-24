@@ -38,38 +38,70 @@ import socket
 import threading
 import time
 import logging
+import logging_setup
 from app import get_local_ip
 
 LOCAL_IP = get_local_ip()
 
-log = logging.getLogger(__name__)
+# Was logging.getLogger(__name__) — a plain stdlib logger with no handler
+# ever attached, so it silently went nowhere (console or file). Now a
+# child of logging_setup's shared "cloudinatorftp" logger, same fix
+# already applied to protocol_manager.py's _pm_logger — see that file's
+# comment for the full story. Also now used for AUDIT-level success
+# logging below, not just the pre-existing PERMISSION_DENIED warnings.
+log = logging_setup.get_logger("sftp")
 
-# ── SFTP open-flags (SSH protocol constants) ──────────────────────────────
-_FXF_READ = 0x00000001
-_FXF_WRITE = 0x00000002
-_FXF_APPEND = 0x00000004
-_FXF_CREAT = 0x00000008
-_FXF_TRUNC = 0x00000010
-_FXF_EXCL = 0x00000020
-
-_WRITE_FLAGS = _FXF_WRITE | _FXF_APPEND | _FXF_CREAT
+# ── SFTP open-flags ────────────────────────────────────────────────────────
+# BUGFIX (found while smoke-testing the audit-logging patch below, 2026-09-24):
+# this used to define SSH_FXF_* protocol-level bit values (READ=0x01,
+# WRITE=0x02, CREAT=0x08, TRUNC=0x10 — straight from the SFTP wire format)
+# and test the `flags` argument against them. But paramiko's
+# SFTPServerInterface.open() does NOT receive raw wire-protocol flags —
+# paramiko's own SFTPServer._process() calls _convert_pflags() first,
+# which translates them into Python's os.O_* flags (os.O_WRONLY=1,
+# os.O_RDWR=2, os.O_CREAT=64, os.O_TRUNC=512, os.O_APPEND=1024) before
+# ever calling into this file. The two bit layouts don't line up —
+# critically, os.O_WRONLY (1) collides with the old _FXF_READ (0x01) —
+# so a brand-new file opened for writing was being misread as a
+# read-only open, the open() call then failed with FileNotFoundError on
+# a file that doesn't exist yet, and the client saw a bare "No such
+# file" on what should have been a normal upload. Confirmed live against
+# a real paramiko client: new-file uploads failed 100% of the time
+# before this fix. Existing-file overwrites were similarly broken (would
+# open in read mode, then fail on the first write with
+# io.UnsupportedOperation instead of succeeding).
+#
+# Fixed to test the actual os.O_* flags paramiko hands us. Not stored as
+# hardcoded hex anymore since os.O_* values, while POSIX-stable, are
+# technically platform-defined — os.O_CREAT etc. are looked up at import
+# time instead so this stays correct if this ever runs somewhere the
+# raw ints differ.
 
 
 def _flags_to_mode(flags: int) -> str:
-    """Convert SFTP open flags to a Python binary open-mode string."""
-    is_read = bool(flags & _FXF_READ)
-    is_write = bool(flags & _FXF_WRITE)
-    is_append = bool(flags & _FXF_APPEND)
-    is_creat = bool(flags & _FXF_CREAT)
-    is_trunc = bool(flags & _FXF_TRUNC)
+    """Convert the os.O_* flags paramiko passes into a Python open() mode."""
+    is_rdwr = bool(flags & os.O_RDWR)
+    is_wronly = bool(flags & os.O_WRONLY)
+    is_read = is_rdwr or not (
+        is_wronly or is_rdwr
+    )  # O_RDONLY is 0 — the "none of the above" case
+    is_write = is_wronly or is_rdwr
+    is_append = bool(flags & os.O_APPEND)
+    is_creat = bool(flags & os.O_CREAT)
+    is_trunc = bool(flags & os.O_TRUNC)
 
     if is_append:
         return "a+b" if is_read else "ab"
     if is_write or is_creat:
         if is_trunc or is_creat:
-            return "w+b" if is_read else "wb"
+            return "w+b" if is_read and is_rdwr else "wb"
         return "r+b"
     return "rb"
+
+
+def _is_write_open(flags: int) -> bool:
+    """True if these os.O_* flags represent any kind of write access."""
+    return bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT))
 
 
 # ── Path helper ───────────────────────────────────────────────────────────
@@ -188,7 +220,30 @@ class _CloudinatorSFTPInterface:
         self._p = paramiko
         self._username = getattr(server, "username", "")
         self._role = getattr(server, "role", "readonly")
+        # Set on the _SSHServer instance in _handle_connection() right
+        # after construction — see that function for where this comes
+        # from. Falls back to "?" defensively; should always be present
+        # in practice since it's set before start_server() is called.
+        self._client_ip = getattr(server, "client_addr", ("?", "?"))[0]
         self._realpath, self._to_sftp = _make_realpath(root_dir)
+
+    # ── Audit logging (new) ─────────────────────────────────────────────
+    # One-line success-path audit trail for every write operation below.
+    # Previously this class only logged PERMISSION_DENIED cases — a
+    # successful delete/rename/mkdir/upload produced zero log output,
+    # meaning "who deleted this file" had no direct answer anywhere in
+    # the logs. Same shape as the request_logger line in app.py
+    # (user + action + path + ip), so both are greppable the same way.
+
+    def _audit(self, action: str, path: str, extra: str = ""):
+        log.info(
+            "SFTP AUDIT: user=%r action=%s path=%r ip=%s%s",
+            self._username,
+            action,
+            path,
+            self._client_ip,
+            f" {extra}" if extra else "",
+        )
 
     # ── Read operations ───────────────────────────────────────────────────
 
@@ -243,7 +298,7 @@ class _CloudinatorSFTPInterface:
 
     def open(self, path: str, flags: int, attr):
         real = self._realpath(path)
-        is_write = bool(flags & _WRITE_FLAGS)
+        is_write = _is_write_open(flags)
 
         if is_write and self._role != "readwrite":
             log.warning(
@@ -255,7 +310,7 @@ class _CloudinatorSFTPInterface:
         mode = _flags_to_mode(flags)
 
         # For new-file creation, ensure the parent directory exists
-        if (flags & _FXF_CREAT) and not os.path.exists(real):
+        if (flags & os.O_CREAT) and not os.path.exists(real):
             parent = os.path.dirname(real)
             if not os.path.isdir(parent):
                 return self._p.SFTP_NO_SUCH_FILE
@@ -276,6 +331,9 @@ class _CloudinatorSFTPInterface:
             return self._p.SFTP_BAD_MESSAGE
         except OSError as e:
             return self._p.SFTPServer.convert_errno(e.errno)
+
+        if is_write:
+            self._audit("upload", path, extra=f"mode={mode}")
 
         # Return a proper paramiko SFTPHandle — the adapter will use it directly.
         return _make_sftp_handle_class()(fobj, flags)
@@ -302,6 +360,7 @@ class _CloudinatorSFTPInterface:
         real = self._realpath(path)
         try:
             os.remove(real)
+            self._audit("delete", path)
             return self._p.SFTP_OK
         except OSError as e:
             return self._p.SFTPServer.convert_errno(e.errno)
@@ -312,6 +371,7 @@ class _CloudinatorSFTPInterface:
             return err
         try:
             os.rename(self._realpath(oldpath), self._realpath(newpath))
+            self._audit("rename", oldpath, extra=f"-> {newpath!r}")
             return self._p.SFTP_OK
         except OSError as e:
             return self._p.SFTPServer.convert_errno(e.errno)
@@ -325,6 +385,7 @@ class _CloudinatorSFTPInterface:
             os.mkdir(real)
             if attr and attr.st_mode is not None:
                 os.chmod(real, attr.st_mode)
+            self._audit("mkdir", path)
             return self._p.SFTP_OK
         except OSError as e:
             return self._p.SFTPServer.convert_errno(e.errno)
@@ -335,6 +396,7 @@ class _CloudinatorSFTPInterface:
             return err
         try:
             os.rmdir(self._realpath(path))
+            self._audit("rmdir", path)
             return self._p.SFTP_OK
         except OSError as e:
             return self._p.SFTPServer.convert_errno(e.errno)
@@ -430,6 +492,11 @@ def _make_ssh_server_class():
         def __init__(self):
             self.username = ""
             self.role = "readonly"
+            # Set by _handle_connection() right after construction, before
+            # start_server() — lets both the login audit line below and
+            # _CloudinatorSFTPInterface's per-file audit lines attribute
+            # activity to a source IP, not just a username.
+            self.client_addr = ("?", "?")
 
         def check_channel_request(self, kind, chanid):
             if kind == "session":
@@ -442,11 +509,21 @@ def _make_ssh_server_class():
         def check_auth_password(self, username, password):
             from database import db
 
+            ip = self.client_addr[0]
             if db.check_login(username, password):
                 self.username = username
                 self.role = db.get_role(username) or "readonly"
                 db.update_last_login(username)
+                log.info(
+                    "SFTP AUDIT: user=%r action=login role=%r ip=%s",
+                    username,
+                    self.role,
+                    ip,
+                )
                 return paramiko.AUTH_SUCCESSFUL
+            # Previously silent — a failed SFTP login attempt produced no
+            # log line at all, unlike the web login's rate-limiter path.
+            log.warning("SFTP AUDIT: user=%r action=login_failed ip=%s", username, ip)
             return paramiko.AUTH_FAILED
 
         def check_auth_publickey(self, username, key):
@@ -575,6 +652,11 @@ def _handle_connection(conn, addr, host_key, sftp_interface_class, ssh_server_cl
             "sftp", paramiko.SFTPServer, sftp_interface_class
         )
         server = ssh_server_class()
+        # Must be set before start_server() — check_auth_password() reads
+        # it during the handshake, and _CloudinatorSFTPInterface.__init__
+        # reads it (via getattr on this same server instance) once the
+        # SFTP subsystem activates after auth succeeds.
+        server.client_addr = addr
         transport.start_server(server=server)
 
         # Send keepalive packets so idle sessions (e.g. a mobile client that's

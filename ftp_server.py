@@ -36,11 +36,21 @@ The home directory for all users is ROOT_DIR.  Users are chrooted to it.
 
 import logging
 import threading
+import logging_setup
 from app import get_local_ip
 
 LOCAL_IP = get_local_ip()
 
-log = logging.getLogger(__name__)
+# Was logging.getLogger(__name__), then never actually called anywhere in
+# this file — a dead logger. Now a child of logging_setup's shared
+# "cloudinatorftp" logger (same fix as protocol_manager.py's _pm_logger
+# and sftp_server.py's log), and actually used below for audit logging.
+# NOTE: this is separate from pyftpdlib's own internal 'pyftpdlib' logger
+# (used for its low-level protocol trace) — that one is intentionally
+# left alone here; AUDIT lines below are written explicitly through this
+# logger instead of relying on pyftpdlib's internal logging reaching the
+# app's unified log file, which it doesn't by default.
+log = logging_setup.get_logger("ftp")
 
 # pyftpdlib permission strings
 # e = change dir, l = list, r = download
@@ -215,6 +225,100 @@ def _make_server(port: int):
         masquerade_address = None
         max_login_attempts = 5
         timeout = 300  # idle disconnect after 5 minutes
+
+        # ── Audit logging (new) ─────────────────────────────────────────
+        # pyftpdlib exposes on_login/on_login_failed/on_file_sent/
+        # on_file_received as ready-made callbacks — used directly below.
+        # Delete/rename/mkdir/rmdir have no equivalent "on_X" callback in
+        # this library, so those four are wrapped by calling the base
+        # class's ftp_DELE/ftp_RMD/ftp_MKD/ftp_RNTO first (unchanged
+        # behavior, including its own error responses) and then checking
+        # self._last_response — set by every pyftpdlib respond() call —
+        # to tell success ("250"/"257") from failure ("550") before
+        # writing the audit line. Mirrors the same user+action+path+ip
+        # shape used in sftp_server.py's _audit() and app.py's request
+        # logger, so all three protocols' logs are greppable the same way.
+
+        def on_login(self, username):
+            perms = self.authorizer.get_perms(username)
+            role = "readwrite" if "d" in perms else "readonly"
+            log.info(
+                "FTP AUDIT: user=%r action=login role=%s ip=%s tls=%s",
+                username,
+                role,
+                self.remote_ip,
+                _TLS_ACTIVE,
+            )
+
+        def on_login_failed(self, username, password):
+            # Previously silent — a failed FTP login (bad password, or a
+            # non-existent username) produced no log line at all.
+            log.warning(
+                "FTP AUDIT: user=%r action=login_failed ip=%s", username, self.remote_ip
+            )
+
+        def on_file_sent(self, file):
+            log.info(
+                "FTP AUDIT: user=%r action=download path=%r ip=%s",
+                self.username,
+                file,
+                self.remote_ip,
+            )
+
+        def on_file_received(self, file):
+            log.info(
+                "FTP AUDIT: user=%r action=upload path=%r ip=%s",
+                self.username,
+                file,
+                self.remote_ip,
+            )
+
+        def ftp_DELE(self, path):
+            result = super().ftp_DELE(path)
+            if self._last_response.startswith("250"):
+                log.info(
+                    "FTP AUDIT: user=%r action=delete path=%r ip=%s",
+                    self.username,
+                    path,
+                    self.remote_ip,
+                )
+            return result
+
+        def ftp_RMD(self, path):
+            result = super().ftp_RMD(path)
+            if self._last_response.startswith("250"):
+                log.info(
+                    "FTP AUDIT: user=%r action=rmdir path=%r ip=%s",
+                    self.username,
+                    path,
+                    self.remote_ip,
+                )
+            return result
+
+        def ftp_MKD(self, path):
+            result = super().ftp_MKD(path)
+            if self._last_response.startswith("257"):
+                log.info(
+                    "FTP AUDIT: user=%r action=mkdir path=%r ip=%s",
+                    self.username,
+                    path,
+                    self.remote_ip,
+                )
+            return result
+
+        def ftp_RNTO(self, path):
+            # Capture the source path before super() clears self._rnfr.
+            src = self._rnfr
+            result = super().ftp_RNTO(path)
+            if self._last_response.startswith("250"):
+                log.info(
+                    "FTP AUDIT: user=%r action=rename path=%r -> %r ip=%s",
+                    self.username,
+                    src,
+                    path,
+                    self.remote_ip,
+                )
+            return result
 
     if use_tls:
         CloudinatorFTPHandler.certfile = certfile

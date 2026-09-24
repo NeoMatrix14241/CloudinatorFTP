@@ -26,6 +26,20 @@ released fix. This module patches TCPServer._close() in-process:
   1. Actually catches TimeoutError (fixes the unhandled-exception spam).
   2. Caps the close-wait at SHUTDOWN_TIMEOUT_SECONDS instead of asyncio's
      30s default (fixes the real hang, not just the noisy traceback).
+  3. (2026-09-24) Also catches any other OSError escaping wait_closed() —
+     in practice ssl.SSLError APPLICATION_DATA_AFTER_CLOSE_NOTIFY, raised
+     when a client sends data after its own TLS close_notify. Stock
+     Hypercorn's _close() doesn't catch that either (its except-list is
+     BrokenPipe/ConnectionAborted/ConnectionReset/RuntimeError/Cancelled),
+     and neither did this patch until now, so it escaped as an "Unhandled
+     exception in client_connected_cb" traceback — same first line as the
+     TimeoutError case above, different cause — carrying NO client
+     address: by the time asyncio reports it, the SSL transport's
+     "peername" is already None (verified). The peer address is therefore
+     read at the very top of _patched_close(), while the connection is
+     still open, and the error is logged as a single line naming it
+     instead of a 20-line traceback. It's a teardown-time blip on a
+     connection that is already closing — nothing is lost.
 
 Call apply() once, as early as possible, in EVERY process that runs a
 Hypercorn server — the main app (prod_server.py) and WebDAV
@@ -41,9 +55,15 @@ they ship their own fix for #202, this can be removed.
 """
 
 import asyncio
-import logging
+
+import logging_setup
 
 _PATCHED = False
+
+# Substrings of an OSError's text that mark a known-harmless teardown blip
+# (logged at INFO). Any other OSError escaping wait_closed() is still
+# swallowed — the connection is closing regardless — but logged at WARNING.
+_BENIGN_TEARDOWN_MARKERS = ("APPLICATION_DATA_AFTER_CLOSE_NOTIFY",)
 
 # How long to actually wait for a graceful SSL close before giving up.
 # Hypercorn/asyncio's own default is 30s — this is deliberately much
@@ -63,12 +83,26 @@ def apply() -> bool:
     if _PATCHED:
         return True
 
-    log = logging.getLogger(__name__)
+    # Was logging.getLogger(__name__) — a plain stdlib logger with no handler
+    # attached, so this module's own startup INFO line below was silently
+    # dropped (only WARNING+ reached stderr, via Python's last-resort
+    # handler, untagged). Now a child of logging_setup's shared
+    # "cloudinatorftp" logger like every other module, so the startup line
+    # and the new teardown lines below actually reach the daily log file.
+    log = logging_setup.get_logger("ssl_fix")
 
     try:
         from hypercorn.asyncio.tcp_server import TCPServer
 
         async def _patched_close(self) -> None:
+            # Read the peer NOW, before anything is closed — once the SSL
+            # transport tears down, get_extra_info("peername") returns None
+            # (see the module docstring, item 3).
+            try:
+                peer = self.writer.get_extra_info("peername")
+            except Exception:
+                peer = None
+
             try:
                 self.writer.write_eof()
             except (NotImplementedError, OSError, RuntimeError):
@@ -92,6 +126,30 @@ def apply() -> bool:
                 # catch (see this module's docstring / hypercorn#202).
             ):
                 pass  # Already closed, or peer gone — nothing more to do
+            except OSError as exc:
+                # ssl.SSLError is an OSError subclass, and (unlike the
+                # ConnectionError family above) is not otherwise caught.
+                # _close() can run twice for one connection (once from
+                # protocol_send(Closed), once from run()'s finally, and
+                # wait_closed() re-raises the same stored exception each
+                # time) — log only the first.
+                if not getattr(self, "_ssl_fix_logged", False):
+                    self._ssl_fix_logged = True
+                    ip = peer[0] if isinstance(peer, tuple) and peer else "?"
+                    if any(m in str(exc) for m in _BENIGN_TEARDOWN_MARKERS):
+                        log.info(
+                            "client %s sent data after TLS close_notify "
+                            "(harmless teardown error, connection already "
+                            "closing)",
+                            ip,
+                        )
+                    else:
+                        log.warning(
+                            "connection teardown error ip=%s: %s: %s",
+                            ip,
+                            type(exc).__name__,
+                            exc,
+                        )
             finally:
                 await self.idle_task.stop()
 

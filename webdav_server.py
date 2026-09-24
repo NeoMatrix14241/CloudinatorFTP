@@ -46,6 +46,18 @@ Roles (same as the main app):
   readonly  → read access only: GET PROPFIND OPTIONS HEAD
               write-method requests return 403 before reaching wsgidav
 
+Audit logging (2026-09-24):
+  Every WebDAV login, failed login, and file operation is written as one
+  "WebDAV AUDIT: user=... action=... path=... ip=..." line through the
+  shared logging_setup logger — same shape as the FTP/SFTP/SMB AUDIT lines,
+  so all four protocols are greppable the same way. Before this, this file
+  had a logger (`log`) that nothing ever called and a plain stdlib one at
+  that, so WebDAV traffic left no user/action/IP trail at all. The client
+  IP comes from REMOTE_ADDR, which asgiref fills in from Hypercorn's ASGI
+  scope["client"] (the real TCP peer — X-Forwarded-For is deliberately NOT
+  trusted, since this listener is exposed directly and the header would be
+  client-spoofable).
+
 Authentication uses the shared _AuthCache to avoid repeated bcrypt
 calls on every WebDAV request (WebDAV clients often re-authenticate
 on every request, which is expensive with bcrypt).
@@ -55,9 +67,13 @@ import base64
 import hashlib
 import logging
 import os
+import re
 import asyncio
 import threading
 import time
+from urllib.parse import unquote, urlsplit
+
+import logging_setup
 from app import get_local_ip
 
 # Patch the same real, still-open Hypercorn bug (hypercorn#202) that
@@ -71,7 +87,14 @@ hypercorn_ssl_fix.apply()
 
 LOCAL_IP = get_local_ip()
 
-log = logging.getLogger(__name__)
+# Was logging.getLogger(__name__) — in the WebDAV subprocess that resolves to
+# "__main__", a plain stdlib logger with no handler attached anywhere, and it
+# was never called in this file anyway (a dead logger — same situation
+# ftp_server.py and sftp_server.py were in before their own AUDIT patches).
+# Now a child of logging_setup's shared "cloudinatorftp" logger, so AUDIT
+# lines land in the same daily file as every other protocol's, tagged
+# [webdav_server] by logging_setup's per-line component tag.
+log = logging_setup.get_logger("webdav")
 
 # ── HTTP methods considered "writes" ──────────────────────────────────────
 _WRITE_METHODS = frozenset(
@@ -169,6 +192,194 @@ def _resolve_role(username: str, password: str):
         return None
 
 
+# ── Audit logging ─────────────────────────────────────────────────────────
+# WebDAV is stateless HTTP Basic — there is no "session" to hang a login/logout
+# pair on the way FTP/SFTP/SMB have, and clients (Windows WebClient especially)
+# send several requests per second. So this is split by what each event
+# actually is:
+#   login / login_failed  → CloudinatorDC.basic_auth_user() below, which is
+#                           where credentials are really checked. Successful
+#                           logins are de-duplicated per (user, ip) for
+#                           _LOGIN_AUDIT_TTL seconds so one Explorer window
+#                           doesn't write a "login" line per request.
+#                           Failures are NOT de-duplicated — every bad
+#                           attempt is a line, same as FTP/SFTP.
+#   upload/delete/mkdir/  → _AuditMiddleware, which sees the final HTTP
+#   rename/copy/download    status, so only operations that actually
+#                           succeeded are logged (same success-path-only
+#                           convention as the other three protocols).
+#   permission_denied     → _AuditMiddleware, for the readonly-role 403.
+# PROPFIND / OPTIONS / HEAD / LOCK / UNLOCK / PROPPATCH are deliberately
+# NOT audited: they are browsing and lock-keepalive chatter that would bury
+# every real event (same reasoning as smb_server.py's audit hooks).
+
+
+def _client_ip(environ) -> str:
+    """Real TCP peer address. asgiref only sets REMOTE_ADDR when Hypercorn's
+    ASGI scope carries a "client" tuple, so fall back to "?" rather than
+    raising if it's ever absent."""
+    return (environ or {}).get("REMOTE_ADDR") or "?"
+
+
+_LOGIN_AUDIT_TTL = 300  # seconds — one "login" line per (user, ip) per window
+_recent_logins: dict = {}
+_recent_logins_lock = threading.Lock()
+
+
+def _audit_login(username, role, environ) -> None:
+    """Best-effort: an audit-logging problem must never break authentication."""
+    try:
+        ip = _client_ip(environ)
+        if role is None:
+            log.warning("WebDAV AUDIT: user=%r action=login_failed ip=%s", username, ip)
+            return
+        key = (username, ip)
+        now = time.monotonic()
+        with _recent_logins_lock:
+            last = _recent_logins.get(key)
+            if last is not None and now - last < _LOGIN_AUDIT_TTL:
+                return
+            if len(_recent_logins) > 1024:  # keep the dict bounded
+                for k in [
+                    k for k, v in _recent_logins.items() if now - v >= _LOGIN_AUDIT_TTL
+                ]:
+                    _recent_logins.pop(k, None)
+            _recent_logins[key] = now
+        log.info(
+            "WebDAV AUDIT: user=%r action=login role=%r ip=%s tls=%s",
+            username,
+            role,
+            ip,
+            (environ or {}).get("wsgi.url_scheme") == "https",
+        )
+    except Exception:
+        pass
+
+
+# HTTP method → audit action name, and the status codes that count as success.
+_AUDIT_ACTIONS = {
+    "GET": "download",
+    "PUT": "upload",
+    "DELETE": "delete",
+    "MKCOL": "mkdir",
+    "MOVE": "rename",
+    "COPY": "copy",
+}
+_AUDIT_OK_CODES = {
+    "GET": {200, 206},
+    "PUT": {200, 201, 204},
+    "DELETE": {200, 204},
+    "MKCOL": {201},
+    "MOVE": {201, 204},
+    "COPY": {201, 204},
+}
+
+
+def _request_path(environ) -> str:
+    """PATH_INFO as a real str. asgiref hands WSGI the path as latin-1-decoded
+    UTF-8 bytes (the WSGI convention), so a non-ASCII filename would log as
+    mojibake without this round-trip."""
+    raw = environ.get("PATH_INFO", "")
+    try:
+        return raw.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return raw
+
+
+def _destination_path(environ) -> str:
+    """Target path of a MOVE/COPY. The Destination header is a full,
+    percent-encoded URL (https://host:8443/dir/new.txt) — reduce it to the
+    same path form _request_path() returns."""
+    dest = environ.get("HTTP_DESTINATION", "")
+    return unquote(urlsplit(dest).path) if dest else "?"
+
+
+def _is_first_chunk(environ) -> bool:
+    """Windows' WebDAV client downloads large files as many 206 range
+    requests. Audit a GET once — when it's un-ranged, or ranged from byte 0 —
+    instead of once per range."""
+    rng = environ.get("HTTP_RANGE")
+    if not rng:
+        return True
+    m = re.match(r"\s*bytes\s*=\s*(\d+)\s*-", rng)
+    return bool(m) and int(m.group(1)) == 0
+
+
+class _AuditMiddleware:
+    """
+    WSGI middleware that writes one AUDIT line per successful file operation.
+
+    Wraps start_response so it can see the final status code that wsgidav (or
+    _RoleEnforcerMiddleware's 403) chose, then logs user + action + path + ip.
+    Sits OUTSIDE _RoleEnforcerMiddleware in _build_app() so it can see that
+    middleware's 403s too.
+
+    Downloads are logged when the response starts (status known, body not
+    yet streamed), not when the last byte is sent — unlike FTP's
+    on_file_sent, WSGI gives no completion hook, and a cancelled download
+    still records that the user asked for the file.
+    """
+
+    def __init__(self, app):
+        self._app = app
+
+    def __call__(self, environ, start_response):
+        method = environ.get("REQUEST_METHOD", "").upper()
+        if method not in _AUDIT_ACTIONS and method not in _WRITE_METHODS:
+            return self._app(environ, start_response)  # PROPFIND/OPTIONS/HEAD…
+
+        def audited_start_response(status, headers, exc_info=None):
+            try:
+                self._record(method, status, environ)
+            except Exception:
+                pass  # best-effort — never break the response over a log line
+            return start_response(status, headers, exc_info)
+
+        return self._app(environ, audited_start_response)
+
+    @staticmethod
+    def _record(method, status, environ) -> None:
+        code = int(status.split(" ", 1)[0])
+        username, _pw = _parse_basic_auth(environ)
+        ip = _client_ip(environ)
+
+        if code == 403 and method in _WRITE_METHODS:
+            log.warning(
+                "WebDAV AUDIT: user=%r action=permission_denied method=%s path=%r ip=%s",
+                username,
+                method,
+                _request_path(environ),
+                ip,
+            )
+            return
+
+        action = _AUDIT_ACTIONS.get(method)
+        if action is None or code not in _AUDIT_OK_CODES[method]:
+            return
+
+        path = _request_path(environ)
+        if method == "GET" and (path.endswith("/") or not _is_first_chunk(environ)):
+            return  # directory listing, or a follow-up range of one download
+
+        if method in ("MOVE", "COPY"):
+            log.info(
+                "WebDAV AUDIT: user=%r action=%s path=%r -> %r ip=%s",
+                username,
+                action,
+                path,
+                _destination_path(environ),
+                ip,
+            )
+        else:
+            log.info(
+                "WebDAV AUDIT: user=%r action=%s path=%r ip=%s",
+                username,
+                action,
+                path,
+                ip,
+            )
+
+
 # ── WSGI middleware — blocks write operations for readonly users ───────────
 
 
@@ -253,6 +464,7 @@ def _make_domain_controller_class():
             # wsgidav 4.x REQUIRES returning the username string on success.
             # Returning True (as in 3.x) causes wsgidav to reject the auth.
             role = _resolve_role(user_name, password)
+            _audit_login(user_name, role, environ)  # login / login_failed + ip
             return user_name if role is not None else False
 
         def supports_http_digest_auth(self):
@@ -359,7 +571,12 @@ def _build_app(root_dir: str):
     except Exception:
         pass
 
-    return _CertMiddleware(_RoleEnforcerMiddleware(dav_app), cert_path=cert_path)
+    # Order matters: _AuditMiddleware wraps _RoleEnforcerMiddleware (not the
+    # other way round) so it sees the enforcer's own 403s, and sits inside
+    # _CertMiddleware so the unauthenticated /webdav.crt download isn't audited.
+    return _CertMiddleware(
+        _AuditMiddleware(_RoleEnforcerMiddleware(dav_app)), cert_path=cert_path
+    )
 
 
 # ── Server lifecycle ──────────────────────────────────────────────────────
@@ -382,24 +599,29 @@ def _build_hypercorn_logger(name: str) -> logging.Logger:
     Passing a pre-built Logger instead of the string "-" makes Hypercorn's
     _create_logger() skip its own crashing formatter construction entirely
     (it has an early return for an already-built logging.Logger target).
-    Same fix as prod_server.py's identical helper — duplicated rather than
-    imported since this module and prod_server.py aren't otherwise coupled.
+
+    2026-09-24: now returns a child of logging_setup's shared
+    "cloudinatorftp" logger, same as prod_server.py's identical helper
+    already did. This copy had been left building its own plain
+    StreamHandler on sys.stderr — which by then is logging_setup's
+    _TeeStream — so every Hypercorn line reached the log file
+    double-timestamped and tagged [STDERR] (e.g. "[STDERR] [webdav_server]
+    2026-09-24 02:57:50 [INFO] Running on https://..."), instead of as a
+    normal [INFO]/[WARNING] logger line. `name` is kept for compatibility
+    with the existing call site but no longer names the logger.
     """
-    logger = logging.getLogger(name)
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
-            )
-        )
-        logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    return logger
+    return logging_setup.get_logger("hypercorn")
 
 
 # ── ASGI-level disconnect guard (fixes a real, verified silent-flood bug) ──
+
+
+# The exact text guarded_send() raises with, shared with the except clause in
+# __call__ below so the two can't drift apart — that clause must recognize
+# ONLY this guard's own deliberate error, never a real connection failure.
+_GUARD_MSG = (
+    "WebDAV client disconnected mid-response (_DisconnectAbortMiddleware guard)"
+)
 
 
 class _DisconnectAbortMiddleware:
@@ -491,15 +713,29 @@ class _DisconnectAbortMiddleware:
 
         async def guarded_send(message):
             if disconnected:
-                raise ConnectionResetError(
-                    "WebDAV client disconnected mid-response "
-                    "(_DisconnectAbortMiddleware guard)"
-                )
+                raise ConnectionResetError(_GUARD_MSG)
             await send(message)
 
         watcher = asyncio.ensure_future(watch_after_body())
         try:
             await self.app(scope, watched_receive, guarded_send)
+        except ConnectionResetError as exc:
+            # 2026-09-24: guarded_send() raising is this middleware doing its
+            # job — it's how a cancelled download's response loop gets broken
+            # (see the class docstring). That raise is meant to end the
+            # request, not to be reported as a server failure, but nothing
+            # caught it, so Hypercorn logged a full "Error in ASGI
+            # Framework" traceback every time. Most visibly when a client
+            # hung up right after receiving a complete response, a split
+            # second before asgiref's final empty body send — nothing was
+            # actually wrong, the client already had everything. Swallow
+            # ONLY this guard's own error (matched on its exact message);
+            # any other ConnectionResetError — a real one from the socket,
+            # from wsgidav, from anywhere else — is re-raised exactly as
+            # before. The response loop was already broken by the raise
+            # itself, so the flood protection is unaffected.
+            if str(exc) != _GUARD_MSG:
+                raise
         finally:
             disconnected = True  # lets the watcher's own loop condition exit
             watcher.cancel()
@@ -507,6 +743,16 @@ class _DisconnectAbortMiddleware:
                 await watcher
             except (asyncio.CancelledError, Exception):
                 pass
+
+
+# ── Connection-teardown errors (TLS close_notify) ──────────────────────────
+# An ssl.SSLError APPLICATION_DATA_AFTER_CLOSE_NOTIFY at connection teardown
+# used to escape Hypercorn's TCPServer._close() as an anonymous "Unhandled
+# exception in client_connected_cb" traceback (no client address — asyncio no
+# longer knows it by then). That is now handled where the rest of the
+# _close() fixes live: hypercorn_ssl_fix.py's patched _close(), applied at the
+# top of this file, reads the peer before teardown and logs one IP-tagged
+# line. Nothing needed here.
 
 
 def _start_hypercorn(wsgi_app, http_port, https_port, cert_path, key_path):
