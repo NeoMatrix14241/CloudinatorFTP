@@ -46,17 +46,21 @@ Roles (same as the main app):
   readonly  → read access only: GET PROPFIND OPTIONS HEAD
               write-method requests return 403 before reaching wsgidav
 
-Audit logging (2026-09-24):
+Audit logging (2026-09-24, IP trust chain fixed same day):
   Every WebDAV login, failed login, and file operation is written as one
   "WebDAV AUDIT: user=... action=... path=... ip=..." line through the
   shared logging_setup logger — same shape as the FTP/SFTP/SMB AUDIT lines,
   so all four protocols are greppable the same way. Before this, this file
   had a logger (`log`) that nothing ever called and a plain stdlib one at
   that, so WebDAV traffic left no user/action/IP trail at all. The client
-  IP comes from REMOTE_ADDR, which asgiref fills in from Hypercorn's ASGI
-  scope["client"] (the real TCP peer — X-Forwarded-For is deliberately NOT
-  trusted, since this listener is exposed directly and the header would be
-  client-spoofable).
+  IP is resolved by _client_ip() the same way app.py's get_client_ip()
+  resolves it for the main app: CF-Connecting-IP first (this listener,
+  port 8443, is tunneled through cloudflared — confirmed, not assumed),
+  then X-Forwarded-For, then REMOTE_ADDR (asgiref's fill-in from
+  Hypercorn's ASGI scope["client"], the raw TCP peer — correct for direct
+  LAN/Tailscale access, but would be cloudflared's own local address for
+  anything arriving through the tunnel, which is why it's no longer
+  trusted first).
 
 Authentication uses the shared _AuthCache to avoid repeated bcrypt
 calls on every WebDAV request (WebDAV clients often re-authenticate
@@ -215,10 +219,35 @@ def _resolve_role(username: str, password: str):
 
 
 def _client_ip(environ) -> str:
-    """Real TCP peer address. asgiref only sets REMOTE_ADDR when Hypercorn's
-    ASGI scope carries a "client" tuple, so fall back to "?" rather than
-    raising if it's ever absent."""
-    return (environ or {}).get("REMOTE_ADDR") or "?"
+    """
+    Client IP for audit lines. Mirrors app.py's get_client_ip() trust chain
+    (2026-09-23 sync note), adapted from Quart's request.headers to WSGI's
+    environ HTTP_* convention — CF-Connecting-IP is set by Cloudflare's edge
+    itself from the true connecting client and isn't spoofable by the client
+    since there's no direct inbound path to this box; X-Forwarded-For is the
+    fallback for a non-Cloudflare reverse proxy.
+
+    FIXED 2026-09-24 (originally shipped as REMOTE_ADDR-only, same day):
+    this listener (port 8443) is confirmed tunneled through cloudflared —
+    every WebDAV audit line was showing cloudflared's local loopback
+    address instead of the real client, for 100% of internet-facing
+    traffic, since HTTPS wins exclusively over the plaintext :8080
+    fallback whenever it's enabled and starts (see this file's own
+    start() logic) and 8080 itself is not tunneled. REMOTE_ADDR is still
+    the right answer for genuinely direct access (LAN/Tailscale, or a
+    future non-tunneled deployment) — CF-Connecting-IP is the real
+    connecting client, deliberately trusted over a possible middlebox.
+    """
+    environ = environ or {}
+    cf_ip = (environ.get("HTTP_CF_CONNECTING_IP") or "").strip()
+    if cf_ip:
+        return cf_ip
+    xff = environ.get("HTTP_X_FORWARDED_FOR")
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first
+    return environ.get("REMOTE_ADDR") or "?"
 
 
 _LOGIN_AUDIT_TTL = 300  # seconds — one "login" line per (user, ip) per window

@@ -60,7 +60,18 @@ import logging_setup
 # walk thread's 30s countdown.
 sys.setswitchinterval(0.001)
 
-from app import get_local_ip
+# get_local_ip() lives in net_utils.py, not app.py (2026-09-25) — a
+# small, side-effect-free module (see its docstring). This used to be
+# `from app import get_local_ip`, which was actually the line that
+# first triggered app.py's heavy module-level init (the comment above
+# says "from app import app below" does it, which is now accurate —
+# before this change, this get_local_ip import got there first, just
+# with the same net effect since it was still after
+# sys.setswitchinterval() either way). Checked before switching: that
+# call above is process-global and stays in effect regardless of which
+# later line actually imports app.py, so moving this import doesn't
+# affect the timing this section depends on.
+from net_utils import get_local_ip
 
 LOCAL_IP = get_local_ip()
 

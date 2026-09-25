@@ -43,6 +43,13 @@ import logging
 import uuid
 import socket
 
+# get_local_ip's real implementation now lives in net_utils.py (no
+# side effects on import) — aliased here so the wrapper below can
+# re-export it under its original name without self-recursion. See
+# net_utils.py's docstring and the wrapper function for why this split
+# exists.
+from net_utils import get_local_ip as _get_local_ip
+
 
 async def _stream_from_thread(sync_generator):
     """Bridges a blocking, synchronous generator (e.g. zipstream reading
@@ -88,15 +95,21 @@ def get_local_ip() -> str:
     A UDP socket to 8.8.8.8:80 sends no packets — it just forces the OS
     to pick the right outbound interface, revealing the real LAN IP.
     Falls back to 127.0.0.1 if the device has no network.
+
+    MOVED to net_utils.py (2026-09-25), re-exported here so every other
+    module that already does `from app import get_local_ip`
+    (sftp_server.py, ftp_server.py, smb_server.py) keeps working
+    unchanged — they run as threads inside this same process, so
+    importing from here was never the problem. webdav_server.py, which
+    runs as its own separate OS process, now imports directly from
+    net_utils instead — see that module's docstring for why: this
+    function used to be defined directly in this file, and merely
+    importing it from a fresh process ran this entire 7500+ line module's
+    side-effecting top-level code (file_monitor, search index crawler,
+    SSE machinery, RateLimiter — all duplicated, uselessly, inside the
+    WebDAV subprocess). The function body itself is unchanged.
     """
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception:
-        return "127.0.0.1"
+    return _get_local_ip()
 
 
 # Ensure ffmpeg and thread prints appear immediately in terminal

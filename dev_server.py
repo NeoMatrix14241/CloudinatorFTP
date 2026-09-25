@@ -10,7 +10,18 @@ if you specifically need to test HTTP/2 or HTTP/3 behaviour locally.
 import os
 import sys
 import signal
-from app import get_local_ip
+
+# get_local_ip() lives in net_utils.py, not app.py (2026-09-25) — a
+# small, side-effect-free module (see its docstring). This used to be
+# `from app import get_local_ip`, which happened to be the line that
+# first triggered app.py's full module-level init (file_monitor,
+# search index, etc.) in this file, ahead of the `from app import app`
+# import further down. Checked before switching: app.py doesn't read
+# QUART_ENV/QUART_DEBUG (set below) at import time, so there was no
+# real ordering dependency here — app.py's heavy init now happens at
+# the `from app import app` line instead, which is where the comment
+# already at that import correctly says it belongs.
+from net_utils import get_local_ip
 
 LOCAL_IP = get_local_ip()
 
