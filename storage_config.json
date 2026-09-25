@@ -5,5 +5,6 @@
   "db_path": "C:\\Server\\config\\db",
   "cache_path": "C:\\Server\\config\\cache",
   "hls_cache_path": "C:\\Server\\config\\cache\\hls",
-  "img_cache_path": "C:\\Server\\config\\cache\\img"
+  "img_cache_path": "C:\\Server\\config\\cache\\img",
+  "versions_path": "C:\\Server\\config\\versions"
 }

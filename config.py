@@ -102,20 +102,85 @@ from paths import (
     get_cache_dir,
     get_hls_cache_dir,
     get_img_cache_dir,
+    get_versions_dir,
     set_db_dir,
     set_cache_dir,
     set_hls_cache_dir,
     set_img_cache_dir,
+    set_versions_dir,
     reset_db_dir,
     reset_cache_dir,
     reset_hls_cache_dir,
     reset_img_cache_dir,
+    reset_versions_dir,
 )
 
 DB_DIR = get_db_dir(create=False)
 CACHE_DIR = get_cache_dir(create=False)
 HLS_CACHE_DIR = get_hls_cache_dir(create=False)
 IMG_CACHE_DIR = get_img_cache_dir(create=False)
+
+# ── Version Engine ──────────────────────────────────────────────────────
+# Master switch — when False, neither launcher starts the Version Engine
+# child process and nothing else in the app changes (Quart, Hypercorn,
+# uploads, downloads, browsing, WebDAV, SFTP, FTP, FTPS, SMB, and existing
+# file storage are all unaffected). See version_engine.py.
+VERSION_ENGINE_ENABLED = True
+
+# Storage — a dedicated sibling of db/ and cache/, resolved the same way
+# DB_DIR/CACHE_DIR are (create=False: importing config never creates dirs).
+VERSION_STORAGE_DIR = get_versions_dir(create=False)
+VERSION_DB_FILENAME = "version_engine.sqlite3"
+
+# Hybrid storage thresholds. VERSION_CHUNK_SIZE is intentionally its own
+# setting, unrelated to CHUNK_SIZE above (which is the existing chunked-
+# UPLOAD size) — changing one must never affect the other.
+VERSION_SMALL_FILE_THRESHOLD = 4 * 1024 * 1024  # 4 MB — below this: full-object storage
+VERSION_CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB — NOT config.CHUNK_SIZE
+VERSION_CHUNKING_ALGORITHM = (
+    "fixed"  # "fixed" today; "cdc" reserved for a future ContentDefinedChunker
+)
+
+# Workers / concurrency — default low (1) since Termux devices are
+# resource-constrained phones/tablets, not servers (see version_engine.py).
+VERSION_WORKER_COUNT = 1
+VERSION_MAX_CONCURRENT_SNAPSHOTS = 2
+
+# Watcher + periodic reconciliation scanner. The engine must keep working
+# correctly with the watcher disabled — the scanner alone still catches
+# everything, just less promptly.
+VERSION_WATCH_ENABLED = True
+VERSION_SCAN_ENABLED = True
+VERSION_SCAN_INTERVAL = 300  # seconds
+
+# Tracking scope. Every list defaults EMPTY — nothing is tracked until an
+# admin explicitly adds an entry. This (not VERSION_TRACK_ALL_FILES, which
+# itself defaults False) is the actual mechanism preventing an admin from
+# accidentally versioning an entire drive.
+VERSION_TRACK_FILES = []
+VERSION_TRACK_DIRECTORIES = []
+VERSION_TRACK_ROOTS = []
+VERSION_TRACK_ALL_FILES = False
+
+VERSION_EXCLUDE_DIRECTORIES = []
+VERSION_EXCLUDE_PATTERNS = ["*.tmp", "*.part", "~$*"]
+
+# Retention & GC
+VERSION_RETENTION_ENABLED = True
+VERSION_MAX_VERSIONS = 50
+VERSION_GC_ENABLED = True
+VERSION_GC_GRACE_PERIOD = (
+    24 * 60 * 60
+)  # seconds — 24h before deleting unreferenced objects
+
+# Reliability
+VERSION_RETRY_COUNT = 3
+VERSION_RETRY_DELAY = 2  # seconds
+
+VERSION_COMPRESSION_ENABLED = False
+VERSION_FOLLOW_SYMLINKS = False
+VERSION_ALLOW_RESTORE_OVERWRITE = False
+VERSION_SHUTDOWN_TIMEOUT = 30  # seconds — graceful drain window before proc.kill()
 
 
 def detect_platform():
@@ -918,6 +983,33 @@ def save_server_config():
         "SMB_PORT": SMB_PORT,
         "SMB_FALLBACK_PORT": SMB_FALLBACK_PORT,
         "SMB_SHARE_NAME": SMB_SHARE_NAME,
+        # ── Version Engine ───────────────────────────────────────────────
+        "VERSION_ENGINE_ENABLED": VERSION_ENGINE_ENABLED,
+        "VERSION_DB_FILENAME": VERSION_DB_FILENAME,
+        "VERSION_SMALL_FILE_THRESHOLD": VERSION_SMALL_FILE_THRESHOLD,
+        "VERSION_CHUNK_SIZE": VERSION_CHUNK_SIZE,
+        "VERSION_CHUNKING_ALGORITHM": VERSION_CHUNKING_ALGORITHM,
+        "VERSION_WORKER_COUNT": VERSION_WORKER_COUNT,
+        "VERSION_MAX_CONCURRENT_SNAPSHOTS": VERSION_MAX_CONCURRENT_SNAPSHOTS,
+        "VERSION_WATCH_ENABLED": VERSION_WATCH_ENABLED,
+        "VERSION_SCAN_ENABLED": VERSION_SCAN_ENABLED,
+        "VERSION_SCAN_INTERVAL": VERSION_SCAN_INTERVAL,
+        "VERSION_TRACK_FILES": VERSION_TRACK_FILES,
+        "VERSION_TRACK_DIRECTORIES": VERSION_TRACK_DIRECTORIES,
+        "VERSION_TRACK_ROOTS": VERSION_TRACK_ROOTS,
+        "VERSION_TRACK_ALL_FILES": VERSION_TRACK_ALL_FILES,
+        "VERSION_EXCLUDE_DIRECTORIES": VERSION_EXCLUDE_DIRECTORIES,
+        "VERSION_EXCLUDE_PATTERNS": VERSION_EXCLUDE_PATTERNS,
+        "VERSION_RETENTION_ENABLED": VERSION_RETENTION_ENABLED,
+        "VERSION_MAX_VERSIONS": VERSION_MAX_VERSIONS,
+        "VERSION_GC_ENABLED": VERSION_GC_ENABLED,
+        "VERSION_GC_GRACE_PERIOD": VERSION_GC_GRACE_PERIOD,
+        "VERSION_RETRY_COUNT": VERSION_RETRY_COUNT,
+        "VERSION_RETRY_DELAY": VERSION_RETRY_DELAY,
+        "VERSION_COMPRESSION_ENABLED": VERSION_COMPRESSION_ENABLED,
+        "VERSION_FOLLOW_SYMLINKS": VERSION_FOLLOW_SYMLINKS,
+        "VERSION_ALLOW_RESTORE_OVERWRITE": VERSION_ALLOW_RESTORE_OVERWRITE,
+        "VERSION_SHUTDOWN_TIMEOUT": VERSION_SHUTDOWN_TIMEOUT,
         # ── Metadata ──────────────────────────────────────────────────────
         "configured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -941,6 +1033,18 @@ def load_server_config():
     global SFTP_ENABLED, SFTP_PORT
     global FTP_ENABLED, FTP_PORT, FTP_TLS_ENABLED, FTP_TLS_REQUIRE_DATA
     global SMB_ENABLED, SMB_PORT, SMB_FALLBACK_PORT, SMB_SHARE_NAME
+    global VERSION_ENGINE_ENABLED, VERSION_DB_FILENAME
+    global VERSION_SMALL_FILE_THRESHOLD, VERSION_CHUNK_SIZE, VERSION_CHUNKING_ALGORITHM
+    global VERSION_WORKER_COUNT, VERSION_MAX_CONCURRENT_SNAPSHOTS
+    global VERSION_WATCH_ENABLED, VERSION_SCAN_ENABLED, VERSION_SCAN_INTERVAL
+    global VERSION_TRACK_FILES, VERSION_TRACK_DIRECTORIES, VERSION_TRACK_ROOTS
+    global VERSION_TRACK_ALL_FILES
+    global VERSION_EXCLUDE_DIRECTORIES, VERSION_EXCLUDE_PATTERNS
+    global VERSION_RETENTION_ENABLED, VERSION_MAX_VERSIONS
+    global VERSION_GC_ENABLED, VERSION_GC_GRACE_PERIOD
+    global VERSION_RETRY_COUNT, VERSION_RETRY_DELAY
+    global VERSION_COMPRESSION_ENABLED, VERSION_FOLLOW_SYMLINKS
+    global VERSION_ALLOW_RESTORE_OVERWRITE, VERSION_SHUTDOWN_TIMEOUT
 
     try:
         if os.path.exists(_SERVER_CONFIG_FILE):
@@ -994,6 +1098,75 @@ def load_server_config():
             SMB_PORT = config.get("SMB_PORT", SMB_PORT)
             SMB_FALLBACK_PORT = config.get("SMB_FALLBACK_PORT", SMB_FALLBACK_PORT)
             SMB_SHARE_NAME = config.get("SMB_SHARE_NAME", SMB_SHARE_NAME)
+
+            # ── Version Engine ──────────────────────────────────────────
+            # .get(key, default) means an old server_config.json missing
+            # any/all VERSION_* keys falls back to the in-code default
+            # above with no migration code needed.
+            VERSION_ENGINE_ENABLED = config.get(
+                "VERSION_ENGINE_ENABLED", VERSION_ENGINE_ENABLED
+            )
+            VERSION_DB_FILENAME = config.get("VERSION_DB_FILENAME", VERSION_DB_FILENAME)
+            VERSION_SMALL_FILE_THRESHOLD = config.get(
+                "VERSION_SMALL_FILE_THRESHOLD", VERSION_SMALL_FILE_THRESHOLD
+            )
+            VERSION_CHUNK_SIZE = config.get("VERSION_CHUNK_SIZE", VERSION_CHUNK_SIZE)
+            VERSION_CHUNKING_ALGORITHM = config.get(
+                "VERSION_CHUNKING_ALGORITHM", VERSION_CHUNKING_ALGORITHM
+            )
+            VERSION_WORKER_COUNT = config.get(
+                "VERSION_WORKER_COUNT", VERSION_WORKER_COUNT
+            )
+            VERSION_MAX_CONCURRENT_SNAPSHOTS = config.get(
+                "VERSION_MAX_CONCURRENT_SNAPSHOTS", VERSION_MAX_CONCURRENT_SNAPSHOTS
+            )
+            VERSION_WATCH_ENABLED = config.get(
+                "VERSION_WATCH_ENABLED", VERSION_WATCH_ENABLED
+            )
+            VERSION_SCAN_ENABLED = config.get(
+                "VERSION_SCAN_ENABLED", VERSION_SCAN_ENABLED
+            )
+            VERSION_SCAN_INTERVAL = config.get(
+                "VERSION_SCAN_INTERVAL", VERSION_SCAN_INTERVAL
+            )
+            VERSION_TRACK_FILES = config.get("VERSION_TRACK_FILES", VERSION_TRACK_FILES)
+            VERSION_TRACK_DIRECTORIES = config.get(
+                "VERSION_TRACK_DIRECTORIES", VERSION_TRACK_DIRECTORIES
+            )
+            VERSION_TRACK_ROOTS = config.get("VERSION_TRACK_ROOTS", VERSION_TRACK_ROOTS)
+            VERSION_TRACK_ALL_FILES = config.get(
+                "VERSION_TRACK_ALL_FILES", VERSION_TRACK_ALL_FILES
+            )
+            VERSION_EXCLUDE_DIRECTORIES = config.get(
+                "VERSION_EXCLUDE_DIRECTORIES", VERSION_EXCLUDE_DIRECTORIES
+            )
+            VERSION_EXCLUDE_PATTERNS = config.get(
+                "VERSION_EXCLUDE_PATTERNS", VERSION_EXCLUDE_PATTERNS
+            )
+            VERSION_RETENTION_ENABLED = config.get(
+                "VERSION_RETENTION_ENABLED", VERSION_RETENTION_ENABLED
+            )
+            VERSION_MAX_VERSIONS = config.get(
+                "VERSION_MAX_VERSIONS", VERSION_MAX_VERSIONS
+            )
+            VERSION_GC_ENABLED = config.get("VERSION_GC_ENABLED", VERSION_GC_ENABLED)
+            VERSION_GC_GRACE_PERIOD = config.get(
+                "VERSION_GC_GRACE_PERIOD", VERSION_GC_GRACE_PERIOD
+            )
+            VERSION_RETRY_COUNT = config.get("VERSION_RETRY_COUNT", VERSION_RETRY_COUNT)
+            VERSION_RETRY_DELAY = config.get("VERSION_RETRY_DELAY", VERSION_RETRY_DELAY)
+            VERSION_COMPRESSION_ENABLED = config.get(
+                "VERSION_COMPRESSION_ENABLED", VERSION_COMPRESSION_ENABLED
+            )
+            VERSION_FOLLOW_SYMLINKS = config.get(
+                "VERSION_FOLLOW_SYMLINKS", VERSION_FOLLOW_SYMLINKS
+            )
+            VERSION_ALLOW_RESTORE_OVERWRITE = config.get(
+                "VERSION_ALLOW_RESTORE_OVERWRITE", VERSION_ALLOW_RESTORE_OVERWRITE
+            )
+            VERSION_SHUTDOWN_TIMEOUT = config.get(
+                "VERSION_SHUTDOWN_TIMEOUT", VERSION_SHUTDOWN_TIMEOUT
+            )
 
             print(f"✅ Server configuration loaded from {_SERVER_CONFIG_FILE}")
             return True
@@ -1082,6 +1255,7 @@ def _pick_suggested_path(kind, examples):
         "cache": "Cache",
         "hls": "HLS Cache",
         "img": "Image Cache",
+        "versions": "Version Storage",
     }.get(kind, kind)
     if not _confirm_path(path, label):
         return
@@ -1091,6 +1265,8 @@ def _pick_suggested_path(kind, examples):
         set_cache_dir(path)
     elif kind == "hls":
         set_hls_cache_dir(path)
+    elif kind == "versions":
+        set_versions_dir(path)
     else:
         set_img_cache_dir(path)
 
@@ -1102,10 +1278,15 @@ def _configure_custom_dir(kind):
         "cache": "Cache",
         "hls": "HLS Cache",
         "img": "Image Cache",
+        "versions": "Version Storage",
     }.get(kind, kind)
-    subfolder = {"db": "db", "cache": "cache", "hls": "hls", "img": "img"}.get(
-        kind, kind
-    )
+    subfolder = {
+        "db": "db",
+        "cache": "cache",
+        "hls": "hls",
+        "img": "img",
+        "versions": "versions",
+    }.get(kind, kind)
     print(f"\n🎯 Custom {label} Directory")
     print(f"   Enter a parent folder — '{subfolder}' will be appended automatically.")
     print(f"   Example: /srv/cloudinator  →  /srv/cloudinator/{subfolder}")
@@ -1126,6 +1307,8 @@ def _configure_custom_dir(kind):
             set_cache_dir(expanded)
         elif kind == "hls":
             set_hls_cache_dir(expanded)
+        elif kind == "versions":
+            set_versions_dir(expanded)
         else:
             set_img_cache_dir(expanded)
     except KeyboardInterrupt:
@@ -1299,6 +1482,238 @@ def configure_cache_path():
         print("🔄 Cache directory reset to default.")
 
 
+def configure_versions_path():
+    """Configure Version Engine storage directory (VERSION_STORAGE_DIR)."""
+    print("\n🕓 Version Storage Directory Configuration")
+    print("=" * 50)
+    print(f"Current: {get_versions_dir()}")
+    print()
+    print("This directory holds the Version Engine's content-addressed")
+    print("object/chunk store — the actual byte content of every historical")
+    print("version of every tracked file. It is irreplaceable if lost (unlike")
+    print("cache/, which is fully rebuildable), so it deserves its own tier.")
+    print()
+    print("⚠️  This directory is NEVER served over WebDAV/SFTP/FTP/SMB —")
+    print("   it is intentionally kept separate from ROOT_DIR.")
+    print()
+    print("⚠️  After moving: copy your existing versions/ files to the new")
+    print("   location BEFORE restarting, or version history is unreachable.")
+    print()
+
+    examples = _db_cache_examples("versions")
+    print("Suggested secure locations:")
+    for ex in examples:
+        print(f"  • {ex}")
+    print()
+
+    print("1. 📁 Use a suggested location")
+    print("2. 🎯 Enter custom path")
+    print("3. 🔄 Reset to default  (inside server root)")
+    print("4. ↩️  Back")
+    print()
+
+    try:
+        choice = input("Select option (1-4): ").strip()
+    except KeyboardInterrupt:
+        return
+
+    if choice == "1":
+        _pick_suggested_path("versions", examples)
+    elif choice == "2":
+        _configure_custom_dir("versions")
+    elif choice == "3":
+        reset_versions_dir()
+        print("🔄 Version storage directory reset to default.")
+
+
+def configure_version_engine_settings():
+    """Configure single-value Version Engine settings."""
+    global VERSION_ENGINE_ENABLED, VERSION_SMALL_FILE_THRESHOLD, VERSION_CHUNK_SIZE
+    global VERSION_WORKER_COUNT, VERSION_SCAN_ENABLED, VERSION_SCAN_INTERVAL
+    global VERSION_WATCH_ENABLED, VERSION_MAX_VERSIONS, VERSION_RETENTION_ENABLED
+    global VERSION_GC_ENABLED, VERSION_GC_GRACE_PERIOD
+    global VERSION_ALLOW_RESTORE_OVERWRITE, VERSION_FOLLOW_SYMLINKS
+
+    print("\n🕓 Version Engine Settings")
+    print("=" * 50)
+
+    while True:
+        _yon = lambda v: "✅ Enabled" if v else "🚫 Disabled"
+        print("\nCurrent Settings:")
+        print(f" 1. Version Engine:        {_yon(VERSION_ENGINE_ENABLED)}")
+        print(
+            f" 2. Small-file threshold:  {format_bytes(VERSION_SMALL_FILE_THRESHOLD)}  (below: full-object; above: chunked)"
+        )
+        print(
+            f" 3. Chunk size:            {format_bytes(VERSION_CHUNK_SIZE)}  (independent of upload CHUNK_SIZE)"
+        )
+        print(f" 4. Worker count:          {VERSION_WORKER_COUNT}")
+        print(f" 5. Watcher:               {_yon(VERSION_WATCH_ENABLED)}")
+        print(
+            f" 6. Scanner:               {_yon(VERSION_SCAN_ENABLED)}  every {VERSION_SCAN_INTERVAL}s"
+        )
+        print(
+            f" 7. Retention:             {_yon(VERSION_RETENTION_ENABLED)}  max {VERSION_MAX_VERSIONS} versions/file"
+        )
+        print(
+            f" 8. Garbage collection:    {_yon(VERSION_GC_ENABLED)}  grace period {VERSION_GC_GRACE_PERIOD}s"
+        )
+        print(f" 9. Allow restore overwrite: {_yon(VERSION_ALLOW_RESTORE_OVERWRITE)}")
+        print(f"10. Follow symlinks:       {_yon(VERSION_FOLLOW_SYMLINKS)}")
+        print("11. Save & Exit")
+        print("12. Exit Without Saving")
+        print()
+
+        choice = input("Select option (1-12): ").strip()
+
+        if choice == "1":
+            VERSION_ENGINE_ENABLED = not VERSION_ENGINE_ENABLED
+        elif choice == "2":
+            try:
+                mb = float(input("Small-file threshold in MB: ").strip())
+                if mb > 0:
+                    VERSION_SMALL_FILE_THRESHOLD = int(mb * 1024 * 1024)
+            except ValueError:
+                print("❌ Invalid number")
+        elif choice == "3":
+            try:
+                mb = float(input("Chunk size in MB: ").strip())
+                if mb > 0:
+                    VERSION_CHUNK_SIZE = int(mb * 1024 * 1024)
+            except ValueError:
+                print("❌ Invalid number")
+        elif choice == "4":
+            try:
+                n = int(
+                    input(
+                        "Worker count (1 recommended on Termux/low-power devices): "
+                    ).strip()
+                )
+                if n >= 1:
+                    VERSION_WORKER_COUNT = n
+            except ValueError:
+                print("❌ Invalid number")
+        elif choice == "5":
+            VERSION_WATCH_ENABLED = not VERSION_WATCH_ENABLED
+        elif choice == "6":
+            VERSION_SCAN_ENABLED = not VERSION_SCAN_ENABLED
+        elif choice == "7":
+            VERSION_RETENTION_ENABLED = not VERSION_RETENTION_ENABLED
+        elif choice == "8":
+            VERSION_GC_ENABLED = not VERSION_GC_ENABLED
+        elif choice == "9":
+            VERSION_ALLOW_RESTORE_OVERWRITE = not VERSION_ALLOW_RESTORE_OVERWRITE
+        elif choice == "10":
+            VERSION_FOLLOW_SYMLINKS = not VERSION_FOLLOW_SYMLINKS
+        elif choice == "11":
+            save_server_config()
+            print("✅ Version Engine configuration saved!")
+            break
+        elif choice == "12":
+            print("↩️  Cancelled")
+            break
+        else:
+            print("❌ Invalid option")
+
+
+def _version_list_menu(title, getter_name):
+    """Generic view/add/remove/clear sub-menu for one VERSION_TRACK_*/
+    VERSION_EXCLUDE_* list setting. `getter_name` is the global var name."""
+    while True:
+        current = globals()[getter_name]
+        print(f"\n{title}  ({len(current)} entr{'y' if len(current) == 1 else 'ies'})")
+        for i, item in enumerate(current, 1):
+            print(f"   {i}. {item}")
+        if not current:
+            print("   (empty — nothing configured)")
+        print("\n1. ➕ Add entry")
+        print("2. ➖ Remove entry")
+        print("3. 🧹 Clear all")
+        print("4. ↩️  Back")
+
+        choice = input("\nSelect option (1-4): ").strip()
+
+        if choice == "1":
+            try:
+                entry = input("Path / pattern to add: ").strip()
+            except KeyboardInterrupt:
+                continue
+            if entry and entry not in current:
+                current.append(entry)
+                print(f"✅ Added: {entry}")
+        elif choice == "2":
+            if not current:
+                print("Nothing to remove.")
+                continue
+            try:
+                idx = int(input("Entry number to remove: ").strip())
+            except ValueError:
+                print("❌ Invalid number")
+                continue
+            if 1 <= idx <= len(current):
+                removed = current.pop(idx - 1)
+                print(f"✅ Removed: {removed}")
+            else:
+                print("❌ Out of range")
+        elif choice == "3":
+            current.clear()
+            print("✅ Cleared")
+        elif choice == "4":
+            break
+        else:
+            print("❌ Invalid option")
+
+
+def configure_version_tracking():
+    """Sub-menu for the five list-value Version Engine settings.
+
+    Unlike every other VERSION_* setting, these are lists, not single
+    values — none of the existing configure_*() single-prompt patterns
+    apply, so this gets its own view/add/remove/clear shape.
+    """
+    print("\n🕓 Version Tracking Scope")
+    print("=" * 50)
+    print("Nothing is tracked until you explicitly add an entry below.")
+    print("VERSION_TRACK_ALL_FILES only applies recursively under whatever")
+    print("roots you list in 'Tracking roots' — it never means the whole machine.")
+
+    while True:
+        global VERSION_TRACK_ALL_FILES
+        _yon = lambda v: "✅ Enabled" if v else "🚫 Disabled"
+        print("\n1. Tracked files            (VERSION_TRACK_FILES)")
+        print("2. Tracked directories       (VERSION_TRACK_DIRECTORIES)")
+        print("3. Tracking roots            (VERSION_TRACK_ROOTS)")
+        print(f"4. Track ALL files under roots  {_yon(VERSION_TRACK_ALL_FILES)}")
+        print("5. Excluded directories      (VERSION_EXCLUDE_DIRECTORIES)")
+        print("6. Excluded patterns         (VERSION_EXCLUDE_PATTERNS)")
+        print("7. Save & Exit")
+        print("8. Exit Without Saving")
+
+        choice = input("\nSelect option (1-8): ").strip()
+
+        if choice == "1":
+            _version_list_menu("Tracked files", "VERSION_TRACK_FILES")
+        elif choice == "2":
+            _version_list_menu("Tracked directories", "VERSION_TRACK_DIRECTORIES")
+        elif choice == "3":
+            _version_list_menu("Tracking roots", "VERSION_TRACK_ROOTS")
+        elif choice == "4":
+            VERSION_TRACK_ALL_FILES = not VERSION_TRACK_ALL_FILES
+        elif choice == "5":
+            _version_list_menu("Excluded directories", "VERSION_EXCLUDE_DIRECTORIES")
+        elif choice == "6":
+            _version_list_menu("Excluded patterns", "VERSION_EXCLUDE_PATTERNS")
+        elif choice == "7":
+            save_server_config()
+            print("✅ Version tracking configuration saved!")
+            break
+        elif choice == "8":
+            print("↩️  Cancelled")
+            break
+        else:
+            print("❌ Invalid option")
+
+
 def configure_hls_cache_path():
     """Configure HLS Cache directory (HLS_CACHE_DIR)."""
     print("\n🎬 HLS Cache Directory Configuration")
@@ -1435,22 +1850,51 @@ def main_configuration_menu():
         print("\nConfiguration Options:")
         print("1. Storage Path Configuration")
         print("2. Server Settings Configuration")
-        print("3. View Current Settings")
-        print("4. Exit")
+        print("3. Version History / Version Engine")
+        print("4. View Current Settings")
+        print("5. Exit")
 
-        choice = input("\nSelect option (1-4): ").strip()
+        choice = input("\nSelect option (1-5): ").strip()
 
         if choice == "1":
             configure_storage_path()
         elif choice == "2":
             configure_server_settings()
         elif choice == "3":
-            view_current_settings()
+            _version_engine_menu()
         elif choice == "4":
+            view_current_settings()
+        elif choice == "5":
             print("✅ Configuration complete!")
             break
         else:
-            print("❌ Invalid option. Please choose 1-4.")
+            print("❌ Invalid option. Please choose 1-5.")
+
+
+def _version_engine_menu():
+    """Version History / Version Engine section of the main config menu."""
+    while True:
+        print("\n🕓 Version History / Version Engine")
+        print("=" * 50)
+        print(f"1. Version storage path       (currently: {get_versions_dir()})")
+        print(
+            "2. Engine settings            (enable, chunking, workers, retention, GC…)"
+        )
+        print("3. Tracking scope             (which files/dirs/roots to version)")
+        print("4. ↩️  Back")
+
+        choice = input("\nSelect option (1-4): ").strip()
+
+        if choice == "1":
+            configure_versions_path()
+        elif choice == "2":
+            configure_version_engine_settings()
+        elif choice == "3":
+            configure_version_tracking()
+        elif choice == "4":
+            break
+        else:
+            print("❌ Invalid option")
 
 
 def configure_hls_settings():
@@ -1803,6 +2247,47 @@ def view_current_settings():
     )
     print(
         f"   SMB    : {_yon(SMB_ENABLED)}  →  \\\\HOST\\{SMB_SHARE_NAME}  (port {SMB_PORT}, fallback {SMB_FALLBACK_PORT})"
+    )
+
+    print(f"\n🕓 Version History:")
+    print(f"   Version Engine:     {_yon(VERSION_ENGINE_ENABLED)}")
+    try:
+        import version_engine as _ve
+
+        st = _ve.status()
+        pid_str = st.get("pid") or "—"
+        print(
+            f"   Running:            {'✅ yes' if st.get('running') else '🚫 no'}  (pid {pid_str})"
+        )
+        print(f"   Watcher running:    {_yon(st.get('watcher_running'))}")
+        print(f"   Scanner running:    {_yon(st.get('scanner_running'))}")
+        print(
+            f"   Jobs:               {st.get('pending_jobs', 0)} pending, "
+            f"{st.get('active_jobs', 0)} active, {st.get('failed_jobs', 0)} failed"
+        )
+        print(f"   Last scan:          {st.get('last_scan') or 'never'}")
+    except Exception as e:
+        print(f"   Running:            (status unavailable: {e})")
+    print(f"   Database (resolved): {os.path.join(get_db_dir(), VERSION_DB_FILENAME)}")
+    print(f"   Storage (resolved):  {get_versions_dir()}")
+    print(
+        f"   Small-file threshold: {format_bytes(VERSION_SMALL_FILE_THRESHOLD)}   "
+        f"Chunk size: {format_bytes(VERSION_CHUNK_SIZE)}"
+    )
+    print(f"   Worker count:        {VERSION_WORKER_COUNT}")
+    print(
+        f"   Watcher: {_yon(VERSION_WATCH_ENABLED)}   "
+        f"Scanner: {_yon(VERSION_SCAN_ENABLED)} (every {VERSION_SCAN_INTERVAL}s)"
+    )
+    print(
+        f"   Retention: {_yon(VERSION_RETENTION_ENABLED)} (max {VERSION_MAX_VERSIONS}/file)   "
+        f"GC: {_yon(VERSION_GC_ENABLED)} (grace {VERSION_GC_GRACE_PERIOD}s)"
+    )
+    print(f"   Tracked files:       {len(VERSION_TRACK_FILES)}")
+    print(f"   Tracked directories: {len(VERSION_TRACK_DIRECTORIES)}")
+    print(
+        f"   Tracking roots:      {len(VERSION_TRACK_ROOTS)}  "
+        f"(all-files-under-roots: {_yon(VERSION_TRACK_ALL_FILES)})"
     )
 
 

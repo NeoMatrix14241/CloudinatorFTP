@@ -67,6 +67,13 @@ import protocol_manager
 
 protocol_manager.start_all()
 
+# Start the Version Engine — a separate OS process (see version_engine.py's
+# module docstring), independent of protocol_manager.py by design. No-op if
+# config.VERSION_ENGINE_ENABLED is False.
+import version_engine
+
+version_engine.start()
+
 if __name__ == "__main__":
 
     from config import ROOT_DIR, HOST, PORT, PERMANENT_SESSION_LIFETIME
@@ -146,6 +153,11 @@ if __name__ == "__main__":
         # a separate, one-time, manually-run setup (smb_setup.py), not
         # something tied to this server's start/stop.
         protocol_manager.stop_all()
+
+        # Stop the Version Engine child process the same way — it's a
+        # genuinely separate OS process (like WebDAV) that does not exit
+        # just because this one does.
+        version_engine.stop()
 
         active = [
             t for t in _t.enumerate() if t is not _t.main_thread() and t.is_alive()

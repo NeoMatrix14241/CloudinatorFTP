@@ -243,6 +243,13 @@ import protocol_manager
 
 protocol_manager.start_all()
 
+# Start the Version Engine — a separate OS process, independent of
+# protocol_manager.py by design (see version_engine.py's module docstring).
+# No-op if config.VERSION_ENGINE_ENABLED is False.
+import version_engine
+
+version_engine.start()
+
 
 async def _run():
     from config import ROOT_DIR, HOST, PORT, PERMANENT_SESSION_LIFETIME
@@ -395,6 +402,10 @@ async def _run():
                     protocol_manager.force_kill_webdav()
                 except Exception:
                     pass
+                try:
+                    version_engine.force_kill()
+                except Exception:
+                    pass
                 os._exit(0)
 
         loop = asyncio.get_running_loop()
@@ -438,6 +449,7 @@ async def _run():
 
         print("\n🛑 Stopping protocol servers…")
         protocol_manager.stop_all()
+        version_engine.stop()
 
         active = [
             t

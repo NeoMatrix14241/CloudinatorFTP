@@ -254,6 +254,60 @@ def reset_img_cache_dir():
     print("⚠️  Restart the server for the change to take effect.")
 
 
+def get_versions_dir(create: bool = True) -> str:
+    """
+    Return the configured Version Engine storage directory (absolute path).
+    Defaults to <server_root>/versions if not set in storage_config.json.
+    Pass create=False to just read the path without creating the directory
+    (used by config.py's module-level resolution so importing config never
+    creates directories).
+
+    This is a dedicated, non-"cache-labeled" tier — unlike cache_path (which
+    holds rebuildable data: search/file indexes, HLS/image preview caches),
+    version history is irreplaceable if lost, so it intentionally does not
+    live under CACHE_DIR and nothing should treat it as safe to purge.
+    """
+    path = _load().get("versions_path") or os.path.join(_HERE, "versions")
+    path = os.path.abspath(path)
+    if create:
+        os.makedirs(path, exist_ok=True)
+    return path
+
+
+def set_versions_dir(path: str) -> bool:
+    """
+    Validate, create, and persist a new Version Engine storage directory.
+    Automatically appends a 'versions' subfolder so the user can point at a
+    parent like C:\\Server and get C:\\Server\\versions.
+    Returns True on success, False if the path is not writable.
+    """
+    path = os.path.abspath(os.path.expanduser(path))
+    if os.path.basename(path).lower() != "versions":
+        path = os.path.join(path, "versions")
+    try:
+        os.makedirs(path, exist_ok=True)
+        _test_writable(path)
+        _save({"versions_path": path})
+        print(f"✅ Version storage directory set to: {path}")
+        print("⚠️  Restart the server for the change to take effect.")
+        print(
+            "   Don't forget to move your existing versions/ files to the new location!"
+        )
+        return True
+    except Exception as e:
+        print(f"❌ Cannot use versions path '{path}': {e}")
+        return False
+
+
+def reset_versions_dir():
+    """Reset Version Engine storage directory to the default (<server_root>/versions)."""
+    _save({"versions_path": ""})
+    print(
+        f"✅ Version storage directory reset to default: {os.path.join(_HERE, 'versions')}"
+    )
+    print("⚠️  Restart the server for the change to take effect.")
+
+
 def ensure_dirs():
     """
     Create db/, cache/, HLS cache, and image cache directories at their
@@ -268,10 +322,12 @@ def ensure_dirs():
     cache_path = get_cache_dir(create=True)
     hls_path = get_hls_cache_dir(create=True)
     img_path = get_img_cache_dir(create=True)
+    versions_path = get_versions_dir(create=True)
     print(f"📂 DB dir ready:        {db_path}")
     print(f"📂 Cache dir ready:     {cache_path}")
     print(f"📂 HLS cache ready:     {hls_path}")
     print(f"📂 Image cache ready:   {img_path}")
+    print(f"📂 Versions dir ready:  {versions_path}")
 
 
 def get_all_paths() -> dict:
@@ -282,10 +338,12 @@ def get_all_paths() -> dict:
         "cache_dir": get_cache_dir(create=False),
         "hls_cache_dir": get_hls_cache_dir(create=False),
         "img_cache_dir": get_img_cache_dir(create=False),
+        "versions_dir": get_versions_dir(create=False),
         "default_db_dir": os.path.join(_HERE, "db"),
         "default_cache_dir": os.path.join(_HERE, "cache"),
         "default_hls_cache_dir": os.path.join(get_cache_dir(create=False), "hls"),
         "default_img_cache_dir": os.path.join(get_cache_dir(create=False), "img"),
+        "default_versions_dir": os.path.join(_HERE, "versions"),
     }
 
 
