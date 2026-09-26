@@ -1,7 +1,11 @@
 # CloudinatorFTP — Complete Codebase Reference for AI-Assisted Development
 
-**Version**: 4.21 (+ 2026-09-24 WebDAV client-IP trust-chain fix, confirmed tunneled on 8443; 2026-09-24 WebDAV audit logging + client-IP attribution for TLS-teardown errors; 2026-09-24 SFTP/FTP/SMB audit logging, SFTP upload flag bug fix; 2026-09-23 app.py client-IP logging change; 2026-09-22 database.py verification pass; 2026-09-21 ops-tooling sync: manage.sh, setup_pymodules.sh, revoke_sharing.py; earlier 2026-08-28 protocol-hardening, route-sync, and video-skin-overrides.css notes) | **Last Updated**: 2026-09-24  
+**Version**: 4.23 (+ 2026-09-26 manage.sh integration for the Version Engine — `version-manage` inserted as menu #9, `config` moved to #10, everything else shifted down; `version_manage.py` gained a full interactive menu alongside its CLI subcommands, plus hardened Ctrl-C handling verified with real SIGINT delivery; 2026-09-25 new subsystem: Universal File Versioning Engine — `version_engine.py`, `version_manage.py`, plus `config.py`/`paths.py`/`dev_server.py`/`prod_server.py` changes; 2026-09-24 WebDAV client-IP trust-chain fix, confirmed tunneled on 8443; 2026-09-24 WebDAV audit logging + client-IP attribution for TLS-teardown errors; 2026-09-24 SFTP/FTP/SMB audit logging, SFTP upload flag bug fix; 2026-09-23 app.py client-IP logging change; 2026-09-22 database.py verification pass; 2026-09-21 ops-tooling sync: manage.sh, setup_pymodules.sh, revoke_sharing.py; earlier 2026-08-28 protocol-hardening, route-sync, and video-skin-overrides.css notes) | **Last Updated**: 2026-09-26  
 **For**: AI assistants and developers modifying/extending CloudinatorFTP
+
+**🆕 2026-09-26 sync note**: `manage.sh` and `version_manage.py` both changed, at the user's explicit request, to finish integrating the Version Engine (added 2026-09-25, see the note below) into the existing ops tooling. `manage.sh`'s Utilities section was reordered — `version-manage` is now **menu #9** (the first Utilities entry), `config` moved to **#10**, and everything that used to occupy 9–19 shifted down to 11–20 in its previous relative order (this is the **third** time this doc's menu numbers have shifted from a mid-list insert — see [manage.sh Internals & Editing Rules](#managesh-internals--editing-rules), which has the full current 1–20 table). `version_manage.py` gained a full interactive menu (`interactive_menu()`, entered automatically with no CLI arguments) that shares its `do_list`/`do_restore`/`do_delete` core functions with the existing CLI subcommands — nothing is duplicated between the two interfaces. Ctrl-C handling was hardened throughout and *verified with real `SIGINT` delivery* (not simulated input) at three points: the interactive menu's top-level prompt (clean exit), mid-action inside a sub-prompt (cancels just that action, returns to the menu), and CLI-mode mid-confirmation (`restore --overwrite`, clean exit 1, no traceback). See [Version Engine (File Versioning)](#version-engine-file-versioning-2026-09-25) for the `version_manage.py` write-up and [Version 4.23](#version-423--2026-09-26-managesh-integration--version_managepy-interactive-mode) in the Changelog.
+
+**🆕 2026-09-25 sync note**: added a brand-new subsystem, not a revision of an existing one — the **Version Engine** (per-file version history, independent of the git-style "share" feature). Two new files, `version_engine.py` (parent-API + `--worker` child process, mirrors `protocol_manager.py`'s WebDAV-subprocess pattern deliberately, see [WebDAV Process Isolation](#webdav-process-isolation-watchdog-restart-webdav-2026-09-09) for the pattern it copies) and `version_manage.py` (a separate admin CLI — `list`/`restore`/`delete` — kept out of `version_engine.py` on purpose, since that file is process-lifecycle code, not an interactive surface). `config.py` gained ~25 `VERSION_*` settings (master switch `VERSION_ENGINE_ENABLED`, chunking, workers, tracking scope, retention, GC) plus the matching menu tree; `paths.py` gained the `get_versions_dir`/`set_versions_dir`/`reset_versions_dir` trio (a fourth sibling of `db_path`/`cache_path`, since version history is irreplaceable, unlike the rebuildable cache tiers); `dev_server.py`/`prod_server.py` gained `version_engine.start()`/`.stop()`/`.force_kill()` calls at the same points WebDAV's process calls sit. `protocol_manager.py` and `app.py` are confirmed **byte-identical** to their pre-change state (`diff`-verified, not just "no changes intended") — the spec for this work explicitly required `protocol_manager.py` stay protocol-only. Full writeup, including the process architecture, SQLite schema, storage layout, the watcher-is-stat-polling-not-inotify design decision, and a real bug found and fixed during testing (`run_gc()`'s foreign-key violation on soft-deleted versions), is in the new **[Version Engine (File Versioning)](#version-engine-file-versioning-2026-09-25)** section, inserted after Protocol Servers. See [Version 4.22](#version-422--2026-09-25-universal-file-versioning-engine) in the Changelog.
 
 **🆕 2026-09-24 sync note**: `sftp_server.py`, `ftp_server.py`, and `smb_server.py` all gained success-path AUDIT logging (`user`/`action`/`path`/`ip`) for login and every write operation (upload, delete, rename, mkdir, rmdir) — previously only PERMISSION_DENIED cases were logged for SFTP, and FTP's `log` object was dead code (created, never called). All three now log through `logging_setup.get_logger(...)` instead of a bare `logging.getLogger(__name__)`, so these lines actually reach the unified log file. While live-testing the SFTP patch against a real paramiko client, found and fixed a genuine pre-existing bug, unrelated to the audit-logging work itself: `sftp_server.py`'s `open()` was checking raw SSH_FXF_* protocol-level flag bits (`0x01`, `0x02`, `0x08`, …) against the `flags` argument, but paramiko's `SFTPServerInterface.open()` actually receives **already-converted `os.O_*` flags** (`os.O_WRONLY=1`, `os.O_CREAT=64`, …) — a different bit layout entirely. Effect: every brand-new-file SFTP upload was silently misdetected as a read-only open (`os.O_WRONLY`'s value of `1` collided with the old `_FXF_READ` bit) and failed with a bare "No such file" on the client side. Fixed in `_flags_to_mode()`/`_is_write_open()` to test the real `os.O_*` flags paramiko passes. All three protocols' full write-path (upload/overwrite/download/mkdir/rename/rmdir/delete, plus SFTP's readonly-role permission block) were re-verified against real clients (paramiko, pyftpdlib+ftplib, impacket's SMBConnection) after the fix, not just read over. SMB deliberately does not log plain read-opens (unlike SFTP/FTP) — see the new bullet in [SMB Implementation Notes](#smb-implementation-notes) for why. See [Version 4.19](#version-419--2026-09-24-sftpftpsmb-audit-logging--sftp-upload-flag-bug-fix) in the Changelog for the full writeup.
 
@@ -49,9 +53,10 @@
 14. [Bulk Operations](#bulk-operations)
 15. [Configuration & Deployment](#configuration--deployment)
 16. [Protocol Servers (WebDAV / SFTP / FTP / SMB)](#protocol-servers-webdav--sftp--ftp)
-17. [Admin Tools & Utilities](#admin-tools--utilities)
-18. [Performance Characteristics](#performance-characteristics)
-19. [Troubleshooting & Edge Cases](#troubleshooting--edge-cases)
+17. [Version Engine (File Versioning)](#version-engine-file-versioning-2026-09-25)
+18. [Admin Tools & Utilities](#admin-tools--utilities)
+19. [Performance Characteristics](#performance-characteristics)
+20. [Troubleshooting & Edge Cases](#troubleshooting--edge-cases)
 
 ---
 
@@ -65,8 +70,8 @@
 | **storage.py** | File system operations | List dirs, chunks, assembly, cleanup |
 | **database.py** | SQLite + encryption (read in full 2026-09-22) | Users, passwords, server tokens, sessions, share tokens/requests. `_connect()` does double-checked-locking bootstrap + explicit `conn.commit()` before releasing the lock (see Troubleshooting) — confirmed to match this file exactly. `update_share_settings()` never clears `passkey_hash` implicitly, only via explicit `clear_passkey=True` — see [Database Tools](#database-tools) gotcha #2 |
 | **auth.py** | Authentication helpers | Login/logout, session validation, role checking |
-| **config.py** | Settings & feature toggles | Paths, sizes, feature flags |
-| **paths.py** | Configurable directory resolver | db_path, cache_path, storage_path resolution |
+| **config.py** | Settings & feature toggles | Paths, sizes, feature flags. 🆕 (2026-09-25) ~25 new `VERSION_*` settings for the Version Engine (master switch, chunking, workers, tracking scope, retention, GC) plus a full menu tree — see [Version Engine](#version-engine-file-versioning-2026-09-25) |
+| **paths.py** | Configurable directory resolver | db_path, cache_path, storage_path resolution. 🆕 (2026-09-25) `get_versions_dir()`/`set_versions_dir()`/`reset_versions_dir()` — a fourth sibling of db_path/cache_path, `<server_root>/versions` by default; deliberately NOT nested under cache_path since version history is irreplaceable, unlike cache's rebuildable data — see [Version Engine](#version-engine-file-versioning-2026-09-25) |
 | **file_monitor.py** | Real-time filesystem tracking | Watchdog integration, counters, reconciliation |
 | **file_index.py** | Large-folder caching | Indexed dir listings, instant lookups |
 | **search_index.py** | Full-text search engine | FTS5 indexing, query processing |
@@ -80,7 +85,9 @@
 | **lanman_guard.py** | SMB Windows state tracker | Passive pending-setup state file, read by smb_server.py, written by smb_setup.py |
 | **kick_sessions.py** | Access revocation tool | Rotate/delete a user, or instantly log out the web UI, for security incidents (replaced the older `revoke_session.py`) |
 | **revoke_sharing.py** | Share-link management CLI (not just revocation any more) | Interactive 8-item menu + 9 CLI subcommands: list, revoke (by token or path), revoke-all, **edit** security mode/passkey/expiry, and work the approval queue (**requests / approve / deny**) — talks straight to `database.db`, no running server needed. See [Database Tools](#database-tools) for the flags and two verified gotchas |
-| **manage.sh** | Server & utility launcher (bash) | Start/stop/restart/status/logs, `restart-webdav`, and a wrapper for every utility script; 19-entry interactive menu. Runs under `set -euo pipefail`, which has caused real bugs — read [manage.sh Internals & Editing Rules](#managesh-internals--editing-rules) before editing it |
+| **version_engine.py** 🆕 (2026-09-25) | Universal File Versioning Engine — process lifecycle only, no admin CLI (see version_manage.py) | Dual role: parent API (`start()`/`stop()`/`force_kill()`/`status()`, imported only by `dev_server.py`/`prod_server.py`) + `--worker` child-process entry point. Runs as its own OS subprocess, mirroring `protocol_manager.py`'s WebDAV-subprocess pattern exactly (same `Popen` args, `CLOUDINATOR_LOG_PREFIX`/`PYTHONUTF8` env vars, piped-and-relayed stdout/stderr, Windows `CREATE_NO_WINDOW` guard) — deliberately does NOT get a watchdog/auto-respawn thread like WebDAV's, since a stuck engine is expected to self-heal via crash recovery on the next `start()`, not be silently respawned. See [Version Engine](#version-engine-file-versioning-2026-09-25) |
+| **version_manage.py** 🆕 (2026-09-25, interactive menu + manage.sh wiring added 2026-09-26) | Version Engine admin CLI + interactive menu (`list` / `restore` / `delete`) | Deliberately a separate file from `version_engine.py` — no interactive/admin code belongs in the process-lifecycle file. Does not start the engine (no threads/subprocess); talks directly to the same SQLite DB + object store, safe to run alongside a live `version_engine.py --worker`. Run with no args for an interactive menu, or use CLI subcommands directly — both call the same underlying `do_list`/`do_restore`/`do_delete` functions. `delete` requires typing a full, version-and-filename-specific confirmation sentence back exactly — no `-f`/`--yes` shortcut exists on purpose. Wired into `manage.sh` as `version-manage` (menu #9); Ctrl-C at any prompt in either mode cancels cleanly, never a traceback. See [Version Engine](#version-engine-file-versioning-2026-09-25) |
+| **manage.sh** | Server & utility launcher (bash) | Start/stop/restart/status/logs, `restart-webdav`, and a wrapper for every utility script; 20-entry interactive menu (🆕 2026-09-26: `version-manage` inserted as #9). Runs under `set -euo pipefail`, which has caused real bugs — read [manage.sh Internals & Editing Rules](#managesh-internals--editing-rules) before editing it |
 | **setup_pymodules.sh** | Python dependency ceiling generator + installer (bash) | Regenerates `constraints.txt` and rewrites managed lines of `requirements.txt` with `<next-major>` ceilings, dry-run-checks for conflicts, then optionally installs. Run via `./manage.sh update-modules`. Windows: self-elevates and adds a Defender exclusion. See [Package Management](#package-management-setup_pymodulessh) |
 | **ftp_server.py** | FTP server | pyftpdlib, custom authorizer, passive ports 60000–60100 |
 | **ssl_cert.py** | TLS certificate manager | Self-signed cert generation, SAN detection, db/ storage; `prod_server.py` now prefers a real Tailscale-issued cert when available, falling back to this self-signed cert otherwise; module docstring now covers Windows + macOS + Linux trust-import steps |
@@ -120,6 +127,8 @@
 - **realtime_shares.py**: `ShareEventManager.broadcast()` (pending-request count), `broadcast_active_shares_changed()` (nudges the Active Shares tab to refetch), and `share_events_sse()` — same call-from-any-thread pattern as `realtime_stats.py`.
 - **revoke_sharing.py**: `cmd_list()`, `cmd_revoke()`, `cmd_revoke_path()`, `cmd_revoke_all()`, `cmd_edit()`, `cmd_edit_path()`, `_apply_edit()` (shared by both edit commands and the interactive menu), `cmd_requests()`, `cmd_approve()`, `cmd_deny()`, `run_interactive_menu()`, and helpers `_parse_duration()`, `_generate_passkey()`, `_operator_id()`, `_fmt_expiry()`. It calls into `database.py`'s share/request API — `list_active_shares()`, `revoke_share_by_token()`, `revoke_share_by_path()`, `revoke_all_shares()`, `get_share_by_token()`, `get_share_by_path()`, `update_share_settings()`, `list_pending_requests()`, `approve_access_request()`, `deny_access_request()` — all confirmed present with matching signatures as of the 2026-09-22 `database.py` read.
 - **webdav_server.py**, **sftp_server.py**, **ftp_server.py**, and **smb_server.py**: their protocol-specific startup and auth hooks, including the middleware and role enforcement entry points used by each server.
+- **version_engine.py** 🆕 (2026-09-25): parent API `start()`, `stop()`, `force_kill()`, `status()`; `Engine` class — `snapshot_file()`, `restore_version()`, `run_gc()`, `get_eligible_files()`, `_crash_recovery()`, `_attempt_snapshot()`, `_capture_full()`/`_capture_chunked()`, `_reconcile_once()`, `_watcher_loop()`/`_scanner_loop()`, `_worker_loop()`, `graceful_shutdown()`. Worker-mode entry: `_worker_main()`, invoked via `python version_engine.py --worker`.
+- **version_manage.py** 🆕 (2026-09-25): `cmd_list()`, `cmd_restore()`, `cmd_delete()`, `_get_engine()` (bootstraps schema, starts no threads), `_fmt_time()`. Calls straight into `version_engine.py`'s `Engine.restore_version()` and `Engine.run_gc()` — no duplicated logic.
 
 ### JavaScript modules
 
@@ -1770,10 +1779,13 @@ POST /bulk_move
   "cache_path": "C:\\Server\\secure\\cache",
   "hls_cache_path": "C:\\Server\\secure\\cache\\hls",
   "img_cache_path": "C:\\Server\\secure\\cache\\img",
+  "versions_path": "C:\\Server\\secure\\versions",
   "platform": "windows",
   "set_at": 1695475200.5
 }
 ```
+
+🆕 (2026-09-25) `versions_path` — the Version Engine's content-addressed object/chunk store, resolved via `paths.get_versions_dir()`/`set_versions_dir()`/`reset_versions_dir()`, mirroring `db_path`/`cache_path` exactly (merge-safe `_save()`, auto-appended `versions` subfolder). See [Version Engine](#version-engine-file-versioning-2026-09-25).
 
 **Recommended Production Setup**:
 ```
@@ -1807,6 +1819,8 @@ img_cache_path: /tmp/cloudinator_img     (can recreate)
 - `ENABLE_FFMPEG=True`: HLS transcoding enabled; if ffmpeg missing → graceful fallback (raw video)
 - `ENABLE_LIBVIPS=True`: WebP compression enabled; if libvips missing → graceful fallback (raw image)
 - `ENABLE_SEARCH_INDEX=True`: FTS5 search; if disabled → full folder scans (slower)
+
+🆕 (2026-09-25) **`VERSION_*` settings** (~25 keys, all in `server_config.json` alongside the above — no separate `version_config.json`): `VERSION_ENGINE_ENABLED` (master switch), `VERSION_STORAGE_DIR`/`VERSION_DB_FILENAME`, `VERSION_SMALL_FILE_THRESHOLD`/`VERSION_CHUNK_SIZE`/`VERSION_CHUNKING_ALGORITHM` (chunk size is intentionally unrelated to the upload `CHUNK_SIZE` above — verified independent, see [Version Engine](#version-engine-file-versioning-2026-09-25)), `VERSION_WORKER_COUNT`, `VERSION_WATCH_ENABLED`/`VERSION_SCAN_ENABLED`/`VERSION_SCAN_INTERVAL`, the five tracking-scope lists (`VERSION_TRACK_FILES`/`_DIRECTORIES`/`_ROOTS`/`_ALL_FILES`, `VERSION_EXCLUDE_DIRECTORIES`/`_PATTERNS` — every list defaults **empty**, nothing is versioned until explicitly added), `VERSION_RETENTION_ENABLED`/`_MAX_VERSIONS`, `VERSION_GC_ENABLED`/`_GC_GRACE_PERIOD`, `VERSION_RETRY_COUNT`/`_RETRY_DELAY`, `VERSION_COMPRESSION_ENABLED`, `VERSION_FOLLOW_SYMLINKS`, `VERSION_ALLOW_RESTORE_OVERWRITE` (default `False`), `VERSION_SHUTDOWN_TIMEOUT`. Configured via `main_configuration_menu()`'s new "Version History / Version Engine" section — single-value settings use the existing `configure_db_path()`-style single-prompt pattern; the five list settings get their own view/add/remove/clear sub-menu (`configure_version_tracking()`), since nothing else in `config.py` handles a list-value setting.
 
 ---
 
@@ -2060,6 +2074,101 @@ Each is imported lazily inside `start()`. If a library is missing, that protocol
 
 ---
 
+## 🕓 Version Engine (File Versioning) (2026-09-25)
+
+Added 2026-09-25. A per-file version-history subsystem — every tracked file's content gets snapshotted, content-addressed, and restorable — **unrelated to the Share Links feature** (that's public link sharing of the *current* file; this is private historical backup of *past* versions). Built from a detailed spec that named six files as ground truth (`config.py`, `paths.py`, `dev_server.py`, `prod_server.py`, `protocol_manager.py`, `logging_setup.py`) with the instruction that the repo wins on any conflict with the spec — the process below follows what those files actually do, not just what was asked for.
+
+### Process Architecture — mirrors WebDAV's subprocess pattern deliberately
+
+```
+dev_server.py / prod_server.py (parent / launcher)
+    └── version_engine.start()
+            └── subprocess.Popen([sys.executable, "version_engine.py", "--worker"])
+                    (separate OS process — own DB connections, own
+                     watcher/scanner/worker threads; never shares the
+                     Quart/Hypercorn event loop)
+```
+
+This is a **close, deliberate copy** of `protocol_manager._spawn_webdav_process()` (see [WebDAV Process Isolation, Watchdog & restart-webdav](#webdav-process-isolation-watchdog-restart-webdav-2026-09-09)) — same `Popen` kwargs (`stdin=DEVNULL`, piped+relayed stdout/stderr on daemon threads, `text=True`/`encoding="utf-8"`/`errors="replace"`), same `env["CLOUDINATOR_LOG_PREFIX"] = logging_setup._LOG_PREFIX` (child logs into the parent's own daily file instead of opening a second one), same unconditional `env["PYTHONUTF8"] = "1"` (root cause: emoji in `print()` output raises `UnicodeEncodeError` under a piped, non-console stdout — same issue WebDAV already worked around), same `sys.platform == "win32"` guard around `creationflags=subprocess.CREATE_NO_WINDOW`. An optional PID file (`.manage_pids/version_engine.pid`) mirrors WebDAV's `_write_webdav_pidfile()`/`_clear_webdav_pidfile()` too — not required for correctness (everything works off the in-process `Popen` handle), added for parity with future `manage.sh`-style tooling.
+
+**Deliberately does NOT copy** WebDAV's watchdog (`_webdav_watchdog()`, auto-respawn on crash). A stuck/crashed Version Engine is expected to self-heal via crash recovery on the *next* `start()`, not be silently respawned — a respawn loop could mask a real problem (corrupt DB, full disk). This is a considered omission, not an oversight — it's called out in `version_engine.py`'s own module docstring.
+
+`protocol_manager.py` has **zero** new imports/functions/references related to this — confirmed via `diff` against the pre-change file, not just "no changes intended." The only callers of `version_engine.start()`/`.stop()`/`.force_kill()` are `dev_server.py` and `prod_server.py`. `app.py`'s standalone `if __name__ == "__main__":` path (used only for direct `python app.py`, not either real launcher) was deliberately left without a `version_engine` import — same reasoning as the file itself already applies to `protocol_manager` there.
+
+### Lifecycle wiring
+
+| Launcher | Start | Stop (graceful) | Stop (force) |
+|---|---|---|---|
+| `dev_server.py` | `version_engine.start()` next to `protocol_manager.start_all()` | `version_engine.stop()` in the `except KeyboardInterrupt:` block, next to `protocol_manager.stop_all()` | *(none — `dev_server.py` has no force-quit tier for anything, not just this; left that way rather than introducing a new one)* |
+| `prod_server.py` | `version_engine.start()` next to `protocol_manager.start_all()` | `version_engine.stop()` in the `finally:` block (first SIGINT → `shutdown_event` → `serve()` returns), next to `protocol_manager.stop_all()` | `version_engine.force_kill()` in the second-SIGINT fast path, next to `protocol_manager.force_kill_webdav()`, before `os._exit(0)` |
+
+`stop()` mirrors `protocol_manager.stop_all()`'s WebDAV half exactly: `proc.terminate()` → `proc.wait(timeout=VERSION_SHUTDOWN_TIMEOUT)` → `proc.kill()` on `TimeoutExpired`. `force_kill()` mirrors `force_kill_webdav()`: bare `proc.kill()`, no wait, safe to call from a signal handler right before `os._exit()`. The actual graceful *drain* (finish in-flight jobs, close the DB) happens **inside the child**, in response to receiving the signal — see Crash Recovery below for why that boundary matters.
+
+`start()` is idempotent — checks the held `Popen` handle's `.poll()` under a lock (`_version_engine_proc_lock`, mirroring WebDAV's `_webdav_proc_lock`) before spawning; calling it three times in a row produces exactly one child (verified: same pid observed across all three calls in testing).
+
+### SQLite schema (`version_engine.sqlite3`, in the resolved `DB_DIR` — a SEPARATE file from `cloudinator.db`)
+
+`files` (path, normalized dedup key, tracking source, deleted flag) → `versions` (sha256, size, storage_mode `full`/`chunked`, status `pending→processing→verifying→completed`/`failed`/`deleted`) → `version_objects` (ordered chunk_index → sha256, links a version to its content-addressed objects) → `objects` (sha256 PK, size, `orphaned_since` for GC). Plus `jobs` (operation, status, retry_count — recoverable after restart) and `tracked_paths` (a DB-side mirror of `config.py`'s tracking lists, for admin visibility). `engine_metadata` stores `schema_version`/`engine_version` plus live counters (`watcher_running`, `scanner_running`, `last_scan`) that the **parent** process's `status()` reads back via its own short-lived read-only connection — this works because SQLite WAL mode supports concurrent readers from a different process; the parent does NOT and CANNOT share the child's in-process connection/locks (different process entirely).
+
+**Note on `database.py`**: `version_engine.sqlite3` is completely separate from `database.py`'s `cloudinator.db` (see the Quick Reference row above) — same `DB_DIR`, different file, no shared schema, no shared connection object, no import of `database.py` from `version_engine.py`. The connection pattern (`sqlite3.connect(..., check_same_thread=False)`, `row_factory=sqlite3.Row`, `PRAGMA journal_mode=WAL`, `PRAGMA foreign_keys=ON`) is mirrored mechanically from `database.py`'s own `_connect()`, not shared as an object — `database.py`'s module-level `_write_lock`/`_bootstrap_lock` are in-process Python objects that wouldn't apply across the parent/child boundary even if imported.
+
+### Storage: hybrid full-object / chunked, content-addressed
+
+Files ≤ `VERSION_SMALL_FILE_THRESHOLD` (default 4 MB) are stored as one full object; larger files are chunked at `VERSION_CHUNK_SIZE` (default 8 MB, **verified independent of the upload `CHUNK_SIZE`** — mutating one does not affect the other) via a `FixedSizeChunker`, architected so a future `ContentDefinedChunker` can be swapped in without touching the public snapshot/restore API. SHA-256 is the sole identity in both modes — every object write is atomic (temp file → fsync → `os.replace()`), and every object read is hash-verified before use, so a corrupted or truncated object is caught and refused rather than silently served. Dedup is automatic and free: identical content (a whole small file, or a chunk shared across two large files) is only ever stored once.
+
+**Universal, format-agnostic by design**: every file is treated as an opaque byte stream — no branching on extension, ever (`if ext == ".docx"` is explicitly disallowed by the spec this was built from). DOCX, ZIP, video, executables, unknown/no extension all go through the exact same code path.
+
+### Restore — the one invariant that's non-negotiable
+
+```
+original_sha256 == restored_sha256   AND   original_size == restored_size
+```
+
+`Engine.restore_version(version_id, destination, overwrite=None)` reconstructs into `destination.tmp`, hash-verifies every object read along the way, computes the full restored file's SHA-256, and only calls `os.replace()` into the real destination **after** that hash and size match the original exactly. Refuses by default to overwrite an existing destination (`VERSION_ALLOW_RESTORE_OVERWRITE=False`), and refuses to ever write into the version storage directory itself. Verified directly (not just by code inspection): small-file and chunked-file restores byte-for-byte identical to the original; a manually corrupted stored object is caught and restore refused; an old version stays restorable after the source file changes again.
+
+### Watcher + Scanner — a documented simplification
+
+The watcher is **stat-polling** (mtime + size, every 3 seconds when `VERSION_WATCH_ENABLED`), not an OS-level filesystem-event watch (inotify/ReadDirectoryChangesW/FSEvents) — this repo has no `watchdog`-package dependency for that (the *unrelated* `watchdog` package already used by `file_monitor.py` for the main storage tree was deliberately not reused here, to keep Version Engine's process fully independent). The scanner does full reconciliation on the slower, configurable `VERSION_SCAN_INTERVAL` (default 300s) and is also what discovers brand-new files under tracking roots. The engine works correctly with the watcher disabled entirely — the scanner alone still eventually catches everything. Both share one `_reconcile_once()` implementation; a changed file is enqueued once and debounced (a `_pending_norm_keys` set) so a burst of filesystem activity doesn't produce duplicate jobs.
+
+Tracking scope resolution (`get_eligible_files()`) combines `VERSION_TRACK_FILES` (individual files, always included), `VERSION_TRACK_DIRECTORIES` (recursive, always included), and — only when `VERSION_TRACK_ALL_FILES=True` — `VERSION_TRACK_ROOTS` (recursive). Every list defaults empty; nothing is versioned until explicitly configured. `VERSION_EXCLUDE_DIRECTORIES`/`VERSION_EXCLUDE_PATTERNS` (default `["*.tmp", "*.part", "~$*"]`) apply everywhere. Path equivalence normalization (`_normalize_path()`) case-folds only on `sys.platform == "win32"` — Linux/Termux are case-sensitive filesystems, so folding case there would wrongly merge distinct files.
+
+### Crash recovery — load-bearing on Termux specifically
+
+On every worker startup, before the watcher/scanner/workers start: any job or version left in a non-terminal state (`pending`/`processing`/`verifying`) from a previous run is marked `failed` — **never** silently resumed and **never** left falsely `completed`. Stale temp files (anything still in the tmp dir is, by construction, an incomplete write — finished writes are renamed *out* of tmp atomically) are deleted unconditionally. No work is actually lost: the next scan naturally re-creates a snapshot job for any file whose hash still doesn't match its latest completed version, so a crash just means redoing hashing, not losing history. This matters more on Termux than desktop platforms — Android's battery/doze management can suspend or kill a background process with **no graceful signal at all**, so `stop()`'s graceful path may simply never have run before the next `start()`; the recovery logic doesn't distinguish *how* the process died, so it doesn't need to.
+
+### Retention & GC
+
+`VERSION_MAX_VERSIONS` (default 50) is enforced right after each successful snapshot — oldest `completed` versions beyond the cap are soft-deleted (`status='deleted'`, row kept for audit trail). GC (`run_gc()`, runs at the end of every scanner pass) considers an object orphaned once nothing references it from a `completed` version; sets `orphaned_since` on first sighting, and only actually deletes the object — plus the now-meaningless `version_objects` link rows from non-completed versions that still FK-reference it — once `VERSION_GC_GRACE_PERIOD` (default 24h) has elapsed AND it's re-confirmed unreferenced (race-aware: a snapshot could have re-referenced the same content moments earlier via dedup).
+
+**Bug found and fixed during testing**: the original `run_gc()` tried to `DELETE FROM objects` for an object still linked from soft-deleted/failed versions' `version_objects` rows, which violated the foreign key and raised `sqlite3.IntegrityError`. Fixed by clearing those stale link rows first — the `versions` row itself (audit trail) is untouched, only the dead object-link bookkeeping is cleared.
+
+### version_manage.py — the admin CLI (now with an interactive menu too, 2026-09-26)
+
+```
+python version_manage.py                                    # interactive menu
+python version_manage.py list                              # every tracked file + version count
+python version_manage.py list <file_path>                   # one file's full version history
+python version_manage.py restore <version_id> <destination> [--overwrite]
+python version_manage.py delete <version_id> [--run-gc-now]
+```
+
+Deliberately a **separate file** from `version_engine.py` — the same reasoning `revoke_sharing.py` gets its own file rather than living inside `database.py`. Starts no threads/subprocess; talks to the same SQLite DB and object store directly through `Engine`'s own methods, safe to run alongside a live `version_engine.py --worker` (SQLite WAL + `PRAGMA busy_timeout=10000` already set in `Engine._connect()` handle the concurrent access). Wired into `manage.sh` as `version-manage` / menu **#9** — see [manage.sh Internals & Editing Rules](#managesh-internals--editing-rules) for the menu-numbering history.
+
+**Two interfaces, one shared implementation**: the CLI subcommands (`list`/`restore`/`delete`, via `argparse`) and the interactive menu (`interactive_menu()`, entered automatically when run with no arguments) both call the exact same three core functions — `do_list()`, `do_restore()`, `do_delete()` — so there's no behavior to keep in sync between the two; a bug fix or confirmation-wording change in one core function fixes both interfaces at once. The `cmd_list`/`cmd_restore`/`cmd_delete` functions that `argparse` calls are thin one-line wrappers unpacking a `Namespace` into the same core function calls the menu makes directly.
+
+- `restore --overwrite` (CLI) / answering "yes" to the overwrite prompt (menu) requires typing an exact but short confirmation (`overwrite <filename> with version <id>`) before replacing an existing destination file.
+- `delete` requires typing a full, **version-and-filename-specific** sentence back exactly (`"I understand this permanently and irreversibly deletes version <id> of <filename> and cannot be undone"`) — no `-f`/`--yes` flag exists anywhere, on purpose, in either interface. Warns explicitly, before the confirmation prompt, when the version being deleted is the file's *only* remaining one. `delete` only soft-deletes (same mechanism as automatic retention) — actual disk reclaim still goes through the normal GC grace period unless `--run-gc-now`/the menu's "also run GC now?" prompt is used, and even then only objects *already* past their grace period from earlier activity get freed immediately.
+
+**Ctrl-C is safe everywhere in this file** — every `input()` call, CLI confirmation prompts included, goes through a `_prompt()` helper that converts `KeyboardInterrupt`/`EOFError` into a clean cancel rather than a traceback. At the interactive menu's top level, Ctrl-C exits the program (mirroring `manage.sh`'s own `cmd_menu` convention: "Ctrl-C / Ctrl-D / closed stdin at the top-level prompt = quit"); inside any action's own sub-prompts, Ctrl-C cancels just that action and returns to the menu. See the Ctrl-C model table in [manage.sh Internals & Editing Rules](#managesh-internals--editing-rules) for how this composes with `run_utility`'s own signal handling when launched via `./manage.sh version-manage` — the two layers are independent but the outer one (manage.sh) is what makes the inner one (this script) receive a normal, interruptible SIGINT in the first place, rather than an inherited ignored one.
+
+Verified directly: `list` (summary and per-file), `restore` returning the *old* version's content correctly (not current), both overwrite-confirmation and delete-confirmation rejecting non-matching typed input and succeeding on an exact match, a deleted version can no longer be restored afterward, the interactive menu's full flow (list → view history → restore → exit) end-to-end via piped stdin, and — the thing that actually mattered for this addition — three separate real-`SIGINT` scenarios (top-level menu quit, mid-action cancel-and-return-to-menu, CLI-mode cancel), all clean, all traceback-free.
+
+### Known gaps — not yet verified in this pass
+
+Following this doc's own convention of separating *verified* from *inferred/untested*: no test was run on actual Windows (UNC paths, drive letters, long paths, `CREATE_NO_WINDOW` itself) or actual Termux (a literal `kill -9` mid-job with no `stop()` ever called — the crash-recovery test simulated the *state* such a kill leaves behind by writing it directly, not by sending a real signal to a running worker). No benchmark pass (snapshot/restore speed, memory, dedup ratio at 100 KB–1 GB) was run — the streaming-I/O design (no full-file buffering above the small-file threshold) was verified by code inspection, not measured. No test exercises the two-stage `prod_server.py` shutdown through an actual live Hypercorn process tree — the underlying `stop()`/`force_kill()` primitives were tested directly against a real spawned subprocess, and the wiring was confirmed by reading the code, but not through a live `prod_server.py` process. First-session usability gap, now closed: the engine originally shipped with **no way for a human to actually restore anything** — no CLI, no list, no lookup helper — until specifically asked "how do we restore a version?" `version_manage.py` (above) is the fix; worth remembering as a pattern for future subsystems of this shape.
+
+---
+
 ## 🛠️ Admin Tools & Utilities
 
 `manage.sh` remains the primary launcher for the server and utility commands. It runs every utility script through a wrapper that keeps `manage.sh` alive on Ctrl-C **while still letting the child script be interrupted** (a *handled* SIGINT trap — earlier versions *ignored* SIGINT, which made child scripts uninterruptible; see [manage.sh Internals & Editing Rules](#managesh-internals--editing-rules) for why that matters). `setup_pymodules.sh` (package updates) is documented under [Package Management](#package-management-setup_pymodulessh).
@@ -2087,10 +2196,11 @@ Reviewed 2026-09-21 against the 1,536-line `manage.sh` (`bash -n` clean and `./m
 | `_follow_log` (`logs -f`) | Same handled trap, plus a Python follower that exits on KeyboardInterrupt — `tail -f` doesn't release the terminal reliably on Git Bash. |
 | `cmd_menu` | One `trap ':' INT` for the whole loop. Each action runs through `_menu_run` — a subshell with its own INT trap that prints "Cancelled", exits 130, and returns to the menu. The top-level prompt is read by `_read_line` in a subshell (a plain `read` in the parent just re-enters after the trap runs); Ctrl-C/Ctrl-D there quits the menu. |
 | `_launch_detached` (servers) | Fully detached (Windows: `CREATE_NEW_PROCESS_GROUP \| DETACHED_PROCESS`; POSIX: `setsid`) **and** SIGINT/SIGBREAK set to `SIG_IGN` inside the child *before* `runpy.run_path`, so no framework can re-arm Ctrl-C. Ignoring is correct here — the server must never die to a stray Ctrl-C. |
+| `version_manage.py` (2026-09-26) | A second, independent layer *inside* the Python process, on top of `run_utility`'s trap — not a manage.sh mechanism, but relies on `run_utility` handing it a normal, default-disposition SIGINT to work at all. Every `input()` goes through a `_prompt()` wrapper that catches `KeyboardInterrupt`/`EOFError` and returns `None` instead of raising; the interactive menu treats `None` at the top-level menu prompt as "quit" and `None` inside an action's own sub-prompt as "cancel this action, return to the menu" (same split as `cmd_menu` itself). A top-level `try/except KeyboardInterrupt` in `main()` is belt-and-suspenders for a Ctrl-C landing outside any `_prompt()` call. *Verified* with real `SIGINT` delivered via `subprocess.Popen.send_signal()` (not simulated input) at three points: the top-level menu prompt (clean exit 0, "Goodbye!", no traceback), mid-action at a sub-prompt (action cancelled, menu redrawn, subsequent input still worked), and CLI-mode (`restore --overwrite` awaiting its confirm phrase — exit 1, "nothing was touched", no traceback). |
 
 Why the utility wrappers must **handle**, not **ignore**: an ignored signal is inherited by children. *Verified*: with a parent running `trap '' INT`, a bash child's own `trap … INT` never fired, and a Python child saw its SIGINT disposition as `SIG_IGN` (so no `KeyboardInterrupt`); with `trap ':' INT` the child's trap fired and Python kept its default handler. This is exactly why Ctrl-C used to skip one pip call and let `setup_pymodules.sh` carry on to the next step. **Do not change `trap ':' INT` back to `trap '' INT`** in either wrapper.
 
-**Menu ↔ command map** (*verified*: the menu's `echo` lines, the `case` dispatch, and `cmd_help`'s "MENU ↔ COMMAND MAP" all agree on 1–19)
+**Menu ↔ command map** (*verified 2026-09-26, after the version-manage insert below*: the menu's `echo` lines, the `case` dispatch, and `cmd_help`'s "MENU ↔ COMMAND MAP" all agree on 1–20)
 
 | # | Command | Runs |
 |---|---|---|
@@ -2098,15 +2208,19 @@ Why the utility wrappers must **handle**, not **ignore**: an ignored signal is i
 | 3 / 4 / 5 | `stop` / `restart` / `status` | |
 | 6 / 7 | `logs [server or dev_server] [-f]` / `clean-logs` | |
 | 8 | `restart-webdav` | see [WebDAV Recovery](#webdav-recovery-managesh-restart-webdav) |
-| 9 | `setup-smb` | `smb_setup.py` |
-| 10 | `kick-sessions` | `kick_sessions.py` |
-| 11 / 12 / 13 / 14 / 15 | `config` / `manage-users` / `debug-pw` / `reset-db` / `setup-storage` | `config.py`, `manage_users.py`, `debug_passwords.py`, `reset_db.py`, `setup_storage.py` |
-| 16 | `update-modules` (alias `setup-modules`) | `setup_pymodules.sh`, after a confirmation |
-| 17 | `revoke-shares` | `revoke_sharing.py` — all extra args pass straight through |
-| 18 | `security-txt` | see [security.txt Management](#securitytxt-management-managesh-security-txt) |
-| 19 | `termux-setup` | `termux_setup.sh` — always listed so numbers match `help`; dimmed off Termux |
+| 9 | `version-manage` 🆕 (2026-09-26) | `version_manage.py` — no args → interactive menu; see [Version Engine](#version-engine-file-versioning-2026-09-25) |
+| 10 | `config` | `config.py` |
+| 11 | `setup-smb` | `smb_setup.py` |
+| 12 | `kick-sessions` | `kick_sessions.py` |
+| 13 / 14 / 15 / 16 | `manage-users` / `debug-pw` / `reset-db` / `setup-storage` | `manage_users.py`, `debug_passwords.py`, `reset_db.py`, `setup_storage.py` |
+| 17 | `update-modules` (alias `setup-modules`) | `setup_pymodules.sh`, after a confirmation |
+| 18 | `revoke-shares` | `revoke_sharing.py` — all extra args pass straight through |
+| 19 | `security-txt` | see [security.txt Management](#securitytxt-management-managesh-security-txt) |
+| 20 | `termux-setup` | `termux_setup.sh` — always listed so numbers match `help`; dimmed off Termux |
 
-**Adding a command — touch all of these** (this doc's own menu numbers have already had to be shifted twice by mid-list inserts):
+**2026-09-26 reorder**: `version-manage` was inserted as the new **#9** (first Utilities entry) and `config` moved up to **#10**, at the user's explicit request — everything that used to be 9–19 (`setup-smb` through `termux-setup`) shifted down to 11–20, keeping their *relative* order unchanged. This is the **third** time this doc's menu numbers have shifted from a mid-list insert (see the note below) — if you're reading this after yet another insert, the table above is the one to trust, not memory of an older revision.
+
+**Adding a command — touch all of these** (this doc's own menu numbers have now shifted three times from mid-list inserts):
 1. A `cmd_<name>()` function (or a `run_utility "<script>.py"` call).
 2. The `case "$cmd"` dispatch in `main()`.
 3. `cmd_menu`: the `echo` line, the `case` arm wrapped in `_menu_run`, and a renumber of everything below if you insert mid-list.
@@ -2679,6 +2793,26 @@ Works at the database level only — it's a separate process, same constraint `m
 
 ## 📝 Changelog
 
+### Version 4.23 — 2026-09-26 manage.sh Integration + version_manage.py Interactive Mode
+
+- `manage.sh`: `version-manage` inserted as the new **menu #9** (first Utilities entry, at the user's explicit request), `config` moved to **#10**; everything previously at 9–19 shifted down to 11–20 in unchanged relative order. Touched all four places a menu command lives (per this doc's own "Adding a command" checklist): the `cmd_menu` `echo` lines, the `case "$choice"` dispatch, the `main()` `case "$cmd"` dispatch, and `cmd_help` (command description, MENU ↔ COMMAND MAP, an EXAMPLES block). Also added to the dashboard's "Utilities:" hint line. Verified programmatically (numbers 1–20 each appear exactly once across the menu dispatch) and via a CRLF-preserving syntax check (this sandbox's `bash -n` chokes on CRLF for reasons unrelated to this edit — confirmed identical failure on the untouched original upload — so the check was done against a temporary LF-converted copy; the delivered file's CRLF line endings were preserved throughout, verified byte-for-byte with zero stray LF-only lines afterward).
+- `version_manage.py`: added a full interactive menu (`interactive_menu()`, entered automatically when run with no CLI arguments — `list`/`restore`/`delete` subcommands still work exactly as before). Refactored the three commands' logic into `do_list()`/`do_restore()`/`do_delete()`, called identically by both the CLI (`cmd_list`/`cmd_restore`/`cmd_delete` — now one-line `argparse`-`Namespace` unwrappers) and the menu — no logic duplicated between the two interfaces.
+- Ctrl-C hardened and *verified with real signal delivery* (`subprocess.Popen.send_signal(SIGINT)`, not simulated stdin input): a `_prompt()` wrapper around every `input()` call converts `KeyboardInterrupt`/`EOFError` into a clean cancel; the top-level menu prompt treats it as "quit", a sub-prompt inside an action treats it as "cancel this action, return to the menu" (mirroring `manage.sh`'s own `cmd_menu` convention exactly). Confirmed: quitting at the top-level menu (exit 0, no traceback), Ctrl-C mid-action returning cleanly to a still-functional menu, and Ctrl-C during a CLI-mode confirmation prompt (`restore --overwrite`, exit 1, "nothing was touched", no traceback). This also confirms the outer layer works as intended: `manage.sh`'s `run_utility()` hands the child a normal, default-disposition SIGINT (not an inherited ignored one), so `./manage.sh version-manage` survives Ctrl-C inside the Python process without `manage.sh` itself exiting.
+- `CLAUDE.md`: menu ↔ command map table updated to the new 1–20 numbering with an explicit note that this is the third mid-list renumber; added a `version_manage.py` row to the Ctrl-C model table; expanded the Version Engine section's `version_manage.py` write-up.
+
+### Version 4.22 — 2026-09-25 Universal File Versioning Engine
+
+- New subsystem, not a revision: per-file version history, independent of Share Links. Two new files:
+  - `version_engine.py` — parent API (`start`/`stop`/`force_kill`/`status`) + `--worker` child process. Mirrors `protocol_manager._spawn_webdav_process()`'s subprocess pattern deliberately (same Popen args, env vars, Windows console-window guard, piped+relayed stdio). No watchdog/auto-respawn — crash recovery on next `start()` is the sole self-healing mechanism, a considered omission.
+  - `version_manage.py` — separate admin CLI (`list`/`restore`/`delete`), added after the first pass shipped with no operator interface at all. `delete` requires a typed, version-and-filename-specific confirmation sentence; no `-f`/`--yes` shortcut exists.
+- `config.py`: ~25 new `VERSION_*` settings (master switch, chunking — verified independent of the existing upload `CHUNK_SIZE` — workers, tracking scope, retention, GC), integrated into the existing `save_server_config()`/`load_server_config()` pattern, plus a new menu tree (`configure_version_engine_settings()`, `configure_version_tracking()`'s list add/remove/clear sub-menu).
+- `paths.py`: `get_versions_dir()`/`set_versions_dir()`/`reset_versions_dir()` — a fourth sibling of `db_path`/`cache_path`, deliberately not nested under cache (version history is irreplaceable; cache is rebuildable).
+- `dev_server.py`/`prod_server.py`: `version_engine.start()`/`.stop()`/`.force_kill()` wired in at the same points as the equivalent WebDAV calls, including `prod_server.py`'s two-stage SIGINT shutdown.
+- `protocol_manager.py` and `app.py` confirmed **byte-identical** to pre-change (`diff`-verified) — required by the spec this was built from.
+- Storage: hybrid full-object/chunked content-addressed store, SHA-256 identity, hash-verified reads, atomic writes, byte-for-byte-verified restore (`original_sha256==restored_sha256 AND original_size==restored_size`, enforced before any file is replaced).
+- Bug found and fixed during testing: `run_gc()`'s object deletion violated a foreign-key constraint when the object was still linked from soft-deleted/failed version rows — fixed by clearing those stale links first.
+- See the new [Version Engine (File Versioning)](#version-engine-file-versioning-2026-09-25) section for the full writeup, including what was and wasn't verified (no live Windows/Termux run, no benchmark pass, no live two-stage-shutdown-through-a-real-process test).
+
 ### Version 4.21 — 2026-09-24 WebDAV Client-IP Trust-Chain Fix
 
 Follow-up to Version 4.20, same day. That version shipped `webdav_server.py`'s new audit-logging `ip=` field as `REMOTE_ADDR` only, with a flagged open question: is WebDAV ever tunneled? Confirmed yes — port 8443 (HTTPS) runs through `cloudflared`; port 8080 (plaintext) does not, since (per this file's own `start()` logic) HTTPS wins exclusively over the plaintext fallback whenever it's enabled and starts, and only the secure listener is exposed through the tunnel — the same "deploy the secure variant, not both" pattern already used for FTP vs. FTPS.
@@ -3113,5 +3247,5 @@ Public, opaque-token share links per file/folder, with a "Manage Shared" admin p
 
 ---
 
-**Last Updated**: 2026-09-23  
+**Last Updated**: 2026-09-26  
 **For Questions**: Refer to source code comments marked with `###` or `# --`

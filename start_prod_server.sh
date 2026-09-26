@@ -4,10 +4,10 @@ echo
 
 # Check if virtual environment exists
 if [ -d "venv" ]; then
-    echo "Activating virtual environment..."
-    source venv/bin/activate
+	echo "Activating virtual environment..."
+	source venv/bin/activate
 else
-    echo "No virtual environment found. Using system Python..."
+	echo "No virtual environment found. Using system Python..."
 fi
 
 # Install/update dependencies

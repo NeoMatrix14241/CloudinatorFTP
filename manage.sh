@@ -428,7 +428,7 @@ cmd_start() {
 		echo ""
 		info "Logs saved to: ${DIM}${log}${NC}"
 		echo ""
-		info "Utilities:   ./manage.sh config | manage-users | debug-pw | reset-db"
+		info "Utilities:   ./manage.sh version-manage | config | manage-users | debug-pw | reset-db"
 		info "Follow logs: ./manage.sh logs $(display_name_for "$type") -f"
 		info "Stop server: ./manage.sh stop"
 	else
@@ -1279,22 +1279,23 @@ cmd_menu() {
 		echo "   8) Restart WebDAV only  — recover a wedged WebDAV listener"
 		echo ""
 		echo -e "  ${BOLD}Utilities${NC}"
-		echo "   9) smb_setup.py        — Configure SMB storage"
-		echo "  10) kick_sessions.py    — Force logout of all active sessions"
-		echo "  11) config.py           — Edit configuration"
-		echo "  12) manage_users.py     — Manage user credentials"
-		echo "  13) debug_passwords.py  — Debug passwords"
-		echo "  14) reset_db.py         — Reset database"
-		echo "  15) setup_storage.py    — Configure storage"
-		echo "  16) setup_pymodules.sh  — Setup and Update Python packages"
-		echo "  17) revoke_sharing.py   — Share link management (links, passkeys, approvals)"
-		echo "  18) security.txt        — Update static/.well-known/security.txt"
-		# Always listed so the menu numbers match `./manage.sh help` (19 entries).
+		echo "   9) version_manage.py    — Version Engine: list / restore / delete file versions"
+		echo "  10) config.py           — Edit configuration"
+		echo "  11) smb_setup.py        — Configure SMB storage"
+		echo "  12) kick_sessions.py    — Force logout of all active sessions"
+		echo "  13) manage_users.py     — Manage user credentials"
+		echo "  14) debug_passwords.py  — Debug passwords"
+		echo "  15) reset_db.py         — Reset database"
+		echo "  16) setup_storage.py    — Configure storage"
+		echo "  17) setup_pymodules.sh  — Setup and Update Python packages"
+		echo "  18) revoke_sharing.py   — Share link management (links, passkeys, approvals)"
+		echo "  19) security.txt        — Update static/.well-known/security.txt"
+		# Always listed so the menu numbers match `./manage.sh help` (20 entries).
 		# Off Termux, cmd_termux_setup just explains that it is Android-only.
 		if is_termux; then
-			echo "  19) termux_setup.sh     — Termux initial setup (Android only)"
+			echo "  20) termux_setup.sh     — Termux initial setup (Android only)"
 		else
-			echo -e "  ${DIM}19) termux_setup.sh     — Termux initial setup (Android only — n/a on this system)${NC}"
+			echo -e "  ${DIM}20) termux_setup.sh     — Termux initial setup (Android only — n/a on this system)${NC}"
 		fi
 		echo ""
 		echo "   q) Quit"
@@ -1318,17 +1319,18 @@ cmd_menu() {
 		6) _menu_run _menu_logs ;;
 		7) _menu_run cmd_clean_logs ;;
 		8) _menu_run cmd_restart_webdav ;;
-		9) _menu_run run_utility "smb_setup.py" ;;
-		10) _menu_run run_utility "kick_sessions.py" ;;
-		11) _menu_run run_utility "config.py" ;;
-		12) _menu_run run_utility "manage_users.py" ;;
-		13) _menu_run run_utility "debug_passwords.py" ;;
-		14) _menu_run run_utility "reset_db.py" ;;
-		15) _menu_run run_utility "setup_storage.py" ;;
-		16) _menu_run cmd_setup_modules ;;
-		17) _menu_run run_utility "revoke_sharing.py" ;;
-		18) _menu_run cmd_security_txt ;;
-		19) _menu_run cmd_termux_setup ;;
+		9) _menu_run run_utility "version_manage.py" ;;
+		10) _menu_run run_utility "config.py" ;;
+		11) _menu_run run_utility "smb_setup.py" ;;
+		12) _menu_run run_utility "kick_sessions.py" ;;
+		13) _menu_run run_utility "manage_users.py" ;;
+		14) _menu_run run_utility "debug_passwords.py" ;;
+		15) _menu_run run_utility "reset_db.py" ;;
+		16) _menu_run run_utility "setup_storage.py" ;;
+		17) _menu_run cmd_setup_modules ;;
+		18) _menu_run run_utility "revoke_sharing.py" ;;
+		19) _menu_run cmd_security_txt ;;
+		20) _menu_run cmd_termux_setup ;;
 		q | Q)
 			echo ""
 			success "Goodbye!"
@@ -1374,6 +1376,14 @@ ${BOLD}SERVER COMMANDS${NC}  (mutually exclusive — only one server at a time)
 
 ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
   Any extra arguments after a utility command are passed straight to its script.
+  version-manage        python version_manage.py — Version Engine: browse, restore,
+                          and delete file versions. No args → interactive menu.
+                          subcommands: list [file_path] |
+                          restore <version_id> <destination> [--overwrite] |
+                          delete <version_id> [--run-gc-now]
+                          Ctrl-C at any prompt cancels that action and returns to
+                          the menu (interactive mode) or exits cleanly (CLI mode) —
+                          never leaves a partial restore/delete in place.
   setup-smb             python smb_setup.py — Configure SMB protocol storage (Windows/Linux)
   kick-sessions         python kick_sessions.py — Force logout of all active
                           sessions (server must be running)
@@ -1419,11 +1429,11 @@ ${BOLD}OTHER${NC}
 ${BOLD}MENU ↔ COMMAND MAP${NC}  (in ./manage.sh menu type the number; from the shell type the command)
    1  start server          2  start dev_server      3  stop
    4  restart               5  status                6  logs [server|dev_server] [-f]
-   7  clean-logs            8  restart-webdav        9  setup-smb
-  10  kick-sessions        11  config               12  manage-users
-  13  debug-pw             14  reset-db             15  setup-storage
-  16  update-modules       17  revoke-shares        18  security-txt
-  19  termux-setup (Android/Termux only; shown dimmed elsewhere)       q  quit
+   7  clean-logs            8  restart-webdav        9  version-manage
+  10  config                11  setup-smb            12  kick-sessions
+  13  manage-users          14  debug-pw             15  reset-db
+  16  setup-storage         17  update-modules       18  revoke-shares
+  19  security-txt         20  termux-setup (Android/Termux only; shown dimmed elsewhere)       q  quit
 
 ${BOLD}EXAMPLES${NC}
   Servers
@@ -1442,6 +1452,12 @@ ${BOLD}EXAMPLES${NC}
     ./manage.sh logs dev_server -f               # same, for the dev server
     ./manage.sh clean-logs                       # delete old log files
   Utilities
+    ./manage.sh version-manage                   # interactive menu: browse/restore/delete versions
+    ./manage.sh version-manage list              # every tracked file + version count
+    ./manage.sh version-manage list <path>       # one file's full version history
+    ./manage.sh version-manage restore <id> <dest>           # restore a version
+    ./manage.sh version-manage restore <id> <dest> --overwrite  # ...replacing an existing file (asks to type a confirm phrase)
+    ./manage.sh version-manage delete <id>       # permanently delete a version (asks to type a long confirm sentence)
     ./manage.sh setup-smb                        # configure SMB storage
     ./manage.sh kick-sessions                    # force logout of every active session
     ./manage.sh config                           # edit configuration
@@ -1514,6 +1530,7 @@ main() {
 	setup-smb) run_utility "smb_setup.py" "$@" ;;
 	kick-sessions) run_utility "kick_sessions.py" "$@" ;;
 	config) run_utility "config.py" "$@" ;;
+	version-manage) run_utility "version_manage.py" "$@" ;;
 	manage-users) run_utility "manage_users.py" "$@" ;;
 	debug-pw) run_utility "debug_passwords.py" "$@" ;;
 	reset-db) run_utility "reset_db.py" "$@" ;;
