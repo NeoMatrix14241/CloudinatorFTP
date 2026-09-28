@@ -1076,6 +1076,56 @@ class Engine:
         conn.commit()
         return True, f"version_id {version_id} marked deleted"
 
+    def clear_failed_versions(self, file_path: str) -> int:
+        """Permanently remove every status='failed' version row for one
+        file. Returns how many rows were removed (0 if the file isn't
+        tracked or has none).
+
+        Unlike delete_version() this is a HARD delete, not a soft one —
+        deliberately: a soft-deleted failed row would just turn into a
+        'deleted' row that still clutters the history. It's safe because a
+        failed capture never became a restorable version: nothing can be
+        restored from it, so no user content is lost. Any partial
+        version_objects rows a failed chunked capture left behind are
+        removed first (foreign_keys is ON), and the chunk objects they
+        pointed at become unreferenced, which the normal GC reclaims after
+        its grace period. jobs rows are left alone (audit history; jobs
+        has no foreign key to versions).
+
+        'completed' and 'deleted' rows are never touched."""
+        conn = self._connect()
+        file_row = conn.execute(
+            "SELECT file_id FROM files WHERE norm_key=?", (_normalize_path(file_path),)
+        ).fetchone()
+        if file_row is None:
+            return 0
+
+        ids = [
+            r["version_id"]
+            for r in conn.execute(
+                "SELECT version_id FROM versions WHERE file_id=? AND status='failed'",
+                (file_row["file_id"],),
+            ).fetchall()
+        ]
+        if not ids:
+            return 0
+
+        placeholders = ",".join("?" for _ in ids)  # structure only, values stay bound
+        try:
+            conn.execute(
+                f"DELETE FROM version_objects WHERE version_id IN ({placeholders})", ids
+            )
+            conn.execute(
+                f"DELETE FROM versions WHERE version_id IN ({placeholders}) "
+                "AND status='failed'",
+                ids,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return len(ids)
+
     # ------------------------------------------------------------------
     # Restore — the core correctness invariant:
     #     original_sha256 == restored_sha256  AND  original_size == restored_size

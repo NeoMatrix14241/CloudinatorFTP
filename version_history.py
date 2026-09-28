@@ -306,6 +306,36 @@ def prepare_download(resolved_file_path: str, version_id: int):
 
 
 # ------------------------------------------------------------------
+# Clear failed attempts / retention summary
+# ------------------------------------------------------------------
+
+
+def clear_failed(resolved_file_path: str):
+    """Permanently remove this file's failed-capture rows (see
+    Engine.clear_failed_versions() for why that's safe: a failed capture
+    never became a restorable version). Returns (ok, message, removed)."""
+    removed = _get_engine().clear_failed_versions(resolved_file_path)
+    if removed == 0:
+        return True, "There were no failed attempts to clear.", 0
+    noun = "attempt" if removed == 1 else "attempts"
+    return True, f"Cleared {removed} failed {noun}.", removed
+
+
+def retention_info(versions):
+    """What the modal needs for its "12 of 50 versions kept" line.
+
+    `kept` counts only status='completed' rows, because that is exactly
+    what Engine._apply_retention() counts — failed and deleted rows don't
+    use up the allowance. Reads config at call time (not import time) so a
+    runtime change to VERSION_MAX_VERSIONS is reflected immediately."""
+    return {
+        "enabled": bool(config.VERSION_RETENTION_ENABLED),
+        "max": int(config.VERSION_MAX_VERSIONS),
+        "kept": sum(1 for v in (versions or []) if v["status"] == "completed"),
+    }
+
+
+# ------------------------------------------------------------------
 # Retry — capture the live file right now, instead of waiting for the
 # next scheduled scan/watch event to happen to pick it back up.
 # ------------------------------------------------------------------

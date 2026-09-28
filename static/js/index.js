@@ -8101,10 +8101,108 @@ function _versionHistoryRowTemplate(itemPath, itemName, version) {
         </div>`;
 }
 
-async function _renderVersionHistoryList(itemPath, itemName) {
+// One open Version History modal at a time, so its view state lives here
+// rather than being threaded through every data-fn call.
+let _vhState = {
+    path: null, name: null, data: null,
+    showHidden: false,   // reveal failed + deleted rows (hidden by default)
+    status: null,        // inline result line: { type: 'success'|'error'|'info', text }
+    suppressBanner: false, // a retry just reported "up to date" -> the stale failed row shouldn't nag
+    busy: false,         // a retry/clear request is in flight
+    clearArmed: false, clearTimer: null,
+};
+
+function _vhResetState(itemPath, itemName) {
+    clearTimeout(_vhState.clearTimer);
+    _vhState = {
+        path: itemPath, name: itemName, data: null, showHidden: false, status: null,
+        suppressBanner: false, busy: false, clearArmed: false, clearTimer: null
+    };
+}
+
+function _paintVersionHistory() {
+    const container = document.getElementById('versionHistoryList');
+    const s = _vhState;
+    if (!container || !s.data) return;
+
+    const versions = s.data.versions;
+    const retention = s.data.retention;
+    const canWrite = USER_ROLE === 'readwrite';
+    const isHidden = v => v.status === 'failed' || v.status === 'deleted';
+    const failedCount = versions.filter(v => v.status === 'failed').length;
+    const hiddenCount = versions.filter(isHidden).length;
+    const visible = s.showHidden ? versions : versions.filter(v => !isHidden(v));
+
+    let html = '';
+
+    // "12 of 50 versions kept" — counts completed rows only, same as the
+    // engine's retention pass, so failed/deleted rows never use it up.
+    if (retention && retention.enabled) {
+        const nearLimit = retention.kept >= Math.ceil(retention.max * 0.9);
+        const atLimit = retention.kept >= retention.max;
+        html += `<div class="version-history-retention${nearLimit ? ' is-near-limit' : ''}">
+            <i class="fas fa-layer-group"></i>
+            <span>${retention.kept} of ${retention.max} versions kept${atLimit ? ' — saving a new version removes the oldest' : ''}</span>
+        </div>`;
+    }
+
+    if (s.status) {
+        const icon = s.status.type === 'success' ? 'fa-circle-check'
+            : s.status.type === 'error' ? 'fa-circle-xmark' : 'fa-circle-info';
+        html += `<div class="version-history-status status-${s.status.type}">
+            <i class="fas ${icon}"></i><span>${escapeHtml(s.status.text)}</span></div>`;
+    }
+
+    // Retry banner: only when the newest attempt overall failed. Retrying always
+    // re-captures the live file, so it is one action, not a per-row button.
+    const newest = versions[0];
+    if (newest && newest.status === 'failed' && canWrite && !s.suppressBanner) {
+        html += `<div class="version-history-retry-banner">
+            <div class="version-history-retry-banner-text">
+                <i class="fas fa-triangle-exclamation"></i>
+                <span>The latest snapshot attempt failed${newest.error ? ': ' + escapeHtml(newest.error) : '.'}</span>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" ${s.busy ? 'disabled' : ''}
+                data-fn="retrySnapshotAction" data-args="${dataArgs([s.path, s.name])}">
+                <i class="fas ${s.busy ? 'fa-spinner fa-spin' : 'fa-rotate-right'}"></i> ${s.busy ? 'Retrying…' : 'Retry Now'}
+            </button>
+        </div>`;
+    }
+
+    if (hiddenCount > 0) {
+        const clearBtn = (canWrite && failedCount > 0) ? `
+            <button type="button" class="btn ${s.clearArmed ? 'btn-danger' : 'btn-outline'} btn-sm" ${s.busy ? 'disabled' : ''}
+                data-fn="clearFailedAction"
+                title="Permanently remove failed attempts. Nothing restorable is lost — a failed attempt never captured any content.">
+                <i class="fas fa-broom"></i>
+                ${s.clearArmed ? `Click again to clear ${failedCount}` : `Clear failed attempts (${failedCount})`}
+            </button>` : '';
+        html += `<div class="version-history-toolbar">
+            <button type="button" class="btn btn-outline btn-sm" data-fn="toggleVersionHistoryHidden">
+                <i class="fas ${s.showHidden ? 'fa-eye-slash' : 'fa-eye'}"></i>
+                ${s.showHidden ? 'Hide failed & deleted' : `Show failed & deleted (${hiddenCount})`}
+            </button>
+            ${clearBtn}
+        </div>`;
+    }
+
+    if (visible.length === 0) {
+        html += `<p class="version-history-empty">No saved versions to show. ${hiddenCount} failed/deleted attempt${hiddenCount === 1 ? '' : 's'} hidden.</p>`;
+    } else {
+        html += visible.map(v => _versionHistoryRowTemplate(s.path, s.name, v)).join('');
+    }
+
+    container.innerHTML = html;
+}
+
+// silent=true re-fetches without blanking the list to a spinner (used after
+// retry/clear so the inline result message doesn't flicker away).
+async function _renderVersionHistoryList(itemPath, itemName, silent = false) {
     const container = document.getElementById('versionHistoryList');
     if (!container) return;
-    container.innerHTML = '<div class="share-status-loading"><i class="fas fa-spinner fa-spin"></i> Loading version history…</div>';
+    if (!silent) {
+        container.innerHTML = '<div class="share-status-loading"><i class="fas fa-spinner fa-spin"></i> Loading version history…</div>';
+    }
 
     try {
         const resp = await fetch(`/api/versions/list?path=${encodeURIComponent(itemPath)}`);
@@ -8114,39 +8212,30 @@ async function _renderVersionHistoryList(itemPath, itemName) {
             return;
         }
         if (!data.tracked || !data.versions || data.versions.length === 0) {
+            _vhState.data = null;
             container.innerHTML = '<p class="version-history-empty">No version history for this file yet.</p>';
             return;
         }
-
-        // A "Retry Now" banner appears once, only when the MOST RECENT
-        // version failed to capture — retrying always re-captures the
-        // current live file regardless of which historical failed row
-        // you'd click, so this is deliberately not a per-row button.
-        let banner = '';
-        const newest = data.versions[0];
-        if (newest.status === 'failed' && USER_ROLE === 'readwrite') {
-            banner = `
-                <div class="version-history-retry-banner">
-                    <div class="version-history-retry-banner-text">
-                        <i class="fas fa-triangle-exclamation"></i>
-                        <span>The latest snapshot attempt failed${newest.error ? ': ' + escapeHtml(newest.error) : '.'}</span>
-                    </div>
-                    <button type="button" class="btn btn-primary btn-sm"
-                        data-fn="retrySnapshotAction" data-args="${dataArgs([itemPath, itemName])}">
-                        <i class="fas fa-rotate-right"></i> Retry Now
-                    </button>
-                </div>`;
-        }
-
-        container.innerHTML = banner + data.versions.map(v => _versionHistoryRowTemplate(itemPath, itemName, v)).join('');
+        _vhState.data = data;
+        _paintVersionHistory();
     } catch (e) {
         container.innerHTML = '<p class="version-history-empty">Could not load version history — check your connection.</p>';
     }
 }
 
+function toggleVersionHistoryHidden() {
+    _vhState.showHidden = !_vhState.showHidden;
+    _paintVersionHistory();
+}
+
+// Retry reports its result INLINE in the Version History modal. It used to pop
+// the shared notification modal, which is redundant here (the list right
+// underneath already shows the outcome) and used to render behind this modal.
 async function retrySnapshotAction(itemPath, itemName) {
-    const banner = document.querySelector('.version-history-retry-banner button');
-    if (banner) banner.disabled = true;
+    if (_vhState.busy) return;
+    _vhState.busy = true;
+    _vhState.status = null;
+    _paintVersionHistory();
 
     try {
         const resp = await fetch('/api/versions/retry', {
@@ -8156,15 +8245,54 @@ async function retrySnapshotAction(itemPath, itemName) {
         });
         const data = await resp.json();
         if (!resp.ok || !data.success) {
-            showNotification('Retry Failed', data.message || data.error || 'Could not retry the snapshot.', 'error');
+            _vhState.status = { type: 'error', text: data.message || data.error || 'Could not retry the snapshot.' };
+        } else if (data.version) {
+            _vhState.status = { type: 'success', text: 'Snapshot captured — a new version was saved.' };
         } else {
-            showNotification('Snapshot Retried', data.message || 'Done.', data.version ? 'success' : 'info');
+            _vhState.status = { type: 'success', text: 'Already up to date — the file’s current content matches the latest saved version.' };
+            _vhState.suppressBanner = true;
         }
-        _renderVersionHistoryList(itemPath, itemName);
     } catch (e) {
-        showNotification('Retry Failed', 'Could not reach the server.', 'error');
-        if (banner) banner.disabled = false;
+        _vhState.status = { type: 'error', text: 'Could not reach the server.' };
+    } finally {
+        _vhState.busy = false;
     }
+    await _renderVersionHistoryList(itemPath, itemName, true);
+}
+
+// Two-step: the first click arms the button (5 s), the second click clears.
+async function clearFailedAction() {
+    const s = _vhState;
+    if (s.busy) return;
+    if (!s.clearArmed) {
+        s.clearArmed = true;
+        clearTimeout(s.clearTimer);
+        s.clearTimer = setTimeout(() => { s.clearArmed = false; _paintVersionHistory(); }, 5000);
+        _paintVersionHistory();
+        return;
+    }
+    clearTimeout(s.clearTimer);
+    s.clearArmed = false;
+    s.busy = true;
+    _paintVersionHistory();
+
+    try {
+        const resp = await fetch('/api/versions/clear-failed', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: s.path }),
+        });
+        const data = await resp.json();
+        s.status = (!resp.ok || !data.success)
+            ? { type: 'error', text: data.error || 'Could not clear failed attempts.' }
+            : { type: 'success', text: data.message };
+        if (resp.ok && data.success) s.suppressBanner = false;
+    } catch (e) {
+        s.status = { type: 'error', text: 'Could not reach the server.' };
+    } finally {
+        s.busy = false;
+    }
+    await _renderVersionHistoryList(s.path, s.name, true);
 }
 
 // =============================================================================
@@ -8222,6 +8350,7 @@ function showVersionHistoryModal(itemPath, itemName) {
     if (title) title.innerHTML = `<i class="fas fa-clock-rotate-left"></i> Version History — ${escapeHtml(itemName)}`;
     const modal = document.getElementById('versionHistoryModal');
     if (modal) modal.classList.add('show');
+    _vhResetState(itemPath, itemName);
     _renderVersionHistoryList(itemPath, itemName);
 }
 
@@ -8301,7 +8430,7 @@ async function confirmDeleteVersionAction(itemPath, versionId, itemName) {
             return;
         }
         showNotification('Version Deleted', data.message || 'Version deleted.', 'success');
-        _renderVersionHistoryList(itemPath, itemName);
+        _renderVersionHistoryList(itemPath, itemName, true);
     } catch (e) {
         showNotification('Delete Failed', 'Could not reach the server.', 'error');
     }

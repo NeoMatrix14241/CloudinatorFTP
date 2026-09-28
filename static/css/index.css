@@ -6657,3 +6657,71 @@ body:has(#fileViewerModal.show) {
 .version-history-retry-banner-text i {
     flex-shrink: 0;
 }
+
+
+/* ===========================================================================
+   Notification modal must stack ABOVE other modals.
+   Every .modal is z-index:1000, and #notificationModal comes earlier in the
+   page than #versionHistoryModal, so with equal z-index the later modal
+   painted over it — Restore/Delete results appeared BEHIND the Version
+   History modal and you had to close it to read them. 1100 clears every
+   modal but stays below the toasts (10000) and tooltips (999999).
+   =========================================================================== */
+
+#notificationModal {
+    z-index: 1100;
+}
+
+/* ===========================================================================
+   Version History — retention line, inline result line, show/hide toolbar
+   =========================================================================== */
+
+.version-history-retention {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.65);
+}
+
+.version-history-retention.is-near-limit {
+    color: #f1c40f;
+}
+
+.version-history-status {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 9px 12px;
+    margin-bottom: 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.version-history-status i {
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
+.version-history-status.status-success {
+    border-color: rgba(46, 204, 113, 0.4);
+    background: rgba(46, 204, 113, 0.1);
+    color: #2ecc71;
+}
+
+.version-history-status.status-error {
+    border-color: rgba(231, 76, 60, 0.4);
+    background: rgba(231, 76, 60, 0.1);
+    color: #e74c3c;
+}
+
+.version-history-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+}

@@ -2083,7 +2083,13 @@ async def api_versions_list():
     versions = await asyncio.to_thread(version_history.get_history, full_path)
     if versions is None:
         return jsonify({"tracked": False, "versions": []})
-    return jsonify({"tracked": True, "versions": versions})
+    return jsonify(
+        {
+            "tracked": True,
+            "versions": versions,
+            "retention": version_history.retention_info(versions),
+        }
+    )
 
 
 @app.route("/api/versions/restore", methods=["POST"])
@@ -2201,6 +2207,32 @@ async def api_versions_retry():
     return jsonify({"success": ok, "message": message, "version": new_version}), (
         200 if ok else 400
     )
+
+
+@app.route("/api/versions/clear-failed", methods=["POST"])
+@login_required
+async def api_versions_clear_failed():
+    """Permanently remove a file's failed-capture rows. Only ever touches
+    status='failed' — a failed capture never produced a restorable
+    version, so nothing recoverable is lost (see
+    Engine.clear_failed_versions())."""
+    role = get_role(current_user())
+    if role != "readwrite":
+        return jsonify({"error": "Permission denied"}), 403
+
+    data = await request.get_json(silent=True) or {}
+    path = data.get("path", "")
+    if not path or not storage.is_safe_path(path):
+        return jsonify({"error": "Invalid request"}), 400
+
+    full_path = os.path.join(ROOT_DIR, path)
+    ok, message, removed = await asyncio.to_thread(
+        version_history.clear_failed, full_path
+    )
+    logging.info(
+        f"Version failed-attempts cleared by {current_user()}: {path} ({removed})"
+    )
+    return jsonify({"success": ok, "message": message, "removed": removed})
 
 
 @app.route("/api/versions/delete", methods=["POST"])
