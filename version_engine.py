@@ -423,6 +423,21 @@ def sha256_stream(fileobj, chunk_size=1024 * 1024):
     return h.hexdigest()
 
 
+def _is_lock_error(exc) -> bool:
+    """True for SQLite's transient 'database is locked' / 'busy' errors."""
+    return isinstance(exc, sqlite3.OperationalError) and any(
+        w in str(exc).lower() for w in ("locked", "busy")
+    )
+
+
+# How many times a worker-driven snapshot is retried (backoff 2,4,8,16,30 s)
+# when another writer is holding the DB lock, before it gives up and lets the
+# watcher pick the file up again. A user-triggered web retry is kept short
+# because an HTTP request is waiting on it.
+_BUSY_MAX_RETRIES = 5
+_BUSY_MAX_RETRIES_WEB = 2
+
+
 class VersionEngineError(Exception):
     pass
 
@@ -480,6 +495,13 @@ class Engine:
         # a lock, and should wait rather than fail instantly.
         conn.execute("PRAGMA busy_timeout=10000")
         conn.execute("PRAGMA journal_mode=WAL")
+        # WAL + NORMAL: no fsync on every commit (WAL is still fsync'd at
+        # checkpoints). Every snapshot does ~8 commits, so on Windows/HDD
+        # the default FULL made each write-lock window several times longer.
+        # Safe here: object files are fsync'd separately, and a power loss
+        # can only roll back the last few commits, which crash recovery
+        # already treats as 'interrupted' (never falsely 'completed').
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
         self._conn_local.conn = conn
         return conn
@@ -778,7 +800,8 @@ class Engine:
         byte stream. Never branches on extension. SHA-256 is the sole
         identity; if it matches the latest completed version, this is a
         no-op (skip, no redundant version)."""
-        job_id = self._create_job("snapshot", file_id=None)
+        self._conn_local.last_snapshot_busy = False
+        job_id = self._retry_locked(self._create_job, "snapshot", None)
         conn = self._connect()
         try:
             if not os.path.isfile(display_path):
@@ -790,41 +813,165 @@ class Engine:
                 )
                 return None
 
-            file_id = self._get_or_create_file(display_path, source)
-            conn.execute("UPDATE jobs SET file_id=? WHERE job_id=?", (file_id, job_id))
-            conn.commit()
+            file_id = self._retry_locked(self._get_or_create_file, display_path, source)
+
+            def _link_job():
+                conn.execute(
+                    "UPDATE jobs SET file_id=? WHERE job_id=?", (file_id, job_id)
+                )
+                conn.commit()
+
+            self._retry_locked(_link_job)
 
             last_error = None
-            for attempt in range(config.VERSION_RETRY_COUNT + 1):
+            changed_attempts = 0
+            busy_attempts = 0
+            busy_gave_up = False
+            max_busy = (
+                _BUSY_MAX_RETRIES_WEB if source == "web-retry" else _BUSY_MAX_RETRIES
+            )
+            while True:
                 try:
                     result = self._attempt_snapshot(file_id, display_path, job_id)
                     if result is None:
                         self._finish_job(
                             job_id, "completed"
-                        )  # dedup skip — not an error
+                        )  # dedup skip - not an error
                     else:
                         self._finish_job(job_id, "completed", version_id=result)
                         self._apply_retention(file_id)
                     return result
                 except _SourceChangedDuringCapture as e:
                     last_error = str(e)
+                    changed_attempts += 1
+                    if changed_attempts > config.VERSION_RETRY_COUNT:
+                        break
                     self.log.info(
-                        f"Snapshot retry {attempt + 1}/{config.VERSION_RETRY_COUNT} for "
+                        f"Snapshot retry {changed_attempts}/{config.VERSION_RETRY_COUNT} for "
                         f"{display_path}: source changed during capture"
                     )
                     time.sleep(config.VERSION_RETRY_DELAY)
+                except _DatabaseBusy as e:
+                    # Another writer held the DB lock past busy_timeout. This
+                    # is NOT a problem with the file, so don't record a
+                    # permanent failed version - back off and try again.
+                    last_error = f"database is locked ({e})"
+                    busy_attempts += 1
+                    if busy_attempts > max_busy:
+                        busy_gave_up = True
+                        break
+                    delay = min(30, 2**busy_attempts)
+                    self.log.warning(
+                        f"Snapshot of {display_path} hit a locked database; "
+                        f"retry {busy_attempts}/{max_busy} in {delay}s"
+                    )
+                    time.sleep(delay)
                 except Exception as e:
                     last_error = str(e)
-                    self.log.error(f"Snapshot failed for {display_path}: {e}")
+                    # exc_info: a bare "database is locked" (or any other
+                    # message) is undiagnosable without knowing WHICH
+                    # statement raised it.
+                    self.log.error(
+                        f"Snapshot failed for {display_path}: {e}", exc_info=True
+                    )
                     break
 
-            self._finish_job(job_id, "failed", error=last_error or "unknown error")
+            if busy_gave_up:
+                # Let the watcher re-discover this file on its next poll
+                # (_reconcile_once only enqueues when the cached (mtime,
+                # size) differs, so without this the capture would be lost
+                # until the file happened to change again).
+                self._known_state.pop(_normalize_path(display_path), None)
+                self.log.warning(
+                    f"Gave up on {display_path} after {max_busy} locked-database "
+                    "retries; it will be re-queued automatically."
+                )
+                # Tell an interactive caller (version_history.retry_snapshot)
+                # the truth: nothing was captured because the DB was busy.
+                # Not a failed version row - writing one would need the very
+                # lock we couldn't get.
+                self._conn_local.last_snapshot_busy = True
+            try:
+                self._finish_job(job_id, "failed", error=last_error or "unknown error")
+            except sqlite3.OperationalError as e:
+                if not _is_lock_error(e):
+                    raise
+                # Still locked: leave the job row 'processing' (crash recovery
+                # marks it failed at next start) rather than turning a handled
+                # give-up into an exception.
+                self.log.warning(f"Could not record failed job {job_id}: {e}")
             return None
         finally:
             with self._pending_lock:
                 self._pending_norm_keys.discard(_normalize_path(display_path))
 
+    def _discard_version_row(self, version_id: int):
+        """Best-effort removal of a not-yet-completed version row (and any
+        partial links) after a locked-database failure, so a transient lock
+        doesn't leave a permanent 'failed' row or a row stuck 'pending'. If
+        even this can't get the lock, crash recovery fixes it at next start."""
+        conn = self._connect()
+        for attempt in range(3):
+            try:
+                conn.execute(
+                    "DELETE FROM version_objects WHERE version_id=?", (version_id,)
+                )
+                conn.execute(
+                    "DELETE FROM versions WHERE version_id=? AND status!='completed'",
+                    (version_id,),
+                )
+                conn.commit()
+                return
+            except sqlite3.OperationalError as e:
+                try:
+                    conn.rollback()
+                except sqlite3.Error:
+                    pass
+                if not _is_lock_error(e) or attempt == 2:
+                    self.log.warning(f"Could not discard version row {version_id}: {e}")
+                    return
+                time.sleep(1.0)
+
+    def _retry_locked(self, fn, *args, delays=(2, 4, 8)):
+        """Run a small bookkeeping write, retrying with backoff if another
+        writer holds the DB lock past busy_timeout. The final failure is
+        re-raised for the caller (worker loop) to handle."""
+        for delay in delays:
+            try:
+                return fn(*args)
+            except sqlite3.OperationalError as e:
+                if not _is_lock_error(e):
+                    raise
+                try:
+                    self._connect().rollback()
+                except sqlite3.Error:
+                    pass
+                self.log.warning(
+                    f"{getattr(fn, '__name__', 'write')}: {e}; retry in {delay}s"
+                )
+                time.sleep(delay)
+        return fn(*args)
+
+    def last_snapshot_busy(self) -> bool:
+        """True if this thread's most recent snapshot_file() call gave up
+        because the database stayed locked (nothing was captured, and no
+        failed version row exists to say so)."""
+        return bool(getattr(self._conn_local, "last_snapshot_busy", False))
+
     def _attempt_snapshot(self, file_id: int, display_path: str, job_id: int):
+        holder = {}
+        try:
+            return self._attempt_snapshot_body(file_id, display_path, job_id, holder)
+        except sqlite3.OperationalError as e:
+            if not _is_lock_error(e):
+                raise
+            if holder.get("version_id") is not None:
+                self._discard_version_row(holder["version_id"])
+            raise _DatabaseBusy(str(e)) from e
+
+    def _attempt_snapshot_body(
+        self, file_id: int, display_path: str, job_id: int, holder: dict
+    ):
         conn = self._connect()
         try:
             stat_before = os.stat(display_path)
@@ -833,6 +980,7 @@ class Engine:
 
         small = stat_before.st_size <= config.VERSION_SMALL_FILE_THRESHOLD
         version_id = self._create_version_row(file_id, "full" if small else "chunked")
+        holder["version_id"] = version_id
         self._set_job_version(job_id, version_id)
 
         try:
@@ -840,6 +988,11 @@ class Engine:
                 sha, size = self._capture_full(display_path, version_id)
             else:
                 sha, size = self._capture_chunked(display_path, version_id)
+        except sqlite3.OperationalError as e:
+            if _is_lock_error(e):
+                raise  # transient; _attempt_snapshot() discards the row and backs off
+            self._mark_version_failed(version_id, f"capture failed: {e}")
+            raise
         except Exception as e:
             # Preserve the REAL reason (e.g. "[Errno 13] Permission denied"
             # for a file locked open by another program — QuickBooks .QBW
@@ -1312,13 +1465,23 @@ class Engine:
         )
 
     def run_gc(self):
+        """Orphan marking / deletion, done in SHORT write transactions.
+
+        All classification (which objects are live / newly orphaned / due for
+        deletion) is read-only and takes no lock. The writes are then applied
+        in small batches, each under BEGIN IMMEDIATE and committed after
+        _GC_BATCH_ROWS statements or _GC_BATCH_SECONDS, with a brief pause
+        between batches so waiting writers (the snapshot worker, the web
+        process) actually get the lock. Previously the whole sweep - including
+        an os.remove() per deleted object - ran in one transaction, holding
+        the write lock for as long as the sweep took."""
         if not config.VERSION_GC_ENABLED:
             return
+        t_start = time.time()
         job_id = self._create_job("gc")
         conn = self._connect()
         now = time.time()
 
-        # An object is live if referenced by any 'completed' version.
         live = {
             row["sha256"]
             for row in conn.execute(
@@ -1331,58 +1494,100 @@ class Engine:
             "SELECT sha256, orphaned_since FROM objects"
         ).fetchall()
 
-        newly_orphaned = 0
-        cleared = 0
-        deleted = 0
+        to_clear, to_mark, due = [], [], []
         for row in all_objects:
             sha = row["sha256"]
             if sha in live:
                 if row["orphaned_since"] is not None:
-                    conn.execute(
-                        "UPDATE objects SET orphaned_since=NULL WHERE sha256=?", (sha,)
-                    )
-                    cleared += 1
-                continue
-            if row["orphaned_since"] is None:
-                conn.execute(
-                    "UPDATE objects SET orphaned_since=? WHERE sha256=?", (now, sha)
-                )
-                newly_orphaned += 1
+                    to_clear.append(sha)
+            elif row["orphaned_since"] is None:
+                to_mark.append(sha)
             elif now - row["orphaned_since"] >= config.VERSION_GC_GRACE_PERIOD:
-                # Still unreferenced after the full grace period — safe to
-                # delete. Re-check liveness right before unlinking (race-
-                # aware: a snapshot could have re-referenced it moments ago).
-                still_unreferenced = conn.execute(
-                    "SELECT 1 FROM version_objects vo JOIN versions v "
-                    "ON v.version_id = vo.version_id "
-                    "WHERE vo.sha256=? AND v.status='completed' LIMIT 1",
-                    (sha,),
-                ).fetchone()
-                if still_unreferenced is None:
-                    try:
-                        os.remove(self._object_path(sha))
-                    except OSError:
-                        pass
-                    # version_objects rows from non-completed (failed/
-                    # deleted) versions still FK-reference this object —
-                    # safe to drop them here: a 'deleted' (soft-retention)
-                    # version's bytes are, by this point, actually gone,
-                    # so its version_objects link is now meaningless
-                    # bookkeeping, not a live reference. The versions row
-                    # itself is untouched (audit trail preserved).
-                    conn.execute("DELETE FROM version_objects WHERE sha256=?", (sha,))
-                    conn.execute("DELETE FROM objects WHERE sha256=?", (sha,))
-                    deleted += 1
-                    if deleted % 100 == 0:
-                        # os.remove() calls happen inside this loop; commit
-                        # in batches so the write lock isn't held for the
-                        # whole sweep on a slow disk.
-                        conn.commit()
-        conn.commit()
+                due.append(sha)
+
+        _GC_BATCH_ROWS = 500
+        _GC_BATCH_SECONDS = 0.25
+        _GC_PAUSE = 0.01
+
+        def _run_batches(items, per_item):
+            """per_item(sha) runs inside the batch's write transaction."""
+            n = 0
+            idx = 0
+            while idx < len(items):
+                conn.execute("BEGIN IMMEDIATE")
+                t0 = time.time()
+                try:
+                    count = 0
+                    while idx < len(items):
+                        n += per_item(items[idx])
+                        idx += 1
+                        count += 1
+                        if (
+                            count >= _GC_BATCH_ROWS
+                            or time.time() - t0 >= _GC_BATCH_SECONDS
+                        ):
+                            break
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                time.sleep(_GC_PAUSE)
+            return n
+
+        def _clear(sha):
+            conn.execute(
+                "UPDATE objects SET orphaned_since=NULL WHERE sha256=?", (sha,)
+            )
+            return 1
+
+        def _mark(sha):
+            conn.execute(
+                "UPDATE objects SET orphaned_since=? WHERE sha256=?", (now, sha)
+            )
+            return 1
+
+        def _delete(sha):
+            # Re-check liveness right before unlinking. We hold the write lock
+            # here (BEGIN IMMEDIATE), so no snapshot can commit a new
+            # reference between this check and the delete.
+            still_referenced = conn.execute(
+                "SELECT 1 FROM version_objects vo JOIN versions v "
+                "ON v.version_id = vo.version_id "
+                "WHERE vo.sha256=? AND v.status='completed' LIMIT 1",
+                (sha,),
+            ).fetchone()
+            if still_referenced is not None:
+                return 0
+            try:
+                os.remove(self._object_path(sha))
+            except OSError:
+                pass
+            # version_objects rows from non-completed (failed/deleted)
+            # versions still FK-reference this object; their bytes are gone
+            # now, so the links are meaningless bookkeeping. The versions row
+            # itself (audit trail) is untouched.
+            conn.execute("DELETE FROM version_objects WHERE sha256=?", (sha,))
+            conn.execute("DELETE FROM objects WHERE sha256=?", (sha,))
+            return 1
+
+        try:
+            cleared = _run_batches(to_clear, _clear)
+            newly_orphaned = _run_batches(to_mark, _mark)
+            deleted = _run_batches(due, _delete)
+        except Exception as e:
+            # Don't leave the gc job row stuck at 'processing'. Batches
+            # already committed are fine; the next scan continues the rest.
+            try:
+                self._finish_job(job_id, "failed", error=str(e))
+            except Exception:
+                pass
+            raise
+
         self._finish_job(job_id, "completed")
         self.log.info(
             f"GC: {newly_orphaned} newly orphaned, {cleared} re-referenced, "
-            f"{deleted} object(s) deleted (grace period {config.VERSION_GC_GRACE_PERIOD}s)"
+            f"{deleted} object(s) deleted (grace period {config.VERSION_GC_GRACE_PERIOD}s) "
+            f"in {time.time() - t_start:.1f}s"
         )
 
     # ------------------------------------------------------------------
@@ -1471,8 +1676,14 @@ class Engine:
                 self.snapshot_file(display_path, source="scan")
             except Exception as e:
                 self.log.error(
-                    f"Worker {worker_index} snapshot error for {display_path}: {e}"
+                    f"Worker {worker_index} snapshot error for {display_path}: {e}",
+                    exc_info=not _is_lock_error(e),
                 )
+                if _is_lock_error(e):
+                    # Even the bookkeeping writes couldn't get the lock. Forget
+                    # the cached (mtime, size) so the watcher re-queues this
+                    # file instead of losing the capture until it changes again.
+                    self._known_state.pop(_normalize_path(display_path), None)
             finally:
                 self._job_queue.task_done()
         self.log.debug(f"Worker {worker_index} stopped.")
@@ -1540,6 +1751,12 @@ class Engine:
         except Exception:
             pass
         self.log.info("Graceful shutdown complete.")
+
+
+class _DatabaseBusy(VersionEngineError):
+    """A DB write hit SQLite's write lock (another writer held it past
+    busy_timeout). Transient: the caller backs off and retries instead of
+    recording a permanent failed version."""
 
 
 class _SourceChangedDuringCapture(VersionEngineError):

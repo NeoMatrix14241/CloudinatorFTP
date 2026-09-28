@@ -429,7 +429,17 @@ def retry_snapshot(resolved_file_path: str):
         for v in (_with_lock_retry(engine.list_versions, resolved_file_path) or [])
     }
 
-    engine.snapshot_file(resolved_file_path, source="web-retry")
+    try:
+        engine.snapshot_file(resolved_file_path, source="web-retry")
+    except Exception as e:
+        log.exception("retry: snapshot_file failed")
+        return False, _fail_message("Retry failed", e), None
+
+    if engine.last_snapshot_busy():
+        # The engine gave up because the DB stayed locked, so no version row
+        # (failed or otherwise) exists. Without this the diff below would say
+        # "already up to date", which would be false.
+        return False, _BUSY_MSG, None
 
     after = _with_lock_retry(engine.list_versions, resolved_file_path) or []
     new_versions = [v for v in after if v["version_id"] not in before_ids]
