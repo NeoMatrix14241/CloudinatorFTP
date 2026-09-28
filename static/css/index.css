@@ -6468,3 +6468,192 @@ body:has(#fileViewerModal.show) {
         background: transparent !important;
     }
 }
+
+/* ===========================================================================
+   Version History modal — version-history-row cards inside #versionHistoryList
+   =========================================================================== */
+
+.version-history-list {
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.version-history-empty {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 14px;
+    text-align: center;
+    padding: 20px 0;
+}
+
+.version-history-row {
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.version-history-row:last-child {
+    margin-bottom: 0;
+}
+
+.version-history-row-main {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 13px;
+}
+
+.version-history-date {
+    color: #fff;
+    font-weight: 500;
+}
+
+.version-history-size,
+.version-history-mode {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.version-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    text-transform: capitalize;
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.version-status-badge.status-completed {
+    background: rgba(46, 204, 113, 0.18);
+    color: #2ecc71;
+}
+
+.version-status-badge.status-failed {
+    background: rgba(231, 76, 60, 0.18);
+    color: #e74c3c;
+}
+
+.version-status-badge.status-deleted {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.version-status-badge.status-pending,
+.version-status-badge.status-processing,
+.version-status-badge.status-verifying {
+    background: rgba(241, 196, 15, 0.18);
+    color: #f1c40f;
+}
+
+.version-history-error {
+    margin-top: 6px;
+    font-size: 12px;
+    color: #e74c3c;
+}
+
+.version-history-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.version-history-delete-confirm {
+    margin-top: 10px;
+    padding: 10px;
+    border: 1px solid rgba(231, 76, 60, 0.4);
+    border-radius: 6px;
+    background: rgba(231, 76, 60, 0.08);
+}
+
+.version-history-delete-confirm p {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 13px;
+    margin: 0 0 8px 0;
+}
+
+.version-history-delete-confirm-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+
+/* ===========================================================================
+   Download Options modal — two big choice buttons (download now / version history)
+   =========================================================================== */
+
+.download-options-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.download-option-btn {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    padding: 14px 16px;
+    text-align: left;
+    font-size: 14px;
+}
+
+.download-option-btn i {
+    font-size: 20px;
+    flex-shrink: 0;
+    width: 24px;
+    text-align: center;
+}
+
+.download-option-btn span {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.download-option-btn strong {
+    font-size: 14px;
+}
+
+.download-option-btn small {
+    font-size: 12px;
+    opacity: 0.75;
+    font-weight: 400;
+}
+
+
+/* ===========================================================================
+   Version History — "Retry Now" banner (shown when the newest version failed)
+   =========================================================================== */
+
+.version-history-retry-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    border: 1px solid rgba(241, 196, 15, 0.4);
+    border-radius: 8px;
+    background: rgba(241, 196, 15, 0.1);
+}
+
+.version-history-retry-banner-text {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #f1c40f;
+    font-size: 13px;
+}
+
+.version-history-retry-banner-text i {
+    flex-shrink: 0;
+}

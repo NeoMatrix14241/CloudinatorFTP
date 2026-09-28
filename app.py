@@ -151,6 +151,7 @@ from auth import (
     get_role,
 )
 import storage
+import version_history
 import secrets as _secrets
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
@@ -1040,6 +1041,21 @@ if ENABLE_SEARCH_INDEX:
 else:
     print("ℹ️  Search index disabled — using os.walk fallback for all searches")
 
+# Version History web UI — logic-only module (version_history.py), no
+# routes registered by importing it (see its own docstring). init() here
+# bootstraps its Engine instance's schema/directories exactly once, same
+# spot as file_monitor/search_index's own one-time startup above — NOT
+# the same thing as version_engine.start(), which spawns the separate
+# Version Engine subprocess and lives in dev_server.py/prod_server.py
+# only. This app.py-side init() just needs a schema-bootstrapped Engine
+# to run read/restore/delete queries against the same SQLite DB that
+# subprocess already writes to (safe under WAL mode — see
+# version_engine.py's own status() docstring for the same pattern).
+version_history.init()
+print(
+    f"🕓 Version History web UI ready (recovered-files dir: {version_history.RECOVERED_ROOT})"
+)
+
 
 def _lean_redirect(location, code=302):
     # Quart's own redirect() (like Flask's) sends a small HTML body with a
@@ -1076,6 +1092,7 @@ async def validate_session():
     # no account required.
     if request.endpoint in [
         "login",
+        "get_csrf_token",
         "static",
         "robots_txt",
         "security_txt",
@@ -2050,6 +2067,168 @@ async def view_file(path):
     directory = os.path.dirname(full_path)
     filename = os.path.basename(full_path)
     return await send_from_directory(directory, filename, as_attachment=False)
+
+
+@app.route("/api/versions/list", methods=["GET"])
+@login_required
+async def api_versions_list():
+    """List a file's version history — used to populate the Version
+    History modal. Available to any logged-in user (mirrors /download
+    and /api/share/status, which have no role restriction either)."""
+    path = request.args.get("path", "")
+    if not path or not storage.is_safe_path(path):
+        return jsonify({"error": "Invalid file path"}), 400
+
+    full_path = os.path.join(ROOT_DIR, path)
+    versions = await asyncio.to_thread(version_history.get_history, full_path)
+    if versions is None:
+        return jsonify({"tracked": False, "versions": []})
+    return jsonify({"tracked": True, "versions": versions})
+
+
+@app.route("/api/versions/restore", methods=["POST"])
+@login_required
+async def api_versions_restore():
+    """Reconstruct a past version into .recovered/ — never overwrites the
+    live file. See version_history.py's module docstring for the naming
+    scheme and why this deliberately isn't an in-place restore."""
+    role = get_role(current_user())
+    if role != "readwrite":
+        return jsonify({"error": "Permission denied"}), 403
+
+    data = await request.get_json(silent=True) or {}
+    path = data.get("path", "")
+    version_id = data.get("version_id")
+    if not path or not storage.is_safe_path(path) or not isinstance(version_id, int):
+        return jsonify({"error": "Invalid request"}), 400
+
+    full_path = os.path.join(ROOT_DIR, path)
+    ok, message, recovered_rel = await asyncio.to_thread(
+        version_history.restore, full_path, version_id
+    )
+    if not ok:
+        return jsonify({"error": message}), 400
+
+    logging.info(
+        f"Version restored by {current_user()}: {path} v{version_id} -> {recovered_rel}"
+    )
+    return jsonify(
+        {
+            "success": True,
+            "message": message,
+            "recovered_path": recovered_rel,
+            "download_url": (
+                f"/download/recovered/{recovered_rel[len(version_history.RECOVERED_DIRNAME) + 1:]}"
+                if recovered_rel
+                else None
+            ),
+        }
+    )
+
+
+@app.route("/api/versions/download", methods=["GET"])
+@login_required
+async def api_versions_download():
+    """Stream a past version's content directly to the browser WITHOUT
+    restoring anything — reconstructed into a throwaway temp dir, read
+    into memory, and cleaned up, all inside version_history.prepare_download()
+    (see its docstring for why this buffers rather than streams: Quart's
+    Response has no call_on_close/equivalent completion hook — confirmed
+    against the actual installed Quart version, not assumed)."""
+    path = request.args.get("path", "")
+    version_id_raw = request.args.get("version_id", "")
+    if not path or not storage.is_safe_path(path) or not version_id_raw.isdigit():
+        return jsonify({"error": "Invalid request"}), 400
+
+    full_path = os.path.join(ROOT_DIR, path)
+    ok, message, data, download_filename = await asyncio.to_thread(
+        version_history.prepare_download, full_path, int(version_id_raw)
+    )
+    if not ok:
+        return jsonify({"error": message}), 400
+
+    mimetype = mimetypes.guess_type(download_filename)[0] or "application/octet-stream"
+    response = Response(data, mimetype=mimetype)
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="{download_filename}"'
+    )
+    return response
+
+
+@app.route("/download/recovered/<path:recovered_rel>")
+@login_required
+async def download_recovered(recovered_rel):
+    """Download a file previously restored into .recovered/ by
+    /api/versions/restore. Deliberately does NOT use storage.is_safe_path
+    (that helper's handling of a dot-prefixed top-level directory like
+    RECOVERED_DIRNAME hasn't been verified against the live storage.py —
+    see handoff doc) — this route does its own containment check, scoped
+    strictly to version_history.RECOVERED_ROOT, which is narrower and
+    doesn't depend on that assumption either way."""
+    candidate = os.path.abspath(
+        os.path.join(version_history.RECOVERED_ROOT, recovered_rel)
+    )
+    if not version_history.is_within_recovered(candidate):
+        return "Invalid path", 400
+    if not os.path.exists(candidate) or os.path.isdir(candidate):
+        return "File not found", 404
+
+    directory = os.path.dirname(candidate)
+    filename = os.path.basename(candidate)
+    return await send_from_directory(directory, filename, as_attachment=True)
+
+
+@app.route("/api/versions/retry", methods=["POST"])
+@login_required
+async def api_versions_retry():
+    """Capture the live file right now instead of waiting for the next
+    scheduled scan/watch event — shown in the UI only when the file's
+    most recent version failed to capture."""
+    role = get_role(current_user())
+    if role != "readwrite":
+        return jsonify({"error": "Permission denied"}), 403
+
+    data = await request.get_json(silent=True) or {}
+    path = data.get("path", "")
+    if not path or not storage.is_safe_path(path):
+        return jsonify({"error": "Invalid request"}), 400
+
+    full_path = os.path.join(ROOT_DIR, path)
+    ok, message, new_version = await asyncio.to_thread(
+        version_history.retry_snapshot, full_path
+    )
+    logging.info(f"Version retry-snapshot by {current_user()}: {path} -> {message}")
+    return jsonify({"success": ok, "message": message, "version": new_version}), (
+        200 if ok else 400
+    )
+
+
+@app.route("/api/versions/delete", methods=["POST"])
+@login_required
+async def api_versions_delete():
+    """Permanently (soft-)delete one version. confirm_text is checked
+    server-side inside version_history.delete() — see its docstring;
+    never trust a client-side-only confirm() dialog for this."""
+    role = get_role(current_user())
+    if role != "readwrite":
+        return jsonify({"error": "Permission denied"}), 403
+
+    data = await request.get_json(silent=True) or {}
+    path = data.get("path", "")
+    version_id = data.get("version_id")
+    confirm_text = data.get("confirm_text", "")
+    if not path or not storage.is_safe_path(path) or not isinstance(version_id, int):
+        return jsonify({"error": "Invalid request"}), 400
+
+    full_path = os.path.join(ROOT_DIR, path)
+    ok, message = await asyncio.to_thread(
+        version_history.delete, full_path, version_id, confirm_text
+    )
+    if not ok:
+        return jsonify({"error": message}), 400
+
+    logging.info(f"Version deleted by {current_user()}: {path} v{version_id}")
+    return jsonify({"success": True, "message": message})
 
 
 def _generate_passkey(length: int = 8) -> str:

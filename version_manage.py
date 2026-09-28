@@ -105,11 +105,7 @@ def do_list(file_path=None) -> int:
             )
             return 1
 
-        rows = conn.execute(
-            "SELECT version_id, sha256, size, storage_mode, status, created_at, completed_at, error "
-            "FROM versions WHERE file_id=? ORDER BY created_at DESC",
-            (file_row["file_id"],),
-        ).fetchall()
+        rows = engine.list_versions(target)
 
         presence = (
             "🗑️  source deleted from disk"
@@ -143,13 +139,7 @@ def do_list(file_path=None) -> int:
         return 0
 
     # No file given — summary across all tracked files.
-    rows = conn.execute(
-        "SELECT f.file_id, f.path, f.deleted, "
-        "COUNT(CASE WHEN v.status='completed' THEN 1 END) AS n_completed, "
-        "MAX(v.created_at) AS last_activity "
-        "FROM files f LEFT JOIN versions v ON v.file_id = f.file_id "
-        "GROUP BY f.file_id ORDER BY last_activity DESC"
-    ).fetchall()
+    rows = engine.list_tracked_files()
 
     print(f"\n📚 Version Engine — {len(rows)} tracked file(s)")
     print("=" * 78)
@@ -294,14 +284,16 @@ def do_delete(version_id: int, run_gc_now: bool = False) -> int:
         )
         return 1
 
-    conn.execute(
-        "UPDATE versions SET status='deleted', error=? WHERE version_id=?",
-        (
-            f"manually deleted via version_manage.py at {_fmt_time(time.time())}",
-            version_id,
-        ),
+    ok, message = engine.delete_version(
+        version_id,
+        reason=f"manually deleted via version_manage.py at {_fmt_time(time.time())}",
     )
-    conn.commit()
+    if not ok:
+        # Shouldn't normally happen — version/already-deleted checks above
+        # already cover both cases this could fail for — but don't print a
+        # false success if engine.delete_version() ever disagrees.
+        print(f"\n❌ {message}")
+        return 1
     print(f"\n✅ version_id {version_id} marked deleted.")
     print(
         "   Its storage objects aren't necessarily freed yet — they're reclaimed by the next "

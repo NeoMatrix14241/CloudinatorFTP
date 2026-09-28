@@ -689,6 +689,59 @@
     </div>
     {% endif %}
 
+    <!-- Download Options Modal — the row's Download button opens this
+         instead of downloading directly, so a file's Version History is
+         reachable without a second permanent icon in the row's action bar. -->
+    <div id="downloadOptionsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title" id="downloadOptionsModalTitle"><i class="fas fa-download"></i> Download</h3>
+                <button class="modal-close" data-fn="closeDownloadOptionsModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="download-options-list">
+                    <button type="button" class="btn btn-primary download-option-btn" id="downloadOptionCurrent">
+                        <i class="fas fa-download"></i>
+                        <span>
+                            <strong>Download current version</strong>
+                            <small>Get the file as it is right now</small>
+                        </span>
+                    </button>
+                    <button type="button" class="btn btn-outline download-option-btn" id="downloadOptionHistory">
+                        <i class="fas fa-clock-rotate-left"></i>
+                        <span>
+                            <strong>Version History</strong>
+                            <small>Browse, restore, or download an older version</small>
+                        </span>
+                    </button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" data-fn="closeDownloadOptionsModal">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Version History Modal -->
+    <div id="versionHistoryModal" class="modal">
+        <div class="modal-content modal-content-lg">
+            <div class="modal-header">
+                <h3 class="modal-title" id="versionHistoryModalTitle"><i class="fas fa-clock-rotate-left"></i>
+                    Version History</h3>
+                <button class="modal-close" data-fn="closeVersionHistoryModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="versionHistoryList" class="version-history-list">
+                    <div class="share-status-loading"><i class="fas fa-spinner fa-spin"></i> Loading version
+                        history…</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" data-fn="closeVersionHistoryModal">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Confirmation Modal -->
     <div id="confirmationModal" class="modal">
         <div class="modal-content">

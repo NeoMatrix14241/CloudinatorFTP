@@ -835,8 +835,16 @@ class Engine:
                 sha, size = self._capture_full(display_path, version_id)
             else:
                 sha, size = self._capture_chunked(display_path, version_id)
-        except Exception:
-            self._mark_version_failed(version_id, "capture error")
+        except Exception as e:
+            # Preserve the REAL reason (e.g. "[Errno 13] Permission denied"
+            # for a file locked open by another program — QuickBooks .QBW
+            # files being the textbook case) instead of a generic string.
+            # A vague "capture error" with no detail was previously stored
+            # here, which made every capture failure equally undiagnosable
+            # from the versions table (and therefore from any UI reading
+            # it, including the Version History web UI) even though the
+            # real exception text was momentarily available right here.
+            self._mark_version_failed(version_id, f"capture failed: {e}")
             raise
 
         try:
@@ -990,6 +998,83 @@ class Engine:
             (error, version_id),
         )
         conn.commit()
+
+    # ------------------------------------------------------------------
+    # Query / read-only data access — pure-data methods (dicts / lists of
+    # dicts / ints, no printing) shared by version_manage.py's CLI output
+    # formatting and, since 2026-09-26, version_history.py's web layer.
+    # Added when version_history.py (the web UI) was built — see
+    # version_manage.py's do_list()/do_delete(), which now call these
+    # instead of running their own copies of this SQL.
+    # ------------------------------------------------------------------
+
+    def list_tracked_files(self) -> list:
+        """Same summary query do_list() runs with no file_path argument —
+        one row per tracked file, with completed-version count and last
+        activity timestamp."""
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT f.file_id, f.path, f.deleted, "
+            "COUNT(CASE WHEN v.status='completed' THEN 1 END) AS n_completed, "
+            "MAX(v.created_at) AS last_activity "
+            "FROM files f LEFT JOIN versions v ON v.file_id = f.file_id "
+            "GROUP BY f.file_id ORDER BY last_activity DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_versions(self, file_path: str):
+        """Same query do_list(file_path) runs. Returns None if the file
+        isn't tracked at all (distinct from an empty list, which means
+        tracked but no versions yet), else a list of version dicts,
+        newest first."""
+        conn = self._connect()
+        norm_key = _normalize_path(file_path)
+        file_row = conn.execute(
+            "SELECT file_id, path, deleted FROM files WHERE norm_key=?", (norm_key,)
+        ).fetchone()
+        if file_row is None:
+            return None
+
+        rows = conn.execute(
+            "SELECT version_id, sha256, size, storage_mode, status, created_at, "
+            "completed_at, error FROM versions WHERE file_id=? ORDER BY created_at DESC",
+            (file_row["file_id"],),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_version(self, version_id: int):
+        """Single version's row plus its file's path/deleted flag, or
+        None if version_id doesn't exist."""
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT v.*, f.path AS file_path, f.deleted AS file_deleted "
+            "FROM versions v JOIN files f ON f.file_id = v.file_id "
+            "WHERE v.version_id=?",
+            (version_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def delete_version(self, version_id: int, reason: str = ""):
+        """Soft-delete: same UPDATE do_delete() ran inline. Returns
+        (success: bool, message: str). Does not run GC — call run_gc()
+        separately (do_delete()'s --run-gc-now flag does this; the web
+        layer can choose to do the same, or leave it to the next
+        scheduled scan)."""
+        conn = self._connect()
+        version = conn.execute(
+            "SELECT * FROM versions WHERE version_id=?", (version_id,)
+        ).fetchone()
+        if version is None:
+            return False, f"No such version_id: {version_id}"
+        if version["status"] == "deleted":
+            return False, f"version_id {version_id} is already deleted"
+
+        conn.execute(
+            "UPDATE versions SET status='deleted', error=? WHERE version_id=?",
+            (f"Deleted by user: {reason}" if reason else "Deleted by user", version_id),
+        )
+        conn.commit()
+        return True, f"version_id {version_id} marked deleted"
 
     # ------------------------------------------------------------------
     # Restore — the core correctness invariant:

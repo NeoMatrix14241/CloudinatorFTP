@@ -2005,8 +2005,8 @@ function createFileTableRow(item, currentPath) {
             `<button type="button" class="btn btn-outline btn-sm download-btn" 
                              data-item-path="${itemPath}"
                              data-label="Download"
-                             data-fn="downloadItem" data-args="${dataArgs([itemPath])}"
-                             title="Download file">
+                             data-fn="showDownloadOptionsModal" data-args="${dataArgs([itemPath, item.name])}"
+                             title="Download">
                          <i class="fas fa-download"></i>
                      </button>` :
             `<button type="button" class="btn btn-outline btn-sm download-btn" 
@@ -8022,6 +8022,289 @@ function showBulkShareModal() {
 function closeShareModal() {
     const modal = document.getElementById('shareModal');
     if (modal) modal.classList.remove('show');
+}
+
+// =============================================================================
+// Version History modal — list / restore (to .recovered/, never in-place) /
+// download / delete for one file's tracked version history. Backed by
+// /api/versions/list, /api/versions/restore, /api/versions/download,
+// /api/versions/delete — see app.py + version_history.py.
+// =============================================================================
+
+const _VERSION_STATUS_ICON = {
+    completed: 'fa-check',
+    failed: 'fa-xmark',
+    deleted: 'fa-trash',
+    pending: 'fa-hourglass-half',
+    processing: 'fa-gear',
+    verifying: 'fa-magnifying-glass',
+};
+
+function _versionStatusBadge(status) {
+    const icon = _VERSION_STATUS_ICON[status] || 'fa-circle-question';
+    return `<span class="version-status-badge status-${status}"><i class="fas ${icon}"></i> ${status}</span>`;
+}
+
+function _versionHistoryRowTemplate(itemPath, itemName, version) {
+    const isCompleted = version.status === 'completed';
+    const fullDate = version.created_at ? new Date(version.created_at * 1000).toLocaleString() : '—';
+    const canWrite = USER_ROLE === 'readwrite';
+
+    const actions = isCompleted ? `
+        <div class="version-history-row-actions">
+            <button type="button" class="btn btn-outline btn-sm"
+                data-fn="downloadVersionAction" data-args="${dataArgs([itemPath, version.version_id])}"
+                title="Download this version">
+                <i class="fas fa-download"></i> Download
+            </button>
+            ${canWrite ? `
+            <button type="button" class="btn btn-outline btn-sm"
+                data-fn="restoreVersionAction" data-args="${dataArgs([itemPath, version.version_id])}"
+                title="Reconstruct this version into .recovered/ — never overwrites the live file">
+                <i class="fas fa-rotate-left"></i> Restore
+            </button>
+            <button type="button" class="btn btn-danger btn-sm"
+                data-fn="showVersionDeleteConfirm" data-args="${dataArgs([version.version_id])}"
+                title="Permanently delete this version">
+                <i class="fas fa-trash"></i> Delete
+            </button>` : ''}
+        </div>` : '';
+
+    const errorLine = version.error
+        ? `<div class="version-history-error">${escapeHtml(version.error)}</div>` : '';
+
+    const deleteConfirm = canWrite ? `
+        <div class="version-history-delete-confirm" id="vh-delete-confirm-${version.version_id}" style="display:none;">
+            <p>Type <strong>${escapeHtml(itemName)}</strong> to permanently delete this version. This cannot be
+                undone.</p>
+            <input type="text" class="form-control" id="vh-delete-input-${version.version_id}" autocomplete="off">
+            <div class="version-history-delete-confirm-actions">
+                <button type="button" class="btn btn-outline btn-sm"
+                    data-fn="cancelVersionDeleteConfirm" data-args="${dataArgs([version.version_id])}">Cancel</button>
+                <button type="button" class="btn btn-danger btn-sm"
+                    data-fn="confirmDeleteVersionAction"
+                    data-args="${dataArgs([itemPath, version.version_id, itemName])}">Confirm Delete</button>
+            </div>
+        </div>` : '';
+
+    return `
+        <div class="version-history-row" data-version-id="${version.version_id}">
+            <div class="version-history-row-main">
+                ${_versionStatusBadge(version.status)}
+                <span class="version-history-date" title="${escapeHtml(fullDate)}">${_fmtAgo(version.created_at)}</span>
+                <span class="version-history-size">${formatFileSize(version.size)}</span>
+                <span class="version-history-mode">${escapeHtml(version.storage_mode || '')}</span>
+            </div>
+            ${errorLine}
+            ${actions}
+            ${deleteConfirm}
+        </div>`;
+}
+
+async function _renderVersionHistoryList(itemPath, itemName) {
+    const container = document.getElementById('versionHistoryList');
+    if (!container) return;
+    container.innerHTML = '<div class="share-status-loading"><i class="fas fa-spinner fa-spin"></i> Loading version history…</div>';
+
+    try {
+        const resp = await fetch(`/api/versions/list?path=${encodeURIComponent(itemPath)}`);
+        const data = await resp.json();
+        if (!resp.ok) {
+            container.innerHTML = `<p class="version-history-empty">${escapeHtml(data.error || 'Could not load version history.')}</p>`;
+            return;
+        }
+        if (!data.tracked || !data.versions || data.versions.length === 0) {
+            container.innerHTML = '<p class="version-history-empty">No version history for this file yet.</p>';
+            return;
+        }
+
+        // A "Retry Now" banner appears once, only when the MOST RECENT
+        // version failed to capture — retrying always re-captures the
+        // current live file regardless of which historical failed row
+        // you'd click, so this is deliberately not a per-row button.
+        let banner = '';
+        const newest = data.versions[0];
+        if (newest.status === 'failed' && USER_ROLE === 'readwrite') {
+            banner = `
+                <div class="version-history-retry-banner">
+                    <div class="version-history-retry-banner-text">
+                        <i class="fas fa-triangle-exclamation"></i>
+                        <span>The latest snapshot attempt failed${newest.error ? ': ' + escapeHtml(newest.error) : '.'}</span>
+                    </div>
+                    <button type="button" class="btn btn-primary btn-sm"
+                        data-fn="retrySnapshotAction" data-args="${dataArgs([itemPath, itemName])}">
+                        <i class="fas fa-rotate-right"></i> Retry Now
+                    </button>
+                </div>`;
+        }
+
+        container.innerHTML = banner + data.versions.map(v => _versionHistoryRowTemplate(itemPath, itemName, v)).join('');
+    } catch (e) {
+        container.innerHTML = '<p class="version-history-empty">Could not load version history — check your connection.</p>';
+    }
+}
+
+async function retrySnapshotAction(itemPath, itemName) {
+    const banner = document.querySelector('.version-history-retry-banner button');
+    if (banner) banner.disabled = true;
+
+    try {
+        const resp = await fetch('/api/versions/retry', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: itemPath }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            showNotification('Retry Failed', data.message || data.error || 'Could not retry the snapshot.', 'error');
+        } else {
+            showNotification('Snapshot Retried', data.message || 'Done.', data.version ? 'success' : 'info');
+        }
+        _renderVersionHistoryList(itemPath, itemName);
+    } catch (e) {
+        showNotification('Retry Failed', 'Could not reach the server.', 'error');
+        if (banner) banner.disabled = false;
+    }
+}
+
+// =============================================================================
+// Download Options modal — the row's Download button opens this instead of
+// downloading directly, so Version History is reachable without a second
+// permanent icon in the row's action bar (which was pushing Delete and
+// other icons out of view on narrow screens).
+// =============================================================================
+
+let _downloadOptionsTarget = null; // { path, name } for whichever row's modal is open
+
+function showDownloadOptionsModal(itemPath, itemName) {
+    _downloadOptionsTarget = { path: itemPath, name: itemName };
+    const title = document.getElementById('downloadOptionsModalTitle');
+    if (title) title.innerHTML = `<i class="fas fa-download"></i> ${escapeHtml(itemName)}`;
+    const modal = document.getElementById('downloadOptionsModal');
+    if (modal) modal.classList.add('show');
+}
+
+function closeDownloadOptionsModal() {
+    const modal = document.getElementById('downloadOptionsModal');
+    if (modal) modal.classList.remove('show');
+    _downloadOptionsTarget = null;
+}
+
+// Wired once at load rather than per-render, since the modal itself is a
+// single static element in index.html (not re-created per row) — matches
+// how the rest of this file's one-off modals (share, move, rename...)
+// attach their static-button handlers.
+document.addEventListener('DOMContentLoaded', () => {
+    const currentBtn = document.getElementById('downloadOptionCurrent');
+    const historyBtn = document.getElementById('downloadOptionHistory');
+
+    if (currentBtn) {
+        currentBtn.addEventListener('click', () => {
+            if (!_downloadOptionsTarget) return;
+            const { path } = _downloadOptionsTarget;
+            closeDownloadOptionsModal();
+            downloadItem(path);
+        });
+    }
+
+    if (historyBtn) {
+        historyBtn.addEventListener('click', () => {
+            if (!_downloadOptionsTarget) return;
+            const { path, name } = _downloadOptionsTarget;
+            closeDownloadOptionsModal();
+            showVersionHistoryModal(path, name);
+        });
+    }
+});
+
+function showVersionHistoryModal(itemPath, itemName) {
+    const title = document.getElementById('versionHistoryModalTitle');
+    if (title) title.innerHTML = `<i class="fas fa-clock-rotate-left"></i> Version History — ${escapeHtml(itemName)}`;
+    const modal = document.getElementById('versionHistoryModal');
+    if (modal) modal.classList.add('show');
+    _renderVersionHistoryList(itemPath, itemName);
+}
+
+function closeVersionHistoryModal() {
+    const modal = document.getElementById('versionHistoryModal');
+    if (modal) modal.classList.remove('show');
+}
+
+function downloadVersionAction(itemPath, versionId) {
+    // Plain navigation, same pattern as downloadItem() — the response
+    // carries Content-Disposition: attachment, so this doesn't navigate
+    // away from the app.
+    window.location.href = `/api/versions/download?path=${encodePathForUrl(itemPath)}&version_id=${versionId}`;
+}
+
+async function restoreVersionAction(itemPath, versionId) {
+    const row = document.querySelector(`.version-history-row[data-version-id="${versionId}"]`);
+    const restoreBtn = row ? row.querySelector('[data-fn="restoreVersionAction"]') : null;
+    if (restoreBtn) restoreBtn.disabled = true;
+
+    try {
+        const resp = await fetch('/api/versions/restore', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: itemPath, version_id: versionId }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            showNotification('Restore Failed', data.error || 'Could not restore this version.', 'error');
+            return;
+        }
+        showNotification(
+            'Version Restored',
+            `Restored into ${data.recovered_path} — the live file was not changed. ` +
+            `You can find it in the .recovered folder, or download it now.`,
+            'success'
+        );
+        if (data.download_url) {
+            // Give the user an immediate way to grab the recovered copy
+            // without having to browse to .recovered/ themselves.
+            setTimeout(() => { window.location.href = data.download_url; }, 400);
+        }
+    } catch (e) {
+        showNotification('Restore Failed', 'Could not reach the server.', 'error');
+    } finally {
+        if (restoreBtn) restoreBtn.disabled = false;
+    }
+}
+
+function showVersionDeleteConfirm(versionId) {
+    const el = document.getElementById(`vh-delete-confirm-${versionId}`);
+    if (el) {
+        el.style.display = 'block';
+        const input = document.getElementById(`vh-delete-input-${versionId}`);
+        if (input) input.focus();
+    }
+}
+
+function cancelVersionDeleteConfirm(versionId) {
+    const el = document.getElementById(`vh-delete-confirm-${versionId}`);
+    if (el) el.style.display = 'none';
+}
+
+async function confirmDeleteVersionAction(itemPath, versionId, itemName) {
+    const input = document.getElementById(`vh-delete-input-${versionId}`);
+    const confirmText = input ? input.value : '';
+
+    try {
+        const resp = await fetch('/api/versions/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: itemPath, version_id: versionId, confirm_text: confirmText }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            showNotification('Delete Failed', data.error || 'Could not delete this version.', 'error');
+            return;
+        }
+        showNotification('Version Deleted', data.message || 'Version deleted.', 'success');
+        _renderVersionHistoryList(itemPath, itemName);
+    } catch (e) {
+        showNotification('Delete Failed', 'Could not reach the server.', 'error');
+    }
 }
 
 function _showRowPasskeyReveal(row, passkey) {

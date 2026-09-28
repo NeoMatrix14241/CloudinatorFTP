@@ -1,7 +1,9 @@
 # CloudinatorFTP — Complete Codebase Reference for AI-Assisted Development
 
-**Version**: 4.23 (+ 2026-09-26 manage.sh integration for the Version Engine — `version-manage` inserted as menu #9, `config` moved to #10, everything else shifted down; `version_manage.py` gained a full interactive menu alongside its CLI subcommands, plus hardened Ctrl-C handling verified with real SIGINT delivery; 2026-09-25 new subsystem: Universal File Versioning Engine — `version_engine.py`, `version_manage.py`, plus `config.py`/`paths.py`/`dev_server.py`/`prod_server.py` changes; 2026-09-24 WebDAV client-IP trust-chain fix, confirmed tunneled on 8443; 2026-09-24 WebDAV audit logging + client-IP attribution for TLS-teardown errors; 2026-09-24 SFTP/FTP/SMB audit logging, SFTP upload flag bug fix; 2026-09-23 app.py client-IP logging change; 2026-09-22 database.py verification pass; 2026-09-21 ops-tooling sync: manage.sh, setup_pymodules.sh, revoke_sharing.py; earlier 2026-08-28 protocol-hardening, route-sync, and video-skin-overrides.css notes) | **Last Updated**: 2026-09-26  
+**Version**: 4.24 (+ 2026-09-27 Version History web UI — `version_history.py`, five `/api/versions/*` routes + `/download/recovered/*`, Download-options/Version-History modals, Retry Now, plus three fixes found while verifying it: `call_on_close` doesn't exist in Quart, `/csrf-token` was unreachable anonymously, and `version_engine.py` was storing a generic "capture error" instead of the real exception; 2026-09-26 manage.sh integration for the Version Engine — `version-manage` inserted as menu #9, `config` moved to #10, everything else shifted down; `version_manage.py` gained a full interactive menu alongside its CLI subcommands, plus hardened Ctrl-C handling verified with real SIGINT delivery; 2026-09-25 new subsystem: Universal File Versioning Engine — `version_engine.py`, `version_manage.py`, plus `config.py`/`paths.py`/`dev_server.py`/`prod_server.py` changes; 2026-09-24 WebDAV client-IP trust-chain fix, confirmed tunneled on 8443; 2026-09-24 WebDAV audit logging + client-IP attribution for TLS-teardown errors; 2026-09-24 SFTP/FTP/SMB audit logging, SFTP upload flag bug fix; 2026-09-23 app.py client-IP logging change; 2026-09-22 database.py verification pass; 2026-09-21 ops-tooling sync: manage.sh, setup_pymodules.sh, revoke_sharing.py; earlier 2026-08-28 protocol-hardening, route-sync, and video-skin-overrides.css notes) | **Last Updated**: 2026-09-27  
 **For**: AI assistants and developers modifying/extending CloudinatorFTP
+
+**🆕 2026-09-27 sync note**: added a browser UI on top of the Version Engine — list a file's history, **download** any past version, **restore** it, **delete** it, and **retry** a failed capture — all from the file browser. New file `version_history.py` (logic only, no routes — same convention as `realtime_shares.py`/`search_index.py`); five routes added to `app.py`; `version_engine.py` gained four pure-data `Engine` methods (`list_tracked_files`/`list_versions`/`get_version`/`delete_version`) that `version_manage.py`'s `do_list()`/`do_delete()` now call instead of running their own SQL (CLI output re-verified unchanged). Two design decisions worth knowing before touching this: (1) a web restore **never overwrites the live file** — it reconstructs into a hidden `ROOT_DIR/.recovered/` folder, named by the version's own snapshot date, and (2) the row's **Download** button now opens a small choice modal (download current / Version History) instead of a permanent extra row icon, because a first attempt at a dedicated icon pushed Delete out of view on narrow screens. Live-verified through a real Quart test client with a real login (not just syntax-checked), which found three real bugs, all fixed: Quart's `Response` has no `call_on_close`; `/csrf-token` was 301-ing anonymous callers because `validate_session`'s exempt list was missing `get_csrf_token`; and `version_engine.py` replaced every capture failure's real exception with the literal string `"capture error"`. See [Version History Web UI](#version-history-web-ui-2026-09-27) and [Version 4.24](#version-424--2026-09-27-version-history-web-ui) in the Changelog. **Still experimental** — not yet deployed to production.
 
 **🆕 2026-09-26 sync note**: `manage.sh` and `version_manage.py` both changed, at the user's explicit request, to finish integrating the Version Engine (added 2026-09-25, see the note below) into the existing ops tooling. `manage.sh`'s Utilities section was reordered — `version-manage` is now **menu #9** (the first Utilities entry), `config` moved to **#10**, and everything that used to occupy 9–19 shifted down to 11–20 in its previous relative order (this is the **third** time this doc's menu numbers have shifted from a mid-list insert — see [manage.sh Internals & Editing Rules](#managesh-internals--editing-rules), which has the full current 1–20 table). `version_manage.py` gained a full interactive menu (`interactive_menu()`, entered automatically with no CLI arguments) that shares its `do_list`/`do_restore`/`do_delete` core functions with the existing CLI subcommands — nothing is duplicated between the two interfaces. Ctrl-C handling was hardened throughout and *verified with real `SIGINT` delivery* (not simulated input) at three points: the interactive menu's top-level prompt (clean exit), mid-action inside a sub-prompt (cancels just that action, returns to the menu), and CLI-mode mid-confirmation (`restore --overwrite`, clean exit 1, no traceback). See [Version Engine (File Versioning)](#version-engine-file-versioning-2026-09-25) for the `version_manage.py` write-up and [Version 4.23](#version-423--2026-09-26-managesh-integration--version_managepy-interactive-mode) in the Changelog.
 
@@ -53,7 +55,7 @@
 14. [Bulk Operations](#bulk-operations)
 15. [Configuration & Deployment](#configuration--deployment)
 16. [Protocol Servers (WebDAV / SFTP / FTP / SMB)](#protocol-servers-webdav--sftp--ftp)
-17. [Version Engine (File Versioning)](#version-engine-file-versioning-2026-09-25)
+17. [Version Engine (File Versioning)](#version-engine-file-versioning-2026-09-25) (includes [Version History Web UI](#version-history-web-ui-2026-09-27))
 18. [Admin Tools & Utilities](#admin-tools--utilities)
 19. [Performance Characteristics](#performance-characteristics)
 20. [Troubleshooting & Edge Cases](#troubleshooting--edge-cases)
@@ -625,6 +627,23 @@ GET /api/search?q=mountain&ext=csv,txt&offset=0&limit=50
   "from_index": true
 }
 ```
+
+---
+
+### Version History Routes
+
+Browser access to the Version Engine (see [Version History Web UI](#version-history-web-ui-2026-09-27)). All are JSON APIs in the `/api/share/*` style — query-param or JSON-body, not path-embedded — and every one resolves its `path` through `storage.is_safe_path()` and `os.path.join(ROOT_DIR, path)` exactly like `/download`.
+
+| Route | Method | Auth | Purpose |
+|-------|--------|------|---------|
+| `/api/versions/list?path=` | GET | login (any role) | A file's version history, newest first — `{"tracked": bool, "versions": [...]}` |
+| `/api/versions/download?path=&version_id=` | GET | login (any role) | Reconstruct one past version and return its bytes as an attachment — touches nothing on disk that persists |
+| `/api/versions/restore` | POST | readwrite | Body `{path, version_id}` — reconstruct into `.recovered/`, never over the live file. Returns `recovered_path` + `download_url` |
+| `/download/recovered/<path:recovered_rel>` | GET | login (any role) | Download a file previously restored into `.recovered/` — does its own containment check against `RECOVERED_ROOT` |
+| `/api/versions/retry` | POST | readwrite | Body `{path}` — snapshot the live file right now. `{"success", "message", "version"}`; `version` is `null` when content was unchanged |
+| `/api/versions/delete` | POST | readwrite | Body `{path, version_id, confirm_text}` — `confirm_text` must equal the file's basename, checked **server-side** |
+
+Every route that takes a `version_id` also verifies that version actually belongs to the `path` given (`_version_belongs_to()`), so a `version_id` from a file you can't access can't be smuggled in alongside one you can.
 
 ---
 
@@ -2167,6 +2186,35 @@ Verified directly: `list` (summary and per-file), `restore` returning the *old* 
 
 Following this doc's own convention of separating *verified* from *inferred/untested*: no test was run on actual Windows (UNC paths, drive letters, long paths, `CREATE_NO_WINDOW` itself) or actual Termux (a literal `kill -9` mid-job with no `stop()` ever called — the crash-recovery test simulated the *state* such a kill leaves behind by writing it directly, not by sending a real signal to a running worker). No benchmark pass (snapshot/restore speed, memory, dedup ratio at 100 KB–1 GB) was run — the streaming-I/O design (no full-file buffering above the small-file threshold) was verified by code inspection, not measured. No test exercises the two-stage `prod_server.py` shutdown through an actual live Hypercorn process tree — the underlying `stop()`/`force_kill()` primitives were tested directly against a real spawned subprocess, and the wiring was confirmed by reading the code, but not through a live `prod_server.py` process. First-session usability gap, now closed: the engine originally shipped with **no way for a human to actually restore anything** — no CLI, no list, no lookup helper — until specifically asked "how do we restore a version?" `version_manage.py` (above) is the fix; worth remembering as a pattern for future subsystems of this shape.
 
+### Version History Web UI (2026-09-27)
+
+Built 2026-09-26/27 from a planning document that specified the module split and the sync-vs-async question; where the real repo disagreed, the repo won (route shape below). **Status: experimental, not yet deployed.**
+
+**Structure.** `version_history.py` is logic-only; the routes live in `app.py` (which has no Blueprints anywhere — none were introduced). It holds one module-level `Engine`, created by `version_history.init()`, called once from `app.py`'s own module-level startup next to the search-index init — **not** from `dev_server.py`/`prod_server.py`, which only start the separate Version Engine subprocess and needed zero changes. `version_engine.py`'s `Engine` stays 100% synchronous; every route wraps its call in `await asyncio.to_thread(...)`. No `aiosqlite`, no async `Engine`.
+
+**Restore never touches the live file.** `restore()` reconstructs (byte-for-byte hash-verified by the same `Engine.restore_version()` the CLI uses) into `ROOT_DIR/.recovered/<original relative dir>/<stem>__<snapshot date YYYY-MM-DD_HHMMSS>__v<id><ext>`, e.g. `.recovered/docs/report__2026-09-20_143012__v42.docx`. Deterministic naming means restoring the same version twice is an idempotent rewrite. `.recovered/` is dot-prefixed like `.chunks/`, and `storage.list_dir()` skips every dot-prefixed entry (confirmed in `storage.py`, then observed live), so it stays out of normal browsing; `/download/recovered/*` serves it. `version_manage.py`'s CLI `restore` is unchanged and can still restore anywhere, including in place.
+
+**Download without restoring** buffers the version in memory: `prepare_download()` reconstructs into a throwaway temp dir, reads the bytes, deletes the dir, returns the bytes — all in one `to_thread` call. This exists because **Quart's `Response` has no `call_on_close`** (verified against the installed 0.22.0 — an earlier draft used it, with a delayed-cleanup fallback that would have silently become the only path). Trade-off: memory proportional to the version's size for one request; a multi-GB download has not been load-tested.
+
+**Delete** requires the exact file basename in `confirm_text`, checked in `version_history.delete()`, not just in JS. Soft-delete only, same as the CLI and retention.
+
+**Retry Now.** `retry_snapshot()` calls `Engine.snapshot_file()` on demand. That method returns `None` for *both* a failed capture and a dedup-skip (content identical to the latest completed version), so `retry_snapshot()` diffs the version list before/after to tell three outcomes apart: new `completed` row (success), new `failed` row (still failing — real error returned), or no new row (unchanged — reported as success with `version: null`). Shown as a single banner at the top of the modal, only when the *newest* version failed — not per row, since a retry always re-captures the current file whichever failed row you'd click. A locked file (a QuickBooks `.QBW` open in QuickBooks is the case that surfaced this) is **not** retried automatically by the engine, so this is the way to force it.
+
+**Retention applies to retries like any capture.** `_apply_retention()` runs after every genuinely new completed snapshot; with `VERSION_RETENTION_ENABLED = True`/`VERSION_MAX_VERSIONS = 50` (the shipped defaults), version 51 soft-deletes the oldest. A retry never overwrites an existing version's content — each capture is a new row.
+
+**Frontend** (`index.html`/`index.js`/`index.css`): the row's Download button (files only; folders keep `downloadFolderAsZip`) opens `#downloadOptionsModal` with "Download current version" and "Version History", which opens `#versionHistoryModal`. Each completed version offers Download/Restore/Delete (Restore/Delete `readwrite` only); Delete expands an inline type-the-filename confirmation. Failed rows show their stored error inline. Uses the existing `data-fn`/`data-args` dispatch and the CSRF-wrapping `fetch`, so no new listener plumbing. **Layout lesson**: a first version added a dedicated Version History icon to each row's action bar, inserted second, which shifted Delete one slot right and forced sideways scrolling on narrow screens; moving it last only shrank the problem. Folding it into the Download button removed the icon entirely — the action bar is back to exactly its pre-feature icons. Don't add icons to that bar without checking the width budget (`.actions-cell .actions` is `flex-wrap: nowrap !important`, fixed 28px buttons).
+
+**Bugs found and fixed while verifying**
+- `call_on_close` — above.
+- `/csrf-token`: `validate_session` did not exempt `get_csrf_token`, so an anonymous request 301'd to `/login` despite the route's own docstring saying no login was needed. Added `"get_csrf_token"` to the exempt list; verified an anonymous session now gets a token that works for a real login POST. (Login itself never hit this — `login.html` seeds the token via the `csrf_token()` Jinja global.)
+- `"capture error"`: `version_engine.py`'s snapshot path caught any exception from `_capture_full`/`_capture_chunked` and stored the literal `"capture error"` in `versions.error`, discarding the real cause (the real message only reached the `jobs` table's error column, which nothing shows). Now stored as `"capture failed: <exception text>"`. **Old rows keep the old text** — the original message was discarded, so it can't be recovered; only new failures carry it. Verified with a simulated `PermissionError`.
+
+**Not a bug, but easy to misread: "corrupt chunk".** `Engine.restore_version()` hash-verifies every object it reads and raises `object <sha>… missing or corrupted — restore aborted` on a mismatch or missing file. That is detect-only; nothing re-derives a bad object. Verified live that deleting a version and running GC does **not** destroy a chunk still shared (deduplicated) with another completed version, so a corrupt-object error means the bytes on disk changed outside the engine. Failed rows in the list are a different thing entirely: failed *captures* (0 B), kept permanently as an audit trail — they are not corruption.
+
+**Verified** (real `app.py` import, real Quart test client, real `database.py` users, and the real `/login` form flow via the uploaded `login.html` — not a session shortcut): list/restore/download/delete/retry, byte-exact recovered and downloaded content, live file untouched after restore, `.recovered/` absent from `storage.list_dir("")`, the cross-file `version_id` guard, wrong/right delete confirmation, readonly → 403 on restore/delete/retry (200 on list), all three retry outcomes, and the async bridge (a restore blocked 3 s by a test patch while an unrelated route answered in ~3 ms). The download-options flow was click-tested against the real rendered page in jsdom (modal opens; "Download current version" closes it and navigates).
+
+**Known gaps.** `file_index.py` was never provided, so the live runs used a stub (test-only, never delivered). No load test of large downloads. Two requests restoring the identical version at the same instant weren't exercised (deterministic destination and identical bytes make it expected to be harmless). The frontend was checked in jsdom, not a real browser's layout. The modal doesn't show how close a file is to `VERSION_MAX_VERSIONS`. Failed capture rows can't be dismissed.
+
 ---
 
 ## 🛠️ Admin Tools & Utilities
@@ -2792,6 +2840,14 @@ Works at the database level only — it's a separate process, same constraint `m
 ---
 
 ## 📝 Changelog
+
+### Version 4.24 — 2026-09-27 Version History Web UI
+
+- New `version_history.py` (logic only) and six routes in `app.py` (`/api/versions/list|download|restore|retry|delete`, `/download/recovered/<path>`); `version_history.init()` called once from `app.py`'s module-level startup. `dev_server.py`/`prod_server.py` untouched.
+- `version_engine.py`: four new pure-data `Engine` methods; `version_manage.py`'s `do_list()`/`do_delete()` refactored onto them (CLI output verified unchanged). Restore-to-`.recovered/` is deliberately different from the CLI's restore-anywhere.
+- Frontend: `#downloadOptionsModal` + `#versionHistoryModal`, per-version Download/Restore/Delete, typed-filename delete confirmation, Retry Now banner; row action bar left exactly as it was before the feature.
+- Fixed: `Response.call_on_close` doesn't exist in Quart (downloads now buffer); `/csrf-token` unreachable anonymously (added `get_csrf_token` to `validate_session`'s exempt list); `version_engine.py` storing `"capture error"` instead of the real exception (now `"capture failed: <detail>"`; pre-existing rows unchanged).
+- Verified live through a real Quart test client with the real login flow; see [Version History Web UI](#version-history-web-ui-2026-09-27) for what was and wasn't covered. **Experimental — not yet deployed.**
 
 ### Version 4.23 — 2026-09-26 manage.sh Integration + version_manage.py Interactive Mode
 
