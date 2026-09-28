@@ -61,6 +61,7 @@ import hashlib
 import json
 import os
 import queue
+import re
 import signal
 import sqlite3
 import subprocess
@@ -423,6 +424,76 @@ def sha256_stream(fileobj, chunk_size=1024 * 1024):
     return h.hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# In-process write gate (2026-09-28, "database is locked" at startup)
+# ---------------------------------------------------------------------------
+# SQLite allows ONE writer at a time, and its busy handler is a sleep-and-poll
+# loop with no fairness: with 12 worker threads + watcher + scanner all
+# opening their own connection and committing ~8 tiny writes per file, a
+# thread can lose the race for the whole busy_timeout even though no single
+# holder is slow (the startup burst in the log: 8 workers failing in the same
+# second, ~10 s after start). This gate serialises write transactions INSIDE
+# this process with an ordinary lock (blocking, no polling), so SQLite's
+# lock only ever arbitrates against the OTHER process (the web process's
+# restore/retry). Reads never take the gate (WAL readers don't block).
+#
+# The gate is taken on the first write statement of a transaction and
+# released by commit()/rollback()/close(). If a write statement raises, the
+# transaction is rolled back and the gate released immediately so a failed
+# statement can never leave the gate (or the SQLite lock) held. Acquisition
+# has a timeout: if it ever expires we proceed WITHOUT the gate (falling back
+# to plain SQLite behaviour) rather than deadlocking every thread.
+_WRITE_GATE = threading.Lock()
+_GATE_ACQUIRE_TIMEOUT = 60
+_WRITE_SQL_RE = re.compile(r"^\s*(insert|update|delete|replace|begin)\b", re.IGNORECASE)
+
+
+class _GatedConnection(sqlite3.Connection):
+    _gate_held = False
+
+    def _gate_acquire(self):
+        if not self._gate_held and _WRITE_GATE.acquire(timeout=_GATE_ACQUIRE_TIMEOUT):
+            self._gate_held = True
+
+    def _gate_release(self):
+        if self._gate_held:
+            self._gate_held = False
+            _WRITE_GATE.release()
+
+    def execute(self, sql, *args, **kwargs):
+        is_write = bool(_WRITE_SQL_RE.match(sql))
+        if is_write:
+            self._gate_acquire()
+        try:
+            return super().execute(sql, *args, **kwargs)
+        except sqlite3.Error:
+            if is_write:
+                try:
+                    super().rollback()
+                except sqlite3.Error:
+                    pass
+                self._gate_release()
+            raise
+
+    def commit(self):
+        try:
+            super().commit()
+        finally:
+            self._gate_release()
+
+    def rollback(self):
+        try:
+            super().rollback()
+        finally:
+            self._gate_release()
+
+    def close(self):
+        try:
+            super().close()
+        finally:
+            self._gate_release()
+
+
 def _is_lock_error(exc) -> bool:
     """True for SQLite's transient 'database is locked' / 'busy' errors."""
     return isinstance(exc, sqlite3.OperationalError) and any(
@@ -489,11 +560,13 @@ class Engine:
         conn = getattr(self._conn_local, "conn", None)
         if conn is not None:
             return conn
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        conn = sqlite3.connect(
+            self.db_path, check_same_thread=False, factory=_GatedConnection
+        )
         conn.row_factory = sqlite3.Row
         # busy_timeout FIRST: the journal_mode pragma below can itself need
         # a lock, and should wait rather than fail instantly.
-        conn.execute("PRAGMA busy_timeout=10000")
+        conn.execute("PRAGMA busy_timeout=30000")
         conn.execute("PRAGMA journal_mode=WAL")
         # WAL + NORMAL: no fsync on every commit (WAL is still fsync'd at
         # checkpoints). Every snapshot does ~8 commits, so on Windows/HDD
@@ -834,12 +907,14 @@ class Engine:
                 try:
                     result = self._attempt_snapshot(file_id, display_path, job_id)
                     if result is None:
-                        self._finish_job(
-                            job_id, "completed"
+                        self._retry_locked(
+                            self._finish_job, job_id, "completed"
                         )  # dedup skip - not an error
                     else:
-                        self._finish_job(job_id, "completed", version_id=result)
-                        self._apply_retention(file_id)
+                        self._retry_locked(
+                            self._finish_job, job_id, "completed", result
+                        )
+                        self._retry_locked(self._apply_retention, file_id)
                     return result
                 except _SourceChangedDuringCapture as e:
                     last_error = str(e)
@@ -1478,7 +1553,7 @@ class Engine:
         if not config.VERSION_GC_ENABLED:
             return
         t_start = time.time()
-        job_id = self._create_job("gc")
+        job_id = self._retry_locked(self._create_job, "gc")
         conn = self._connect()
         now = time.time()
 
@@ -1624,10 +1699,17 @@ class Engine:
         vanished = known_norm_keys - set(eligible.keys())
         if vanished:
             conn = self._connect()
+
+            def _mark_vanished():
+                for norm_key in vanished:
+                    conn.execute(
+                        "UPDATE files SET deleted=1 WHERE norm_key=?", (norm_key,)
+                    )
+                conn.commit()
+
+            self._retry_locked(_mark_vanished)
             for norm_key in vanished:
-                conn.execute("UPDATE files SET deleted=1 WHERE norm_key=?", (norm_key,))
                 self._known_state.pop(norm_key, None)
-            conn.commit()
 
     def _watcher_loop(self):
         self._watcher_running = True
@@ -1638,7 +1720,10 @@ class Engine:
                 try:
                     self._reconcile_once()
                 except Exception as e:
-                    self.log.error(f"Watcher reconcile error: {e}")
+                    if _is_lock_error(e):
+                        self.log.warning(f"Watcher pass hit a locked database: {e}")
+                    else:
+                        self.log.error(f"Watcher reconcile error: {e}", exc_info=True)
             self._shutdown_event.wait(_WATCH_POLL_INTERVAL)
         self._watcher_running = False
         self._set_meta("watcher_running", "0")
@@ -1652,10 +1737,20 @@ class Engine:
             if not self._stop_scheduling.is_set():
                 try:
                     self._reconcile_once()
-                    self.run_gc()
-                    self._set_meta("last_scan", time.strftime("%Y-%m-%d %H:%M:%S"))
+                    self._retry_locked(self.run_gc, delays=(2, 4, 8))
+                    self._retry_locked(
+                        self._set_meta,
+                        "last_scan",
+                        time.strftime("%Y-%m-%d %H:%M:%S"),
+                    )
                 except Exception as e:
-                    self.log.error(f"Scanner error: {e}")
+                    if _is_lock_error(e):
+                        self.log.warning(
+                            f"Scanner pass hit a locked database ({e}); "
+                            "will retry at the next interval."
+                        )
+                    else:
+                        self.log.error(f"Scanner error: {e}", exc_info=True)
             self._shutdown_event.wait(config.VERSION_SCAN_INTERVAL)
         self._scanner_running = False
         self._set_meta("scanner_running", "0")
@@ -1675,6 +1770,10 @@ class Engine:
             try:
                 self.snapshot_file(display_path, source="scan")
             except Exception as e:
+                try:
+                    self._connect().rollback()  # never leave a txn/gate held
+                except sqlite3.Error:
+                    pass
                 self.log.error(
                     f"Worker {worker_index} snapshot error for {display_path}: {e}",
                     exc_info=not _is_lock_error(e),

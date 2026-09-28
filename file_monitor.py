@@ -597,22 +597,74 @@ class FileSystemMonitor:
             return False
 
     def _save_cache(self):
-        try:
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            data = {
-                "file_count": self._file_count,
-                "dir_count": self._dir_count,
-                "total_size": self._total_size,
-                "last_modified": self._last_modified,
-                "dir_info": self._dir_info,
-                "saved_at": time.time(),
-            }
-            tmp = CACHE_FILE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f)
-            os.replace(tmp, CACHE_FILE)
-        except Exception as e:
-            print(f"⚠️ Failed to save cache: {e}")
+        """Atomically persist storage_index.json.
+
+        2026-09-28 (WinError 32 fix): the old code wrote to a FIXED
+        "storage_index.json.tmp" and called os.replace() once. prod_server.py
+        and the WebDAV subprocess each run their own FileMonitor against the
+        same cache dir, and threads inside one process also call this
+        concurrently (reconcile + watchdog), so two writers collided on the
+        same .tmp / on the target while the other side (or antivirus/indexer)
+        had it open -> "[WinError 32] The process cannot access the file".
+        Now: (1) in-process saves are serialised by _save_lock (it existed
+        but was never used), (2) each save writes to a UNIQUE temp file,
+        (3) os.replace() is retried with short backoff on the Windows
+        sharing-violation errors (5/32), (4) the dict is copied under
+        self.lock first so json.dump never sees a dict mutating mid-write.
+        Cross-process is last-writer-wins, which is fine: both processes
+        compute the same index from the same disk.
+        """
+        with self._save_lock:
+            tmp = None
+            try:
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with self.lock:
+                    dir_info_copy = {
+                        k: (dict(v) if isinstance(v, dict) else v)
+                        for k, v in self._dir_info.items()
+                    }
+                    data = {
+                        "file_count": self._file_count,
+                        "dir_count": self._dir_count,
+                        "total_size": self._total_size,
+                        "last_modified": self._last_modified,
+                        "dir_info": dir_info_copy,
+                        "saved_at": time.time(),
+                    }
+
+                import tempfile
+
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=CACHE_DIR,
+                    prefix="storage_index.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as tf:
+                    json.dump(data, tf)
+                    tmp = tf.name
+
+                last_err = None
+                for delay in (0, 0.05, 0.1, 0.2, 0.4, 0.8, 1.5):
+                    if delay:
+                        time.sleep(delay)
+                    try:
+                        os.replace(tmp, CACHE_FILE)
+                        last_err = None
+                        tmp = None  # consumed by the replace
+                        break
+                    except PermissionError as e:  # WinError 5 / 32
+                        last_err = e
+                if last_err is not None:
+                    raise last_err
+            except Exception as e:
+                print(f"⚠️ Failed to save cache: {e}")
+                try:
+                    if tmp and os.path.exists(tmp):
+                        os.remove(tmp)
+                except OSError:
+                    pass
 
         # Keep file_index.json in sync with storage_index.json
         file_index_manager.save()
