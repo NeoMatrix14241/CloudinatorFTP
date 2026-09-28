@@ -71,6 +71,7 @@ cleanup() callback to remove it once the response has been sent.
 
 import os
 import sqlite3
+import threading
 import time
 
 import config
@@ -132,6 +133,28 @@ RECOVERED_DIRNAME = getattr(config, "VERSION_RECOVERED_DIRNAME", ".recovered")
 RECOVERED_ROOT = os.path.join(ROOT_DIR, RECOVERED_DIRNAME)
 
 _engine = None
+
+# In-flight restores (2026-09-28). Double-clicking Restore used to start two
+# reconstructions of the same version at once; both wrote/renamed the same
+# files in .recovered/ -> WinError 32. Now the second request is refused
+# immediately (HTTP 409 from app.py) while the first is running, and the
+# UI can ask which versions are busy via inflight_versions().
+IN_PROGRESS_MSG = (
+    "This version is already being restored. Please wait for it to finish."
+)
+_inflight = set()
+_inflight_lock = threading.Lock()
+
+
+def _inflight_key(resolved_file_path: str, version_id: int):
+    return (ve._normalize_path(resolved_file_path), int(version_id))
+
+
+def inflight_versions(resolved_file_path: str) -> list:
+    """version_ids of this file that are being restored right now."""
+    norm = ve._normalize_path(resolved_file_path)
+    with _inflight_lock:
+        return sorted(v for (p, v) in _inflight if p == norm)
 
 
 def init():
@@ -272,23 +295,53 @@ def restore(resolved_file_path: str, version_id: int):
     if not _within_root(destination, RECOVERED_ROOT):
         # Should be unreachable (destination is built entirely from
         # RECOVERED_ROOT + a relpath + a synthesized filename, no raw
-        # user input) — defensive check kept anyway per §5's checklist.
+        # user input) - defensive check kept anyway per section 5's checklist.
         return False, "Refusing to restore outside the recovered-files area.", None
 
+    recovered_rel = None
+    key = _inflight_key(resolved_file_path, version_id)
+    with _inflight_lock:
+        if key in _inflight:
+            return False, IN_PROGRESS_MSG, None
+        _inflight.add(key)
     try:
-        result_path = _with_lock_retry(
-            engine.restore_version, version_id, destination, overwrite=True
-        )
-    except ve.VersionEngineError as e:
-        return False, f"Restore failed: {e}", None
-    except Exception as e:
-        # Anything else used to escape as an HTML 500, which the browser
-        # reported as "Could not reach the server". Log the real cause.
-        log.exception("restore: restore_version(%s) failed", version_id)
-        return False, _fail_message("Restore failed", e), None
+        # Fast path: the destination name is unique per (file, version) and
+        # the engine only ever publishes it by atomic rename AFTER full
+        # sha256+size verification, so an existing file of the right size is
+        # a complete, verified restore - no need to rebuild it again.
+        try:
+            if (
+                os.path.isfile(destination)
+                and os.path.getsize(destination) == version["size"]
+            ):
+                recovered_rel = os.path.relpath(destination, ROOT_DIR).replace(
+                    os.sep, "/"
+                )
+                return (
+                    True,
+                    f"Restored version {version_id} to {recovered_rel}",
+                    recovered_rel,
+                )
+        except OSError:
+            pass
 
-    recovered_rel = os.path.relpath(result_path, ROOT_DIR).replace(os.sep, "/")
-    return True, f"Restored version {version_id} to {recovered_rel}", recovered_rel
+        try:
+            result_path = _with_lock_retry(
+                engine.restore_version, version_id, destination, overwrite=True
+            )
+        except ve.VersionEngineError as e:
+            return False, f"Restore failed: {e}", None
+        except Exception as e:
+            # Anything else used to escape as an HTML 500, which the browser
+            # reported as "Could not reach the server". Log the real cause.
+            log.exception("restore: restore_version(%s) failed", version_id)
+            return False, _fail_message("Restore failed", e), None
+
+        recovered_rel = os.path.relpath(result_path, ROOT_DIR).replace(os.sep, "/")
+        return True, f"Restored version {version_id} to {recovered_rel}", recovered_rel
+    finally:
+        with _inflight_lock:
+            _inflight.discard(key)
 
 
 # ------------------------------------------------------------------
@@ -364,6 +417,39 @@ def prepare_download(resolved_file_path: str, version_id: int):
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     return True, "ok", data, download_filename
+
+
+def open_download_stream(resolved_file_path: str, version_id: int):
+    """Fast download: no rebuild, no temp file, no whole-file buffering.
+
+    Returns (ok, message, size, download_filename, chunk_iterator). The
+    iterator yields the version's bytes directly from the object store
+    (verified as it goes - see Engine.iter_version_bytes) and is meant to be
+    pulled via asyncio.to_thread by app.py. Supersedes prepare_download()
+    for the web route (kept for compatibility, now unused by app.py)."""
+    engine = _get_engine()
+    try:
+        version = _with_lock_retry(engine.get_version, version_id)
+    except Exception as e:
+        log.exception("download: get_version(%s) failed", version_id)
+        return False, _fail_message("Could not prepare download", e), None, None, None
+    if version is None:
+        return False, f"No such version_id: {version_id}", None, None, None
+    if not _version_belongs_to(version, resolved_file_path):
+        return False, "That version does not belong to this file.", None, None, None
+    if version["status"] != "completed":
+        msg = (
+            f"version_id {version_id} is not downloadable (status={version['status']})."
+        )
+        if version.get("error"):
+            msg += f" {version['error']}"
+        return False, msg, None, None, None
+
+    base = os.path.basename(resolved_file_path)
+    stem, ext = os.path.splitext(base)
+    date_tag = time.strftime("%Y-%m-%d_%H%M%S", time.localtime(version["created_at"]))
+    filename = f"{stem}__{date_tag}__v{version_id}{ext}"
+    return True, "ok", version["size"], filename, engine.iter_version_bytes(version_id)
 
 
 # ------------------------------------------------------------------

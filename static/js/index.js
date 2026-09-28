@@ -8045,6 +8045,22 @@ function _versionStatusBadge(status) {
     return `<span class="version-status-badge status-${status}"><i class="fas ${icon}"></i> ${status}</span>`;
 }
 
+// Restores in flight, keyed "path::versionId". Lives OUTSIDE the DOM/_vhState
+// on purpose: _paintVersionHistory() rebuilds the rows' innerHTML, which used
+// to throw away a button's `disabled` state mid-restore and let a second click
+// start a second rebuild (WinError 32 on the server). The row template reads
+// this set, so the loading state survives every repaint and modal reopen.
+const _vhRestoring = new Set();
+const _vhDownloading = new Set();
+const _vhKey = (p, id) => `${p}::${id}`;
+
+function _vhIsRestoring(itemPath, versionId) {
+    if (_vhRestoring.has(_vhKey(itemPath, versionId))) return true;
+    // Also busy if the SERVER says so (another tab/user, or modal reopened).
+    const srv = (_vhState.data && _vhState.data.restoring) || [];
+    return _vhState.path === itemPath && srv.includes(versionId);
+}
+
 function _versionHistoryRowTemplate(itemPath, itemName, version) {
     const isCompleted = version.status === 'completed';
     const fullDate = version.created_at ? new Date(version.created_at * 1000).toLocaleString() : '—';
@@ -8054,14 +8070,19 @@ function _versionHistoryRowTemplate(itemPath, itemName, version) {
         <div class="version-history-row-actions">
             <button type="button" class="btn btn-outline btn-sm"
                 data-fn="downloadVersionAction" data-args="${dataArgs([itemPath, version.version_id])}"
-                title="Download this version">
-                <i class="fas fa-download"></i> Download
+                title="Download this version"${_vhDownloading.has(_vhKey(itemPath, version.version_id)) ? ' disabled' : ''}>
+                ${_vhDownloading.has(_vhKey(itemPath, version.version_id))
+            ? '<i class="fas fa-spinner fa-spin"></i> Starting…'
+            : '<i class="fas fa-download"></i> Download'}
             </button>
             ${canWrite ? `
             <button type="button" class="btn btn-outline btn-sm"
                 data-fn="restoreVersionAction" data-args="${dataArgs([itemPath, version.version_id])}"
-                title="Reconstruct this version into .recovered/ — never overwrites the live file">
-                <i class="fas fa-rotate-left"></i> Restore
+                title="Reconstruct this version into .recovered/ — never overwrites the live file"
+                ${_vhIsRestoring(itemPath, version.version_id) ? 'disabled aria-busy="true"' : ''}>
+                ${_vhIsRestoring(itemPath, version.version_id)
+                ? '<i class="fas fa-spinner fa-spin"></i> Restoring…'
+                : '<i class="fas fa-rotate-left"></i> Restore'}
             </button>
             <button type="button" class="btn btn-danger btn-sm"
                 data-fn="showVersionDeleteConfirm" data-args="${dataArgs([version.version_id])}"
@@ -8370,17 +8391,53 @@ function closeVersionHistoryModal() {
     if (modal) modal.classList.remove('show');
 }
 
+function _vhRepaintIfOpen(itemPath) {
+    // Only repaint if the modal is still showing this same file.
+    if (_vhState.path === itemPath && _vhState.data) _paintVersionHistory();
+}
+
 function downloadVersionAction(itemPath, versionId) {
     // Plain navigation, same pattern as downloadItem() — the response
     // carries Content-Disposition: attachment, so this doesn't navigate
-    // away from the app.
+    // away from the app. The server now streams straight from the version
+    // store (no rebuild), so the browser's own download UI takes over almost
+    // immediately; the button is only locked for a moment to stop
+    // double-click from starting two downloads.
+    const key = _vhKey(itemPath, versionId);
+    if (_vhDownloading.has(key)) return;
+    _vhDownloading.add(key);
+    _vhRepaintIfOpen(itemPath);
     window.location.href = `/api/versions/download?path=${encodePathForUrl(itemPath)}&version_id=${versionId}`;
+    setTimeout(() => {
+        _vhDownloading.delete(key);
+        _vhRepaintIfOpen(itemPath);
+    }, 3000);
 }
 
-async function restoreVersionAction(itemPath, versionId) {
-    const row = document.querySelector(`.version-history-row[data-version-id="${versionId}"]`);
-    const restoreBtn = row ? row.querySelector('[data-fn="restoreVersionAction"]') : null;
-    if (restoreBtn) restoreBtn.disabled = true;
+// Another request (double-click in another tab, etc.) is already rebuilding
+// this version. Wait for the SERVER to report it finished, rather than
+// showing an error or letting the button re-enable.
+async function _vhWaitForRestoreToFinish(itemPath, versionId, maxSeconds = 600) {
+    const deadline = Date.now() + maxSeconds * 1000;
+    while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 1500));
+        try {
+            const resp = await fetch(`/api/versions/list?path=${encodeURIComponent(itemPath)}`);
+            const data = await _vhJson(resp);
+            if (resp.ok) {
+                if (_vhState.path === itemPath) _vhState.data = data;
+                if (!(data.restoring || []).includes(versionId)) return true;
+            }
+        } catch (e) { /* transient — keep waiting */ }
+    }
+    return false;
+}
+
+async function restoreVersionAction(itemPath, versionId, _afterWait = false) {
+    const key = _vhKey(itemPath, versionId);
+    if (_vhRestoring.has(key)) return;          // already processing — ignore extra clicks
+    _vhRestoring.add(key);
+    _vhRepaintIfOpen(itemPath);                 // shows "Restoring…" and disables the button
 
     try {
         const resp = await fetch('/api/versions/restore', {
@@ -8389,6 +8446,22 @@ async function restoreVersionAction(itemPath, versionId) {
             body: JSON.stringify({ path: itemPath, version_id: versionId }),
         });
         const data = await _vhJson(resp);
+
+        if (resp.status === 409 && data.in_progress) {
+            // Not an error: it's still rebuilding. Keep the loading state,
+            // wait for it to finish, then ask again — the server returns the
+            // finished file instantly (no second rebuild).
+            if (!_afterWait) {
+                const finished = await _vhWaitForRestoreToFinish(itemPath, versionId);
+                if (finished) {
+                    _vhRestoring.delete(key);
+                    return restoreVersionAction(itemPath, versionId, true);
+                }
+            }
+            showNotification('Still Restoring', 'This version is still being rebuilt. Please check again in a moment.', 'info');
+            return;
+        }
+
         if (!resp.ok || !data.success) {
             showNotification('Restore Failed', data.error || 'Could not restore this version.', 'error');
             return;
@@ -8407,7 +8480,8 @@ async function restoreVersionAction(itemPath, versionId) {
     } catch (e) {
         showNotification('Restore Failed', 'Could not reach the server.', 'error');
     } finally {
-        if (restoreBtn) restoreBtn.disabled = false;
+        _vhRestoring.delete(key);
+        _vhRepaintIfOpen(itemPath);
     }
 }
 

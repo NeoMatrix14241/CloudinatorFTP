@@ -1389,7 +1389,7 @@ class Engine:
             overwrite = config.VERSION_ALLOW_RESTORE_OVERWRITE
 
         conn = self._connect()
-        job_id = self._create_job("restore", version_id=version_id)
+        job_id = self._retry_locked(self._create_job, "restore", None, version_id)
 
         version = conn.execute(
             "SELECT * FROM versions WHERE version_id=?", (version_id,)
@@ -1420,7 +1420,15 @@ class Engine:
 
         dest_dir = os.path.dirname(destination)
         os.makedirs(dest_dir, exist_ok=True)
-        tmp_dest = destination + ".tmp"
+        # UNIQUE temp name (2026-09-28): this used to be destination + ".tmp",
+        # so two overlapping restores of the same version (double-click)
+        # both opened/removed/renamed the SAME temp file -> WinError 32
+        # ("used by another process"). mkstemp in the destination dir keeps
+        # os.replace() a same-filesystem atomic rename.
+        _fd, tmp_dest = tempfile.mkstemp(
+            dir=dest_dir, prefix=".restore_", suffix=".tmp"
+        )
+        os.close(_fd)
 
         objects = conn.execute(
             "SELECT chunk_index, sha256 FROM version_objects WHERE version_id=? ORDER BY chunk_index",
@@ -1467,15 +1475,79 @@ class Engine:
             self._finish_job(job_id, "failed", error=err)
             raise VersionEngineError(err)
 
-        os.replace(
-            tmp_dest, destination
-        )  # atomic publish, only after full verification
-        self._finish_job(job_id, "completed")
+        # Atomic publish, only after full verification. Retried on
+        # PermissionError (WinError 5/32): the destination may be briefly held
+        # open by a download, antivirus or the indexer.
+        last_err = None
+        for delay in (0, 0.1, 0.25, 0.5, 1.0, 2.0):
+            if delay:
+                time.sleep(delay)
+            try:
+                os.replace(tmp_dest, destination)
+                last_err = None
+                break
+            except PermissionError as e:
+                last_err = e
+        if last_err is not None:
+            try:
+                os.remove(tmp_dest)
+            except OSError:
+                pass
+            self._finish_job(job_id, "failed", error=str(last_err))
+            raise VersionEngineError(
+                f"could not publish restored file (in use by another process): {last_err}"
+            )
+        self._retry_locked(self._finish_job, job_id, "completed")
         self.log.info(
             f"Restore verified + completed: version {version_id} -> {destination} "
             f"({restored_sha[:12]}…, {total} bytes)"
         )
         return destination
+
+    def iter_version_bytes(self, version_id: int, block_size: int = 1024 * 1024):
+        """Yield a completed version's bytes straight from the object store
+        - no temp file, no rebuild-then-read (the old download path rebuilt
+        the whole file, re-hashed it, then read it into memory before the
+        first byte went out). Every object is hashed as it streams and the
+        whole-file sha256/size are checked at the end; on ANY mismatch this
+        raises, which aborts the HTTP response (truncated/failed download)
+        instead of ever delivering silently corrupt bytes. Synchronous
+        generator - the web layer pulls it via asyncio.to_thread."""
+        conn = self._connect()
+        version = conn.execute(
+            "SELECT * FROM versions WHERE version_id=?", (version_id,)
+        ).fetchone()
+        if version is None or version["status"] != "completed":
+            raise VersionEngineError("version not found or not completed")
+        objects = conn.execute(
+            "SELECT chunk_index, sha256 FROM version_objects WHERE version_id=? ORDER BY chunk_index",
+            (version_id,),
+        ).fetchall()
+        whole = hashlib.sha256()
+        total = 0
+        for row in objects:
+            path = self._object_path(row["sha256"])
+            obj_h = hashlib.sha256()
+            try:
+                with open(path, "rb") as f:
+                    while True:
+                        buf = f.read(block_size)
+                        if not buf:
+                            break
+                        obj_h.update(buf)
+                        whole.update(buf)
+                        total += len(buf)
+                        yield buf
+            except OSError as e:
+                raise VersionEngineError(
+                    f"object {row['sha256'][:12]}... unreadable: {e}"
+                )
+            if obj_h.hexdigest() != row["sha256"]:
+                raise VersionEngineError(
+                    f"object {row['sha256'][:12]}... corrupted - download aborted"
+                )
+        if whole.hexdigest() != version["sha256"] or total != version["size"]:
+            raise VersionEngineError("download verification failed - aborted")
 
     # ------------------------------------------------------------------
     # Jobs

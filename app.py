@@ -2092,6 +2092,7 @@ async def api_versions_list():
             "tracked": True,
             "versions": versions,
             "retention": version_history.retention_info(versions),
+            "restoring": version_history.inflight_versions(full_path),
         }
     )
 
@@ -2117,6 +2118,11 @@ async def api_versions_restore():
         version_history.restore, full_path, version_id
     )
     if not ok:
+        if message == version_history.IN_PROGRESS_MSG:
+            # Double-click / second tab: the first request is still
+            # rebuilding this version. 409 + in_progress lets the UI keep
+            # the button in its loading state instead of showing an error.
+            return jsonify({"error": message, "in_progress": True}), 409
         return jsonify({"error": message}), 400
 
     logging.info(
@@ -2151,17 +2157,34 @@ async def api_versions_download():
         return jsonify({"error": "Invalid request"}), 400
 
     full_path = os.path.join(ROOT_DIR, path)
-    ok, message, data, download_filename = await asyncio.to_thread(
-        version_history.prepare_download, full_path, int(version_id_raw)
+    ok, message, size, download_filename, chunks = await asyncio.to_thread(
+        version_history.open_download_stream, full_path, int(version_id_raw)
     )
     if not ok:
         return jsonify({"error": message}), 400
 
+    async def _stream():
+        # Pull the (blocking, disk-bound) sync generator one 1 MB block at a
+        # time on a worker thread so the event loop never stalls. Any
+        # integrity failure raises here, aborting the response rather than
+        # delivering corrupt bytes.
+        sentinel = object()
+        try:
+            while True:
+                block = await asyncio.to_thread(next, chunks, sentinel)
+                if block is sentinel:
+                    break
+                yield block
+        finally:
+            chunks.close()
+
     mimetype = mimetypes.guess_type(download_filename)[0] or "application/octet-stream"
-    response = Response(data, mimetype=mimetype)
+    response = Response(_stream(), mimetype=mimetype)
     response.headers["Content-Disposition"] = (
         f'attachment; filename="{download_filename}"'
     )
+    response.headers["Content-Length"] = str(size)
+    response.headers["Cache-Control"] = "no-store"
     return response
 
 
