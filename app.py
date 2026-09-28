@@ -2080,7 +2080,11 @@ async def api_versions_list():
         return jsonify({"error": "Invalid file path"}), 400
 
     full_path = os.path.join(ROOT_DIR, path)
-    versions = await asyncio.to_thread(version_history.get_history, full_path)
+    try:
+        versions = await asyncio.to_thread(version_history.get_history, full_path)
+    except Exception as e:
+        app_logger.exception("Version history list failed for %s", path)
+        return jsonify({"error": "Could not load version history: " + str(e)}), 503
     if versions is None:
         return jsonify({"tracked": False, "versions": []})
     return jsonify(

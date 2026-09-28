@@ -476,9 +476,11 @@ class Engine:
             return conn
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        # busy_timeout FIRST: the journal_mode pragma below can itself need
+        # a lock, and should wait rather than fail instantly.
+        conn.execute("PRAGMA busy_timeout=10000")
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA busy_timeout=10000")
         self._conn_local.conn = conn
         return conn
 
@@ -596,7 +598,9 @@ class Engine:
     def _object_path(self, sha256_hex: str) -> str:
         return os.path.join(self.objects_dir, sha256_hex[:2], sha256_hex)
 
-    def _store_object_from_tmp(self, tmp_path: str, sha256_hex: str, size: int):
+    def _store_object_from_tmp(
+        self, tmp_path: str, sha256_hex: str, size: int, commit: bool = True
+    ):
         """Atomically publish a fully-written temp file as the
         content-addressed object for `sha256_hex`. Dedup: if the object
         already exists on disk, the incoming tmp is just discarded — the
@@ -619,7 +623,8 @@ class Engine:
             "ON CONFLICT(sha256) DO UPDATE SET orphaned_since=NULL",
             (sha256_hex, size, time.time()),
         )
-        conn.commit()
+        if commit:
+            conn.commit()
 
     def _verify_object(self, sha256_hex: str) -> bool:
         """Integrity check: hash-verify an object on read (spec:
@@ -968,11 +973,21 @@ class Engine:
                     except OSError:
                         pass
                     raise
-                self._store_object_from_tmp(tmp_path, chunk_sha, len(buf))
+                # LOCK-HOLD FIX: the object row and its version_objects link
+                # are written and COMMITTED together, right here. Previously
+                # the version_objects INSERT was left uncommitted, so SQLite's
+                # write lock stayed held while the NEXT chunk was read,
+                # hashed and fsync'd (seconds per 8 MB on a slow disk) - i.e.
+                # nearly the entire capture. Any other writer (a second
+                # worker, the scanner, or the web process's restore/retry)
+                # then waited out busy_timeout and got "database is locked".
+                # Now the lock is held only for these two tiny statements.
+                self._store_object_from_tmp(tmp_path, chunk_sha, len(buf), commit=False)
                 conn.execute(
                     "INSERT OR IGNORE INTO version_objects(version_id, chunk_index, sha256) VALUES (?, ?, ?)",
                     (version_id, chunk_index, chunk_sha),
                 )
+                conn.commit()
                 chunk_index += 1
 
         conn.execute(
@@ -993,11 +1008,19 @@ class Engine:
 
     def _mark_version_failed(self, version_id: int, error: str):
         conn = self._connect()
-        conn.execute(
-            "UPDATE versions SET status='failed', error=? WHERE version_id=?",
-            (error, version_id),
-        )
-        conn.commit()
+        for attempt in range(3):
+            try:
+                conn.execute(
+                    "UPDATE versions SET status='failed', error=? WHERE version_id=?",
+                    (error, version_id),
+                )
+                conn.commit()
+                return
+            except sqlite3.OperationalError as e:
+                conn.rollback()
+                if "locked" not in str(e).lower() or attempt == 2:
+                    raise
+                time.sleep(1.0)
 
     # ------------------------------------------------------------------
     # Query / read-only data access — pure-data methods (dicts / lists of
@@ -1350,6 +1373,11 @@ class Engine:
                     conn.execute("DELETE FROM version_objects WHERE sha256=?", (sha,))
                     conn.execute("DELETE FROM objects WHERE sha256=?", (sha,))
                     deleted += 1
+                    if deleted % 100 == 0:
+                        # os.remove() calls happen inside this loop; commit
+                        # in batches so the write lock isn't held for the
+                        # whole sweep on a slow disk.
+                        conn.commit()
         conn.commit()
         self._finish_job(job_id, "completed")
         self.log.info(

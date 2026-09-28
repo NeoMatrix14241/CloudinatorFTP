@@ -8197,6 +8197,17 @@ function _paintVersionHistory() {
 
 // silent=true re-fetches without blanking the list to a spinner (used after
 // retry/clear so the inline result message doesn't flicker away).
+// Parse a JSON body but never throw: a 500 from the server is an HTML page,
+// and resp.json() throwing used to be reported as "Could not reach the
+// server" even though the server had answered.
+async function _vhJson(resp) {
+    try {
+        return await resp.json();
+    } catch (e) {
+        return { error: `Server error (HTTP ${resp.status}) — see the server log.` };
+    }
+}
+
 async function _renderVersionHistoryList(itemPath, itemName, silent = false) {
     const container = document.getElementById('versionHistoryList');
     if (!container) return;
@@ -8206,7 +8217,7 @@ async function _renderVersionHistoryList(itemPath, itemName, silent = false) {
 
     try {
         const resp = await fetch(`/api/versions/list?path=${encodeURIComponent(itemPath)}`);
-        const data = await resp.json();
+        const data = await _vhJson(resp);
         if (!resp.ok) {
             container.innerHTML = `<p class="version-history-empty">${escapeHtml(data.error || 'Could not load version history.')}</p>`;
             return;
@@ -8243,7 +8254,7 @@ async function retrySnapshotAction(itemPath, itemName) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path: itemPath }),
         });
-        const data = await resp.json();
+        const data = await _vhJson(resp);
         if (!resp.ok || !data.success) {
             _vhState.status = { type: 'error', text: data.message || data.error || 'Could not retry the snapshot.' };
         } else if (data.version) {
@@ -8282,7 +8293,7 @@ async function clearFailedAction() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path: s.path }),
         });
-        const data = await resp.json();
+        const data = await _vhJson(resp);
         s.status = (!resp.ok || !data.success)
             ? { type: 'error', text: data.error || 'Could not clear failed attempts.' }
             : { type: 'success', text: data.message };
@@ -8377,7 +8388,7 @@ async function restoreVersionAction(itemPath, versionId) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path: itemPath, version_id: versionId }),
         });
-        const data = await resp.json();
+        const data = await _vhJson(resp);
         if (!resp.ok || !data.success) {
             showNotification('Restore Failed', data.error || 'Could not restore this version.', 'error');
             return;
@@ -8424,7 +8435,7 @@ async function confirmDeleteVersionAction(itemPath, versionId, itemName) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path: itemPath, version_id: versionId, confirm_text: confirmText }),
         });
-        const data = await resp.json();
+        const data = await _vhJson(resp);
         if (!resp.ok || !data.success) {
             showNotification('Delete Failed', data.error || 'Could not delete this version.', 'error');
             return;

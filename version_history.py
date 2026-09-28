@@ -70,10 +70,52 @@ cleanup() callback to remove it once the response has been sent.
 """
 
 import os
+import sqlite3
 import time
 
 import config
+import logging_setup
 import version_engine as ve
+
+log = logging_setup.get_logger("version_history")
+
+# The Version Engine's worker is a separate OS process writing to the same
+# SQLite file. When it holds the write lock past busy_timeout, this process
+# gets `sqlite3.OperationalError: database is locked`. Every web-side call
+# below retries that specific error with backoff (these functions run in
+# asyncio.to_thread, so sleeping is fine) instead of surfacing a 500.
+_LOCK_RETRY_DELAYS = (0.25, 0.5, 1.0, 2.0, 3.0)
+_BUSY_MSG = (
+    "The version database is busy (the Version Engine is writing to it). "
+    "Please try again in a few seconds."
+)
+
+
+def _is_lock_error(exc) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and any(
+        s in str(exc).lower() for s in ("locked", "busy")
+    )
+
+
+def _with_lock_retry(fn, *args, **kwargs):
+    for delay in _LOCK_RETRY_DELAYS:
+        try:
+            return fn(*args, **kwargs)
+        except sqlite3.OperationalError as e:
+            if not _is_lock_error(e):
+                raise
+            log.warning(
+                "%s hit '%s' - retrying in %.2fs", getattr(fn, "__name__", fn), e, delay
+            )
+            time.sleep(delay)
+    return fn(*args, **kwargs)  # last attempt; caller handles the raise
+
+
+def _fail_message(prefix: str, exc: Exception) -> str:
+    if _is_lock_error(exc):
+        return _BUSY_MSG
+    return f"{prefix}: {exc}"
+
 
 try:
     ROOT_DIR = config.ROOT_DIR
@@ -161,7 +203,7 @@ def get_history(resolved_file_path: str):
     file has no tracking history at all. resolved_file_path must already
     be an authorized, absolute (or ROOT_DIR-relative-resolved-to-absolute)
     path — app.py's route does that resolution before calling this."""
-    return _get_engine().list_versions(resolved_file_path)
+    return _with_lock_retry(_get_engine().list_versions, resolved_file_path)
 
 
 def list_tracked():
@@ -177,7 +219,7 @@ def get_version_info(version_id: int, resolved_file_path: str):
     belong to resolved_file_path (the cross-file guard is applied here so
     every caller gets it for free rather than remembering to call
     _version_belongs_to() separately)."""
-    version = _get_engine().get_version(version_id)
+    version = _with_lock_retry(_get_engine().get_version, version_id)
     if version is None or not _version_belongs_to(version, resolved_file_path):
         return None
     return version
@@ -211,7 +253,11 @@ def restore(resolved_file_path: str, version_id: int):
     handing straight to app.py's dedicated recovered-file download route
     — see version_history_web_ui_prompt.md §4's route sketch, adapted."""
     engine = _get_engine()
-    version = engine.get_version(version_id)
+    try:
+        version = _with_lock_retry(engine.get_version, version_id)
+    except Exception as e:
+        log.exception("restore: get_version(%s) failed", version_id)
+        return False, _fail_message("Restore failed", e), None
     if version is None:
         return False, f"No such version_id: {version_id}", None
     if not _version_belongs_to(version, resolved_file_path):
@@ -230,9 +276,16 @@ def restore(resolved_file_path: str, version_id: int):
         return False, "Refusing to restore outside the recovered-files area.", None
 
     try:
-        result_path = engine.restore_version(version_id, destination, overwrite=True)
+        result_path = _with_lock_retry(
+            engine.restore_version, version_id, destination, overwrite=True
+        )
     except ve.VersionEngineError as e:
         return False, f"Restore failed: {e}", None
+    except Exception as e:
+        # Anything else used to escape as an HTML 500, which the browser
+        # reported as "Could not reach the server". Log the real cause.
+        log.exception("restore: restore_version(%s) failed", version_id)
+        return False, _fail_message("Restore failed", e), None
 
     recovered_rel = os.path.relpath(result_path, ROOT_DIR).replace(os.sep, "/")
     return True, f"Restored version {version_id} to {recovered_rel}", recovered_rel
@@ -272,7 +325,11 @@ def prepare_download(resolved_file_path: str, version_id: int):
     import tempfile
 
     engine = _get_engine()
-    version = engine.get_version(version_id)
+    try:
+        version = _with_lock_retry(engine.get_version, version_id)
+    except Exception as e:
+        log.exception("download: get_version(%s) failed", version_id)
+        return False, _fail_message("Could not prepare download", e), None, None
     if version is None:
         return False, f"No such version_id: {version_id}", None, None
     if not _version_belongs_to(version, resolved_file_path):
@@ -293,12 +350,16 @@ def prepare_download(resolved_file_path: str, version_id: int):
     temp_path = os.path.join(tmp_dir, download_filename)
 
     try:
-        result_path = engine.restore_version(version_id, temp_path, overwrite=True)
+        result_path = _with_lock_retry(
+            engine.restore_version, version_id, temp_path, overwrite=True
+        )
         with open(result_path, "rb") as f:
             data = f.read()
     except ve.VersionEngineError as e:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
         return False, f"Could not prepare download: {e}", None, None
+    except Exception as e:
+        log.exception("download: restore_version(%s) failed", version_id)
+        return False, _fail_message("Could not prepare download", e), None, None
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -314,7 +375,13 @@ def clear_failed(resolved_file_path: str):
     """Permanently remove this file's failed-capture rows (see
     Engine.clear_failed_versions() for why that's safe: a failed capture
     never became a restorable version). Returns (ok, message, removed)."""
-    removed = _get_engine().clear_failed_versions(resolved_file_path)
+    try:
+        removed = _with_lock_retry(
+            _get_engine().clear_failed_versions, resolved_file_path
+        )
+    except Exception as e:
+        log.exception("clear_failed failed")
+        return False, _fail_message("Could not clear failed attempts", e), 0
     if removed == 0:
         return True, "There were no failed attempts to clear.", 0
     noun = "attempt" if removed == 1 else "attempts"
@@ -358,12 +425,13 @@ def retry_snapshot(resolved_file_path: str):
     than trusting snapshot_file()'s return value alone."""
     engine = _get_engine()
     before_ids = {
-        v["version_id"] for v in (engine.list_versions(resolved_file_path) or [])
+        v["version_id"]
+        for v in (_with_lock_retry(engine.list_versions, resolved_file_path) or [])
     }
 
     engine.snapshot_file(resolved_file_path, source="web-retry")
 
-    after = engine.list_versions(resolved_file_path) or []
+    after = _with_lock_retry(engine.list_versions, resolved_file_path) or []
     new_versions = [v for v in after if v["version_id"] not in before_ids]
 
     if not new_versions:
@@ -381,6 +449,11 @@ def retry_snapshot(resolved_file_path: str):
     msg = "The retry failed again."
     if newest.get("error"):
         msg += f" {newest['error']}"
+    if "locked" in (newest.get("error") or "").lower():
+        msg += (
+            " (the Version Engine's background worker was writing to the "
+            "database at the same time - try again in a few seconds)"
+        )
     return False, msg, newest
 
 
@@ -399,7 +472,11 @@ def delete(resolved_file_path: str, version_id: int, confirm_text: str):
     SERVER-SIDE against expected_delete_confirmation() — never trust a
     client-side-only confirm() dialog for this, per §5's checklist."""
     engine = _get_engine()
-    version = engine.get_version(version_id)
+    try:
+        version = _with_lock_retry(engine.get_version, version_id)
+    except Exception as e:
+        log.exception("delete: get_version(%s) failed", version_id)
+        return False, _fail_message("Delete failed", e)
     if version is None:
         return False, f"No such version_id: {version_id}"
     if not _version_belongs_to(version, resolved_file_path):
@@ -409,5 +486,11 @@ def delete(resolved_file_path: str, version_id: int, confirm_text: str):
     if (confirm_text or "").strip() != expected:
         return False, "Confirmation text did not match — nothing was deleted."
 
-    ok, message = engine.delete_version(version_id, reason="deleted via web UI")
+    try:
+        ok, message = _with_lock_retry(
+            engine.delete_version, version_id, reason="deleted via web UI"
+        )
+    except Exception as e:
+        log.exception("delete: delete_version(%s) failed", version_id)
+        return False, _fail_message("Delete failed", e)
     return ok, message
