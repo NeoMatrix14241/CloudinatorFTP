@@ -12,6 +12,8 @@ The file acts as the central configuration hub for:
 - Version Engine behavior
 - platform-aware storage defaults
 
+_Last checked against `config.py` on 2026-09-29._
+
 It is also closely tied to [../server_config.json](../server_config.json), which stores a persisted subset of these values when the app saves the server configuration.
 
 > ⚡ Quick fixes for common admin problems
@@ -64,11 +66,15 @@ It is also closely tied to [../server_config.json](../server_config.json), which
 The project uses a mix of:
 
 - hardcoded defaults in the module itself
-- runtime overrides from environment variables
+- one environment override, `CLOUDINATOR_FTP_ROOT`, which only affects the files root (`ROOT_DIR`)
 - persisted values from `server_config.json`
 - path helper functions in [../paths.py](../paths.py)
 
-When the app starts, values can be loaded from disk using `load_server_config()`, and saved by `save_server_config()`.
+`load_server_config()` runs automatically at the bottom of `config.py` every time the module is imported, and `save_server_config()` writes the current values back out.
+
+> ⚠️ **Precedence.** The values written in `config.py` are only fallback defaults. Any key present in `server_config.json` overrides the in-code constant on every import. For example, setting `FTP_ENABLED = False` in `config.py` has no effect while `server_config.json` still contains `"FTP_ENABLED": true`. Change settings through the admin menu (`python config.py`), or edit or delete the key in `server_config.json`, then restart.
+
+`server_config.json` lives in the same directory as `config.py` (anchored via `_HERE` / `_SERVER_CONFIG_FILE`), not in the process working directory.
 
 ---
 
@@ -144,16 +150,18 @@ from config import main_configuration_menu
 main_configuration_menu()
 ```
 
+You can also start the same menu from a shell with `python config.py`.
+
 The module also exposes individual helper functions for targeted changes, including:
 
-- `configure_storage_path()`
-- `configure_db_path()`
-- `configure_cache_path()`
+- `configure_storage_path()` (submenu for all five directories)
+- `configure_files_path()`, `configure_db_path()`, `configure_cache_path()`, `configure_hls_cache_path()`, `configure_img_cache_path()`
 - `configure_versions_path()`
-- `configure_version_engine_settings()`
-- `configure_hls_settings()`
-- `configure_image_settings()`
+- `configure_version_engine_settings()` and `configure_version_tracking()`
+- `configure_hls_settings()` and `configure_image_settings()`
+- `configure_protocol_settings()`
 - `configure_server_settings()`
+- `view_current_settings()`
 
 ### What the menu covers
 
@@ -163,8 +171,37 @@ The main menu is organized into a few practical categories:
 |---|---|
 | Storage Path Configuration | Adjust file storage, database, cache, HLS cache, and image cache paths |
 | Server Settings Configuration | Change ports, session timeout, upload settings, and host binding |
-| Version History / Version Engine | Toggle versioning, tracking rules, retention, and symlink behavior |
+| Version History / Version Engine | Version storage path, engine settings, and tracking scope (details below) |
 | View Current Settings | Review the active runtime values |
+
+### Menu reference (as implemented)
+
+**Server Settings** (`configure_server_settings()`):
+
+| Option | Setting |
+|---|---|
+| 1 | Port |
+| 2 | Chunk size |
+| 3 | Chunked uploads on/off |
+| 4 | Max file size |
+| 5 | Session timeout (shown in minutes) |
+| 6 | Host binding |
+| 7 | Generate a new session secret |
+| 8 | HLS settings (minimum size, force-HLS formats) |
+| 9 | Image settings (compress threshold, WebP quality) |
+| 11 | ffmpeg toggle |
+| 12 | libvips toggle |
+| 13 | Protocol servers (WebDAV / SFTP / FTP / SMB) |
+| 10 | Save & Exit (writes `server_config.json`) |
+| 0 | Exit without saving |
+
+The numbering is out of order in the code (Save & Exit is 10 but is listed last). Values change in memory as you go and are only written to disk when you choose a Save & Exit option.
+
+**Version Engine** (`_version_engine_menu()`): 1 = version storage path, 2 = engine settings, 3 = tracking scope.
+
+- *Engine settings* can toggle the master switch, watcher, scanner, retention, garbage collection, restore-overwrite and symlink following, and can set the small-file threshold (MB), chunk size (MB) and worker count.
+- Not editable from the menu (edit `server_config.json` instead): `VERSION_SCAN_INTERVAL`, `VERSION_MAX_VERSIONS`, `VERSION_GC_GRACE_PERIOD`, `VERSION_MAX_CONCURRENT_SNAPSHOTS`, `VERSION_RETRY_COUNT`, `VERSION_RETRY_DELAY`, `VERSION_COMPRESSION_ENABLED`, `VERSION_SHUTDOWN_TIMEOUT`, `VERSION_CHUNKING_ALGORITHM`, `VERSION_DB_FILENAME`. The menu shows some of these but does not change them.
+- *Tracking scope* (`configure_version_tracking()`): tracked files, tracked directories, tracking roots, a track-all-under-roots toggle, excluded directories and excluded patterns.
 
 ### Typical admin workflow
 
@@ -197,12 +234,12 @@ This editor-friendly flow allows the admin to change:
 - chunk size
 - worker count
 - watcher and scanner behavior
-- retention and garbage collection rules
-- overwrite and symlink behavior
+- retention and garbage collection on/off (limits such as `VERSION_MAX_VERSIONS` and `VERSION_GC_GRACE_PERIOD` are display-only in this menu)
+- restore-overwrite and symlink toggles
 
 ### Save behavior
 
-The configuration helpers do not blindly mutate the working environment. They call the same persistence functions used elsewhere in the project, saving a subset of current values to [../server_config.json](../server_config.json) so the settings survive restarts.
+The configuration menus change values in memory as you go and only write them to disk when you choose a Save & Exit option. That option calls the same persistence functions used elsewhere in the project, saving a subset of current values to [../server_config.json](../server_config.json) so the settings survive restarts.
 
 > ⚠️ After changing storage paths or sensitive runtime values, restart the app so the updated configuration is reapplied consistently.
 
@@ -225,9 +262,9 @@ CloudinatorFTP supports multiple network protocols. These settings are explicitl
 
 The config comments explicitly state:
 
-- HTTPS is preferred and preferred over the plain HTTP listener when the certificate loads successfully.
-- `WEBDAV_ENABLED` does not run alongside HTTPS in the usual case.
-- The project reuses an auto-generated certificate in the database directory for HTTPS.
+- When `WEBDAV_HTTPS_ENABLED` is on and the certificate loads, HTTPS runs exclusively. The plain `:8080` listener never opens alongside it, whatever `WEBDAV_ENABLED` says.
+- `WEBDAV_ENABLED` only takes effect when HTTPS is disabled, or as an automatic fallback if the HTTPS certificate can't be prepared (for example the `cryptography` package is missing).
+- The certificate is auto-generated in `db/webdav.crt` on first run, and FTPS reuses the same certificate.
 
 ### SFTP
 
@@ -242,8 +279,8 @@ The config comments explicitly state:
 |---|---:|---|
 | `FTP_ENABLED` | `True` | Enables FTP | 
 | `FTP_PORT` | `2121` | FTP control port |
-| `FTP_TLS_ENABLED` | `True` | Enables FTPS (`AUTH TLS`) |
-| `FTP_TLS_REQUIRE_DATA` | `True` | Requires TLS on the data channel |
+| `FTP_TLS_ENABLED` | `True` | Enables FTPS (`AUTH TLS`); falls back to plain FTP if pyOpenSSL isn't installed |
+| `FTP_TLS_REQUIRE_DATA` | `True` | Requires TLS on the data channel; `False` allows a plaintext data channel for legacy clients (the control channel stays TLS whenever FTPS and pyOpenSSL are both available) |
 
 ### SMB
 
@@ -287,10 +324,13 @@ The project looks for a custom root path in this order:
 
 The default location depends on platform:
 
-- Termux: `/storage/emulated/0/...` when accessible, otherwise user home
+- Termux: the first writable of `/storage/emulated/0/Download/CloudinatorFTP`, `/storage/emulated/0/Documents/CloudinatorFTP`, `/storage/emulated/0/CloudinatorFTP`; otherwise `~/uploads`
 - Linux: `$HOME/CloudinatorFTP`
 - Windows: Documents/CloudinatorFTP
 - macOS: `$HOME/CloudinatorFTP`
+- Unknown platform: `./uploads` under the current working directory
+
+If the chosen directory can't be created or written to, `setup_storage_directory()` falls back to `./uploads` under the current working directory.
 
 ### Security recommendations
 
@@ -313,7 +353,7 @@ The Version Engine is a separate subsystem for tracking historical file versions
 | Setting | Default | Purpose |
 |---|---:|---|
 | `VERSION_ENGINE_ENABLED` | `True` | Enables the Version Engine child process |
-| `VERSION_STORAGE_DIR` | derived from path helpers | Version object and chunk storage |
+| `VERSION_STORAGE_DIR` | derived from path helpers | Version object and chunk storage (not saved in `server_config.json`; comes from `versions_path` in `storage_config.json`) |
 | `VERSION_DB_FILENAME` | `"version_engine.sqlite3"` | SQLite database for version metadata |
 
 ### Chunking and retention
@@ -327,6 +367,13 @@ The Version Engine is a separate subsystem for tracking historical file versions
 | `VERSION_MAX_VERSIONS` | `50` | Max versions per file |
 | `VERSION_GC_ENABLED` | `True` | Enables garbage collection |
 | `VERSION_GC_GRACE_PERIOD` | `24 * 60 * 60` | Time before unreferenced objects are deleted |
+
+### Workers and concurrency
+
+| Setting | Default | Purpose |
+|---|---:|---|
+| `VERSION_WORKER_COUNT` | `1` | Snapshot worker count; kept low because Termux devices are resource-constrained |
+| `VERSION_MAX_CONCURRENT_SNAPSHOTS` | `2` | Upper limit on snapshots running at the same time |
 
 ### Watcher and scanner
 
@@ -381,6 +428,14 @@ Saved sections include:
 - Version Engine values
 - metadata such as `configured_at`
 
+Not saved to `server_config.json`:
+
+- `ALLOWED_EXTENSIONS` (a code-only setting)
+- `ROOT_DIR`, `DB_DIR`, `CACHE_DIR`, `HLS_CACHE_DIR`, `IMG_CACHE_DIR` and `VERSION_STORAGE_DIR`. Directory locations live in `storage_config.json`, managed by `paths.py`.
+- `PRESET_PATHS` and other derived values
+
+An older `server_config.json` that is missing keys falls back to the in-code defaults (`config.get(key, default)`), so no migration is needed.
+
 This makes the app configuration resilient across restarts without hardcoding every setting into the environment.
 
 ### Example persisted values
@@ -415,22 +470,24 @@ These are used to choose a default root path and to provide user-friendly messag
 
 ### Default platform mapping
 
-- `termux` → uses Android storage or Termux home
+- `termux` → first writable of Android `Download`, `Documents`, or the internal-storage root (each with a `CloudinatorFTP` subfolder), else `~/uploads`
 - `linux` → `$HOME/CloudinatorFTP`
 - `windows` → `Documents/CloudinatorFTP`
 - `macos` → `$HOME/CloudinatorFTP`
-- `unknown` → current working directory fallback
+- `unknown` → `./uploads` under the current working directory
 
 ### Preset path helpers
 
-There are also preset path definitions for quick setup such as:
+`PRESET_PATHS` defines per-platform presets for quick setup. Each path ends in `CloudinatorFTP` except `termux_home`, which is `~/uploads`.
 
-- `downloads`
-- `documents`
-- `desktop`
-- `internal`
-- `dcim`
-- `userprofile`
+| Platform | Preset keys |
+|---|---|
+| termux | `downloads`, `documents`, `internal`, `dcim`, `termux_home` |
+| linux | `home`, `desktop`, `documents`, `downloads` |
+| windows | `documents`, `desktop`, `downloads`, `userprofile` |
+| macos | `documents`, `desktop`, `downloads` |
+
+`set_preset_path(key)` applies one and `list_available_presets()` prints the ones valid for the current platform.
 
 This is used by the config wizard and storage path configuration functions.
 
@@ -448,6 +505,8 @@ The file contains interactive helper functions such as:
 - `configure_version_engine_settings()`
 - `configure_hls_settings()`
 - `configure_image_settings()`
+
+See section 5 for the full helper list and the menu layout. `python config.py` starts `main_configuration_menu()`.
 
 These are intended for manual CLI configuration and are useful when running the project without editing Python constants directly.
 
@@ -468,6 +527,8 @@ For most deployments, these settings are worth reviewing first:
 ---
 
 ## 13. Practical examples
+
+> These snippets edit constants in `config.py`. They only take effect for keys that are **not** already in `server_config.json` (see the precedence note in section 1). Otherwise use the admin menu or edit the JSON.
 
 ### Disable a protocol
 
@@ -520,7 +581,8 @@ This section covers the most common configuration problems administrators run in
 **What to check**
 - Make sure the active configuration is saved.
 - Inspect [../server_config.json](../server_config.json) and confirm the expected keys are present.
-- Verify the app is not reloading a previous file from a different working directory.
+- `server_config.json` is always read from the same directory as `config.py`, regardless of the working directory, so make sure you are editing that copy.
+- In the admin menu, finish with a Save & Exit option. Exit without saving leaves the change in memory only, so it is lost on restart.
 
 **Fix**
 ```python
@@ -551,7 +613,7 @@ SFTP_PORT = 2223
 FTP_PORT = 2122
 ```
 
-Use unique ports that do not conflict with other services on the same machine.
+Use unique ports that do not conflict with other services on the same machine. If a port is already stored in `server_config.json`, changing the constant alone won't work; use the admin menu (Server Settings → Port or Protocol Servers) or edit the JSON.
 
 ---
 
