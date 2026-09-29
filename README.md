@@ -60,6 +60,7 @@ Platform-specific deployment and production guides are available in the **[`docs
 | 🪟 **Apache/WSGI** | [DEPLOY_APACHE.md](./docs/DEPLOY_APACHE.md) | Production Apache deployment with mod_wsgi |
 | 🔗 **Cloudflare Tunnel** | [SETUP_TUNNEL_ADVANCED.md](./docs/SETUP_TUNNEL_ADVANCED.md) | Advanced tunnel setup with custom domains |
 | 🔄 **rclone** | [RCLONE_DEPLOYMENT.md](./docs/RCLONE_DEPLOYMENT.md) | Mount and sync via rclone |
+| ⚙️ **Configuration** | [CONFIG_PY_REFERENCE.md](./docs/CONFIG_PY_REFERENCE.md) | Every `config.py` setting, defaults, the admin menu, and `server_config.json` |
 
 ---
 
@@ -144,6 +145,7 @@ python setup_storage.py
 ```bash
 python config.py
 ```
+Every setting is explained in the [Configuration Reference](./docs/CONFIG_PY_REFERENCE.md).
 
 **Update security.txt and robots.txt(Important for tunneling else optional up to you)**
 ```
@@ -536,20 +538,24 @@ This tool helps:
 ## 🌐 Network & Server Configuration
 
 ### Default Settings
+
+These are the built-in defaults in `config.py`. Values saved in `server_config.json` (written by `python config.py`) override them. See the [Configuration Reference](./docs/CONFIG_PY_REFERENCE.md) for every setting.
+
 - **Port**: 5000 (configurable in `config.py`)
 - **Host**: 0.0.0.0 (listens on all interfaces)
 - **Chunk Size**: 10MB (`10485760` bytes, for large file uploads)
 - **Chunked Uploads**: Enabled
 - **Max Content Length**: 16GB (`17179869184` bytes)
-- **Session Lifetime**: 1 hour (`3600` seconds)
-- **HLS Minimum Size**: 25MB (`26214400` bytes)
-- **HLS Forced Formats**: 3gp, avi, flv, m2ts, mkv, mov, mpeg, mpg, mts, ogv, ts, wmv
-- **Compression Thresold**: 3.0 MB (`3145728` bytes)
+- **Session Lifetime**: 365 days (`31536000` seconds)
+- **HLS Minimum Size**: 50MB (`52428800` bytes)
+- **HLS Forced Formats**: 3gp, avi, flv, m2ts, mkv, mpeg, mpg, mts, ogv, wmv
+- **Image Compression Threshold**: 1.0 MB (`1048576` bytes)
 - **Lossy WebP Quality**: 50
-- **WebDAV HTTP Port**: 8080
-- **WebDAV HTTPS Port**: 8443
+- **WebDAV HTTPS Port**: 8443 (enabled by default)
+- **WebDAV HTTP Port**: 8080 (off by default; only used if HTTPS is disabled or its certificate can't be prepared)
 - **SFTP Port**: 2222
-- **FTP Port**: 2121
+- **FTP Port**: 2121 (FTPS enabled by default)
+- **SMB Port**: 445, fallback 8445 (off by default; run `python smb_setup.py` first)
 
 ### Firewall Configuration (If needed)
 

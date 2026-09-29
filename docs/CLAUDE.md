@@ -2949,6 +2949,7 @@ Works at the database level only — it's a separate process, same constraint `m
 - Re-checked every top-level `config.py` name against `CONFIG_PY_REFERENCE.md` and this file. No code changed.
 - Added missing settings: `VERSION_WORKER_COUNT` (1), `VERSION_MAX_CONCURRENT_SNAPSHOTS` (2) and the per-platform `PRESET_PATHS`.
 - Corrected: `server_config.json` overrides in-code constants on import; the file is anchored next to `config.py` (not the CWD); `ALLOWED_EXTENSIONS` and the directory settings are not saved to it; WebDAV HTTP/HTTPS exclusivity wording; Termux and unknown-platform default paths (`~/uploads`, `./uploads`); which Version Engine settings the admin menu can and cannot change.
+- `README.md` "Default Settings" corrected to match `config.py` (session lifetime 365 days not 1 hour, HLS minimum 50 MB not 25 MB, image compression threshold 1 MB not 3 MB, force-HLS list had `mov`/`ts` that `config.py` doesn't; added SMB and the WebDAV HTTP/HTTPS defaults) and now links `docs/CONFIG_PY_REFERENCE.md` (the reference's relative links assume it lives in `docs/`).
 - Code observations left untouched: `configure_server_settings()` prompts `(0-13)` but its invalid-option message says `0-12`, and Save & Exit is option 10 though listed last; the protocol comment in `config.py` still says "main Flask server (5000)". All cosmetic.
 
 ### Version 4.34 — 2026-09-29 VT Rubber-Band Root-Cause Fix (supersedes 4.33 and the CSP theory in 4.32)
