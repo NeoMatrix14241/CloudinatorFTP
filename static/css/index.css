@@ -6042,6 +6042,50 @@ td .fa-file {
     max-height: none !important;
 }
 
+/* ── VT (virtual table) spacer rows ──────────────────────────────────────
+   #vtTopSpacer / #vtBottomSpacer stand in for every row that is not
+   mounted, so their combined height is what gives #tableScrollWrapper its
+   real scrollable length.
+
+   The rule directly above pins EVERY tbody <tr> to height:auto !important,
+   and !important beats every non-important way of setting a row height
+   (inline style, CSSOM style, an inserted rule) — so a height on the
+   spacer <tr> can never take effect. That is why the spacers stayed ~13-21px
+   tall and the list scrolled/rubber-banded as if it were only the ~35
+   mounted rows long. The height is therefore carried by the spacer's <td>,
+   which nothing above touches; index.js writes it as a CSSOM property with
+   priority 'important' (CSSOM writes are not governed by CSP style-src-attr).
+
+   The zeroing below used to be an inline style="padding:0;border:0;
+   line-height:0;" attribute in index.js markup; CSP style-src-attr blocked it
+   (its hash was never in app.py's allow-list), which left default cell
+   padding on every spacer. Do not put it back as an attribute. */
+#filesTable tbody tr.vt-spacer-row {
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    pointer-events: none;
+}
+
+#filesTable tbody tr.vt-spacer-row > td.vt-spacer-cell {
+    padding: 0 !important;
+    margin: 0 !important;
+    border: 0 !important;
+    line-height: 0 !important;
+    font-size: 0 !important;
+    overflow: hidden !important;
+    height: 0;            /* real value is set from index.js */
+}
+
+/* VT rows are estimated until first laid out (wrapped filenames make heights
+   non-uniform). Native scroll anchoring keeps the on-screen rows still when
+   estimates are corrected above the viewport, without cancelling wheel/touch
+   smooth-scroll the way JS scrollTop writes did. Explicit so nobody "fixes"
+   it to `none` — that reintroduces the rubber band. */
+#tableScrollWrapper {
+    overflow-anchor: auto;
+}
+
 /* Action container: always one horizontal line */
 .file-table .actions,
 #filesTable .actions,

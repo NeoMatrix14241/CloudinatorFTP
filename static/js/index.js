@@ -1624,15 +1624,41 @@ function _parseDisplayDate(str) {
 }
 
 const VT = (() => {
-    const CHUNK = 80;     // rows to render per batch
+    // ── row-windowing tunables ──────────────────────────────────
+    const RENDER_BUFFER = 1;        // rows to keep mounted above/below the viewport
+    const DEFAULT_ROW_HEIGHT = 5;   // seed estimate; replaced by a real measurement ASAP
+    const RESIZE_DEBOUNCE_MS = 1;
+
     let _allFiles = []; // raw server data for current folder
     let _curPath = '';
     let _filter = ''; // active search term
     let _sortCol = null;
     let _sortDir = 'asc';
-    let _rendered = 0;
-    let _observer = null;
     let _searchResultsMode = false; // true when deep-search is active
+
+    // display cache + windowing state (state lives here, never in the DOM)
+    let _display = [];               // cached _getDisplayFiles() result for the current render
+    let _offsets = null;             // Float64Array, length display.length+1 — cumulative top px per row
+    let _rowHeight = DEFAULT_ROW_HEIGHT;   // running estimate for rows never measured
+    let _heightCache = new Map();    // item-path -> last measured px height (survives sort/filter/refresh)
+    let _winStart = 0, _winEnd = 0;  // [start, end) display-indices currently mounted
+    let _mounted = new Map();        // display-index -> <tr> currently in the DOM
+    let _renderGen = 0;              // bumped on every full rebuild; guards stale async work
+
+    let _topSpacer = null, _bottomSpacer = null;
+    // The spacer HEIGHT lives on these <td>s, never on the <tr>s: index.css's
+    // "AUTHORITATIVE TABLE ROW OVERRIDES" pins every `#filesTable tbody tr` to
+    // `height:auto !important`, and !important beats every non-important way
+    // of setting a row height (inline style, CSSOM style, an inserted rule).
+    // A cell's height is not covered by that rule. Written via the CSSOM
+    // (`style.setProperty`), which CSP style-src-attr does not govern.
+    let _topCell = null, _bottomCell = null;
+    // px from the top of the wrapper's scrollable content to the first list
+    // row (sticky thead + sticky ".." row sit above it). _offsets is relative
+    // to the list, wrapper.scrollTop is relative to the whole content.
+    let _listBase = 0;
+    let _scrollHandler = null, _resizeHandler = null;
+    let _scrollRafPending = false, _resizeTimer = null;
 
     const _dirInfoCache = new Map();
     // ── public API ────────────────────────────────────────────
@@ -1640,7 +1666,6 @@ const VT = (() => {
         _allFiles = Array.isArray(files) ? files : [];
         _curPath = path ? path.replace(/\\/g, '/').replace(/\/$/, '') : '';
         _filter = '';
-        _rendered = 0;
         _searchResultsMode = false;
         // preserve existing sort state
         _sortCol = currentSort.column;
@@ -1669,13 +1694,11 @@ const VT = (() => {
         _sortCol = currentSort.column;
         _sortDir = currentSort.direction;
         updateSortHeaders(_sortCol, _sortDir);
-        _rendered = 0;
         _renderAll();
     }
 
     function applyFilter(term) {
         _filter = (term || '').toLowerCase().trim();
-        _rendered = 0;
         _searchResultsMode = false;
         _renderAll();
         const clearBtn = document.getElementById('clearSearch');
@@ -1684,7 +1707,27 @@ const VT = (() => {
 
     function markSearchResults() {
         _searchResultsMode = true;
-        _disconnectObserver();
+        _teardownScrollHandler();
+    }
+
+    // Scroll the windowed table so `path` (a full item path, same shape as
+    // createFileTableRow's data-path) is brought into view. Used after
+    // operations like rename/upload where the item may be off-screen.
+    // Returns false if the item isn't in the current display list (e.g. it
+    // was filtered out, or we're in deep-search mode).
+    function scrollToItem(path) {
+        if (_searchResultsMode || !_display.length || !_offsets) return false;
+        const idx = _display.findIndex(item => {
+            const p = _curPath ? `${_curPath}/${item.name}` : item.name;
+            return p === path;
+        });
+        if (idx === -1) return false;
+        const wrapper = document.getElementById('tableScrollWrapper');
+        if (!wrapper) return false;
+        const target = Math.max(0, _listBase + _offsets[idx] - Math.floor((wrapper.clientHeight || 0) / 3));
+        _renderWindow(true, target);   // mount + size spacers first, so the height exists...
+        wrapper.scrollTop = target;    // ...before we scroll into it
+        return true;
     }
 
     function getAll() { return _allFiles; }
@@ -1764,13 +1807,59 @@ const VT = (() => {
 
     function _getTbody() { return document.querySelector('#filesTable tbody'); }
 
+    function _itemPath(item) {
+        return _curPath ? `${_curPath}/${item.name}` : item.name;
+    }
+
+    // Spacer row. Deliberately NO style="..." attribute: a static inline style
+    // in innerHTML markup is dropped by CSP style-src-attr unless its exact
+    // SHA-256 is allow-listed in app.py (the old `padding:0;border:0;
+    // line-height:0;` here was not, which left each spacer cell with default
+    // padding). The zeroing now lives in index.css (.vt-spacer-cell).
+    function _makeSpacerRow(id) {
+        const tr = document.createElement('tr');
+        tr.id = id;
+        tr.className = 'vt-spacer-row';
+        tr.setAttribute('aria-hidden', 'true');
+        const td = document.createElement('td');
+        td.colSpan = 6;
+        td.className = 'vt-spacer-cell';
+        tr.appendChild(td);
+        return tr;
+    }
+
+    // Where the list starts inside the wrapper's scrollable content. Read in
+    // one layout state (rect first, scrollTop last) so it is consistent even
+    // if that layout pass clamps scrollTop.
+    function _measureListBase(wrapper) {
+        if (!wrapper || !_topSpacer) return 0;
+        const spacerTop = _topSpacer.getBoundingClientRect().top;
+        const wrapTop = wrapper.getBoundingClientRect().top;
+        return spacerTop - wrapTop + wrapper.scrollTop;
+    }
+
     function _renderAll() {
         const tbody = _getTbody();
         if (!tbody) return;
-        _disconnectObserver();
+        // Capture scroll position BEFORE clearing rows. tbody.innerHTML = ''
+        // below collapses the table's height to ~0, which collapses the
+        // wrapper's scrollHeight too — the browser clamps wrapper.scrollTop
+        // to 0 synchronously as a side effect of that, regardless of what
+        // this function does afterward. That's the real "rubber band"
+        // scroll-to-top bug: every _renderAll() (refreshFileTable/SSE/
+        // polling updates included, not just real navigation) was silently
+        // losing the scroll position this way, even though the code never
+        // explicitly sets scrollTop itself. Restored below, once the
+        // spacers give the wrapper its real height back.
+        const wrapper = document.getElementById('tableScrollWrapper');
+        const _preservedScrollTop = wrapper ? wrapper.scrollTop : 0;
+        _renderGen++;
+        _teardownScrollHandler();
+        _mounted = new Map();
+        _winStart = 0; _winEnd = 0;
         tbody.innerHTML = '';
 
-        // parent-directory row
+        // parent-directory row (sticky; lives outside the windowed range)
         if (_curPath) {
             const parentPath = _curPath.split('/').slice(0, -1).join('/');
             const pRow = document.createElement('tr');
@@ -1791,113 +1880,268 @@ const VT = (() => {
             _updateTheadHeightVar();
         }
 
-        const display = _getDisplayFiles();
+        _display = _getDisplayFiles();
 
-        if (display.length === 0) {
+        if (_display.length === 0) {
             tbody.appendChild(createEmptyFolderRow());
+            _offsets = null;
             updateVisibleCount(0);
             reinitializeTableControls(0);
+            storeOriginalTableOrder();
             return;
         }
 
-        // render first chunk
-        const end = Math.min(CHUNK, display.length);
-        for (let i = 0; i < end; i++) {
-            tbody.appendChild(createFileTableRow(display[i], _curPath));
+        _topSpacer = _makeSpacerRow('vtTopSpacer');
+        _bottomSpacer = _makeSpacerRow('vtBottomSpacer');
+        _topCell = _topSpacer.firstElementChild;
+        _bottomCell = _bottomSpacer.firstElementChild;
+        tbody.appendChild(_topSpacer);
+        tbody.appendChild(_bottomSpacer);
+
+        _rebuildOffsets();
+        _listBase = _measureListBase(wrapper);
+
+        // Mount the window for where the user WAS (not for the clamped
+        // scrollTop the innerHTML clear left behind), which also sizes the
+        // spacers — and only THEN restore scrollTop. Restoring before the
+        // spacers have their height (as 4.32 did) is clamped straight back.
+        // Callers that want the top of the list (navigateToFolder) set
+        // scrollTop = 0 themselves afterwards, which simply overrides this.
+        _renderWindow(true, _preservedScrollTop);
+        if (wrapper && _preservedScrollTop > 0) {
+            wrapper.scrollTop = _preservedScrollTop;
         }
-        _rendered = end;
 
-        // highlight if filtering
-        if (_filter) {
-            _highlightVisible(_filter);
-        }
-
-        updateVisibleCount(display.length);
-        reinitializeTableControls(display.length);
-
-        // sentinel for infinite scroll
-        if (_rendered < display.length) {
-            _attachSentinel(display);
-        }
-
-        loadDirInfoCells();
+        updateVisibleCount(_display.length);
+        reinitializeTableControls(_display.length);
         storeOriginalTableOrder();
+
+        _attachScrollHandler();
     }
 
-    function _renderNextChunk(display) {
-        if (_rendered >= display.length) {
-            _disconnectObserver();
-            _removeSentinel();
-            return;
+    // Binary search: greatest index i such that _offsets[i] <= offset.
+    function _findIndexAtOffset(offset) {
+        let lo = 0, hi = _display.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (_offsets[mid] <= offset) lo = mid + 1; else hi = mid;
         }
-        const tbody = _getTbody();
-        if (!tbody) return;
-
-        // remove old sentinel
-        _removeSentinel();
-
-        const end = Math.min(_rendered + CHUNK, display.length);
-        for (let i = _rendered; i < end; i++) {
-            tbody.appendChild(createFileTableRow(display[i], _curPath));
-        }
-        _rendered = end;
-
-        if (_filter) {
-            _highlightVisible(_filter);
-        }
-
-        loadDirInfoCells();
-
-        if (_rendered < display.length) {
-            _attachSentinel(display);
-        }
+        return Math.max(0, lo - 1);
     }
 
-    function _attachSentinel(display) {
+    function _rebuildOffsets() {
+        const n = _display.length;
+        const offsets = new Float64Array(n + 1);
+        let acc = 0;
+        for (let i = 0; i < n; i++) {
+            offsets[i] = acc;
+            const cached = _heightCache.get(_itemPath(_display[i]));
+            acc += (cached && cached > 0) ? cached : _rowHeight;
+        }
+        offsets[n] = acc;
+        _offsets = offsets;
+    }
+
+    function _positionSpacers() {
+        if (!_offsets || !_topCell || !_bottomCell) return;
+        const total = _display.length;
+        const topH = _offsets[_winStart] || 0;
+        const bottomH = Math.max(0, _offsets[total] - _offsets[_winEnd]);
+        _topCell.style.setProperty('height', topH + 'px', 'important');
+        _bottomCell.style.setProperty('height', bottomH + 'px', 'important');
+    }
+
+    // Mount exactly [start, end), touching only what changed. Two phases so
+    // layout is never forced against a half-edited table:
+    //   1. create the missing rows — createFileTableRow() reads layout
+    //      (applyColumnWidths -> wrapper.clientWidth); the DOM is untouched
+    //      here, so that read is against a complete table.
+    //   2. write only — drop off-window rows, then walk the wanted range in
+    //      order and insert only nodes that are not already in place. A one-row
+    //      scroll step is one insert + one remove, not a re-insert of the whole
+    //      window (the old fragment approach detached every mounted row on
+    //      every step, so any layout read mid-way saw a collapsed table).
+    // Returns the newly created rows so callers can scope highlighting /
+    // dir-info loading / measurement to just those.
+    function _mountRange(start, end) {
         const tbody = _getTbody();
-        if (!tbody) return;
+        if (!tbody || !_topSpacer || !_bottomSpacer) return [];
 
-        // loading indicator row
-        const loadRow = document.createElement('tr');
-        loadRow.id = 'vtSentinelRow';
-        loadRow.className = 'vt-loading-row';
-        loadRow.innerHTML = `<td colspan="6">
-            <span id="vtSentinel" style="display:inline-block;height:1px;width:100%;"></span>
-            <i class="fas fa-circle-notch fa-spin" style="margin-right:6px;opacity:0.6;font-size:12px;"></i>
-            <span style="font-size:12px;opacity:0.7;">Loading ${Math.min(CHUNK, display.length - _rendered)} more of ${display.length - _rendered} remaining…</span>
-        </td>`;
-        tbody.appendChild(loadRow);
+        const created = [];
+        const wanted = new Array(end - start);
+        for (let i = start; i < end; i++) {
+            let el = _mounted.get(i);
+            if (!el) {
+                el = createFileTableRow(_display[i], _curPath);
+                created.push(el);
+            }
+            wanted[i - start] = el;
+        }
 
-        const sentinel = document.getElementById('vtSentinel');
-        if (!sentinel) return;
+        for (const [idx, el] of _mounted) {
+            if ((idx < start || idx >= end) && el.parentNode) el.remove();
+        }
 
+        const keep = new Map();
+        let ref = _topSpacer.nextSibling;
+        for (let i = start; i < end; i++) {
+            const el = wanted[i - start];
+            if (el === ref) ref = ref.nextSibling;   // already in place
+            else tbody.insertBefore(el, ref);        // new, or moved
+            keep.set(i, el);
+        }
+        _mounted = keep;
+        return created;
+    }
+
+    // No manual scroll compensation on purpose. Rows are only estimated until
+    // first laid out (long filenames wrap, so heights are not uniform), and a
+    // size change above the viewport would shift what is on screen. The
+    // browser's native scroll anchoring (`overflow-anchor:auto` on the wrapper,
+    // see index.css) corrects that on the compositor side without cancelling an
+    // in-flight wheel/touch smooth-scroll. An earlier version compensated with
+    // `wrapper.scrollTop += delta`; measured in real Chromium, those writes
+    // collided with the smooth-scroll animation and produced visible
+    // reversals (a lost 14px, or a whole 120px wheel step). Don't reintroduce.
+
+    // `scrollTopOverride`: compute the window for a scroll position that is
+    // not (yet) the wrapper's real one — used by _renderAll / scrollToItem /
+    // resize, where the real scrollTop is about to be set after the spacers
+    // are sized.
+    function _renderWindow(force, scrollTopOverride) {
         const wrapper = document.getElementById('tableScrollWrapper');
-        _observer = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    _disconnectObserver();
-                    _renderNextChunk(display);
-                }
+        if (!wrapper || !_offsets || !_display.length) return;
+
+        const scrollTop = (scrollTopOverride == null) ? wrapper.scrollTop : scrollTopOverride;
+        const viewportH = wrapper.clientHeight || 600;
+        const rel = scrollTop - _listBase;
+        const total = _display.length;
+
+        const start = Math.max(0, _findIndexAtOffset(rel) - RENDER_BUFFER);
+        const end = Math.min(total, _findIndexAtOffset(rel + viewportH) + 1 + RENDER_BUFFER);
+
+        if (!force && start === _winStart && end === _winEnd) return;
+
+        const gen = _renderGen;
+        let newRows = [];
+        const apply = () => {
+            newRows = _mountRange(start, end);
+            _winStart = start; _winEnd = end;
+            _positionSpacers();
+        };
+        apply();
+
+        if (_filter && newRows.length) _highlightVisible(_filter, newRows);
+        if (newRows.length) loadDirInfoCells(newRows);
+        if (newRows.length) _scheduleMeasure(newRows, gen);
+    }
+
+    // Measures freshly-mounted rows in the next animation frame (a single
+    // batched read, after all writes for this pass are done — no
+    // read/write layout thrash) and folds anything that differs from the
+    // estimate into the per-path height cache. Filenames can wrap onto
+    // multiple lines (see index.css .name-cell white-space:normal rules for
+    // both desktop and mobile), so row height is NOT assumed uniform —
+    // this cache is the fallback for that variance. Offsets are only rebuilt
+    // (O(n)) when a measurement actually disagrees with what the offsets
+    // currently assume, so a folder of same-height rows costs one measurement
+    // pass, ever.
+    function _scheduleMeasure(rows, gen) {
+        requestAnimationFrame(() => {
+            if (gen !== _renderGen) return; // a full re-render already replaced _display/_offsets
+            let changed = false;
+            rows.forEach(el => {
+                if (!el.isConnected) return;
+                const h = el.getBoundingClientRect().height;
+                if (!h) return;
+                if (_rowHeight === DEFAULT_ROW_HEIGHT) { _rowHeight = h; changed = true; } // seed from the very first real row
+                const path = el.dataset.path;
+                const prev = _heightCache.get(path);
+                const assumed = (prev !== undefined && prev > 0) ? prev : _rowHeight;
+                if (prev === undefined || Math.abs(prev - h) > 1) _heightCache.set(path, h);
+                if (Math.abs(assumed - h) > 1) changed = true;
             });
-        }, { root: wrapper, threshold: 0.1 });
-        _observer.observe(sentinel);
-    }
-
-    function _removeSentinel() {
-        const row = document.getElementById('vtSentinelRow');
-        if (row) row.remove();
-    }
-
-    function _disconnectObserver() {
-        if (_observer) { _observer.disconnect(); _observer = null; }
-    }
-
-    function _highlightVisible(term) {
-        const tbody = _getTbody();
-        if (!tbody) return;
-        tbody.querySelectorAll('tr.file-row').forEach(row => {
-            highlightSearchTerm(row, term);
+            if (!changed) return;
+            const wrapper = document.getElementById('tableScrollWrapper');
+            if (!wrapper) return;
+            _rebuildOffsets();
+            _positionSpacers();
+            _renderWindow(false);
         });
+    }
+
+    // A mounted row's content changed size after it was measured (e.g. a
+    // folder's size cell going from a one-line spinner to "N files, N
+    // folders<br>size"). Fold the new height into the cache.
+    function rowResized(tr) {
+        if (tr && tr.isConnected) _scheduleMeasure([tr], _renderGen);
+    }
+
+    function _remeasureMounted() {
+        if (_mounted.size) _scheduleMeasure(Array.from(_mounted.values()), _renderGen);
+    }
+
+    function _attachScrollHandler() {
+        const wrapper = document.getElementById('tableScrollWrapper');
+        if (!wrapper) return;
+
+        _scrollHandler = () => {
+            if (_scrollRafPending) return;
+            _scrollRafPending = true;
+            requestAnimationFrame(() => {
+                _scrollRafPending = false;
+                _renderWindow(false);
+            });
+        };
+        wrapper.addEventListener('scroll', _scrollHandler, { passive: true });
+
+        // One global resize listener for VT's lifetime; column width and
+        // text wrapping both depend on viewport width, so a resize can
+        // change every row's real height — re-measure rather than trust
+        // the cache. Debounced (not rAF-throttled) since layout on resize
+        // is heavier than a scroll tick.
+        if (!_resizeHandler) {
+            _resizeHandler = () => {
+                clearTimeout(_resizeTimer);
+                _resizeTimer = setTimeout(_onResize, RESIZE_DEBOUNCE_MS);
+            };
+            window.addEventListener('resize', _resizeHandler);
+        }
+    }
+
+    // Column widths changed, so every wrap point (and row height) moved.
+    // Remember WHICH row is at the top of the viewport and how far into it,
+    // not a pixel offset — after the cache is dropped the pixel offsets are
+    // estimates again, and reusing the old scrollTop against them would land
+    // on a different part of the list.
+    function _onResize() {
+        _updateTheadHeightVar();
+        if (!_display.length || !_offsets) return;
+        const wrapper = document.getElementById('tableScrollWrapper');
+        if (!wrapper) return;
+        const rel = wrapper.scrollTop - _listBase;
+        const idx = _findIndexAtOffset(rel);
+        const intra = rel - _offsets[idx];
+        _heightCache.clear();          // _rowHeight (first measured row) stays as the estimate
+        _rebuildOffsets();
+        _listBase = _measureListBase(wrapper);   // thead height can change with width
+        const st = Math.max(0, _listBase + _offsets[idx] + intra);
+        _renderWindow(true, st);
+        wrapper.scrollTop = st;
+        _remeasureMounted();
+    }
+
+    function _teardownScrollHandler() {
+        const wrapper = document.getElementById('tableScrollWrapper');
+        if (wrapper && _scrollHandler) wrapper.removeEventListener('scroll', _scrollHandler);
+        _scrollHandler = null;
+        // _resizeHandler is intentionally left attached — it's a no-op
+        // when _display is empty and is reused across every re-render.
+    }
+
+    function _highlightVisible(term, rows) {
+        const targets = rows || Array.from(_mounted.values());
+        targets.forEach(row => highlightSearchTerm(row, term));
     }
 
     function _updateTheadHeightVar() {
@@ -1912,7 +2156,10 @@ const VT = (() => {
         });
     }
 
-    return { init, applySort, applyFilter, getAll, getPath, markSearchResults, patchFolderSize, cacheDirInfo, getCachedDirInfo, invalidateDirCache, clearDirCache };
+    return {
+        init, applySort, applyFilter, getAll, getPath, markSearchResults, scrollToItem, rowResized,
+        patchFolderSize, cacheDirInfo, getCachedDirInfo, invalidateDirCache, clearDirCache
+    };
 })();
 
 function updateFileTable(files, path) {
@@ -2078,9 +2325,14 @@ function createFileTableRow(item, currentPath) {
     return row;
 }
 
-// Lazy-load folder size and item count for all visible dir-info-cell spans.
-// Called after every table render — initial load, navigation, and SSE refresh.
-function loadDirInfoCells() {
+// Lazy-load folder size and item count for dir-info-cell spans.
+// `rows`, when given, scopes this to just the rows VT rendered in the most
+// recent pass — with row windowing, most of the folder is never in the DOM,
+// so a document-wide querySelectorAll would silently do nothing for
+// off-screen rows anyway (and would still cost a full-DOM scan every batch).
+// Omitting `rows` falls back to the old whole-document scan, kept for any
+// future non-VT caller.
+function loadDirInfoCells(rows) {
     function formatSize(bytes) {
         if (!bytes || bytes <= 0) return null;
         if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
@@ -2089,7 +2341,9 @@ function loadDirInfoCells() {
         return bytes + ' bytes';
     }
 
-    const cells = document.querySelectorAll('.dir-info-cell');
+    const cells = rows
+        ? rows.flatMap(row => Array.from(row.querySelectorAll('.dir-info-cell')))
+        : Array.from(document.querySelectorAll('.dir-info-cell'));
     if (!cells.length) return;
 
     cells.forEach(function (cell) {
@@ -2111,16 +2365,26 @@ function loadDirInfoCells() {
         fetch('/api/dir_info/' + dirPath)
             .then(function (r) { return r.json(); })
             .then(function (data) {
-                if (data.error) { cell.textContent = '--'; return; }
+                if (data.error) { if (cell.isConnected) cell.textContent = '--'; return; }
+                // Always cache, even if the row has since scrolled out of
+                // the rendered window — the next time this folder is
+                // rendered (re-scroll, re-sort) it's an instant cache hit.
+                VT.cacheDirInfo(dirPath, data);
+                // But don't write into a cell whose row is no longer in the
+                // DOM — it was recycled/removed when the row scrolled out,
+                // and writing to it would be a wasted, stale DOM mutation.
+                if (!cell.isConnected) return;
                 var html = data.file_count + ' files, ' + data.dir_count + ' folders';
                 var sizeStr = formatSize(data.total_size);
                 if (sizeStr) {
                     html += '<br><small style="color:white;">' + sizeStr + '</small>';
                 }
                 cell.innerHTML = html;
-                VT.cacheDirInfo(dirPath, data);
+                // The cell just grew (spinner -> two lines); tell VT so its
+                // cached row height / offsets are corrected.
+                VT.rowResized(cell.closest('tr'));
             })
-            .catch(function () { cell.textContent = '--'; });
+            .catch(function () { if (cell.isConnected) cell.textContent = '--'; });
     });
 }
 
@@ -6960,8 +7224,15 @@ async function performRename(oldPath, newName) {
             selectedItems.clear();
             isOperationInProgress = false;
 
-            // Trigger navigation (file monitor will update later)
-            navigateToFolder(currentPath || '');
+            // Trigger navigation (file monitor will update later), then
+            // scroll the renamed item into view — it may have moved well
+            // outside the current scroll window (e.g. a rename that changes
+            // sort order under a "sort by name" view).
+            const oldDir = oldPath.includes('/') ? oldPath.split('/').slice(0, -1).join('/') : '';
+            const renamedPath = oldDir ? `${oldDir}/${newName}` : newName;
+            navigateToFolder(currentPath || '').then(() => {
+                VT.scrollToItem(renamedPath);
+            });
 
         } else {
             showNotification('Rename Failed', result.error || 'Could not rename item', 'error');
@@ -7323,9 +7594,17 @@ function bulkDownload() {
     if (selectedPaths.length === 1) {
         const singlePath = selectedPaths[0];
 
-        // Check if it's a file by looking at the table row to determine if it's a directory
-        const pathRow = document.querySelector(`tr[data-path="${singlePath}"]`);
-        const isDirectory = pathRow && pathRow.querySelector('.folder-icon, .fa-folder');
+        // Check if it's a file or a folder. Reads VT's data array rather than
+        // the DOM: with row windowing, the row for `singlePath` frequently
+        // isn't rendered at all (scrolled out), so a DOM lookup here would
+        // silently and incorrectly treat folders as files. Falls back to a
+        // DOM check only for paths VT doesn't know about (e.g. a deep-search
+        // result), where the row, if selected, is guaranteed to be rendered.
+        const vtCurPath = VT.getPath();
+        const vtItem = VT.getAll().find(f => (vtCurPath ? `${vtCurPath}/${f.name}` : f.name) === singlePath);
+        const isDirectory = vtItem
+            ? !!vtItem.is_dir
+            : !!document.querySelector(`tr[data-path="${singlePath}"] .folder-icon, tr[data-path="${singlePath}"] .fa-folder`);
 
         if (!isDirectory) {
             console.log('📄 Single file selected, doing direct download:', singlePath);
