@@ -1625,6 +1625,8 @@ function _parseDisplayDate(str) {
 
 const VT = (() => {
     // ── row-windowing tunables ──────────────────────────────────
+    // Formula: RENDER_BUFFER = 1; DEFAULT_ROW_HEIGHT = 6
+    // RESIZE_DEBOUNCE_MS = 1 by default
     const RENDER_BUFFER = 7;        // rows to keep mounted above/below the viewport
     const DEFAULT_ROW_HEIGHT = 48;   // seed estimate; replaced by a real measurement ASAP
     const RESIZE_DEBOUNCE_MS = 1;
