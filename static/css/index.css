@@ -514,6 +514,20 @@ body::after {
     font-size: 13px;
 }
 
+/* Deep-search "Loading more results…" row (index.js _dsMakeLoadingRow). These
+   used to be inline style="" attributes on the markup; classes keep them
+   CSP-safe (style-src-attr). */
+.ds-loading-row .ds-loading-icon {
+    margin-right: 6px;
+    opacity: 0.6;
+    font-size: 12px;
+}
+
+.ds-loading-row .ds-sentinel-label {
+    font-size: 12px;
+    opacity: 0.7;
+}
+
 /* ── Sticky parent-directory row ─────────────────────────────────────
    Sits just below the sticky thead. `top` is written by JS via
    --table-thead-h on .table-scroll-wrapper after measuring the thead.
@@ -3942,9 +3956,38 @@ td .fa-file {
 .search-highlight {
     background: #f39c12;
     color: #2c3e50;
-    padding: 2px 4px;
-    border-radius: 3px;
-    font-weight: bold;
+    /* No horizontal padding and no bold: both change the glyph advance, so a
+       match in the middle of a word ("Soft[are] Services") rendered with a
+       visible gap on each side. Keep the highlight exactly the width of the
+       matched characters. */
+    padding: 0;
+    margin: 0;
+    border-radius: 2px;
+    font-weight: inherit;
+    display: inline;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+}
+
+/* The file table has many `.file-name span {display:block; width:100%}` rules
+   (desktop wrap + mobile layout). They also matched the highlight span, so a
+   folder like "QB Data 2024" showed a full-width yellow bar with the rest of
+   the name pushed to the next line. The #filesTable id makes this win over
+   all of them; do not remove the id or these !importants. */
+#filesTable td .file-name span.search-highlight,
+#filesTable td .file-name a span.search-highlight {
+    display: inline !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: inherit !important;
+    line-height: inherit !important;
+    font-weight: inherit !important;
+    color: #2c3e50 !important;
 }
 
 /* Deep search results styling */
@@ -6067,14 +6110,15 @@ td .fa-file {
     pointer-events: none;
 }
 
-#filesTable tbody tr.vt-spacer-row > td.vt-spacer-cell {
+#filesTable tbody tr.vt-spacer-row>td.vt-spacer-cell {
     padding: 0 !important;
     margin: 0 !important;
     border: 0 !important;
     line-height: 0 !important;
     font-size: 0 !important;
     overflow: hidden !important;
-    height: 0;            /* real value is set from index.js */
+    height: 0;
+    /* real value is set from index.js */
 }
 
 /* VT rows are estimated until first laid out (wrapped filenames make heights

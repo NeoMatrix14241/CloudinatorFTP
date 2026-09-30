@@ -54,6 +54,22 @@ _use_fts: Optional[bool] = (
     None  # set at bootstrap; True = trigram FTS5, False = LIKE table
 )
 
+# The FTS5 trigram tokenizer indexes 3-character grams, so MATCH can never
+# return a row for a query shorter than 3 characters (it silently yields zero
+# rows, not an error).  Shorter queries are answered from files_meta with a
+# parameterised LIKE instead — see _db_search().
+_FTS_MIN_QUERY_LEN = 3
+
+
+def _like_contains(query_lower: str) -> str:
+    """
+    Build a `%...%` LIKE pattern for a lower-cased query, escaping the LIKE
+    wildcards (%, _) and the escape character itself with backslash.
+    Every LIKE that uses this MUST carry  ESCAPE '\\'.
+    """
+    esc = query_lower.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{esc}%"
+
 
 # ------------------------------------------------------------------
 # Connection + lazy bootstrap
@@ -369,8 +385,8 @@ class SearchIndexManager:
             clauses: list = []
             params: list = []
             if query_lower:
-                clauses.append("name_lower LIKE ?")
-                params.append(f"%{query_lower}%")
+                clauses.append("name_lower LIKE ? ESCAPE '\\'")
+                params.append(_like_contains(query_lower))
             if ext_list:
                 ext_sql = " OR ".join("ext_lower = ?" for _ in ext_list)
                 clauses.append(f"({ext_sql})")
@@ -463,13 +479,23 @@ class SearchIndexManager:
         C) Ext only     -> files_meta ext_lower IN (...) — exact indexed column, always correct
 
         Plain-table mode: files_meta handles everything via LIKE + ext_lower.
+
+        Queries shorter than _FTS_MIN_QUERY_LEN (3) characters can't match a
+        trigram FTS5 index, so they take the same files_meta LIKE path as
+        plain-table mode (parameterised, wildcard-escaped, LIMIT/OFFSET in SQL).
         """
         query_lower = query.lower()
         ext_list = [e.lstrip(".").lower() for e in (ext_filter or []) if e]
         fetch = limit + 1  # fetch limit+1 to detect has_more
 
+        # FTS5 trigram only when it can actually match (>= 3 chars) or when
+        # there is no name query at all (ext-only, Strategy C).
+        use_fts_path = bool(_use_fts) and (
+            not query_lower or len(query_lower) >= _FTS_MIN_QUERY_LEN
+        )
+
         with _connect() as conn:
-            if _use_fts:
+            if use_fts_path:
                 if query_lower and ext_list:
                     # Strategy A: MATCH + ext exact match via files_meta JOIN
                     safe = '"' + query_lower.replace('"', '""') + '"'
@@ -508,8 +534,8 @@ class SearchIndexManager:
                 clauses: list = []
                 params: list = []
                 if query_lower:
-                    clauses.append("name_lower LIKE ?")
-                    params.append(f"%{query_lower}%")
+                    clauses.append("name_lower LIKE ? ESCAPE '\\'")
+                    params.append(_like_contains(query_lower))
                 if ext_list:
                     ext_ph = ",".join("?" for _ in ext_list)
                     clauses.append(f"ext_lower IN ({ext_ph})")

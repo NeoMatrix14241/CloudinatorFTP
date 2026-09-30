@@ -470,7 +470,11 @@ function smartTableColumnizer() {
                         _set(fn, 'overflow', 'hidden');
                         _set(fn, 'white-space', 'normal');
                         _set(fn, 'max-width', '100%');
-                        fn.querySelectorAll('a, span').forEach(el => {
+                        // span.search-highlight is excluded on purpose: these are
+                        // INLINE !important styles, so display:block here beats every
+                        // stylesheet rule and turns the highlight into a full-width bar
+                        // (this runs again on every resize / scrollbar change).
+                        fn.querySelectorAll('a, span:not(.search-highlight)').forEach(el => {
                             _set(el, 'white-space', 'normal');
                             _set(el, 'word-break', 'break-word');
                             _set(el, 'overflow-wrap', 'anywhere');
@@ -686,6 +690,9 @@ function setNotificationTimer(type, milliseconds) {
 let currentSort = { column: null, direction: 'asc' };
 let originalRowOrder = []; // Store original order for reset functionality
 let searchTimeout = null;
+// Deep search (all nested folders) starts at this many characters. Shorter
+// queries only filter the current folder. A `*.ext` term always goes deep.
+const _DEEP_SEARCH_MIN_CHARS = 3;
 
 // Search functionality
 
@@ -700,91 +707,293 @@ function performLocalSearch(searchTerm) {
     console.log(`🔍 Local VT filter for "${searchTerm}"`);
 }
 
-// ── Deep search pagination state ─────────────────────────────────────────────
-const _DS_CHUNK = 80;      // rows to render per DOM batch (visual smoothness)
-const _DS_LIMIT = 500;     // rows to fetch from server per API call
-let _dsResults = [];      // buffer of fetched-but-not-yet-rendered rows
-let _dsRendered = 0;       // total rows appended to tbody this session
-let _dsOffset = 0;       // next API offset to request
-let _dsHasMore = false;   // server says more rows exist beyond current offset
-let _dsFetching = false;   // guard against concurrent fetches
-let _dsObserver = null;
-let _dsQuery = '';      // current query (for next-page requests)
-let _dsExts = [];      // current ext filter
-let _dsSearchTerm = '';      // raw display term for highlight
+// ── Deep search: true row windowing (virtual scroll) ─────────────────────────
+// Same idea as the VT module above, applied to deep-search results: the FULL
+// result list lives in _dsAll (plain data, pages of _DS_LIMIT fetched from the
+// server as the user nears the end), but only the rows in the viewport +/-
+// _DS_RENDER_BUFFER are ever in the DOM. Two spacer rows stand in for
+// everything else. Rules inherited from VT (see CLAUDE.md 4.34) — do not break:
+//   * NO style="" attribute in any markup built here (CSP style-src-attr)
+//   * spacer height goes on the spacer <td> via style.setProperty(..,'important')
+//     (index.css pins every `#filesTable tbody tr` to height:auto !important)
+//   * NO JS scrollTop compensation; native scroll anchoring does that job
+const _DS_LIMIT = 500;              // rows to fetch from the server per API call
+const _DS_RENDER_BUFFER = 7;        // rows kept mounted above/below the viewport
+const _DS_DEFAULT_ROW_HEIGHT = 56;  // seed estimate until the first real row is measured
+const _DS_PREFETCH_ROWS = 40;       // fetch the next page when the window ends this close to the loaded end
+const _DS_RESIZE_DEBOUNCE_MS = 1;
 
-function _dsDisconnectObserver() {
-    if (_dsObserver) { _dsObserver.disconnect(); _dsObserver = null; }
+let _dsAll = [];            // every result fetched so far (data only, never DOM)
+let _dsTotal = null;        // server total_count (exact), or null if the index couldn't say
+let _dsOffset = 0;          // next API offset to request
+let _dsHasMore = false;     // server says more rows exist beyond _dsOffset
+let _dsFetching = false;    // guard against concurrent fetches
+let _dsQuery = '';          // current query (for next-page requests)
+let _dsExts = [];           // current ext filter
+let _dsSearchTerm = '';     // raw display term for highlight
+let _dsGen = 0;             // bumped on every new search / teardown; guards stale async work
+
+let _dsOffsets = null;      // Float64Array, length _dsAll.length+1 — cumulative top px per row
+let _dsRowH = _DS_DEFAULT_ROW_HEIGHT;   // running estimate for rows never measured
+let _dsHeightCache = new Map();         // result path -> last measured px height
+let _dsMounted = new Map();             // _dsAll index -> <tr> currently in the DOM
+let _dsWinStart = 0, _dsWinEnd = 0;     // [start, end) indices currently mounted
+let _dsTopRow = null, _dsBottomRow = null, _dsTopCell = null, _dsBottomCell = null, _dsLoadRow = null;
+let _dsListBase = 0;        // px from the wrapper's scrollable top to the first result row
+let _dsScrollHandler = null, _dsScrollRafPending = false;
+let _dsResizeHandler = null, _dsResizeTimer = null;
+
+function _dsMakeSpacerRow(id) {
+    // Same classes as the VT spacers so index.css zeroes padding/border/font.
+    // ds-spacer-row is NOT search-result-row, so selection/delete counters skip it.
+    const tr = document.createElement('tr');
+    tr.id = id;
+    tr.className = 'vt-spacer-row ds-spacer-row';
+    tr.setAttribute('aria-hidden', 'true');
+    const td = document.createElement('td');
+    td.colSpan = 6;
+    td.className = 'vt-spacer-cell';
+    tr.appendChild(td);
+    return tr;
 }
 
-function _dsRemoveSentinel() {
-    const row = document.getElementById('dsSearchSentinelRow');
-    if (row) row.remove();
+function _dsMakeLoadingRow() {
+    const tr = document.createElement('tr');
+    tr.id = 'dsSearchSentinelRow';
+    tr.className = 'vt-loading-row ds-loading-row';
+    const td = document.createElement('td');
+    td.colSpan = 6;
+    td.innerHTML = '<i class="fas fa-circle-notch fa-spin ds-loading-icon"></i>' +
+        '<span class="ds-sentinel-label">Loading more results…</span>';
+    tr.appendChild(td);
+    return tr;
 }
 
-function _dsAttachSentinel() {
+function _dsSyncLoadingRow() {
     const tbody = document.querySelector('#filesTable tbody');
     if (!tbody) return;
-    _dsRemoveSentinel();
+    if (_dsHasMore) {
+        if (!_dsLoadRow) _dsLoadRow = _dsMakeLoadingRow();
+        if (_dsLoadRow.parentNode !== tbody) tbody.appendChild(_dsLoadRow);   // always after the bottom spacer
+    } else if (_dsLoadRow) {
+        _dsLoadRow.remove();
+        _dsLoadRow = null;
+    }
+}
 
-    const loadRow = document.createElement('tr');
-    loadRow.id = 'dsSearchSentinelRow';
-    loadRow.className = 'vt-loading-row';
-    loadRow.innerHTML = `<td colspan="6">
-        <span id="dsSearchSentinel" style="display:inline-block;height:1px;width:100%;"></span>
-        <i class="fas fa-circle-notch fa-spin" style="margin-right:6px;opacity:0.6;font-size:12px;"></i>
-        <span class="ds-sentinel-label" style="font-size:12px;opacity:0.7;">Loading more results…</span>
-    </td>`;
-    tbody.appendChild(loadRow);
+function _dsMeasureListBase(wrapper) {
+    if (!wrapper || !_dsTopRow) return 0;
+    const spacerTop = _dsTopRow.getBoundingClientRect().top;
+    const wrapTop = wrapper.getBoundingClientRect().top;
+    return spacerTop - wrapTop + wrapper.scrollTop;
+}
 
-    const sentinel = document.getElementById('dsSearchSentinel');
-    if (!sentinel) return;
+// Binary search: greatest index i such that _dsOffsets[i] <= offset.
+function _dsFindIndexAtOffset(offset) {
+    let lo = 0, hi = _dsAll.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (_dsOffsets[mid] <= offset) lo = mid + 1; else hi = mid;
+    }
+    return Math.max(0, lo - 1);
+}
 
+function _dsRebuildOffsets() {
+    const n = _dsAll.length;
+    const offsets = new Float64Array(n + 1);
+    let acc = 0;
+    for (let i = 0; i < n; i++) {
+        offsets[i] = acc;
+        const cached = _dsHeightCache.get(_dsAll[i].path);
+        acc += (cached && cached > 0) ? cached : _dsRowH;
+    }
+    offsets[n] = acc;
+    _dsOffsets = offsets;
+}
+
+function _dsPositionSpacers() {
+    if (!_dsOffsets || !_dsTopCell || !_dsBottomCell) return;
+    const total = _dsAll.length;
+    const topH = _dsOffsets[_dsWinStart] || 0;
+    const bottomH = Math.max(0, _dsOffsets[total] - _dsOffsets[_dsWinEnd]);
+    _dsTopCell.style.setProperty('height', topH + 'px', 'important');
+    _dsBottomCell.style.setProperty('height', bottomH + 'px', 'important');
+}
+
+function _dsCreateRow(result) {
+    const row = createSearchResultRow(result, _dsSearchTerm);
+    // A row that scrolled out and back in must still show its selection.
+    if (selectedItems.has(result.path)) {
+        const cb = row.querySelector('.item-checkbox');
+        if (cb) cb.checked = true;
+        row.classList.add('selected');
+    }
+    return row;
+}
+
+// Mount exactly [start, end), touching only what changed (same two-phase
+// create-then-write approach as VT._mountRange). Returns the newly created rows.
+function _dsMountRange(start, end) {
+    const tbody = document.querySelector('#filesTable tbody');
+    if (!tbody || !_dsTopRow || !_dsBottomRow) return [];
+
+    const created = [];
+    const wanted = new Array(Math.max(0, end - start));
+    for (let i = start; i < end; i++) {
+        let el = _dsMounted.get(i);
+        if (!el) {
+            el = _dsCreateRow(_dsAll[i]);
+            created.push(el);
+        }
+        wanted[i - start] = el;
+    }
+
+    for (const [idx, el] of _dsMounted) {
+        if ((idx < start || idx >= end) && el.parentNode) el.remove();
+    }
+
+    const keep = new Map();
+    let ref = _dsTopRow.nextSibling;
+    for (let i = start; i < end; i++) {
+        const el = wanted[i - start];
+        if (el === ref) ref = ref.nextSibling;   // already in place
+        else tbody.insertBefore(el, ref);        // new, or moved
+        keep.set(i, el);
+    }
+    _dsMounted = keep;
+    return created;
+}
+
+function _dsRenderWindow(force, scrollTopOverride) {
     const wrapper = document.getElementById('tableScrollWrapper');
-    _dsObserver = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            if (entry.isIntersecting) {
-                _dsDisconnectObserver();
-                _dsAdvance();
-            }
-        });
-    }, { root: wrapper, threshold: 0.1 });
-    _dsObserver.observe(sentinel);
+    if (!wrapper || !_dsOffsets || !_dsAll.length) return;
+
+    const scrollTop = (scrollTopOverride == null) ? wrapper.scrollTop : scrollTopOverride;
+    const viewportH = wrapper.clientHeight || 600;
+    const rel = scrollTop - _dsListBase;
+    const total = _dsAll.length;
+
+    const start = Math.max(0, _dsFindIndexAtOffset(rel) - _DS_RENDER_BUFFER);
+    const end = Math.min(total, _dsFindIndexAtOffset(rel + viewportH) + 1 + _DS_RENDER_BUFFER);
+
+    if (force || start !== _dsWinStart || end !== _dsWinEnd) {
+        const created = _dsMountRange(start, end);
+        _dsWinStart = start; _dsWinEnd = end;
+        _dsPositionSpacers();
+        if (created.length) _dsScheduleMeasure(created, _dsGen);
+    }
+
+    // Near the end of what is loaded? Pull the next page before the user hits the wall.
+    if (_dsHasMore && !_dsFetching && _dsWinEnd >= total - _DS_PREFETCH_ROWS) {
+        _dsFetchNextPage();
+    }
 }
 
-// Render up to _DS_CHUNK rows from the local buffer; fetch next page when empty.
-function _dsAdvance() {
+// Batched measure of freshly mounted rows (one read pass in the next frame).
+// Search-result rows can wrap (long names / long paths), so height is not
+// uniform; offsets are only rebuilt when a measurement disagrees with them.
+function _dsScheduleMeasure(rows, gen) {
+    requestAnimationFrame(() => {
+        if (gen !== _dsGen) return;   // search closed / replaced meanwhile
+        let changed = false;
+        rows.forEach(el => {
+            if (!el.isConnected) return;
+            const h = el.getBoundingClientRect().height;
+            if (!h) return;
+            if (_dsRowH === _DS_DEFAULT_ROW_HEIGHT) { _dsRowH = h; changed = true; }   // seed from first real row
+            const path = el.dataset.path;
+            const prev = _dsHeightCache.get(path);
+            const assumed = (prev !== undefined && prev > 0) ? prev : _dsRowH;
+            if (prev === undefined || Math.abs(prev - h) > 1) _dsHeightCache.set(path, h);
+            if (Math.abs(assumed - h) > 1) changed = true;
+        });
+        if (!changed) return;
+        _dsRebuildOffsets();
+        _dsPositionSpacers();
+        _dsRenderWindow(false);
+    });
+}
+
+function _dsAttachScrollHandler() {
+    const wrapper = document.getElementById('tableScrollWrapper');
+    if (!wrapper) return;
+    _dsDetachScrollHandler();
+    _dsScrollHandler = () => {
+        if (_dsScrollRafPending) return;
+        _dsScrollRafPending = true;
+        requestAnimationFrame(() => {
+            _dsScrollRafPending = false;
+            if (isSearchResultsDisplayed) _dsRenderWindow(false);
+        });
+    };
+    wrapper.addEventListener('scroll', _dsScrollHandler, { passive: true });
+
+    // Wrapping (and so row height) depends on width: on resize drop the height
+    // cache and keep the row that is at the top of the viewport at the top.
+    _dsResizeHandler = () => {
+        clearTimeout(_dsResizeTimer);
+        _dsResizeTimer = setTimeout(_dsOnResize, _DS_RESIZE_DEBOUNCE_MS);
+    };
+    window.addEventListener('resize', _dsResizeHandler);
+}
+
+function _dsDetachScrollHandler() {
+    const wrapper = document.getElementById('tableScrollWrapper');
+    if (wrapper && _dsScrollHandler) wrapper.removeEventListener('scroll', _dsScrollHandler);
+    _dsScrollHandler = null;
+    _dsScrollRafPending = false;
+    if (_dsResizeHandler) window.removeEventListener('resize', _dsResizeHandler);
+    _dsResizeHandler = null;
+    clearTimeout(_dsResizeTimer);
+}
+
+function _dsOnResize() {
+    if (!isSearchResultsDisplayed || !_dsAll.length || !_dsOffsets) return;
+    const wrapper = document.getElementById('tableScrollWrapper');
+    if (!wrapper) return;
+    const rel = wrapper.scrollTop - _dsListBase;
+    const idx = _dsFindIndexAtOffset(rel);
+    const intra = rel - _dsOffsets[idx];
+    _dsHeightCache.clear();
+    _dsRebuildOffsets();
+    _dsListBase = _dsMeasureListBase(wrapper);
+    const st = Math.max(0, _dsListBase + _dsOffsets[idx] + intra);
+    _dsRenderWindow(true, st);
+    wrapper.scrollTop = st;
+    if (_dsMounted.size) _dsScheduleMeasure(Array.from(_dsMounted.values()), _dsGen);
+}
+
+// Build the spacer rows + first window for a fresh result set. The hidden
+// folder rows (VT) stay in the tbody untouched; result rows go after them.
+function _dsBuildWindow() {
     const tbody = document.querySelector('#filesTable tbody');
+    const wrapper = document.getElementById('tableScrollWrapper');
     if (!tbody) return;
-    _dsRemoveSentinel();
 
-    // Render from local buffer first
-    if (_dsResults.length > 0) {
-        const end = Math.min(_DS_CHUNK, _dsResults.length);
-        const batch = _dsResults.splice(0, end);
-        batch.forEach(r => tbody.appendChild(createSearchResultRow(r, _dsSearchTerm)));
-        _dsRendered += batch.length;
-        _dsUpdateCount();
-    }
+    _dsMounted = new Map();
+    _dsWinStart = 0; _dsWinEnd = 0;
+    _dsHeightCache = new Map();
+    _dsRowH = _DS_DEFAULT_ROW_HEIGHT;
 
-    // If buffer is empty and server has more, fetch next page
-    if (_dsResults.length === 0 && _dsHasMore && !_dsFetching) {
-        _dsFetchNextPage();
-        return; // sentinel re-attached inside _dsFetchNextPage after data arrives
-    }
+    _dsTopRow = _dsMakeSpacerRow('dsTopSpacer');
+    _dsBottomRow = _dsMakeSpacerRow('dsBottomSpacer');
+    _dsTopCell = _dsTopRow.firstElementChild;
+    _dsBottomCell = _dsBottomRow.firstElementChild;
+    tbody.appendChild(_dsTopRow);
+    tbody.appendChild(_dsBottomRow);
+    _dsSyncLoadingRow();
 
-    // Still have rows in buffer — keep scrolling
-    if (_dsResults.length > 0) {
-        _dsAttachSentinel();
-    }
+    if (wrapper) wrapper.scrollTop = 0;   // a new search always starts at the top
+    _dsRebuildOffsets();
+    _dsListBase = _dsMeasureListBase(wrapper);
+    _dsRenderWindow(true, 0);
+    _dsAttachScrollHandler();
 }
 
 function _dsFetchNextPage() {
-    if (_dsFetching) return;
+    if (_dsFetching || !_dsHasMore) return;
     _dsFetching = true;
-
-    // Re-attach sentinel immediately so the loading spinner stays visible
-    _dsAttachSentinel();
+    const gen = _dsGen;
 
     let url = `/api/search?q=${encodeURIComponent(_dsQuery)}&offset=${_dsOffset}&limit=${_DS_LIMIT}`;
     if (_dsExts.length) url += `&ext=${encodeURIComponent(_dsExts.join(','))}`;
@@ -792,28 +1001,60 @@ function _dsFetchNextPage() {
     fetch(url)
         .then(r => r.json())
         .then(data => {
-            if (!isSearchResultsDisplayed) return; // user cleared search mid-fetch
-
-            _dsResults = data.results || [];
-            _dsHasMore = data.has_more || false;
-            _dsOffset += _dsResults.length;
-
-            // Remove sentinel before rendering
-            _dsRemoveSentinel();
+            if (gen !== _dsGen || !isSearchResultsDisplayed) return;   // search closed or replaced mid-fetch
+            const page = data.results || [];
+            _dsAll = _dsAll.concat(page);
+            _dsOffset += page.length;
+            _dsHasMore = !!data.has_more && page.length > 0;   // an empty page ends paging (no infinite loop)
             _dsFetching = false;
 
-            _dsAdvance();
+            _dsRebuildOffsets();
+            _dsSyncLoadingRow();
+            _dsRenderWindow(true);
+            _dsUpdateCount();
         })
         .catch(err => {
             console.error('❌ Deep search next page error:', err);
-            _dsRemoveSentinel();
+            if (gen !== _dsGen) return;
             _dsFetching = false;
+            _dsHasMore = false;     // stop retrying on every scroll tick; a new search resets this
+            _dsSyncLoadingRow();
         });
 }
 
 function _dsUpdateCount() {
-    updateVisibleCount(_dsRendered);
-    // Header count badge is set once from total_count on first page — don't overwrite it
+    updateVisibleCount(_dsAll.length);
+    // Header count badge is set once from total_count on first page — only the
+    // delete handlers rewrite it (via _dsRemoveResults).
+}
+
+function _dsHeaderCountLabel() {
+    if (_dsTotal != null) return _dsTotal.toLocaleString();
+    return `${_dsAll.length}${_dsHasMore ? '+' : ''}`;
+}
+
+// Drop deleted paths from the result data (rows are no longer 1:1 with the
+// DOM, so deleting a <tr> is not enough — the data array is the source of truth).
+function _dsRemoveResults(paths) {
+    if (!isSearchResultsDisplayed) return;
+    const dead = new Set(paths);
+    const kept = _dsAll.filter(r => !dead.has(r.path));
+    const removed = _dsAll.length - kept.length;
+    if (removed > 0) {
+        _dsAll = kept;
+        if (_dsTotal != null) _dsTotal = Math.max(0, _dsTotal - removed);
+        // Indices shifted: unmount everything and re-mount from the data.
+        for (const el of _dsMounted.values()) el.remove();
+        _dsMounted = new Map();
+        _dsWinStart = 0; _dsWinEnd = 0;
+        _dsRebuildOffsets();
+        _dsPositionSpacers();
+        if (_dsAll.length) _dsRenderWindow(true);
+        else if (_dsHasMore) _dsFetchNextPage();
+    }
+    const countEl = document.querySelector('#searchResultsHeader .search-count');
+    if (countEl) countEl.textContent = `${_dsHeaderCountLabel()} items found`;
+    _dsUpdateCount();
 }
 
 // ── *.ext query parser ────────────────────────────────────────────────────────
@@ -844,8 +1085,15 @@ function searchTable(searchTerm) {
     // Debounce search to avoid too many API calls
     searchTimeout = setTimeout(() => {
         if (searchTerm.trim().length > 0) {
-            // Always use deep search for any non-empty query (no local-only shortcut)
-            performDeepSearch(searchTerm.trim());
+            const term = searchTerm.trim();
+            const { query, exts } = _parseSearchQuery(term);
+            if (exts.length || query.length >= _DEEP_SEARCH_MIN_CHARS) {
+                performDeepSearch(term);
+            } else {
+                // 1-2 characters: current-folder filter only. performLocalSearch()
+                // also tears down any deep-search list that is still showing.
+                performLocalSearch(term);
+            }
         } else {
             // Empty query — clear deep search and reset VT view
             hideDeepSearchResults();
@@ -867,9 +1115,11 @@ function performDeepSearch(rawTerm) {
     console.log(`🔍 Starting deep search: query="${query}" exts=${JSON.stringify(exts)}`);
     showSearchLoading(true);
 
-    // Reset pagination state for a fresh search
-    _dsResults = [];
-    _dsRendered = 0;
+    // Reset state for a fresh search (bump _dsGen so any in-flight page fetch
+    // from the previous query is discarded)
+    _dsGen++;
+    _dsAll = [];
+    _dsTotal = null;
     _dsOffset = 0;
     _dsHasMore = false;
     _dsFetching = false;
@@ -880,13 +1130,19 @@ function performDeepSearch(rawTerm) {
     let url = `/api/search?q=${encodeURIComponent(query)}&offset=0&limit=${_DS_LIMIT}`;
     if (exts.length) url += `&ext=${encodeURIComponent(exts.join(','))}`;
 
+    // Drop this response if the search was closed or replaced while it was in
+    // flight (e.g. the user backspaced to a 1-2 char local filter).
+    const gen = _dsGen;
+
     fetch(url)
         .then(response => response.json())
         .then(data => {
+            if (gen !== _dsGen) return;
             console.log(`✅ Deep search results:`, data);
             displayDeepSearchResults(data, _dsSearchTerm, exts);
         })
         .catch(error => {
+            if (gen !== _dsGen) return;
             console.error('❌ Deep search error:', error);
             showNotification('Search failed. Please try again.', 'ERROR');
             performLocalSearch(query || rawTerm);
@@ -897,26 +1153,66 @@ function performDeepSearch(rawTerm) {
 }
 
 
+// Wraps matches of `term` in <span class="search-highlight"> inside a file-table
+// row's name cell. Works on TEXT NODES only, so the row's icon <i>, the folder
+// <a> and the preview (eye) button survive - the old version rewrote
+// .file-name.innerHTML and destroyed the icon/button on file rows. Idempotent
+// (previous highlights are unwrapped first) and regex-safe (term is escaped).
 function highlightSearchTerm(row, term) {
     const nameCell = row.querySelector('td:nth-child(2) .file-name');
-    if (nameCell) {
-        const originalText = nameCell.dataset.originalText || nameCell.textContent;
-        nameCell.dataset.originalText = originalText;
+    if (!nameCell) return;
 
-        const regex = new RegExp(`(${term})`, 'gi');
-        const safeOriginalText = escapeHtml(originalText);
-        const highlightedText = safeOriginalText.replace(regex, '<span class="search-highlight">$1</span>');
+    // Unwrap any earlier highlight so re-running never nests spans.
+    nameCell.querySelectorAll('span.search-highlight').forEach(s => {
+        s.replaceWith(document.createTextNode(s.textContent));
+    });
+    nameCell.normalize();
 
-        // Only update if we have a match and it's different
-        if (highlightedText !== safeOriginalText) {
-            const linkElement = nameCell.querySelector('a');
-            if (linkElement) {
-                linkElement.innerHTML = escapeHtml(linkElement.textContent).replace(regex, '<span class="search-highlight">$1</span>');
-            } else {
-                nameCell.innerHTML = highlightedText;
-            }
+    // File rows keep the name as a BARE text node directly inside .file-name,
+    // which is a flex container. A highlight <span> dropped in there splits the
+    // name into separate flex items (gaps around the match, "Q/B" stacked
+    // vertically in narrow columns). Wrap the bare name text in one span first
+    // so the whole name stays a single flex item and the highlight is inline
+    // inside it - exactly how folder rows already work (name lives in an <a>).
+    Array.from(nameCell.childNodes).forEach(n => {
+        if (n.nodeType === Node.TEXT_NODE && n.nodeValue.trim()) {
+            const wrap = document.createElement('span');
+            wrap.className = 'fn-text';
+            n.parentNode.replaceChild(wrap, n);
+            wrap.appendChild(n);
         }
-    }
+    });
+
+    const needle = String(term == null ? '' : term).trim();
+    if (!needle) return;
+    const regex = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+
+    const walker = document.createTreeWalker(nameCell, NodeFilter.SHOW_TEXT, {
+        acceptNode: n => (n.parentElement && n.parentElement.closest('button'))
+            ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+    });
+    const textNodes = [];
+    while (walker.nextNode()) textNodes.push(walker.currentNode);
+
+    textNodes.forEach(node => {
+        const text = node.nodeValue;
+        regex.lastIndex = 0;
+        let m, last = 0, frag = null;
+        while ((m = regex.exec(text)) !== null) {
+            if (m[0].length === 0) { regex.lastIndex++; continue; }
+            if (!frag) frag = document.createDocumentFragment();
+            if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+            const span = document.createElement('span');
+            span.className = 'search-highlight';
+            span.textContent = m[0];
+            frag.appendChild(span);
+            last = m.index + m[0].length;
+        }
+        if (frag) {
+            if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+            node.parentNode.replaceChild(frag, node);
+        }
+    });
 }
 
 
@@ -925,18 +1221,26 @@ function displayDeepSearchResults(data, searchTerm, exts) {
         const label = exts && exts.length
             ? `*.${exts.join(', *.')}${searchTerm && searchTerm !== exts.join(',') ? ` containing "${searchTerm}"` : ''}`
             : `"${searchTerm}"`;
-        showNotification(`No results found for ${label}`, 'INFO');
+        // Nothing deeper in the tree: fall back to filtering the current folder,
+        // and only say "no results" if that finds nothing either (it used to
+        // toast "No results found" while the local filter was showing a hit).
         performLocalSearch(searchTerm);
+        const shown = parseInt((document.getElementById('visibleCount') || {}).textContent, 10) || 0;
+        if (shown > 0) {
+            showNotification(`No matches in subfolders for ${label} - showing ${shown} in this folder`, 'INFO');
+        } else {
+            showNotification(`No results found for ${label}`, 'INFO');
+        }
         return;
     }
 
     hideDeepSearchResults();
     hideLocalResults();
 
-    _dsResults = data.results;
+    _dsAll = data.results.slice();
+    _dsTotal = (data.total_count != null) ? data.total_count : null;
     _dsHasMore = data.has_more || false;
     _dsOffset = data.results.length;
-    _dsRendered = 0;
     _dsSearchTerm = searchTerm;
 
     isSearchResultsDisplayed = true;
@@ -947,17 +1251,10 @@ function displayDeepSearchResults(data, searchTerm, exts) {
     const searchHeader = createSearchResultsHeaderDiv(data, exts);
     table.parentNode.insertBefore(searchHeader, table);
 
-    const tbody = table.querySelector('tbody');
-    const end = Math.min(_DS_CHUNK, _dsResults.length);
-    const batch = _dsResults.splice(0, end);
-    batch.forEach(r => tbody.appendChild(createSearchResultRow(r, searchTerm)));
-    _dsRendered += batch.length;
-
+    // Windowed render: only the first viewport of rows is created; the rest
+    // of _dsAll is mounted on demand as the user scrolls.
+    _dsBuildWindow();
     _dsUpdateCount();
-
-    if (_dsResults.length > 0 || _dsHasMore) {
-        _dsAttachSentinel();
-    }
 
     const extLabel = exts && exts.length ? ` [*.${exts.join(', *.')}]` : '';
     const totalLabel = data.total_count != null ? data.total_count.toLocaleString() : data.results.length;
@@ -1027,7 +1324,7 @@ function createSearchResultRow(result, searchTerm) {
                 <div class="search-result-title">
                     <a href="#" data-fn="navigateToFolder" data-args="${dataArgs([result.path])}" data-prevent="1"
                        class="search-folder-link">
-                        ${highlightText(escapeHtml(result.name), searchTerm)}
+                        ${highlightText(result.name, searchTerm)}
                     </a>
                 </div>
                 <div class="search-result-path">
@@ -1046,7 +1343,7 @@ function createSearchResultRow(result, searchTerm) {
             </div>
             <div class="search-result-details">
                 <div class="search-result-title">
-                    ${highlightText(escapeHtml(result.name), searchTerm)}
+                    ${highlightText(result.name, searchTerm)}
                 </div>
                 <div class="search-result-path">
                     <i class="fas fa-folder-open"></i>
@@ -1097,15 +1394,31 @@ function createSearchResultRow(result, searchTerm) {
     return row;
 }
 
+// Takes RAW (unescaped) text and returns safe HTML with matches wrapped in
+// <span class="search-highlight">. Escaping is done per piece AFTER matching:
+// matching against already-escaped text let a query like "amp", "lt" or "39"
+// match inside an entity (&amp; &lt; &#039;) and emit broken markup.
 function highlightText(text, searchTerm) {
-    const regex = new RegExp(`(${searchTerm})`, 'gi');
-    return text.replace(regex, '<span class="search-highlight">$1</span>');
+    const raw = String(text == null ? '' : text);
+    const needle = String(searchTerm == null ? '' : searchTerm).trim();
+    if (!needle) return escapeHtml(raw);
+    // Escape regex metacharacters: a query like "c++" or "(" used to throw here.
+    const safeTerm = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(safeTerm, 'gi');
+    let out = '', last = 0, m;
+    while ((m = regex.exec(raw)) !== null) {
+        if (m[0].length === 0) { regex.lastIndex++; continue; }
+        out += escapeHtml(raw.slice(last, m.index))
+            + '<span class="search-highlight">' + escapeHtml(m[0]) + '</span>';
+        last = m.index + m[0].length;
+    }
+    return out + escapeHtml(raw.slice(last));
 }
 
 function hideLocalResults() {
     const table = document.getElementById('filesTable');
     const tbody = table.querySelector('tbody');
-    const rows = tbody.querySelectorAll('tr:not(.search-results-header):not(.search-result-row)');
+    const rows = tbody.querySelectorAll('tr:not(.search-results-header):not(.search-result-row):not(.ds-spacer-row):not(.ds-loading-row)');
 
     rows.forEach(row => {
         if (!row.innerHTML.includes('.. (Parent Directory)')) {
@@ -1117,18 +1430,26 @@ function hideLocalResults() {
 function hideDeepSearchResults() {
     isSearchResultsDisplayed = false;
 
-    // Tear down pagination state
-    _dsDisconnectObserver();
-    _dsRemoveSentinel();
-    _dsResults = [];
-    _dsRendered = 0;
+    // Tear down the windowed result list. Bumping _dsGen invalidates any
+    // in-flight page fetch and any queued measure pass.
+    _dsGen++;
+    _dsDetachScrollHandler();
+    _dsAll = [];
+    _dsTotal = null;
     _dsOffset = 0;
     _dsHasMore = false;
     _dsFetching = false;
+    _dsOffsets = null;
+    _dsMounted = new Map();
+    _dsWinStart = 0; _dsWinEnd = 0;
+    _dsHeightCache = new Map();
+    _dsRowH = _DS_DEFAULT_ROW_HEIGHT;
+    _dsListBase = 0;
 
-    // Remove table-based search headers
-    const searchRows = document.querySelectorAll('.search-results-header, .search-result-row');
+    // Remove result rows, spacers and the loading row
+    const searchRows = document.querySelectorAll('.search-results-header, .search-result-row, .ds-spacer-row, .ds-loading-row');
     searchRows.forEach(row => row.remove());
+    _dsTopRow = _dsBottomRow = _dsTopCell = _dsBottomCell = _dsLoadRow = null;
 
     // Remove div-based search header
     const searchHeaderDiv = document.getElementById('searchResultsHeader');
@@ -6551,12 +6872,12 @@ function toggleSelectAll() {
 
     if (isNowChecked) {
         if (isSearchResultsDisplayed) {
-            // DEEP SEARCH MODE: only select paths from visible search-result rows.
-            // VT.getAll() returns the current-folder file list, NOT search results —
-            // selecting from it would queue up every file in the folder for deletion.
-            document.querySelectorAll('.search-result-row .item-checkbox').forEach(cb => {
-                if (cb.dataset.path) selectedItems.add(cb.dataset.path);
-            });
+            // DEEP SEARCH MODE: select every LOADED search result (_dsAll), not just
+            // the rows currently mounted — deep search is windowed now, so the DOM
+            // only holds ~a screenful. VT.getAll() is the current-folder list, NOT
+            // search results — selecting from it would queue up every file in the
+            // folder for deletion.
+            _dsAll.forEach(r => { if (r.path) selectedItems.add(r.path); });
         } else {
             // NORMAL MODE: populate from full VT data array (handles virtual scroll).
             // Virtual scroll only renders ~80 rows at a time, so querySelectorAll misses the rest.
@@ -6659,11 +6980,11 @@ function updateSelection() {
     });
 
     const checkedCount = selectedItems.size;
-    // In deep search mode compare against visible search-result rows, not VT folder count.
+    // In deep search mode compare against the loaded search results (_dsAll), not VT folder count.
     // Using VT.getAll().length here would always show the wrong ratio and could allow
     // selectAll to think everything is selected when it isn't.
     const totalCount = isSearchResultsDisplayed
-        ? document.querySelectorAll('.search-result-row .item-checkbox').length
+        ? _dsAll.length
         : VT.getAll().length;
 
     console.log(`📊 Selection update: ${checkedCount}/${totalCount} items selected`);
@@ -7555,16 +7876,9 @@ async function performBulkDelete(paths) {
             clearSelection();
             if (isSearchResultsDisplayed) {
                 // In deep search mode refreshFileTable() is a no-op (intentionally
-                // skipped to preserve the search view).  Remove deleted rows directly
-                // from the search results DOM and update the count badge.
-                paths.forEach(p => {
-                    const deadRow = document.querySelector(`.search-result-row[data-path="${CSS.escape(p)}"]`);
-                    if (deadRow) deadRow.remove();
-                });
-                const remaining = document.querySelectorAll('.search-result-row').length;
-                const countEl = document.querySelector('#searchResultsHeader .search-count');
-                if (countEl) countEl.textContent = `${remaining} items found`;
-                updateVisibleCount(remaining);
+                // skipped to preserve the search view).  Search results are windowed,
+                // so drop the deleted paths from the result data and re-mount.
+                _dsRemoveResults(paths);
             } else {
                 await refreshFileTable();
             }
@@ -7799,14 +8113,9 @@ async function deleteItem(itemPath, itemName) {
             clearSelection();
             if (isSearchResultsDisplayed) {
                 // In deep search mode refreshFileTable() is a no-op (intentionally
-                // skipped to preserve the search view).  Remove the deleted row directly
-                // from the search results DOM instead, and update the count badge.
-                const deadRow = document.querySelector(`.search-result-row[data-path="${CSS.escape(itemPath)}"]`);
-                if (deadRow) deadRow.remove();
-                const remaining = document.querySelectorAll('.search-result-row').length;
-                const countEl = document.querySelector('#searchResultsHeader .search-count');
-                if (countEl) countEl.textContent = `${remaining} items found`;
-                updateVisibleCount(remaining);
+                // skipped to preserve the search view).  Search results are windowed,
+                // so drop the deleted path from the result data and re-mount.
+                _dsRemoveResults([itemPath]);
             } else {
                 await refreshFileTable();
             }
