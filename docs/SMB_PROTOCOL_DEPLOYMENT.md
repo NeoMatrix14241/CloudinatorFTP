@@ -99,8 +99,6 @@ This is a **standalone, manual, one-time tool** — exactly like `create_user.py
 
 ```bash
 python smb_setup.py
-# or
-./manage.sh smb-setup
 ```
 
 It detects your platform automatically and walks you through the right action.

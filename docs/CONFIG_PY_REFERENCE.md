@@ -253,7 +253,7 @@ CloudinatorFTP supports multiple network protocols. These settings are explicitl
 
 | Setting | Default | Purpose |
 |---|---:|---|
-| `WEBDAV_ENABLED` | `False` | Legacy plain WebDAV listener |
+| `WEBDAV_ENABLED` | `False` | Plain-HTTP WebDAV listener (off by default; only used when HTTPS is disabled, or as the fallback if the HTTPS certificate can't be prepared) |
 | `WEBDAV_PORT` | `8080` | Plain HTTP WebDAV port |
 | `WEBDAV_HTTPS_ENABLED` | `True` | Prefer HTTPS WebDAV listener |
 | `WEBDAV_HTTPS_PORT` | `8443` | HTTPS WebDAV port |
@@ -295,7 +295,7 @@ The config comments explicitly state:
 
 - SMB is intentionally off by default even when the library is installed.
 - The config comments say the machine requires one-time setup before the service is practically useful.
-- The admin can run `python smb_setup.py` or `./manage.sh smb-setup` to enable it properly.
+- The admin can run `python smb_setup.py` to enable it properly.
 
 ---
 

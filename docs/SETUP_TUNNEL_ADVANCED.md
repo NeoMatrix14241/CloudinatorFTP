@@ -26,8 +26,8 @@ CloudinatorFTP runs multiple services. You choose which one to expose. Each has 
 | Service | Port | Tunnel? | Best For |
 |---------|------|---------|---------|
 | **Web UI** | 5000 | ✅ Yes | Browser access from anywhere |
-| **WebDAV HTTP** | 8080 | ✅ Yes | Remote drive mapping on Windows/macOS/Linux |
-| **WebDAV HTTPS** | 8443 | ✅ Yes (preferred) | Remote drive mapping (encrypted) |
+| **WebDAV HTTPS** | 8443 | ✅ Yes (default) | Remote drive mapping (encrypted) |
+| **WebDAV HTTP** | 8080 | ⚠️ Only if enabled | Off by default — plaintext fallback (`WEBDAV_ENABLED`); doesn't listen while HTTPS is running |
 | **SFTP** | 2222 | ❌ No* | File transfer clients (LAN only) |
 | **FTP** | 2121 | ❌ No* | Legacy clients (LAN only) |
 | **SMB** | 445 / 8445 | ❌ No* | Native network drive (LAN only) |
@@ -42,7 +42,7 @@ Want browser access from anywhere?
   → Tunnel port 5000 (Web UI)
 
 Want to map a network drive from a remote computer?
-  → Tunnel port 8080 (WebDAV HTTP) or 8443 (WebDAV HTTPS)
+  → Tunnel port 8443 (WebDAV HTTPS — the default; 8080 only exists if you enabled plain-HTTP WebDAV)
 
 Want both? Use a custom domain with multiple ingress rules → see Step 7 below.
 
@@ -60,11 +60,11 @@ For a quick test without any setup:
 # Tunnel just the web UI
 cloudflared tunnel --url https://localhost:5000
 
-# Or tunnel WebDAV (for remote drive mapping)
-cloudflared tunnel --url http://localhost:8080
-
-# Or tunnel WebDAV HTTPS
+# Or tunnel WebDAV (for remote drive mapping) — HTTPS is the default
 cloudflared tunnel --url https://localhost:8443
+
+# Only if you enabled plain-HTTP WebDAV (WEBDAV_ENABLED with HTTPS disabled, or the HTTPS-cert fallback)
+cloudflared tunnel --url http://localhost:8080
 ```
 
 You get a temporary public URL like:
@@ -608,7 +608,7 @@ cloudflared tunnel route list
 | **Certificate errors** | Authentication failed | Re-run: `cloudflared tunnel login` |
 | **Service won't start** | Service fails to start | Check Event Viewer → Windows Logs → Application |
 | **ERR_TOO_MANY_REDIRECTS** | Redirect loop | Check SSL/TLS settings in Cloudflare (use Flexible or Full) |
-| **WebDAV drive fails** | Can't map drive via tunnel URL | Import cert or use HTTP; check BasicAuthLevel |
+| **WebDAV drive fails** | Can't map drive via tunnel URL | Point the ingress rule at `https://localhost:8443` (port 8080 isn't open by default) and map the drive with the tunnel's `https://` hostname |
 | **SFTP/FTP won't tunnel** | Connection refused | Expected — SFTP/FTP are TCP-only; use on LAN or VPN |
 | **SMB won't tunnel** | Connection refused | Expected — SMB is TCP-only, same as SFTP/FTP; use on LAN or VPN, or tunnel WebDAV instead for a similar mapped-drive experience |
 
@@ -709,7 +709,7 @@ Write-Host "Setup complete! Your tunnel is running at https://$DOMAIN" -Foregrou
 
 ## Quick Setup Script — Parameterized Port (PowerShell)
 
-Same as above, but lets you choose which local port to expose (5000 for web UI, 8080 for WebDAV HTTP, 8443 for WebDAV HTTPS) without editing the script body.
+Same as above, but lets you choose which local port to expose (5000 for web UI, 8443 for WebDAV HTTPS — the default; 8080 is plain-HTTP WebDAV and only listens if you've enabled it) without editing the script body.
 
 Save as `setup-tunnel-port.ps1`:
 ```powershell
@@ -718,7 +718,7 @@ $TUNNEL_NAME = "my-app-tunnel"
 $DOMAIN = "domain.com"
 $DOMAIN_WEBDAV = "webdav.domain.com"
 $SERVICE_PORT = 5000
-$SERVICE_PORT_WEBDAV = 8443  # Change to 8080 for WebDAV, 8443 for WebDAV HTTPS
+$SERVICE_PORT_WEBDAV = 8443  # WebDAV HTTPS (default). Keep 8443 — the ingress rule below uses https://, which plain-HTTP 8080 doesn't speak
 
 # Install cloudflared
 Write-Host "Installing cloudflared..." -ForegroundColor Green

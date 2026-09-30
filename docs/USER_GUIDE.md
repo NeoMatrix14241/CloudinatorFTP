@@ -62,7 +62,7 @@ python create_user.py
 
 ### Session Management
 
-Your login session is valid for **1 hour** (default setting). After that:
+Your login session stays valid for **365 days of inactivity** by default (`PERMANENT_SESSION_LIFETIME = 31536000` seconds — effectively no idle timeout; the expiry slides forward on every request). If an administrator lowers that limit and you exceed it:
 - You'll be automatically redirected to the login page
 - Your files remain safe — only your session expired
 
@@ -70,9 +70,9 @@ Your login session is valid for **1 hour** (default setting). After that:
 
 Sessions can end for two reasons:
 
-1. **Time Expired**: 1 hour of inactivity (default)
-   - Configured in `config.py`: `PERMANENT_SESSION_LIFETIME = 3600`
-   - Adjust as needed for your use case
+1. **Time Expired**: no activity for longer than the configured lifetime (365 days by default)
+   - Default in `config.py`: `PERMANENT_SESSION_LIFETIME = 31536000`; a value saved in `server_config.json` overrides it
+   - To get a real timeout back, run `python config.py` → Server Settings → Session Timeout, then Save & Exit
 
 2. **Token Revoked**: An admin ran `python kick_sessions.py` (this replaced the older `revoke_session.py` script)
    - `kick-all` logs out every connected user within a few seconds
@@ -657,8 +657,8 @@ In addition to the web UI, CloudinatorFTP runs four additional protocol servers.
 | Protocol | Port | Best For |
 |----------|------|----------|
 | Web UI | 5000 | Browser access |
-| WebDAV HTTP | 8080 | Network drive mapping |
-| WebDAV HTTPS | 8443 | Network drive mapping (secure, recommended) |
+| WebDAV HTTPS | 8443 | Network drive mapping (secure, on by default) |
+| WebDAV HTTP | 8080 | Plaintext fallback — off by default (only if HTTPS is disabled, or the HTTPS certificate can't be prepared) |
 | SFTP | 2222 | WinSCP, FileZilla, command-line `sftp` |
 | FTP | 2121 | Legacy FTP clients |
 | SMB | 445 (8445 fallback) | Native network drive, `\\HOST\SharedFolder` |
@@ -676,27 +676,32 @@ WebDAV lets you mount the server as a drive letter (Windows) or volume (macOS/Li
 # Enable the WebClient service
 Set-Service WebClient -StartupType Automatic; Start-Service WebClient
 
-# For HTTP (port 8080): allow Basic Auth over plain HTTP
+# Only if you use plain HTTP (port 8080 — off by default): allow Basic Auth over plain HTTP.
+# Not needed for HTTPS (port 8443), which is the default.
 reg add "HKLM\SYSTEM\CurrentControlSet\Services\WebClient\Parameters" /v BasicAuthLevel /t REG_DWORD /d 2 /f
 Restart-Service WebClient
 ```
 
 **Map the drive**:
 ```cmd
-# HTTP (after registry fix above)
-net use X: http://SERVER-IP:8080/ /user:admin admin123 /persistent:yes
-
-# HTTPS (no registry fix needed — just import the cert once first)
+# HTTPS (default — no registry fix needed, just import the cert once first; see below)
 net use X: https://SERVER-IP:8443/ /user:admin admin123 /persistent:yes
+
+# HTTP fallback (only if plain-HTTP WebDAV is enabled; needs the registry fix above)
+net use X: http://SERVER-IP:8080/ /user:admin admin123 /persistent:yes
 ```
 
 **Import HTTPS certificate (one-time, elevated PowerShell)**:
 ```powershell
-# Download and import in one line — no file copying needed
-$f="$env:TEMP\c.crt"
-Invoke-WebRequest http://SERVER-IP:8080/webdav.crt -OutFile $f
-Import-Certificate $f -CertStoreLocation Cert:\LocalMachine\Root
-del $f
+# 1. Get the certificate. Simplest and safest: copy db/webdav.crt from the server
+#    to this PC yourself (USB, scp, shared folder...), then import it:
+Import-Certificate -FilePath "C:\path\to\webdav.crt" -CertStoreLocation Cert:\LocalMachine\Root
+
+# Alternative: download it from the server's HTTPS port. The cert isn't trusted yet,
+# so the download has to skip verification (curl.exe is bundled with current Windows 10/11).
+# This is trust-on-first-use - only do it on a network you trust.
+curl.exe -k -o "$env:TEMP\webdav.crt" https://SERVER-IP:8443/webdav.crt
+Import-Certificate -FilePath "$env:TEMP\webdav.crt" -CertStoreLocation Cert:\LocalMachine\Root
 ```
 
 After mapping, the server appears as a drive in **This PC** — copy, paste, rename, and delete files just like a local drive.
@@ -705,7 +710,7 @@ After mapping, the server appears as a drive in **This PC** — copy, paste, ren
 
 **Finder:**
 1. Finder → Go → Connect to Server (`⌘K`)
-2. Enter: `http://SERVER-IP:8080` or `https://SERVER-IP:8443`
+2. Enter: `https://SERVER-IP:8443` — macOS must trust the certificate first: `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain webdav.crt` (plain `http://SERVER-IP:8080` only works if HTTP WebDAV is enabled)
 3. Click Connect → enter credentials
 
 The server appears as a removable volume on the Desktop.
@@ -714,7 +719,12 @@ The server appears as a removable volume on the Desktop.
 
 ```bash
 sudo apt install davfs2
-sudo mount -t davfs http://SERVER-IP:8080/ /mnt/cloudinator
+
+# Trust the server certificate once (copy db/webdav.crt from the server first)
+sudo cp webdav.crt /usr/local/share/ca-certificates/cloudinator.crt
+sudo update-ca-certificates
+
+sudo mount -t davfs https://SERVER-IP:8443/ /mnt/cloudinator
 # Enter credentials when prompted
 
 # Unmount
@@ -723,7 +733,7 @@ sudo umount /mnt/cloudinator
 
 **Persistent mount** (add to `/etc/fstab`):
 ```
-http://SERVER-IP:8080/ /mnt/cloudinator davfs user,auto,_netdev 0 0
+https://SERVER-IP:8443/ /mnt/cloudinator davfs user,auto,_netdev 0 0
 ```
 
 ---
@@ -862,7 +872,7 @@ rclone can connect to CloudinatorFTP via WebDAV, SFTP, or FTP and provides power
 
 **Quick example** (WebDAV mount):
 ```bash
-rclone mount :webdav,url=http://SERVER-IP:8080/,user=admin,pass=admin123: Z: --vfs-cache-mode full
+rclone mount :webdav,url=https://SERVER-IP:8443/,user=admin,pass=admin123,no_check_certificate=true: Z: --vfs-cache-mode full
 ```
 
 ---
@@ -942,7 +952,7 @@ Watch **"Orphaned chunks"** stat (shows incomplete uploads):
 #### Issue: "Session Expired" Message
 
 **Cause**: 
-- 1 hour of inactivity, OR
+- No activity for longer than `PERMANENT_SESSION_LIFETIME` (365 days by default), OR
 - Administrator revoked all sessions
 
 **Solution**:
@@ -952,7 +962,7 @@ Watch **"Orphaned chunks"** stat (shows incomplete uploads):
 
 **Prevention**:
 - Keep browser tab active
-- To change timeout: `PERMANENT_SESSION_LIFETIME` in `config.py`
+- To change timeout: `python config.py` → Server Settings → Session Timeout (or `PERMANENT_SESSION_LIFETIME` in `server_config.json`)
 - Re-login before timeout expires
 
 ---
@@ -1107,11 +1117,12 @@ python create_user.py
 
 #### Issue: WebDAV Drive Shows "Inaccessible" on Windows
 
-**Cause**: WebClient service not started, or BasicAuthLevel not set
+**Cause**: WebClient service not started, the server certificate isn't trusted yet (HTTPS, the default), or — only if you're using plain HTTP on port 8080 — BasicAuthLevel not set
 
 **Solution** (elevated PowerShell):
 ```powershell
 Set-Service WebClient -StartupType Automatic; Start-Service WebClient
+# Next line is only for plain HTTP (port 8080); skip it for HTTPS and import webdav.crt instead
 reg add "HKLM\SYSTEM\CurrentControlSet\Services\WebClient\Parameters" /v BasicAuthLevel /t REG_DWORD /d 2 /f
 Restart-Service WebClient
 ```
@@ -1285,7 +1296,7 @@ python setup_storage.py  # Interactive configuration
 | Method | Best for |
 |--------|---------|
 | Web UI (port 5000) | Browser-based access, media preview, bulk ZIP download |
-| WebDAV (8080/8443) | Native OS drive mapping — drag & drop in File Explorer |
+| WebDAV (8443; 8080 only if plain-HTTP WebDAV is enabled) | Native OS drive mapping — drag & drop in File Explorer |
 | SFTP (port 2222) | Secure file transfer clients (WinSCP, FileZilla, sshfs) |
 | FTP (port 2121) | Legacy FTP clients on trusted local networks only |
 | SMB (445/8445) | Native network drive, `\\HOST\SharedFolder` — needs one-time setup (`python smb_setup.py`) |

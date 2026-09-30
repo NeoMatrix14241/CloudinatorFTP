@@ -127,7 +127,7 @@ pip install wsgidav cheroot paramiko pyftpdlib
 
 | Package | Enables |
 |---------|---------|
-| `wsgidav` | WebDAV HTTP (port 8080) |
+| `wsgidav` | WebDAV (HTTPS on port 8443 by default) |
 | `cheroot` | WebDAV HTTPS (port 8443) |
 | `paramiko` | SFTP (port 2222) |
 | `pyftpdlib` | FTP (port 2121) |
@@ -207,15 +207,15 @@ Open a new terminal session and run — **choose what to tunnel**:
 cloudflared tunnel --url https://localhost:5000
 
 # Or tunnel WebDAV (for remote network drive mapping)
-cloudflared tunnel --url https://localhost:8080
+cloudflared tunnel --url https://localhost:8443
 ```
 
 You'll receive a public URL like: `https://random-words-12345.trycloudflare.com`
 
 > **What port should I tunnel?**
 > - `5000` → Web browser access (upload, download, preview via browser)
-> - `8080` → WebDAV drive mapping from remote Windows/macOS/Linux machines
-> - `8443` → WebDAV HTTPS (use with `--url https://localhost:8443`)
+> - `8443` → WebDAV drive mapping from remote Windows/macOS/Linux machines (HTTPS, the default — use with `--url https://localhost:8443`)
+> - `8080` → plain-HTTP WebDAV — **off by default**; it only listens if HTTPS is disabled (with `WEBDAV_ENABLED` on) or as the automatic fallback when the HTTPS certificate can't be prepared
 > - Only one port can be tunneled at once with the quick `--url` method. For multiple services, see the [Advanced Tunnel Setup](./docs/SETUP_TUNNEL_ADVANCED.md).
 >
 > **Note**: SFTP (2222) and FTP (2121) are raw TCP — they work on your local network but cannot be exposed via standard Cloudflare Tunnel.
@@ -240,7 +240,7 @@ ingress:
       proxyConnectTimeout: 0s
       expectContinueTimeout: 0s
   - hostname: files.yourowndomain.com
-    service: http://localhost:8080
+    service: https://localhost:8443
     originRequest:
       connectTimeout: 0s
       tlsTimeout: 0s
@@ -265,8 +265,8 @@ In addition to the web UI, CloudinatorFTP runs three additional protocol servers
 | Service | Port | Best For |
 |---------|------|----------|
 | 🌐 Web UI | 5000 | Browser-based file management |
-| 📂 WebDAV HTTP | 8080 | Native drive mapping (Windows/macOS/Linux) |
-| 🔐 WebDAV HTTPS | 8443 | Native drive mapping (secure, recommended) |
+| 🔐 WebDAV HTTPS | 8443 | Native drive mapping (secure, on by default) |
+| 📂 WebDAV HTTP | 8080 | Plaintext fallback — off by default (see the note under WebDAV below) |
 | 🔒 SFTP | 2222 | WinSCP, FileZilla, sshfs |
 | 📁 FTP | 2121 | Legacy FTP clients (LAN only) |
 
@@ -274,21 +274,32 @@ In addition to the web UI, CloudinatorFTP runs three additional protocol servers
 
 No browser needed — the server appears as a drive letter or volume in your file manager.
 
+> The examples below use **HTTPS on port 8443**, which is what runs by default. Plain HTTP on port 8080 is off by default and only listens if HTTPS is disabled (with `WEBDAV_ENABLED` on) or as the automatic fallback when the HTTPS certificate can't be prepared.
+
 **Windows (elevated PowerShell — first time only):**
 ```powershell
-# One-line certificate import from server (no file copying)
-$f="$env:TEMP\c.crt"; Invoke-WebRequest http://SERVER-IP:8080/webdav.crt -OutFile $f; Import-Certificate $f -CertStoreLocation Cert:\LocalMachine\Root; del $f
+# 1. Get the certificate. Simplest and safest: copy db/webdav.crt from the server
+#    to this PC yourself (USB, scp, shared folder...), then import it:
+Import-Certificate -FilePath "C:\path\to\webdav.crt" -CertStoreLocation Cert:\LocalMachine\Root
+
+# Alternative: download it from the server's HTTPS port. The cert isn't trusted yet,
+# so the download has to skip verification (curl.exe is bundled with current Windows 10/11).
+# This is trust-on-first-use - only do it on a network you trust.
+curl.exe -k -o "$env:TEMP\webdav.crt" https://SERVER-IP:8443/webdav.crt
+Import-Certificate -FilePath "$env:TEMP\webdav.crt" -CertStoreLocation Cert:\LocalMachine\Root
 
 # Map HTTPS drive (no registry edit needed after cert import)
 net use X: https://SERVER-IP:8443/ /user:admin admin123 /persistent:yes
 ```
 
-**macOS:**  Finder → Go → Connect to Server → `http://SERVER-IP:8080`
+**macOS:**  Finder → Go → Connect to Server → `https://SERVER-IP:8443/` (trust the certificate first: `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain webdav.crt`)
 
 **Linux:**
 ```bash
 sudo apt install davfs2
-sudo mount -t davfs http://SERVER-IP:8080/ /mnt/cloudinator
+sudo cp webdav.crt /usr/local/share/ca-certificates/cloudinator.crt
+sudo update-ca-certificates
+sudo mount -t davfs https://SERVER-IP:8443/ /mnt/cloudinator
 ```
 
 ### 🔒 SFTP — WinSCP Quick Setup
@@ -315,7 +326,7 @@ rclone can mount, sync, and copy via WebDAV, SFTP, or FTP. See [RCLONE_DEPLOYMEN
 
 ```bash
 # Quick WebDAV mount (no configuration needed)
-rclone mount :webdav,url=http://SERVER-IP:8080/,user=admin,pass=admin123: Z: --vfs-cache-mode full
+rclone mount :webdav,url=https://SERVER-IP:8443/,user=admin,pass=admin123,no_check_certificate=true: Z: --vfs-cache-mode full
 ```
 
 ---
@@ -563,7 +574,7 @@ These are the built-in defaults in `config.py`. Values saved in `server_config.j
 ```bash
 sudo ufw allow 80
 sudo ufw allow 5000/tcp   # Web UI
-sudo ufw allow 8080/tcp   # WebDAV HTTP
+sudo ufw allow 8080/tcp   # WebDAV HTTP (only if plain-HTTP WebDAV is enabled)
 sudo ufw allow 8443/tcp   # WebDAV HTTPS
 sudo ufw allow 2222/tcp   # SFTP
 sudo ufw allow 2121/tcp   # FTP
@@ -578,7 +589,7 @@ netsh advfirewall firewall add rule name="CloudflareFTP" dir=in action=allow pro
 **Windows Firewall (PowerShell, elevated) — Protocol Servers:**
 ```powershell
 New-NetFirewallRule -DisplayName "CloudinatorFTP Web"           -Direction Inbound -Protocol TCP -LocalPort 5000        -Action Allow
-New-NetFirewallRule -DisplayName "CloudinatorFTP WebDAV"        -Direction Inbound -Protocol TCP -LocalPort 8080        -Action Allow
+New-NetFirewallRule -DisplayName "CloudinatorFTP WebDAV"        -Direction Inbound -Protocol TCP -LocalPort 8080        -Action Allow   # only if plain-HTTP WebDAV is enabled
 New-NetFirewallRule -DisplayName "CloudinatorFTP WebDAV-HTTPS"  -Direction Inbound -Protocol TCP -LocalPort 8443        -Action Allow
 New-NetFirewallRule -DisplayName "CloudinatorFTP SFTP"          -Direction Inbound -Protocol TCP -LocalPort 2222        -Action Allow
 New-NetFirewallRule -DisplayName "CloudinatorFTP FTP"           -Direction Inbound -Protocol TCP -LocalPort 2121        -Action Allow

@@ -25,7 +25,7 @@ rclone is a powerful command-line tool that connects to CloudinatorFTP via **Web
 | Two-way sync | ✅ (bisync) | ❌ | ❌ |
 | Copy with filters | ✅ | ❌ | ❌ |
 | Resume interrupted transfers | ✅ | ❌ | ❌ |
-| Works on Windows without registry | ✅ | ❌ (BasicAuthLevel) | ❌ |
+| Works on Windows without registry | ✅ | ✅ over HTTPS (after importing the cert); ❌ over plain HTTP (BasicAuthLevel) | ❌ |
 | Works through Cloudflare Tunnel | ✅ | ✅ | ❌ |
 | Scripting & automation | ✅ | ❌ | ❌ |
 
@@ -83,21 +83,25 @@ rclone version
 
 rclone supports **connection strings** — you can connect to CloudinatorFTP without writing any config file. Useful for one-off commands or scripting.
 
-### WebDAV (recommended)
+### WebDAV over HTTPS (recommended)
 
 ```bash
 # List files at root
-rclone ls :webdav,url=http://SERVER-IP:8080/,user=admin,pass=admin123:
+rclone ls :webdav,url=https://SERVER-IP:8443/,user=admin,pass=admin123,no_check_certificate=true:
 
 # List top-level directories
-rclone lsd :webdav,url=http://SERVER-IP:8080/,user=admin,pass=admin123:
+rclone lsd :webdav,url=https://SERVER-IP:8443/,user=admin,pass=admin123,no_check_certificate=true:
 
 # Copy a file to the server
-rclone copy /local/file.txt :webdav,url=http://SERVER-IP:8080/,user=admin,pass=admin123:backups/
+rclone copy /local/file.txt :webdav,url=https://SERVER-IP:8443/,user=admin,pass=admin123,no_check_certificate=true:backups/
 
 # Copy a file from the server
-rclone copy :webdav,url=http://SERVER-IP:8080/,user=admin,pass=admin123:photos/IMG_001.jpg ./
+rclone copy :webdav,url=https://SERVER-IP:8443/,user=admin,pass=admin123,no_check_certificate=true:photos/IMG_001.jpg ./
 ```
+
+> **Why `no_check_certificate=true`?** The HTTPS listener (port 8443, on by default) uses the self-signed certificate stored in `db/webdav.crt`, so rclone can't validate it out of the box. The option tells rclone to skip validation. If you'd rather validate, import `db/webdav.crt` as a trusted CA on the client and drop the option.
+>
+> **HTTP fallback (port 8080):** off by default. It only listens if HTTPS is disabled (with `WEBDAV_ENABLED` on) or as the automatic fallback when the HTTPS certificate can't be prepared (for example the `cryptography` package is missing). In that setup use `url=http://SERVER-IP:8080/` and drop `no_check_certificate`. Credentials travel unencrypted on that port.
 
 ### SFTP
 
@@ -137,23 +141,10 @@ Choose **n** for new remote, give it a name (e.g., `cloudinator`), then follow t
 
 Edit `~/.config/rclone/rclone.conf` (Linux/macOS) or `%APPDATA%\rclone\rclone.conf` (Windows):
 
-#### WebDAV HTTP Remote
+#### WebDAV HTTPS Remote (default — self-signed cert)
 
 ```ini
 [cloudinator]
-type = webdav
-url = http://SERVER-IP:8080/
-vendor = other
-user = admin
-pass = ENCRYPTED_PASSWORD
-```
-
-> **Encrypt the password**: run `rclone obscure admin123` and paste the output as `pass`.
-
-#### WebDAV HTTPS Remote (with self-signed cert)
-
-```ini
-[cloudinator-https]
 type = webdav
 url = https://SERVER-IP:8443/
 vendor = other
@@ -162,7 +153,22 @@ pass = ENCRYPTED_PASSWORD
 no_check_certificate = true
 ```
 
-> Or import `db/webdav.crt` as a system CA (see WINDOWS_DEPLOYMENT.md) and remove the `no_check_certificate` line.
+> **Encrypt the password**: run `rclone obscure admin123` and paste the output as `pass`.
+
+> Or import `db/webdav.crt` as a trusted CA on the client (steps are in the WebDAV section of USER_GUIDE.md) and remove the `no_check_certificate` line.
+
+#### WebDAV HTTP Remote (fallback — only if plain-HTTP WebDAV is enabled)
+
+Port 8080 is off by default. Use this remote only if you turned on `WEBDAV_ENABLED` with HTTPS disabled, or the server fell back to HTTP because its HTTPS certificate couldn't be prepared. Credentials are not encrypted on this port.
+
+```ini
+[cloudinator-http]
+type = webdav
+url = http://SERVER-IP:8080/
+vendor = other
+user = admin
+pass = ENCRYPTED_PASSWORD
+```
 
 #### SFTP Remote
 
@@ -222,7 +228,7 @@ rclone copy cloudinator:photos ./local-photos
 
 ## Mount as a Drive
 
-rclone can mount the server as a local drive letter (Windows) or mount point (Linux/macOS). Unlike WebDAV native mounting, **no registry edits are required on Windows**.
+rclone can mount the server as a local drive letter (Windows) or mount point (Linux/macOS). Unlike native WebDAV over plain HTTP, **no registry edits are required on Windows** (and with `no_check_certificate` there is no certificate import either).
 
 ### Windows — Mount as Drive Letter
 
@@ -240,7 +246,7 @@ winget install WinFsp.WinFsp
 rclone mount cloudinator: Z: --vfs-cache-mode full
 
 # Using connection string (no config needed)
-rclone mount :webdav,url=http://SERVER-IP:8080/,user=admin,pass=admin123: Z: --vfs-cache-mode full
+rclone mount :webdav,url=https://SERVER-IP:8443/,user=admin,pass=admin123,no_check_certificate=true: Z: --vfs-cache-mode full
 ```
 
 Open File Explorer — you'll see `Z:` with your server files.
@@ -448,7 +454,7 @@ rclone serve http cloudinator: --addr :8765
 ### Windows
 
 - WinFsp required for `rclone mount`
-- No registry edits needed (unlike native WebDAV)
+- No registry edits needed (native WebDAV over plain HTTP needs `BasicAuthLevel`; over HTTPS it doesn't)
 - Password in config must be obscured: `rclone obscure yourpassword`
 - If mount shows as read-only: add `--vfs-cache-mode writes` or `full`
 - Use `rclone mount --network-mode` flag for network drive appearance
@@ -481,8 +487,8 @@ rclone copy ~/storage/dcim cloudinator:phone-backup --progress
 |-------|----------|
 | `no FUSE found` (Windows) | Install WinFsp from winfsp.dev |
 | `no FUSE found` (Linux) | `sudo apt install fuse3` |
-| `certificate verify failed` | Add `no_check_certificate = true` to remote config |
-| `connection refused` | Check server is running; verify IP and port |
+| `certificate verify failed` | Add `no_check_certificate = true` to the remote config (or `no_check_certificate=true` in a connection string) |
+| `connection refused` | Check server is running; verify IP and port (WebDAV is on 8443 by default — 8080 only listens if plain-HTTP WebDAV is enabled) |
 | Mount shows empty | Check `--vfs-cache-mode` setting; try `full` |
 | Slow transfers | Increase `--transfers 8 --checkers 16` flags |
 | Files appear read-only | Use `--vfs-cache-mode writes` or `full` |
@@ -510,7 +516,7 @@ rclone ls cloudinator: -vv 2>&1 | head -50
 | **macOS mount** | ✅ | ❌ | ✅ | ❌ | ✅ |
 | **Sync/Backup** | ✅ | ⚠️ limited | ❌ | ❌ | ❌ |
 | **GUI** | ❌ CLI only | ✅ | ✅ Explorer | ❌ | ❌ |
-| **No registry (Windows)** | ✅ | ✅ | ❌ | ✅ | ✅ |
+| **No registry (Windows)** | ✅ | ✅ | ✅ over HTTPS, ❌ over HTTP | ✅ | ✅ |
 | **Works via domain/tunnel** | ✅ | ✅ | ✅ | ✅ | ❌ |
 
 ---
