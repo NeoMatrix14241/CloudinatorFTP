@@ -62,6 +62,7 @@ Platform-specific deployment and production guides are available in the **[`docs
 | 🔄 **rclone** | [RCLONE_DEPLOYMENT.md](./docs/RCLONE_DEPLOYMENT.md) | Mount and sync via rclone |
 | 📡 **SMB** | [SMB_PROTOCOL_DEPLOYMENT.md](./docs/SMB_PROTOCOL_DEPLOYMENT.md) | One-time SMB setup per platform, antivirus quirk, connecting to the share |
 | 📖 **User Guide** | [USER_GUIDE.md](./docs/USER_GUIDE.md) | End-user guide to the web file manager, including share links |
+| 🖥️ **manage.sh** | [MANAGE_SCRIPT_GUIDE.md](./docs/MANAGE_SCRIPT_GUIDE.md) | Every `manage.sh` command, the interactive menu, logs, and troubleshooting on Windows, Linux and Termux |
 | ⚙️ **Configuration** | [CONFIG_PY_REFERENCE.md](./docs/CONFIG_PY_REFERENCE.md) | Every `config.py` setting, defaults, the admin menu, and `server_config.json` |
 
 ---
@@ -152,7 +153,7 @@ Every setting is explained in the [Configuration Reference](./docs/CONFIG_PY_REF
 **Update security.txt and robots.txt(Important for tunneling else optional up to you)**
 ```
 # use your own details
-# you can also use "bash manage.sh menu > 17 to create security.txt
+# you can also use "bash manage.sh menu > 19 to create security.txt
 # or run:
 # bash manage.sh security-txt --contact you@example.com --expires 2030-09-03 --preferred-lang en,fil --canonical https://yourdomain.com/.well-known/security.txt
 static\.well-known\security.txt
@@ -335,7 +336,7 @@ rclone mount :webdav,url=https://SERVER-IP:8443/,user=admin,pass=admin123,no_che
 
 ## 🖥️ Server Management Script (`manage.sh`)
 
-A shell script for **Windows (Git Bash) and Linux/macOS** that runs a server in the background while keeping your terminal free to run utilities — no separate terminal window needed.
+A shell script for **Windows (Git Bash), Linux and Android (Termux)** that runs a server in the background while keeping your terminal free to run utilities — no separate terminal window needed. Full reference: **[MANAGE_SCRIPT_GUIDE.md](./docs/MANAGE_SCRIPT_GUIDE.md)**.
 
 ### ⚡ Setup
 
@@ -349,8 +350,8 @@ chmod +x manage.sh
 
 | Command | Description |
 |---------|-------------|
-| `./manage.sh start server` | Start `prod_server.py` (Waitress) in the background |
-| `./manage.sh start dev_server` | Start `dev_server.py` (Flask) in the background |
+| `./manage.sh start server` | Start `prod_server.py` (Hypercorn) in the background |
+| `./manage.sh start dev_server` | Start `dev_server.py` (Quart) in the background |
 | `./manage.sh stop` | Gracefully stop whichever server is running |
 | `./manage.sh restart` | Restart the currently active server |
 | `./manage.sh status` | Show server status, PID, uptime, and recent log tail |
@@ -375,7 +376,7 @@ Run any utility **while a server is running in the same terminal**:
 | Command | Equivalent |
 |---------|------------|
 | `./manage.sh config` | `python config.py` |
-| `./manage.sh create-user` | `python create_user.py` |
+| `./manage.sh manage-users` | `python manage_users.py` |
 | `./manage.sh debug-pw` | `python debug_passwords.py` |
 | `./manage.sh reset-db` | `python reset_db.py` |
 | `./manage.sh setup-storage` | `python setup_storage.py` |
@@ -395,7 +396,7 @@ A numbered menu covering all server and utility commands with live status shown 
 ./manage.sh start server
 
 # 2. Run utilities in the same terminal while the server is up
-./manage.sh create-user
+./manage.sh manage-users
 ./manage.sh config
 
 # 3. Check server is still running
@@ -415,7 +416,7 @@ A numbered menu covering all server and utility commands with live status shown 
 Keep all packages current without manually editing `requirements.txt`:
 
 ```bash
-bash update_pymodules.sh
+bash setup_pymodules.sh   # or: ./manage.sh update-modules
 ```
 
 Or via `manage.sh` (works on all platforms):
