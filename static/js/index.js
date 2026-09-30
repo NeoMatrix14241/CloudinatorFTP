@@ -1625,10 +1625,10 @@ function _parseDisplayDate(str) {
 
 const VT = (() => {
     // ── row-windowing tunables ──────────────────────────────────
-    // Formula: RENDER_BUFFER = 1; DEFAULT_ROW_HEIGHT = 7
+    // Formula: RENDER_BUFFER = 1; DEFAULT_ROW_HEIGHT = 8
     // RESIZE_DEBOUNCE_MS = 150 by default
-    const RENDER_BUFFER = 10;        // rows to keep mounted above/below the viewport
-    const DEFAULT_ROW_HEIGHT = 70;   // seed estimate; replaced by a real measurement ASAP
+    const RENDER_BUFFER = 12;        // rows to keep mounted above/below the viewport
+    const DEFAULT_ROW_HEIGHT = 96;   // seed estimate; replaced by a real measurement ASAP
     const RESIZE_DEBOUNCE_MS = 150;
 
     let _allFiles = []; // raw server data for current folder
