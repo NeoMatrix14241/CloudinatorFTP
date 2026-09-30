@@ -466,8 +466,8 @@ cmd_start() {
 # port and its log file handle open — the "stale python process locking
 # the log file, have to kill it in Task Manager" symptom. Rather than
 # trust the pidfile alone, this now also actively finds whatever's bound
-# to WebDAV's ports (8080/8443, matching protocol_manager.py's own
-# _webdav_target_ports() fallback) and kills that directly — a no-op on
+# to WebDAV's ports (see _webdav_ports() — server_config.json overrides,
+# else 8080/8443) and kills that directly — a no-op on
 # any port nothing is actually listening on. Called both from cmd_stop
 # and defensively from cmd_start before spawning, so this self-heals
 # without needing a manual netstat/taskkill step going forward.
@@ -502,11 +502,9 @@ _kill_webdav_child() {
 	# file handle — open indefinitely. That's the "stale python process
 	# locking the log file, have to kill it in Task Manager" symptom.
 	# Rather than trust the pidfile at all, actively find whatever's bound
-	# to WebDAV's ports and kill that directly — matches the ports
-	# protocol_manager.py's own _webdav_target_ports() checks
-	# (WEBDAV_PORT/WEBDAV_HTTPS_PORT from config.py, falling back to
-	# 8080/8443 same as that function does). Harmless no-op on every port
-	# nothing is actually listening on.
+	# to WebDAV's ports and kill that directly. The ports come from
+	# _webdav_ports() below (server_config.json overrides, else 8080/8443).
+	# Harmless no-op on every port nothing is actually listening on.
 	#
 	# !! Every lookup below ends in `|| true` on purpose. With `set -eo
 	# pipefail`, "nothing is listening on this port" makes grep/lsof exit 1,
@@ -517,7 +515,7 @@ _kill_webdav_child() {
 	# Safety: only ever kill a *python* process — never whatever unrelated
 	# program happens to be listening on 8080/8443.
 	local port webdav_pid
-	for port in 8080 8443; do
+	for port in $(_webdav_ports); do
 		webdav_pid=""
 		if is_windows; then
 			webdav_pid=$(netstat -ano 2>/dev/null | tr -d '\r' | grep ":${port} " | grep LISTENING | awk '{print $NF}' | head -1) || true
@@ -534,6 +532,39 @@ _kill_webdav_child() {
 		fi
 	done
 	return 0
+}
+
+# Ports the orphan sweep below checks: WEBDAV_PORT and WEBDAV_HTTPS_PORT from
+# server_config.json (the same file config.py's load_server_config() reads —
+# its saved values override the in-code defaults), else 8080 / 8443.
+# Reads the JSON directly instead of importing config.py: importing it runs
+# load_server_config() and prints to the console. Never fails — any problem
+# (no file, bad JSON, no python, a non-numeric or out-of-range value) falls
+# back to the default for that port, so stop/start/restart are never broken
+# by this lookup. Prints two numbers separated by a space.
+# Limitation: a port changed only by editing the constant in config.py (with
+# no server_config.json entry) is not seen here.
+_webdav_ports() {
+	local out=""
+	out=$(
+		"$PYTHON" - "${SCRIPT_DIR}/server_config.json" <<'PYEOF' 2>/dev/null
+import json, sys
+ports = [8080, 8443]
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    for i, key in enumerate(("WEBDAV_PORT", "WEBDAV_HTTPS_PORT")):
+        v = cfg.get(key, ports[i])
+        if isinstance(v, int) and not isinstance(v, bool) and 0 < v < 65536:
+            ports[i] = v
+except Exception:
+    pass
+print(*ports)
+PYEOF
+	) || true
+	out="${out//[^0-9 ]/}" # digits and space only (strips a Windows \r)
+	[[ "$out" =~ ^[0-9]+\ [0-9]+$ ]] || out="8080 8443"
+	echo "$out"
 }
 
 # True only if PID belongs to a python process (guards the port sweep above).

@@ -369,6 +369,8 @@ Logs are always saved to `logs/` regardless of whether you're watching them.
 
 > 💡 **Ctrl-C while following logs detaches your terminal without stopping the server.**
 
+> ℹ️ **Background mode hides startup banners.** `start` discards the server's console output, so messages the code `print()`s at startup (such as the WebDAV certificate hint) only show when you run `python prod_server.py` in the foreground. The log files in `logs/` contain everything that goes through the app's logger.
+
 ### 🔧 Utility Commands
 
 Run any utility **while a server is running in the same terminal**:

@@ -81,6 +81,18 @@ Details worth knowing:
 
 ---
 
+### Startup messages are not shown in background mode
+
+`start` runs the server detached with its console output thrown away. Startup banners that the code `print()`s (for example the WebDAV HTTPS line that tells you where to fetch the certificate) **do not appear** when you use `./manage.sh start server`. To see them, run the server in the foreground instead:
+
+```bash
+python prod_server.py     # or: python dev_server.py
+```
+
+What does reach the log files is whatever goes through the app's logger (request timing, errors, protocol events, uncaught exceptions). The certificate itself is always at `db/webdav.crt`, and on a default install it can also be downloaded from `https://HOST:8443/webdav.crt`.
+
+---
+
 ## Log Commands
 
 | Command | What it does |
@@ -150,7 +162,7 @@ Per the script's built-in help:
 ./manage.sh revoke-shares deny <id>
 ```
 
-Edit options: `--mode public|passkey|approval`, `--passkey KEY`, `--generate-passkey`, `--clear-passkey`, `--expires-in 1h|2d|30m|7d|SECONDS`, `--never-expire`.
+Edit options: `--mode public|passkey|approval`, `--passkey KEY` (implies passkey mode unless a mode is already set), `--generate-passkey`, `--clear-passkey`, `--expires-in 1h|2d|30m|7d|SECONDS`, `--never-expire`. `approve` allows **1** download unless you pass `--max-downloads N`.
 
 ### update-modules
 
@@ -222,7 +234,7 @@ Type `q` to quit. After each action it waits for Enter before redrawing.
 | `logs/prod_server_YYYY-MM-DD.log`, `logs/dev_server_YYYY-MM-DD.log` | One log per day per server type, written by the app's own logger. It rolls to a new file at midnight without a restart |
 | `static/.well-known/security.txt` | Edited by `security-txt` |
 
-Because background mode discards raw console output (see below), the log files are where diagnostics live. Console banners that `print()` at startup are only visible if you run the server in the foreground (`python prod_server.py`).
+Because background mode discards raw console output (see [Startup messages](#startup-messages-are-not-shown-in-background-mode)), the log files are where diagnostics live.
 
 ---
 
@@ -244,9 +256,11 @@ The practical result: closing a log view or pressing Ctrl-C **never** stops the 
 WebDAV runs as its own operating-system process next to the main server, tracked by `.manage_pids/webdav.pid`. Killing the main server does not automatically kill it, so `stop` and `start` also clean it up:
 
 1. Kill the process in `webdav.pid`.
-2. Sweep ports **8080 and 8443**. Whatever is listening there is killed **only if it is a Python process**, so unrelated programs on those ports are left alone.
+2. Sweep the two WebDAV ports. Whatever is listening there is killed **only if it is a Python process**, so unrelated programs on those ports are left alone.
 
-Note that this sweep uses the fixed ports 8080 and 8443. If you changed the WebDAV ports in `config.py`, the PID file is what cleans up your custom ports. If a stale process ever holds a port or a log file open (a common Windows complaint), running `./manage.sh stop` and `./manage.sh start server` again clears it.
+**Which ports:** `WEBDAV_PORT` and `WEBDAV_HTTPS_PORT` from `server_config.json` (the file `python config.py` saves to), otherwise the defaults **8080** and **8443**. The script reads that JSON file directly, and any problem (no file, unreadable file, a value that is not a valid port number) falls back to the default for that port, so this lookup can never break `stop`, `start` or `restart`. One limit: if you change a port only by editing the constant inside `config.py` and never save it through `python config.py`, `manage.sh` does not see it and still checks 8080 and 8443 (the normal PID-file cleanup still works).
+
+If a stale process ever holds a port or a log file open (a common Windows complaint), running `./manage.sh stop` and `./manage.sh start server` again clears it.
 
 ---
 
