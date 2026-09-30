@@ -938,9 +938,9 @@ def start() -> bool:
     if https_port:
         print(f"🔐 WebDAV HTTPS: https://{LOCAL_IP}:{https_port}/  (HTTP/1.1 only)")
         print(
-            f"   Import {cert_path} as a trusted root manually (or serve it "
-            f"yourself) — the plaintext HTTP listener that used to host it at "
-            f"/webdav.crt is disabled while HTTPS is running exclusively."
+            f"   Import {cert_path} as a trusted root, or download it from "
+            f"https://{LOCAL_IP}:{https_port}/webdav.crt (the cert isn't "
+            f"trusted yet, so that first fetch is trust-on-first-use)."
         )
 
     return True

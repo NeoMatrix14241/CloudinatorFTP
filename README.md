@@ -60,6 +60,8 @@ Platform-specific deployment and production guides are available in the **[`docs
 | 🪟 **Apache/WSGI** | [DEPLOY_APACHE.md](./docs/DEPLOY_APACHE.md) | Production Apache deployment with mod_wsgi |
 | 🔗 **Cloudflare Tunnel** | [SETUP_TUNNEL_ADVANCED.md](./docs/SETUP_TUNNEL_ADVANCED.md) | Advanced tunnel setup with custom domains |
 | 🔄 **rclone** | [RCLONE_DEPLOYMENT.md](./docs/RCLONE_DEPLOYMENT.md) | Mount and sync via rclone |
+| 📡 **SMB** | [SMB_PROTOCOL_DEPLOYMENT.md](./docs/SMB_PROTOCOL_DEPLOYMENT.md) | One-time SMB setup per platform, antivirus quirk, connecting to the share |
+| 📖 **User Guide** | [USER_GUIDE.md](./docs/USER_GUIDE.md) | End-user guide to the web file manager, including share links |
 | ⚙️ **Configuration** | [CONFIG_PY_REFERENCE.md](./docs/CONFIG_PY_REFERENCE.md) | Every `config.py` setting, defaults, the admin menu, and `server_config.json` |
 
 ---
