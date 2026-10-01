@@ -875,6 +875,111 @@ class SearchIndexManager:
             # Don't set _ready — callers fall back to os.walk until fixed
 
     # ------------------------------------------------------------------
+    # Reconcile against a filesystem walk (4.53)
+    # ------------------------------------------------------------------
+    def reconcile_from_walk(self, direct_entries: dict) -> tuple:
+        """
+        Bring the index in line with a full filesystem walk. Called by
+        file_monitor._full_walk (settle reconcile after bulk operations, the
+        15-minute reconcile, and the post-startup reconcile), right after it
+        rebuilds file_index.json from the same data.
+
+        Why: the watchdog handlers deliberately skip work while a bulk-op
+        settle is pending, and nothing sees changes made while the server was
+        down - the file index and counters were repaired by the walk, the
+        search index never was, so moved/added/deleted entries stayed wrong
+        until a full crawl (e.g. a folder moved to a new path stayed indexed
+        under the old path).
+
+        direct_entries: rel_path -> [ {name, is_dir, ...}, ... ]  (same dict
+        that file_index_manager.build_from_walk receives; '' is the root).
+        Returns (added, removed). Does nothing until the first crawl is done.
+        """
+        if not self._ready:
+            return (0, 0)
+
+        fs = {}
+        for rel, entries in direct_entries.items():
+            for e in entries:
+                child = (rel + "/" + e["name"]) if rel else e["name"]
+                fs[child] = bool(e["is_dir"])
+        if not fs:  # failed/empty walk - never wipe the index because of it
+            return (0, 0)
+
+        with _connect() as conn:
+            db = {
+                r[0]: r[1]
+                for r in conn.execute("SELECT rel_path, is_dir FROM files_meta")
+            }
+
+        add_paths = [p for p in fs if p not in db]
+        rem_paths = [p for p in db if p not in fs]
+
+        # The walk takes minutes; events handled meanwhile may already have
+        # changed things. Re-check small change sets against the live disk.
+        if len(add_paths) <= 5000:
+            add_paths = [
+                p for p in add_paths if os.path.lexists(os.path.join(ROOT_DIR, p))
+            ]
+        if len(rem_paths) <= 5000:
+            rem_paths = [
+                p for p in rem_paths if not os.path.lexists(os.path.join(ROOT_DIR, p))
+            ]
+
+        # Safety: the walk swallows its own errors and may return a partial
+        # tree. Never mass-delete on that evidence.
+        limit = max(2000, len(db) // 4)
+        if len(rem_paths) > limit:
+            print(
+                f"⚠️  Search index reconcile: {len(rem_paths):,} stale rows exceed "
+                f"the safety limit ({limit:,}) - NOT removing them "
+                f"(partial walk?). Delete search_index.db to rebuild if this persists."
+            )
+            rem_paths = []
+
+        removed = 0
+        if rem_paths:
+            rem_set = set(rem_paths)
+            with _connect() as conn:
+                # One scan to map rel_path -> rowid (FTS5 cannot look up
+                # rel_path directly), then delete by rowid.
+                rowids = [
+                    r[0]
+                    for r in conn.execute("SELECT rowid, rel_path FROM files")
+                    if r[1] in rem_set
+                ]
+            for i in range(0, len(rowids), 500):
+                chunk = rowids[i : i + 500]
+                ph = ",".join("?" for _ in chunk)
+                with _write_lock, _connect() as conn:
+                    conn.execute(f"DELETE FROM files WHERE rowid IN ({ph})", chunk)
+                time.sleep(0.01)
+            for i in range(0, len(rem_paths), 500):
+                chunk = rem_paths[i : i + 500]
+                ph = ",".join("?" for _ in chunk)
+                with _write_lock, _connect() as conn:
+                    conn.execute(
+                        f"DELETE FROM files_meta WHERE rel_path IN ({ph})", chunk
+                    )
+                removed += len(chunk)
+                time.sleep(0.01)
+
+        added = 0
+        for i in range(0, len(add_paths), 1000):
+            batch = [(p, p.rsplit("/", 1)[-1], fs[p]) for p in add_paths[i : i + 1000]]
+            with _write_lock, _connect() as conn:
+                self._batch_insert(conn, batch)
+            added += len(batch)
+            time.sleep(0.01)
+
+        if added or removed:
+            print(
+                f"🔄 Search index reconciled with filesystem: "
+                f"+{added:,} added, -{removed:,} removed"
+            )
+        return (added, removed)
+
+    # ------------------------------------------------------------------
     # Cache keep-warm (4.53)
     # ------------------------------------------------------------------
     # Observed: a deep search sometimes takes 11-20 s server-side with

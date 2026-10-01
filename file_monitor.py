@@ -833,6 +833,14 @@ class FileSystemMonitor:
         # Build file_index.json for folders exceeding the direct-entry threshold
         file_index_manager.build_from_walk(direct_entries)
 
+        # Same data repairs the search index (changes missed while a bulk-op
+        # settle was pending, or while the server was down). No-op until the
+        # search index's first crawl has finished.
+        try:
+            search_index_manager.reconcile_from_walk(direct_entries)
+        except Exception as e:
+            print(f"⚠️  Search index reconcile failed: {e}")
+
         return {
             "file_count": file_count,
             "dir_count": dir_count,
