@@ -5306,15 +5306,19 @@ async def search_files():
         # Exact total — single COUNT(*), essentially free on the indexed DB.
         # Only on offset=0 (first page) to avoid repeating it on every scroll page.
         total_count = None
+        t_count = 0.0
         if offset == 0 and ENABLE_SEARCH_INDEX:
+            _tc = time.time()
             # Blocking SQLite work -> worker thread so the event loop (SSE
             # heartbeats, HTTP/2 pings, other requests) is never stalled.
             c = await asyncio.to_thread(
                 search_index_manager.count, query, ext_filter=ext_filter
             )
+            t_count = time.time() - _tc
             if c >= 0:  # -1 means index not ready yet
                 total_count = c
 
+        _ts = time.time()
         if ENABLE_SEARCH_INDEX:
             results, from_index, has_more = await asyncio.to_thread(
                 search_index_manager.search,
@@ -5330,6 +5334,16 @@ async def search_files():
             from_index = False
 
         search_time = time.time() - search_start
+        t_search = time.time() - _ts
+        if search_time > 1.0:
+            # Diagnostic (4.52+): which step is slow? count() = files_meta LIKE
+            # scan, search() = FTS/LIKE query + one os.stat() per returned row.
+            print(
+                f"⏱️  Slow search {query!r}: total={search_time:.2f}s "
+                f"count={t_count:.2f}s search={t_search:.2f}s "
+                f"rows={len(results)} from_index={from_index}",
+                flush=True,
+            )
 
         return (
             jsonify(
@@ -5343,6 +5357,12 @@ async def search_files():
                     "limit": limit,
                     "has_more": has_more,
                     "search_time": round(search_time, 3),
+                    # Diagnostic: per-step seconds (count = total_count query,
+                    # search = results query incl. per-row os.stat()).
+                    "timing": {
+                        "count": round(t_count, 3),
+                        "search": round(t_search, 3),
+                    },
                     "from_index": from_index,
                     # Diagnostic: None when served from the DB, else why not.
                     "fallback_reason": (

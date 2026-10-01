@@ -191,6 +191,9 @@ class SearchIndexManager:
         # Diagnostic: why the last search() used os.walk instead of the DB
         # (None = it used the DB). Reported in /api/search as fallback_reason.
         self._last_fallback_reason: Optional[str] = None
+        # Keep-warm thread (see _warm_loop): keeps search_index.db in the OS
+        # file cache so a search never has to read it cold from a busy HDD.
+        self._warm_thread: Optional[threading.Thread] = None
 
     # ------------------------------------------------------------------
     # Internal write helpers
@@ -743,6 +746,7 @@ class SearchIndexManager:
                     f"(files={fts_count:,}  meta={meta_count:,}, {elapsed:.1f}s)"
                 )
                 self._ready = True
+                self._ensure_warmer()
                 return
 
             # Case B / C: crawl the filesystem — single source of truth
@@ -826,10 +830,83 @@ class SearchIndexManager:
                 f"indexed in {elapsed:.1f}s"
             )
             self._ready = True
+            self._ensure_warmer()
 
         except Exception as e:
             print(f"❌ Search index crawler error: {e}")
             # Don't set _ready — callers fall back to os.walk until fixed
+
+    # ------------------------------------------------------------------
+    # Cache keep-warm (4.53)
+    # ------------------------------------------------------------------
+    # Observed: a deep search sometimes takes 11-20 s server-side with
+    # from_index=True on a ~220 MB search_index.db on a spinning disk, and
+    # 0.075 s other times. Each search opens a fresh SQLite connection (8 MB
+    # page cache), so everything depends on the OS file cache, which uploads /
+    # streaming / walks evict. A sequential read of the DB file every
+    # _WARM_INTERVAL_SECS puts it back in the cache: if it is already cached
+    # the read costs almost nothing, if it was evicted it costs one sequential
+    # read (a couple of seconds on an HDD) instead of a user waiting on
+    # thousands of random reads.
+    _WARM_INTERVAL_SECS = 600
+    _WARM_CHUNK = 4 * 1024 * 1024
+
+    def _ensure_warmer(self):
+        if self._warm_thread and self._warm_thread.is_alive():
+            return
+        self._warm_thread = threading.Thread(
+            target=self._warm_loop, daemon=True, name="search-index-warmer"
+        )
+        self._warm_thread.start()
+
+    def _warm_once(self, first: bool):
+        t0 = time.time()
+        total = 0
+        for suffix in ("", "-wal"):
+            path = SEARCH_INDEX_PATH + suffix
+            try:
+                with open(path, "rb") as f:
+                    while not self._stop_crawler:
+                        chunk = f.read(self._WARM_CHUNK)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        time.sleep(0.002)  # be gentle with the disk
+            except OSError:
+                pass
+        # Also touch the query paths themselves (indexes, FTS structures).
+        try:
+            with _connect() as conn:
+                conn.execute(
+                    "SELECT COUNT(*) FROM files_meta WHERE name_lower LIKE '%zzzqq%'"
+                ).fetchone()
+                if _use_fts:
+                    conn.execute(
+                        "SELECT rowid FROM files WHERE files MATCH '\"zzzqq\"' LIMIT 1"
+                    ).fetchall()
+        except Exception:
+            pass
+        dt = time.time() - t0
+        # Quiet unless it was the first pass or the cache had been evicted.
+        if first or dt > 1.0:
+            print(
+                f"🔥 Search index cache warmed: {total / 1048576:,.0f} MB in {dt:.1f}s"
+                f"{'' if first else ' (was cold)'}"
+            )
+
+    def _warm_loop(self):
+        first = True
+        while not self._stop_crawler:
+            try:
+                self._warm_once(first)
+            except Exception as e:
+                print(f"⚠️  Search index warmer error: {e}")
+            first = False
+            # sleep in small steps so stop() is honoured quickly
+            for _ in range(self._WARM_INTERVAL_SECS):
+                if self._stop_crawler:
+                    return
+                time.sleep(1)
 
     # ------------------------------------------------------------------
     # Stats + shutdown
