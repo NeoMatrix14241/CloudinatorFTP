@@ -1960,7 +1960,13 @@ async function navigateToFolder(newPath) {
         console.log(`🔗 Fetching from: ${apiUrl}`);
 
         console.log("🚀 Starting fetch request...");
-        const response = await fetch(apiUrl);
+        // cache:'no-store' — never serve this call from the HTTP cache (a cached
+        // 301 -> /login would replay as "Session expired" even while logged in).
+        const response = await fetch(apiUrl, {
+            cache: 'no-store',
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+        });
         console.log(`📡 Response status: ${response.status} ${response.statusText}`);
         console.log(`📡 Response headers:`, response.headers);
         console.log("📡 Response object:", response);

@@ -1068,7 +1068,32 @@ def _lean_redirect(location, code=302):
     # in the full page-with-link HTML.
     response = Response("", status=code)
     response.headers["Location"] = location
+    # A 301 is cacheable FOREVER by default. This redirect is produced by
+    # validate_session for anonymous callers, and after_request only adds
+    # no-store for logged-in/known endpoints, so without this a single
+    # unauthenticated hit on e.g. /api/files/ was cached by the browser
+    # and replayed from disk on every later call, even after login.
+    response.headers["Cache-Control"] = "no-store"
     return response
+
+
+def _wants_json_auth_error():
+    """Same test login_required uses: API/XHR callers get 401 JSON, not a redirect."""
+    return (
+        request.path.startswith("/api/")
+        or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        or request.accept_mimetypes.best == "application/json"
+    )
+
+
+def _unauthenticated_response():
+    if _wants_json_auth_error():
+        return (
+            jsonify({"error": "Session expired", "redirect": "/login"}),
+            401,
+            {"Cache-Control": "no-store"},
+        )
+    return _lean_redirect(url_for("login"), code=301)
 
 
 @app.before_request
@@ -1141,7 +1166,7 @@ async def validate_session():
         if request.endpoint == "index" and request.path != "/":
             abort(404)
 
-        return _lean_redirect(url_for("login"), code=301)
+        return _unauthenticated_response()
 
     # Verify the account still exists in users.json.
     # Without this, a deleted account's still-valid cookie causes an infinite
@@ -1150,7 +1175,7 @@ async def validate_session():
     username = session.get("username")
     if not username or get_role(username) is None:
         session.clear()
-        return _lean_redirect(url_for("login"), code=301)
+        return _unauthenticated_response()
 
     # Session lifetime controlled by PERMANENT_SESSION_LIFETIME (86400s = 24h)
     # and refreshed on every request via SESSION_REFRESH_EACH_REQUEST=True.
