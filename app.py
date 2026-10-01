@@ -5207,6 +5207,59 @@ async def health_check():
     )
 
 
+# ---------------------------------------------------------------------------
+# Event-loop stall watchdog (diagnostic)
+# ---------------------------------------------------------------------------
+# A heartbeat coroutine stamps a timestamp every 250 ms on the event loop. A
+# plain thread (unaffected by a blocked loop) checks it; if the loop has not
+# beat for > _LOOP_STALL_SECS it prints the loop thread's CURRENT stack, i.e.
+# the exact line of blocking code. Cause of ERR_HTTP2_PING_FAILED / SSE drops
+# and "search stuck 20 s but search_time 0.075 s".
+_LOOP_STALL_SECS = 2.0
+_loop_beat = {"t": 0.0, "tid": None}
+_loop_wd_started = False
+
+
+async def _loop_heartbeat():
+    _loop_beat["tid"] = threading.get_ident()
+    while True:
+        _loop_beat["t"] = time.monotonic()
+        await asyncio.sleep(0.25)
+
+
+def _loop_watchdog_thread():
+    import traceback
+
+    reported_for = 0.0
+    while True:
+        time.sleep(0.5)
+        beat = _loop_beat["t"]
+        tid = _loop_beat["tid"]
+        if not beat or tid is None:
+            continue
+        lag = time.monotonic() - beat
+        if lag > _LOOP_STALL_SECS and beat != reported_for:
+            reported_for = beat
+            frame = sys._current_frames().get(tid)
+            stack = "".join(traceback.format_stack(frame)) if frame else "(no frame)"
+            print(
+                f"\n\U0001f6a8 EVENT LOOP BLOCKED for {lag:.1f}s - blocking code:\n{stack}",
+                flush=True,
+            )
+
+
+@app.before_serving
+async def _start_loop_watchdog():
+    global _loop_wd_started
+    if _loop_wd_started:
+        return
+    _loop_wd_started = True
+    asyncio.get_running_loop().create_task(_loop_heartbeat())
+    threading.Thread(
+        target=_loop_watchdog_thread, daemon=True, name="loop-stall-watchdog"
+    ).start()
+
+
 @app.route("/api/search", methods=["GET"])
 @login_required
 async def search_files():
@@ -5242,17 +5295,25 @@ async def search_files():
         # Only on offset=0 (first page) to avoid repeating it on every scroll page.
         total_count = None
         if offset == 0 and ENABLE_SEARCH_INDEX:
-            c = search_index_manager.count(query, ext_filter=ext_filter)
+            # Blocking SQLite work -> worker thread so the event loop (SSE
+            # heartbeats, HTTP/2 pings, other requests) is never stalled.
+            c = await asyncio.to_thread(
+                search_index_manager.count, query, ext_filter=ext_filter
+            )
             if c >= 0:  # -1 means index not ready yet
                 total_count = c
 
         if ENABLE_SEARCH_INDEX:
-            results, from_index, has_more = search_index_manager.search(
-                query, ext_filter=ext_filter, limit=limit, offset=offset
+            results, from_index, has_more = await asyncio.to_thread(
+                search_index_manager.search,
+                query,
+                ext_filter=ext_filter,
+                limit=limit,
+                offset=offset,
             )
         else:
-            results, has_more = search_index_manager._walk_fallback(
-                query, ext_filter, limit, offset
+            results, has_more = await asyncio.to_thread(
+                search_index_manager._walk_fallback, query, ext_filter, limit, offset
             )
             from_index = False
 
