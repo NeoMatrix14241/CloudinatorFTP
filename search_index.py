@@ -188,6 +188,9 @@ class SearchIndexManager:
         self._ready = False
         self._crawler_thread: Optional[threading.Thread] = None
         self._stop_crawler = False
+        # Diagnostic: why the last search() used os.walk instead of the DB
+        # (None = it used the DB). Reported in /api/search as fallback_reason.
+        self._last_fallback_reason: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Internal write helpers
@@ -458,12 +461,20 @@ class SearchIndexManager:
         has_more — True when there are more rows beyond this page.
         """
         if not self._ready:
+            self._last_fallback_reason = (
+                "index not ready (crawler still running or failed)"
+            )
+            print(
+                f"⚠️  Search: {self._last_fallback_reason} - using slow os.walk for {query!r}"
+            )
             rows, has_more = self._walk_fallback(query, ext_filter, limit, offset)
             return rows, False, has_more
         try:
             rows, has_more = self._db_search(query, ext_filter, limit, offset)
+            self._last_fallback_reason = None
             return rows, True, has_more
         except Exception as e:
+            self._last_fallback_reason = f"index query error: {e}"
             print(f"⚠️  Search index query error, falling back to os.walk: {e}")
             rows, has_more = self._walk_fallback(query, ext_filter, limit, offset)
             return rows, False, has_more

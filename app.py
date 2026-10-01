@@ -5332,6 +5332,15 @@ async def search_files():
                     "has_more": has_more,
                     "search_time": round(search_time, 3),
                     "from_index": from_index,
+                    # Diagnostic: None when served from the DB, else why not.
+                    "fallback_reason": (
+                        None
+                        if from_index
+                        else (
+                            getattr(search_index_manager, "_last_fallback_reason", None)
+                            or "search index disabled (ENABLE_SEARCH_INDEX)"
+                        )
+                    ),
                 }
             ),
             200,
