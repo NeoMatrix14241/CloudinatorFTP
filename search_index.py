@@ -116,6 +116,13 @@ def _do_bootstrap(conn) -> bool:
             ON files_meta(ext_lower, is_dir);
         CREATE INDEX IF NOT EXISTS idx_meta_name_lower
             ON files_meta(name_lower);
+        -- 4.53: written ONLY when a full crawl finishes (key 'crawl_complete').
+        -- Without it a half-built index (server restarted mid-crawl) would be
+        -- trusted as complete on the next start.
+        CREATE TABLE IF NOT EXISTS index_state (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        );
     """)
 
     use_fts = False
@@ -740,9 +747,18 @@ class SearchIndexManager:
                 meta_count = conn.execute(
                     "SELECT COUNT(*) AS c FROM files_meta"
                 ).fetchone()["c"]
+                _m = conn.execute(
+                    "SELECT value FROM index_state WHERE key = 'crawl_complete'"
+                ).fetchone()
+                crawl_complete = bool(_m and _m[0] == "1")
 
             # Case A: both tables populated and in sync → ready immediately
-            if fts_count > 0 and meta_count > 0 and meta_count >= fts_count * 0.95:
+            if (
+                crawl_complete
+                and fts_count > 0
+                and meta_count > 0
+                and meta_count >= fts_count * 0.95
+            ):
                 elapsed = time.time() - start
                 print(
                     f"✅ Search index: loaded from disk "
@@ -753,7 +769,12 @@ class SearchIndexManager:
                 return
 
             # Case B / C: crawl the filesystem — single source of truth
-            if meta_count < fts_count * 0.95:
+            if fts_count > 0 and not crawl_complete:
+                print(
+                    f"🔄 Search index: previous crawl never finished (no completion "
+                    f"marker; {fts_count:,} rows) — rebuilding from filesystem"
+                )
+            elif meta_count < fts_count * 0.95:
                 print(
                     f"🔄 Search index: files_meta incomplete "
                     f"({meta_count:,} vs {fts_count:,}) — rebuilding from filesystem"
@@ -768,6 +789,7 @@ class SearchIndexManager:
                 else:
                     conn.execute("DELETE FROM files")
                 conn.execute("DELETE FROM files_meta")
+                conn.execute("DELETE FROM index_state")  # not complete until the end
 
             dir_count = 0
             file_count = 0
@@ -832,6 +854,19 @@ class SearchIndexManager:
                 f"{dir_count:,} dirs + {file_count:,} files "
                 f"indexed in {elapsed:.1f}s"
             )
+            try:
+                with _write_lock, _connect() as conn:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO index_state(key, value) "
+                        "VALUES ('crawl_complete', '1')"
+                    )
+                    conn.execute(
+                        "INSERT OR REPLACE INTO index_state(key, value) "
+                        "VALUES ('crawl_rows', ?)",
+                        (str(dir_count + file_count),),
+                    )
+            except Exception as me:
+                print(f"⚠️  Search index: could not write completion marker: {me}")
             self._ready = True
             self._ensure_warmer()
 
