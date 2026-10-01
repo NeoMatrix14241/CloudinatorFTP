@@ -1070,37 +1070,55 @@ function _parseSearchQuery(rawTerm) {
     return { query, exts };
 }
 
-// Debounced search trigger, wired from the search input's onkeyup in index.html
+// Explicit search trigger (v4.46). Search no longer runs while typing: it runs
+// only when the user clicks the Search button (data-fn="runSearch") or presses
+// Enter in #tableSearch. 1-2 chars (no *.ext) filter the current folder;
+// 3+ chars or an *.ext term run the deep search.
+function runSearch() {
+    const input = document.getElementById('tableSearch');
+    if (!input) return;
+    searchTable(input.value);
+}
+
+// Immediate (non-debounced) search of `searchTerm`. Kept under its old name.
 function searchTable(searchTerm) {
     clearTimeout(searchTimeout);
 
     // Show/hide clear button
-    const clearButton = document.getElementById('clearSearch');
-    if (searchTerm.trim()) {
-        clearButton.style.display = 'block';
-    } else {
-        clearButton.style.display = 'none';
-    }
+    _syncClearButton(searchTerm);
 
-    // Debounce search to avoid too many API calls
-    searchTimeout = setTimeout(() => {
-        if (searchTerm.trim().length > 0) {
-            const term = searchTerm.trim();
-            const { query, exts } = _parseSearchQuery(term);
-            if (exts.length || query.length >= _DEEP_SEARCH_MIN_CHARS) {
-                performDeepSearch(term);
-            } else {
-                // 1-2 characters: current-folder filter only. performLocalSearch()
-                // also tears down any deep-search list that is still showing.
-                performLocalSearch(term);
-            }
+    const term = (searchTerm || '').trim();
+    if (term.length > 0) {
+        const { query, exts } = _parseSearchQuery(term);
+        if (exts.length || query.length >= _DEEP_SEARCH_MIN_CHARS) {
+            performDeepSearch(term);
         } else {
-            // Empty query — clear deep search and reset VT view
-            hideDeepSearchResults();
-            VT.applyFilter('');
+            // 1-2 characters: current-folder filter only. performLocalSearch()
+            // also tears down any deep-search list that is still showing.
+            performLocalSearch(term);
         }
-    }, 500); // Increased debounce for API calls
+    } else {
+        // Empty query — clear deep search and reset VT view
+        hideDeepSearchResults();
+        VT.applyFilter('');
+    }
 }
+
+function _syncClearButton(value) {
+    const clearButton = document.getElementById('clearSearch');
+    if (clearButton) clearButton.style.display = (value || '').trim() ? 'block' : 'none';
+}
+
+// Typing only updates the clear (X) button; Enter starts the search.
+document.addEventListener('input', function (e) {
+    if (e.target && e.target.id === 'tableSearch') _syncClearButton(e.target.value);
+});
+document.addEventListener('keydown', function (e) {
+    if (e.target && e.target.id === 'tableSearch' && e.key === 'Enter' && !e.isComposing) {
+        e.preventDefault();
+        runSearch();
+    }
+});
 
 // Deep search using API to scan nested folders
 function performDeepSearch(rawTerm) {

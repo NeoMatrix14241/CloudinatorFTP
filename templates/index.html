@@ -304,16 +304,19 @@
         <div class="table-controls" style="margin-bottom: 20px;">
             <div
                 style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 15px;">
-                <div class="search-wrapper" style="position: relative; max-width: 400px; flex: 1; min-width: 250px;">
-                    <i class="fas fa-search"
-                        style="position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: rgba(255,255,255,0.6); z-index: 2;"></i>
-                    <input type="text" id="tableSearch"
-                        placeholder="🔍 Search files and folders (3+ chars for deep search)..."
-                        data-fn-keyup="searchTable"
-                        title="Type 3 or more characters to search through all nested folders" />
-                    <button id="clearSearch" data-fn="clearSearch"
-                        style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: rgba(255,255,255,0.6); cursor: pointer; display: none;">
-                        <i class="fas fa-times"></i>
+                <div class="search-row">
+                    <div class="search-wrapper">
+                        <input type="text" id="tableSearch"
+                            placeholder="Search files and folders (3+ chars for deep search)..." autocomplete="off"
+                            title="Type your search, then press Enter or click Search. 1-2 characters filter this folder; 3 or more search all nested folders" />
+                        <button id="clearSearch" data-fn="clearSearch"
+                            style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: rgba(255,255,255,0.6); cursor: pointer; display: none;">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <button id="searchBtn" data-fn="runSearch" class="btn btn-primary search-submit-btn" type="button"
+                        title="Search (or press Enter). 1-2 characters filter this folder; 3+ search all nested folders">
+                        <i class="fas fa-search"></i> Search
                     </button>
                 </div>
                 <div class="sort-controls" style="display: flex; gap: 10px; align-items: center;">

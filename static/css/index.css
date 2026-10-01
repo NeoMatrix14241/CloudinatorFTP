@@ -4552,10 +4552,43 @@ td .fa-file {
     font-size: 13px;
 }
 
+/* Search row: input + explicit Search button (search no longer auto-runs) */
+.search-row {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    flex: 1;
+    max-width: 60vw;
+    min-width: 250px;
+}
+
+/* Wrapper layout lives here, NOT in an inline style="": the CSP only allows
+   inline style attributes whose SHA-256 is listed in app.py, so a changed
+   inline style is silently dropped (box stayed ~204px, clear X mispositioned). */
+.search-wrapper {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+}
+
+.search-submit-btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 0 18px;
+    border-radius: 8px;
+}
+
+@media (max-width: 480px) {
+    .search-row {
+        min-width: 0;
+        max-width: 100%;
+    }
+}
+
 /* Search input styling */
 #tableSearch {
     width: 100% !important;
-    padding: 12px 15px 12px 45px !important;
+    padding: 12px 15px !important;
     background: rgba(255, 255, 255, 0.1) !important;
     border: 2px solid rgba(255, 255, 255, 0.2) !important;
     border-radius: 8px !important;
