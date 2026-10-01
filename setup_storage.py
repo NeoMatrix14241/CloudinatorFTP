@@ -1,527 +1,942 @@
-#!/usr/bin/env python3
 """
-Interactive storage setup script for CloudinatorFTP.
-Configures three independent directories:
-  1. Files      — where uploaded files are stored        (ROOT_DIR)
-  2. Database   — SQLite DB, encryption key, session secret (DB_DIR)
-  3. Cache      — storage_index.json, file_index.json     (CACHE_DIR)
+search_index.py — SQLite-backed filename search index for CloudinatorFTP
+-------------------------------------------------------------------------
+Provides fast substring search over all files and folders under ROOT_DIR
+without walking the filesystem on every query.
 
-Moving db/ and cache/ outside the server/web root is recommended for
-production: a compromised web directory then cannot expose your keys.
+Architecture
+------------
+  Startup    → background crawler walks ROOT_DIR once, populates DB
+               (sleeps 10 ms between dirs to avoid I/O saturation).
+               Sets _ready=True when complete.
+               On restart with an existing DB, skips the crawl immediately.
+  Runtime    → file_monitor watchdog hooks call add/remove/rename_tree
+               keeping the index current with zero filesystem walking.
+  Query      → search() queries SQLite FTS5 or LIKE table in RAM/disk.
+               While the crawler is still building, falls back to os.walk
+               (same behaviour as before — temporary, one-time only).
+
+Storage
+-------
+  DB file : <DB_DIR>/search_index.db
+  Mode A  : FTS5 with trigram tokenizer  (SQLite ≥ 3.34, 2020-12-01)
+             → native arbitrary substring matching via MATCH
+  Mode B  : Regular table + name_lower index  (older SQLite / Termux)
+             → LIKE '%query%' full-table scan, still far faster than os.walk
+
+Threading
+---------
+  All writes use _write_lock (same pattern as database.py).
+  The crawler is a daemon thread; reads are always safe in parallel.
+  WAL mode allows concurrent reads while the crawler is writing.
 """
+
 import os
-import sys
-import json
+import sqlite3
+import threading
+import time
+from datetime import datetime
+from typing import Optional
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from paths import get_db_dir
+from config import ROOT_DIR
 
-try:
-    import importlib
-    import config
+# ------------------------------------------------------------------
+# Paths
+# ------------------------------------------------------------------
 
-    importlib.reload(config)
-    from config import (
-        detect_platform,
-        PRESET_PATHS,
-        format_bytes,
-        set_preset_path,
-        set_custom_storage_path,
-    )
-    from paths import (
-        get_db_dir,
-        get_cache_dir,
-        get_hls_cache_dir,
-        set_db_dir,
-        set_cache_dir,
-        set_hls_cache_dir,
-        reset_db_dir,
-        reset_cache_dir,
-        reset_hls_cache_dir,
-        get_all_paths,
-    )
+_DB_DIR = get_db_dir(create=False)
+SEARCH_INDEX_PATH = os.path.join(_DB_DIR, "search_index.db")
 
-    # DB_DIR and CACHE_DIR come from paths directly — not from config —
-    # so setup_storage.py works even on an older config.py that doesn't
-    # export them yet.
-    DB_DIR = get_db_dir()
-    CACHE_DIR = get_cache_dir()
-except ImportError as e:
-    print(f"❌ Import error: {e}")
-    print("Make sure you're running this script from the project directory.")
-    sys.exit(1)
+_write_lock = threading.Lock()
+_bootstrapped = False
+_use_fts: Optional[bool] = (
+    None  # set at bootstrap; True = trigram FTS5, False = LIKE table
+)
+
+# The FTS5 trigram tokenizer indexes 3-character grams, so MATCH can never
+# return a row for a query shorter than 3 characters (it silently yields zero
+# rows, not an error).  Shorter queries are answered from files_meta with a
+# parameterised LIKE instead — see _db_search().
+_FTS_MIN_QUERY_LEN = 3
 
 
-def clear_screen():
-    os.system("cls" if os.name == "nt" else "clear")
+def _like_contains(query_lower: str) -> str:
+    """
+    Build a `%...%` LIKE pattern for a lower-cased query, escaping the LIKE
+    wildcards (%, _) and the escape character itself with backslash.
+    Every LIKE that uses this MUST carry  ESCAPE '\\'.
+    """
+    esc = query_lower.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{esc}%"
 
 
-def print_banner():
-    print("=" * 60)
-    print("🚀 CLOUDINATOR FTP — STORAGE SETUP")
-    print("=" * 60)
-    print()
+# ------------------------------------------------------------------
+# Connection + lazy bootstrap
+# ------------------------------------------------------------------
 
 
-def _get_choice(max_choice):
-    while True:
-        try:
-            raw = input(f"Select option (1-{max_choice}, 0 to cancel): ").strip()
-            if raw == "0":
-                return 0
-            n = int(raw)
-            if 1 <= n <= max_choice:
-                return n
-            print(f"❌ Enter a number between 1 and {max_choice}")
-        except ValueError:
-            print("❌ Please enter a valid number")
-        except KeyboardInterrupt:
-            print("\n👋 Cancelled")
-            return 0
+def _connect() -> sqlite3.Connection:
+    global _bootstrapped, _use_fts
+    os.makedirs(_DB_DIR, exist_ok=True)
+    conn = sqlite3.connect(SEARCH_INDEX_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")  # safe with WAL, faster than FULL
+    conn.execute("PRAGMA cache_size=-8000")  # 8 MB page cache
+    if not _bootstrapped:
+        _bootstrapped = True
+        _use_fts = _do_bootstrap(conn)
+    return conn
 
 
-def _confirm_path(final_path: str, label: str) -> bool:
-    """Show the resolved final path and ask user to confirm before saving."""
-    print()
-    print(f"  📁 {label} will be set to:")
-    print(f"     {final_path}")
-    print()
-    while True:
-        try:
-            ans = input("  Confirm? (y/n): ").strip().lower()
-            if ans in ("y", "yes"):
-                return True
-            if ans in ("n", "no"):
-                print("  ↩️  Cancelled.")
-                return False
-        except KeyboardInterrupt:
-            print("\n👋 Cancelled")
-            return False
+def _do_bootstrap(conn) -> bool:
+    """
+    Create the search tables.
 
+    Always creates files_meta — a plain indexed table used for COUNT(*),
+    ext-filter queries, and the non-FTS fallback path.  Reliable, correct
+    SQL semantics with no FTS quirks.
 
-def _check_path(path):
-    if not os.path.exists(path):
-        return False, False
+    Also tries to create the FTS5 trigram virtual table (SQLite >= 3.34)
+    for fast name-substring MATCH queries.  If unavailable, name search
+    falls back to LIKE on files_meta.
+
+    Returns True if FTS5 trigram is available, False otherwise.
+    """
+    # files_meta: always present, plain SQL, ext/count queries go here
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS files_meta (
+            rel_path   TEXT PRIMARY KEY,
+            name_lower TEXT NOT NULL,
+            ext_lower  TEXT NOT NULL DEFAULT \'\',
+            is_dir     INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_meta_ext_lower
+            ON files_meta(ext_lower, is_dir);
+        CREATE INDEX IF NOT EXISTS idx_meta_name_lower
+            ON files_meta(name_lower);
+    """)
+
+    use_fts = False
     try:
-        test = os.path.join(path, ".write_test")
-        with open(test, "w") as f:
-            f.write("test")
-        os.remove(test)
-        return True, True
-    except Exception:
-        return True, False
-
-
-def _free_space(path):
-    try:
-        if os.name == "nt":
-            import shutil
-
-            _, _, free = shutil.disk_usage(path)
-        else:
-            st = os.statvfs(path)
-            free = st.f_bavail * st.f_frsize
-        return format_bytes(free)
-    except Exception:
-        return "Unknown"
-
-
-def print_current_config():
-    importlib.reload(config)
-    paths = get_all_paths()
-    server_root = os.path.dirname(os.path.abspath(__file__))
-
-    print("📋 Current Configuration:")
-    print()
-
-    rows = [
-        ("Files   (ROOT_DIR) ", config.ROOT_DIR, "🗂️ "),
-        ("Database (DB_DIR)  ", paths["db_dir"], "🔐"),
-        ("Cache   (CACHE_DIR)", paths["cache_dir"], "⚡"),
-        ("HLS Cache          ", paths["hls_cache_dir"], "🎬"),
-    ]
-
-    for label, path, icon in rows:
-        exists, writable = _check_path(path)
-        status = "✅" if writable else ("⚠️ " if exists else "❌ missing")
-        inside = (
-            " ⚠️  inside server root"
-            if os.path.abspath(path).startswith(os.path.abspath(server_root))
-            else " ✅ outside server root"
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS _fts_probe "
+            "USING fts5(x, tokenize='trigram')"
         )
-        print(f"  {icon}  {label}")
-        print(f"      {status} {path}")
-        print(f"         {inside}")
-        if exists:
-            print(f"         Free space: {_free_space(path)}")
-        print()
+        conn.execute("DROP TABLE IF EXISTS _fts_probe")
+        use_fts = True
+    except Exception:
+        pass
+
+    if use_fts:
+        conn.executescript("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS files USING fts5(
+                name,
+                rel_path,
+                is_dir,
+                parent_rel,
+                tokenize=\'trigram\'
+            );
+        """)
+        print(
+            "✅ Search index: FTS5 trigram + files_meta (fast name search + exact counts)"
+        )
+    else:
+        # No FTS5 — files_meta handles everything via LIKE
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS files (
+                rel_path   TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                name_lower TEXT NOT NULL,
+                is_dir     INTEGER NOT NULL DEFAULT 0,
+                parent_rel TEXT NOT NULL DEFAULT \'\'
+            );
+            CREATE INDEX IF NOT EXISTS idx_files_name_lower
+                ON files(name_lower);
+        """)
+        print("✅ Search index: LIKE table mode (SQLite trigram unavailable)")
+
+    return use_fts
 
 
-# ---------------------------------------------------------------------------
-# Files (ROOT_DIR) configuration
-# ---------------------------------------------------------------------------
+# ------------------------------------------------------------------
+# Search Index Manager
+# ------------------------------------------------------------------
 
 
-def show_preset_options():
-    platform_type = detect_platform()
-    if platform_type not in PRESET_PATHS:
-        print(f"❌ No preset paths available for {platform_type}")
-        return []
+class SearchIndexManager:
+    """
+    Thread-safe manager for search_index.db.
 
-    presets = PRESET_PATHS[platform_type]
-    print(f"📍 Available File Storage Locations for {platform_type.title()}:")
-    print("-" * 50)
+    Write API  (called from file_monitor watchdog hooks):
+        add(rel_path, name, is_dir)
+        remove(rel_path)
+        remove_tree(rel_path_prefix)
+        rename_tree(old_prefix, new_prefix)
 
-    options = []
-    for i, (key, path) in enumerate(presets.items(), 1):
-        try:
-            parent = os.path.dirname(path)
-            status = (
-                "✅"
-                if os.path.exists(parent) and os.access(parent, os.W_OK)
-                else ("⚠️ " if os.path.exists(parent) else "❌")
+    Read API:
+        search(query, max_results=100) → (results, from_index)
+        get_stats() → dict
+
+    Lifecycle:
+        start_crawler()  — call once after init_file_monitor()
+        stop()           — call on server shutdown
+    """
+
+    def __init__(self):
+        self._ready = False
+        self._crawler_thread: Optional[threading.Thread] = None
+        self._stop_crawler = False
+        # Diagnostic: why the last search() used os.walk instead of the DB
+        # (None = it used the DB). Reported in /api/search as fallback_reason.
+        self._last_fallback_reason: Optional[str] = None
+        # Keep-warm thread (see _warm_loop): keeps search_index.db in the OS
+        # file cache so a search never has to read it cold from a busy HDD.
+        self._warm_thread: Optional[threading.Thread] = None
+
+    # ------------------------------------------------------------------
+    # Internal write helpers
+    # ------------------------------------------------------------------
+
+    def _rows_for_batch(self, entries: list) -> tuple:
+        """
+        Convert a list of (rel_path, name, is_dir) tuples into two row lists:
+          fts_rows  — for the FTS5/plain files table
+          meta_rows — for files_meta (always populated, used for COUNT/ext queries)
+        """
+        fts_rows = []
+        meta_rows = []
+        for rel_path, name, is_dir in entries:
+            rel_path = rel_path.replace("\\", "/")
+            parent_rel = rel_path.rsplit("/", 1)[0] if "/" in rel_path else ""
+            _, _ext = os.path.splitext(name)
+            ext_lower = _ext.lstrip(".").lower()
+            name_lower = name.lower()
+            if _use_fts:
+                fts_rows.append((name, rel_path, "1" if is_dir else "0", parent_rel))
+            else:
+                fts_rows.append(
+                    (rel_path, name, name_lower, 1 if is_dir else 0, parent_rel)
+                )
+            meta_rows.append((rel_path, name_lower, ext_lower, 1 if is_dir else 0))
+        return fts_rows, meta_rows
+
+    def _batch_insert(self, conn, entries: list):
+        """
+        Bulk-insert a batch of (rel_path, name, is_dir) tuples into both tables.
+        Called from the crawler — conn is already open, no extra locking needed.
+        """
+        if not entries:
+            return
+        fts_rows, meta_rows = self._rows_for_batch(entries)
+        if _use_fts:
+            conn.executemany(
+                "INSERT INTO files(name, rel_path, is_dir, parent_rel) VALUES (?,?,?,?)",
+                fts_rows,
             )
+        else:
+            conn.executemany(
+                "INSERT OR IGNORE INTO files"
+                "(rel_path, name, name_lower, is_dir, parent_rel) VALUES (?,?,?,?,?)",
+                fts_rows,
+            )
+        conn.executemany(
+            "INSERT OR IGNORE INTO files_meta(rel_path, name_lower, ext_lower, is_dir)"
+            " VALUES (?,?,?,?)",
+            meta_rows,
+        )
+
+    # ------------------------------------------------------------------
+    # Public write API — called from file_monitor watchdog hooks
+    # ------------------------------------------------------------------
+
+    def add(self, rel_path: str, name: str, is_dir: bool):
+        """Insert or replace a single entry in both files and files_meta."""
+        rel_path = rel_path.replace("\\", "/")
+        parent_rel = rel_path.rsplit("/", 1)[0] if "/" in rel_path else ""
+        _, _ext = os.path.splitext(name)
+        ext_lower = _ext.lstrip(".").lower()
+        name_lower = name.lower()
+        try:
+            with _write_lock, _connect() as conn:
+                if _use_fts:
+                    conn.execute("DELETE FROM files WHERE rel_path = ?", (rel_path,))
+                    conn.execute(
+                        "INSERT INTO files(name, rel_path, is_dir, parent_rel) "
+                        "VALUES (?,?,?,?)",
+                        (name, rel_path, "1" if is_dir else "0", parent_rel),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO files"
+                        "(rel_path, name, name_lower, is_dir, parent_rel) "
+                        "VALUES (?,?,?,?,?)",
+                        (rel_path, name, name_lower, 1 if is_dir else 0, parent_rel),
+                    )
+                conn.execute(
+                    "INSERT OR REPLACE INTO files_meta"
+                    "(rel_path, name_lower, ext_lower, is_dir) VALUES (?,?,?,?)",
+                    (rel_path, name_lower, ext_lower, 1 if is_dir else 0),
+                )
+        except Exception as e:
+            print(f"⚠️  Search index add error for '{rel_path}': {e}")
+
+    def remove(self, rel_path: str):
+        """Remove a single entry from both tables."""
+        rel_path = rel_path.replace("\\", "/")
+        try:
+            with _write_lock, _connect() as conn:
+                conn.execute("DELETE FROM files WHERE rel_path = ?", (rel_path,))
+                conn.execute("DELETE FROM files_meta WHERE rel_path = ?", (rel_path,))
+        except Exception as e:
+            print(f"⚠️  Search index remove error for '{rel_path}': {e}")
+
+    def remove_tree(self, rel_path_prefix: str):
+        """Remove a folder and every path beneath it from both tables."""
+        rel_path_prefix = rel_path_prefix.replace("\\", "/")
+        try:
+            with _write_lock, _connect() as conn:
+                args = (rel_path_prefix, rel_path_prefix + "/%")
+                conn.execute(
+                    "DELETE FROM files WHERE rel_path = ? OR rel_path LIKE ?", args
+                )
+                conn.execute(
+                    "DELETE FROM files_meta WHERE rel_path = ? OR rel_path LIKE ?", args
+                )
+        except Exception as e:
+            print(f"⚠️  Search index remove_tree error for '{rel_path_prefix}': {e}")
+
+    def rename_tree(self, old_prefix: str, new_prefix: str):
+        """
+        Migrate all rel_paths when a folder is renamed or moved.
+        FTS5 doesn't support UPDATE on indexed columns, so we fetch → delete → re-insert.
+        The plain table does the same for consistency (avoids partial-update edge cases).
+        """
+        old_prefix = old_prefix.replace("\\", "/")
+        new_prefix = new_prefix.replace("\\", "/")
+        try:
+            with _write_lock, _connect() as conn:
+                # Fetch affected rows
+                rows = conn.execute(
+                    "SELECT name, rel_path, is_dir FROM files "
+                    "WHERE rel_path = ? OR rel_path LIKE ?",
+                    (old_prefix, old_prefix + "/%"),
+                ).fetchall()
+
+                if not rows:
+                    return
+
+                # Delete old entries
+                conn.execute(
+                    "DELETE FROM files WHERE rel_path = ? OR rel_path LIKE ?",
+                    (old_prefix, old_prefix + "/%"),
+                )
+
+                # Re-insert with updated paths
+                new_entries = []
+                for r in rows:
+                    suffix = r["rel_path"][len(old_prefix) :]  # '' or '/child/...'
+                    new_rel = new_prefix + suffix
+                    new_entries.append((new_rel, r["name"], str(r["is_dir"]) == "1"))
+
+                self._batch_insert(conn, new_entries)
+
+                # Migrate files_meta in one shot
+                meta_rows_old = conn.execute(
+                    "SELECT rel_path, name_lower, ext_lower, is_dir FROM files_meta "
+                    "WHERE rel_path = ? OR rel_path LIKE ?",
+                    (old_prefix, old_prefix + "/%"),
+                ).fetchall()
+                if meta_rows_old:
+                    conn.execute(
+                        "DELETE FROM files_meta WHERE rel_path = ? OR rel_path LIKE ?",
+                        (old_prefix, old_prefix + "/%"),
+                    )
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO files_meta"
+                        "(rel_path, name_lower, ext_lower, is_dir) VALUES (?,?,?,?)",
+                        [
+                            (
+                                new_prefix + r["rel_path"][len(old_prefix) :],
+                                r["name_lower"],
+                                r["ext_lower"],
+                                r["is_dir"],
+                            )
+                            for r in meta_rows_old
+                        ],
+                    )
+
+        except Exception as e:
+            print(
+                f"⚠️  Search index rename_tree error '{old_prefix}'→'{new_prefix}': {e}"
+            )
+
+    # ------------------------------------------------------------------
+    # Public read API
+    # ------------------------------------------------------------------
+
+    def count(self, query: str, ext_filter: list = None) -> int:
+        """
+        Return the exact total number of matching entries.
+        Always queries files_meta — a plain indexed table with correct SQL
+        semantics, no FTS quirks.  Sub-millisecond on indexed columns.
+        Returns -1 if the index isn't ready yet.
+        """
+        if not self._ready:
+            return -1
+        try:
+            query_lower = query.lower()
+            ext_list = [e.lstrip(".").lower() for e in (ext_filter or []) if e]
+            clauses: list = []
+            params: list = []
+            if query_lower:
+                clauses.append("name_lower LIKE ? ESCAPE '\\'")
+                params.append(_like_contains(query_lower))
+            if ext_list:
+                ext_sql = " OR ".join("ext_lower = ?" for _ in ext_list)
+                clauses.append(f"({ext_sql})")
+                params.extend(ext_list)
+                clauses.append("is_dir = 0")
+            where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+            with _connect() as conn:
+                row = conn.execute(
+                    f"SELECT COUNT(*) AS c FROM files_meta {where}", params
+                ).fetchone()
+            return row["c"] if row else 0
+        except Exception as e:
+            print(f"⚠️  Search index count error: {e}")
+            return -1
+        try:
+            query_lower = query.lower()
+            ext_list = [e.lstrip(".").lower() for e in (ext_filter or []) if e]
+            with _connect() as conn:
+                if _use_fts:
+                    clauses: list = []
+                    params: list = []
+                    if query_lower:
+                        safe = '"' + query_lower.replace('"', '""') + '"'
+                        clauses.append("files MATCH ?")
+                        params.append(safe)
+                        if ext_list:
+                            ext_likes = " OR ".join("name LIKE ?" for _ in ext_list)
+                            clauses.append(f"({ext_likes})")
+                            params.extend(f"%.{e}" for e in ext_list)
+                            clauses.append("is_dir = '0'")
+                    else:
+                        if ext_list:
+                            ext_likes = " OR ".join("name LIKE ?" for _ in ext_list)
+                            clauses.append(f"({ext_likes})")
+                            params.extend(f"%.{e}" for e in ext_list)
+                            clauses.append("is_dir = '0'")
+                    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+                    row = conn.execute(
+                        f"SELECT COUNT(*) AS c FROM files {where}", params
+                    ).fetchone()
+                else:
+                    clauses = []
+                    params = []
+                    if query_lower:
+                        clauses.append("name_lower LIKE ?")
+                        params.append(f"%{query_lower}%")
+                    if ext_list:
+                        ext_sql = " OR ".join("name_lower LIKE ?" for _ in ext_list)
+                        clauses.append(f"({ext_sql})")
+                        params.extend(f"%.{e}" for e in ext_list)
+                        clauses.append("is_dir = 0")
+                    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+                    row = conn.execute(
+                        f"SELECT COUNT(*) AS c FROM files {where}", params
+                    ).fetchone()
+            return row["c"] if row else 0
+        except Exception as e:
+            print(f"⚠️  Search index count error: {e}")
+            return -1
+
+    def search(
+        self, query: str, ext_filter: list = None, limit: int = 500, offset: int = 0
+    ) -> tuple:
+        """
+        Paginated search. Returns (results, from_index, has_more).
+
+        limit   — page size. Default 500.
+        offset  — starting row for pagination. Default 0.
+        has_more — True when there are more rows beyond this page.
+        """
+        if not self._ready:
+            self._last_fallback_reason = (
+                "index not ready (crawler still running or failed)"
+            )
+            print(
+                f"⚠️  Search: {self._last_fallback_reason} - using slow os.walk for {query!r}"
+            )
+            rows, has_more = self._walk_fallback(query, ext_filter, limit, offset)
+            return rows, False, has_more
+        try:
+            rows, has_more = self._db_search(query, ext_filter, limit, offset)
+            self._last_fallback_reason = None
+            return rows, True, has_more
+        except Exception as e:
+            self._last_fallback_reason = f"index query error: {e}"
+            print(f"⚠️  Search index query error, falling back to os.walk: {e}")
+            rows, has_more = self._walk_fallback(query, ext_filter, limit, offset)
+            return rows, False, has_more
+
+    def _db_search(
+        self, query: str, ext_filter: list, limit: int, offset: int
+    ) -> tuple:
+        """
+        Three strategies, each using the right table for the job:
+
+        A) Name + ext   -> FTS5 MATCH on `files` JOIN files_meta for ext (exact index)
+        B) Name only    -> FTS5 MATCH on `files`, no ext filter
+        C) Ext only     -> files_meta ext_lower IN (...) — exact indexed column, always correct
+
+        Plain-table mode: files_meta handles everything via LIKE + ext_lower.
+
+        Queries shorter than _FTS_MIN_QUERY_LEN (3) characters can't match a
+        trigram FTS5 index, so they take the same files_meta LIKE path as
+        plain-table mode (parameterised, wildcard-escaped, LIMIT/OFFSET in SQL).
+        """
+        query_lower = query.lower()
+        ext_list = [e.lstrip(".").lower() for e in (ext_filter or []) if e]
+        fetch = limit + 1  # fetch limit+1 to detect has_more
+
+        # FTS5 trigram only when it can actually match (>= 3 chars) or when
+        # there is no name query at all (ext-only, Strategy C).
+        use_fts_path = bool(_use_fts) and (
+            not query_lower or len(query_lower) >= _FTS_MIN_QUERY_LEN
+        )
+
+        with _connect() as conn:
+            if use_fts_path:
+                if query_lower and ext_list:
+                    # Strategy A: MATCH + ext exact match via files_meta JOIN
+                    safe = '"' + query_lower.replace('"', '""') + '"'
+                    ext_ph = ",".join("?" for _ in ext_list)
+                    rows = conn.execute(
+                        "SELECT f.name, f.rel_path, f.is_dir FROM files f "
+                        "JOIN files_meta m ON m.rel_path = f.rel_path "
+                        "WHERE f.files MATCH ? "
+                        f"AND m.ext_lower IN ({ext_ph}) "
+                        "AND m.is_dir = 0 "
+                        "LIMIT ? OFFSET ?",
+                        [safe] + ext_list + [fetch, offset],
+                    ).fetchall()
+
+                elif query_lower:
+                    # Strategy B: MATCH only
+                    safe = '"' + query_lower.replace('"', '""') + '"'
+                    rows = conn.execute(
+                        "SELECT name, rel_path, is_dir FROM files "
+                        "WHERE files MATCH ? LIMIT ? OFFSET ?",
+                        [safe, fetch, offset],
+                    ).fetchall()
+
+                else:
+                    # Strategy C: ext-only via files_meta — always correct, indexed
+                    ext_ph = ",".join("?" for _ in ext_list)
+                    rows = conn.execute(
+                        "SELECT rel_path, is_dir FROM files_meta "
+                        f"WHERE ext_lower IN ({ext_ph}) AND is_dir = 0 "
+                        "LIMIT ? OFFSET ?",
+                        ext_list + [fetch, offset],
+                    ).fetchall()
+
+            else:
+                # Plain table — files_meta handles everything
+                clauses: list = []
+                params: list = []
+                if query_lower:
+                    clauses.append("name_lower LIKE ? ESCAPE '\\'")
+                    params.append(_like_contains(query_lower))
+                if ext_list:
+                    ext_ph = ",".join("?" for _ in ext_list)
+                    clauses.append(f"ext_lower IN ({ext_ph})")
+                    params.extend(ext_list)
+                    clauses.append("is_dir = 0")
+                where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+                params += [fetch, offset]
+                rows = conn.execute(
+                    f"SELECT rel_path, is_dir FROM files_meta {where} "
+                    f"LIMIT ? OFFSET ?",
+                    params,
+                ).fetchall()
+
+        has_more = len(rows) > limit
+        if has_more:
+            rows = rows[:limit]
+
+        results = []
+        for row in rows:
+            rel_path = row["rel_path"]
+            name = rel_path.rsplit("/", 1)[-1] if "/" in rel_path else rel_path
+            is_dir_val = row["is_dir"]
+            is_dir = (
+                (str(is_dir_val) == "1")
+                if isinstance(is_dir_val, str)
+                else bool(is_dir_val)
+            )
+            full_path = os.path.join(ROOT_DIR, rel_path)
+            try:
+                st = os.stat(full_path)
+                size = 0 if is_dir else st.st_size
+                modified = datetime.fromtimestamp(st.st_mtime).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            except OSError as e:
+                # Was silent. Row is dropped (stale index entry or unreadable
+                # path) - total_count can then exceed the rows returned.
+                print(f"⚠️  Search: dropped {rel_path!r} (os.stat failed: {e})")
+                continue
+            _, ext = os.path.splitext(name)
+            file_type = "folder" if is_dir else (ext[1:].upper() if ext else "FILE")
+            results.append(
+                {
+                    "name": name,
+                    "path": rel_path,
+                    "type": file_type,
+                    "is_dir": is_dir,
+                    "size": size,
+                    "modified": modified,
+                    "match_type": "name",
+                }
+            )
+
+        return results, has_more
+
+    def _walk_fallback(
+        self, query: str, ext_filter: list = None, limit: int = 500, offset: int = 0
+    ) -> tuple:
+        """
+        os.walk fallback used on first boot while the crawler is still building.
+        Supports the same limit/offset pagination so the API shape is identical.
+        """
+        query_lower = query.lower()
+        ext_list = [e.lstrip(".").lower() for e in (ext_filter or []) if e]
+        collected = []
+        # Collect offset+limit+1 to detect has_more without walking the entire tree
+        need = offset + limit + 1
+
+        for root, dirs, files in os.walk(ROOT_DIR):
+            if len(collected) >= need:
+                break
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            rel_path = os.path.relpath(root, ROOT_DIR).replace("\\", "/")
+            if rel_path == ".":
+                rel_path = ""
+
+            if not ext_list:
+                for dirname in dirs:
+                    if query_lower and query_lower not in dirname.lower():
+                        continue
+                    folder_path = (rel_path + "/" + dirname) if rel_path else dirname
+                    try:
+                        st = os.stat(os.path.join(root, dirname))
+                        collected.append(
+                            {
+                                "name": dirname,
+                                "path": folder_path,
+                                "type": "folder",
+                                "is_dir": True,
+                                "size": 0,
+                                "modified": datetime.fromtimestamp(
+                                    st.st_mtime
+                                ).strftime("%Y-%m-%d %H:%M:%S"),
+                                "match_type": "name",
+                            }
+                        )
+                    except OSError:
+                        continue
+                    if len(collected) >= need:
+                        break
+
+            for filename in files:
+                if len(collected) >= need:
+                    break
+                if filename.startswith("."):
+                    continue
+                if ext_list:
+                    _, fext = os.path.splitext(filename)
+                    if fext.lstrip(".").lower() not in ext_list:
+                        continue
+                if query_lower and query_lower not in filename.lower():
+                    continue
+                file_path = (rel_path + "/" + filename) if rel_path else filename
+                try:
+                    st = os.stat(os.path.join(root, filename))
+                    _, ext = os.path.splitext(filename)
+                    collected.append(
+                        {
+                            "name": filename,
+                            "path": file_path,
+                            "type": ext[1:].upper() if ext else "FILE",
+                            "is_dir": False,
+                            "size": st.st_size,
+                            "modified": datetime.fromtimestamp(st.st_mtime).strftime(
+                                "%Y-%m-%d %H:%M:%S"
+                            ),
+                            "match_type": "name",
+                        }
+                    )
+                except OSError:
+                    continue
+
+        has_more = len(collected) > offset + limit
+        page = collected[offset : offset + limit]
+        return page, has_more
+
+    # ------------------------------------------------------------------
+    # Background crawler
+    # ------------------------------------------------------------------
+
+    def start_crawler(self):
+        """
+        Launch the background crawler daemon thread.
+        Call once, immediately after init_file_monitor() so watchdog hooks
+        are already active before the crawl completes.
+        """
+        if self._crawler_thread and self._crawler_thread.is_alive():
+            return
+        self._stop_crawler = False
+        self._crawler_thread = threading.Thread(
+            target=self._crawl,
+            daemon=True,
+            name="search-index-crawler",
+        )
+        self._crawler_thread.start()
+        print("🔍 Search index: background crawler started")
+
+    def _crawl(self):
+        """
+        Walk ROOT_DIR once, inserting entries in per-directory batches.
+        Sleeps 10 ms between directories to avoid I/O saturation.
+        On restart, detects an existing DB and skips the crawl entirely.
+        Sets _ready=True on completion.
+        """
+        print("🔍 Search index: crawling filesystem...")
+        start = time.time()
+
+        try:
+            # Trigger bootstrap (creates table if needed)
+            with _connect():
+                pass
+
+            # Decide whether we need a fresh crawl.
+            #
+            # files_meta is the authoritative table — it always reflects the
+            # filesystem.  We NEVER backfill it from the FTS5 table because the
+            # FTS5 table may itself be incomplete (the bug that caused wrong counts).
+            # The filesystem is always the ground truth.
+            #
+            # Restart cases:
+            #   A) files_meta populated and matches files  → ready, skip crawl
+            #   B) files_meta empty / behind               → fresh crawl (rebuilds both)
+            #   C) files empty (brand new DB)              → fresh crawl
+            with _connect() as conn:
+                fts_count = conn.execute("SELECT COUNT(*) AS c FROM files").fetchone()[
+                    "c"
+                ]
+                meta_count = conn.execute(
+                    "SELECT COUNT(*) AS c FROM files_meta"
+                ).fetchone()["c"]
+
+            # Case A: both tables populated and in sync → ready immediately
+            if fts_count > 0 and meta_count > 0 and meta_count >= fts_count * 0.95:
+                elapsed = time.time() - start
+                print(
+                    f"✅ Search index: loaded from disk "
+                    f"(files={fts_count:,}  meta={meta_count:,}, {elapsed:.1f}s)"
+                )
+                self._ready = True
+                self._ensure_warmer()
+                return
+
+            # Case B / C: crawl the filesystem — single source of truth
+            if meta_count < fts_count * 0.95:
+                print(
+                    f"🔄 Search index: files_meta incomplete "
+                    f"({meta_count:,} vs {fts_count:,}) — rebuilding from filesystem"
+                )
+            else:
+                print("🔍 Search index: fresh crawl starting…")
+
+            # Wipe both tables so we start clean (avoids stale partial data)
+            with _write_lock, _connect() as conn:
+                if _use_fts:
+                    conn.execute("DELETE FROM files")
+                else:
+                    conn.execute("DELETE FROM files")
+                conn.execute("DELETE FROM files_meta")
+
+            dir_count = 0
+            file_count = 0
+
+            for root, dirs, files in os.walk(ROOT_DIR):
+                if self._stop_crawler:
+                    print("🛑 Search index: crawler stopped early")
+                    return
+
+                # Skip hidden directories (mirrors _full_walk in file_monitor)
+                dirs[:] = [d for d in dirs if not d.startswith(".")]
+
+                rel_root = os.path.relpath(root, ROOT_DIR).replace("\\", "/")
+                if rel_root == ".":
+                    rel_root = ""
+
+                batch = []
+
+                # The directory itself (skip root — no name to search)
+                if rel_root:
+                    batch.append((rel_root, os.path.basename(root), True))
+                    dir_count += 1
+
+                # All non-hidden files in this directory
+                for fname in files:
+                    if fname.startswith("."):
+                        continue
+                    frel = (rel_root + "/" + fname) if rel_root else fname
+                    batch.append((frel, fname, False))
+                    file_count += 1
+
+                if batch:
+                    try:
+                        with _write_lock, _connect() as conn:
+                            self._batch_insert(conn, batch)
+                    except Exception as be:
+                        # Batch failed (e.g. encoding issue in one filename).
+                        # Fall back to entry-by-entry so one bad file never
+                        # silently drops the whole directory.
+                        print(
+                            f"⚠️  Search index batch error in '{rel_root}': {be} — retrying entry-by-entry"
+                        )
+                        for entry in batch:
+                            try:
+                                with _write_lock, _connect() as conn:
+                                    self._batch_insert(conn, [entry])
+                            except Exception:
+                                pass  # skip truly unindexable entries
+
+                # Progress log every 5 000 directories
+                if dir_count > 0 and dir_count % 5000 == 0:
+                    print(
+                        f"🔍 Search index: {dir_count:,} dirs, "
+                        f"{file_count:,} files indexed…"
+                    )
+
+                time.sleep(0.01)  # yield — prevents I/O saturation
+
+            elapsed = time.time() - start
+            print(
+                f"✅ Search index ready: "
+                f"{dir_count:,} dirs + {file_count:,} files "
+                f"indexed in {elapsed:.1f}s"
+            )
+            self._ready = True
+            self._ensure_warmer()
+
+        except Exception as e:
+            print(f"❌ Search index crawler error: {e}")
+            # Don't set _ready — callers fall back to os.walk until fixed
+
+    # ------------------------------------------------------------------
+    # Cache keep-warm (4.53)
+    # ------------------------------------------------------------------
+    # Observed: a deep search sometimes takes 11-20 s server-side with
+    # from_index=True on a ~220 MB search_index.db on a spinning disk, and
+    # 0.075 s other times. Each search opens a fresh SQLite connection (8 MB
+    # page cache), so everything depends on the OS file cache, which uploads /
+    # streaming / walks evict. A sequential read of the DB file every
+    # _WARM_INTERVAL_SECS puts it back in the cache: if it is already cached
+    # the read costs almost nothing, if it was evicted it costs one sequential
+    # read (a couple of seconds on an HDD) instead of a user waiting on
+    # thousands of random reads.
+    _WARM_INTERVAL_SECS = 600
+    _WARM_CHUNK = 4 * 1024 * 1024
+
+    def _ensure_warmer(self):
+        if self._warm_thread and self._warm_thread.is_alive():
+            return
+        self._warm_thread = threading.Thread(
+            target=self._warm_loop, daemon=True, name="search-index-warmer"
+        )
+        self._warm_thread.start()
+
+    def _warm_once(self, first: bool):
+        t0 = time.time()
+        total = 0
+        for suffix in ("", "-wal"):
+            path = SEARCH_INDEX_PATH + suffix
+            try:
+                with open(path, "rb") as f:
+                    while not self._stop_crawler:
+                        chunk = f.read(self._WARM_CHUNK)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        time.sleep(0.002)  # be gentle with the disk
+            except OSError:
+                pass
+        # Also touch the query paths themselves (indexes, FTS structures).
+        try:
+            with _connect() as conn:
+                conn.execute(
+                    "SELECT COUNT(*) FROM files_meta WHERE name_lower LIKE '%zzzqq%'"
+                ).fetchone()
+                if _use_fts:
+                    conn.execute(
+                        "SELECT rowid FROM files WHERE files MATCH '\"zzzqq\"' LIMIT 1"
+                    ).fetchall()
         except Exception:
-            status = "❌"
+            pass
+        dt = time.time() - t0
+        # Quiet unless it was the first pass or the cache had been evicted.
+        if first or dt > 1.0:
+            print(
+                f"🔥 Search index cache warmed: {total / 1048576:,.0f} MB in {dt:.1f}s"
+                f"{'' if first else ' (was cold)'}"
+            )
 
-        print(f"{i:2d}. {status} {key.replace('_', ' ').title()}")
-        print(f"      {path}")
-        options.append((key, path))
+    def _warm_loop(self):
+        first = True
+        while not self._stop_crawler:
+            try:
+                self._warm_once(first)
+            except Exception as e:
+                print(f"⚠️  Search index warmer error: {e}")
+            first = False
+            # sleep in small steps so stop() is honoured quickly
+            for _ in range(self._WARM_INTERVAL_SECS):
+                if self._stop_crawler:
+                    return
+                time.sleep(1)
 
-        descs = {
-            "downloads": "Recommended for easy access",
-            "documents": "Good for document storage",
-            "desktop": "Quick access from desktop",
-            "internal": "Android internal storage root",
-            "dcim": "Camera/media folder",
-            "termux_home": "Termux app directory only",
-        }
-        if key in descs:
-            print(f"      💡 {descs[key]}")
-        print()
+    # ------------------------------------------------------------------
+    # Stats + shutdown
+    # ------------------------------------------------------------------
 
-    return options
+    def get_stats(self) -> dict:
+        """Return summary stats for the /api/status or admin endpoints."""
+        try:
+            with _connect() as conn:
+                row = conn.execute("SELECT COUNT(*) AS c FROM files").fetchone()
+                total = row["c"] if row else 0
+            return {
+                "ready": self._ready,
+                "total_entries": total,
+                "mode": "fts5_trigram" if _use_fts else "like_table",
+                "db_path": SEARCH_INDEX_PATH,
+            }
+        except Exception:
+            return {"ready": self._ready, "total_entries": 0}
 
-
-def configure_files_path():
-    print("\n🗂️  Files Storage Path Configuration")
-    print("=" * 50)
-    print(f"Current: {config.ROOT_DIR}\n")
-
-    options = show_preset_options()
-    if not options:
-        _configure_custom_files_path()
-        return
-
-    print(f"{len(options) + 1}. 🎯 Enter custom path")
-    print(f"{len(options) + 2}. ↩️  Back")
-    print()
-
-    choice = _get_choice(len(options) + 2)
-    if choice == 0 or choice == len(options) + 2:
-        return
-    elif choice == len(options) + 1:
-        _configure_custom_files_path()
-    elif 1 <= choice <= len(options):
-        key, path = options[choice - 1]
-        if not _confirm_path(path, "Files storage"):
-            return
-        if set_preset_path(key):
-            importlib.reload(config)
-            print(f"✅ Files storage set to: {path}")
+    def stop(self):
+        """Signal the crawler to stop on server shutdown."""
+        self._stop_crawler = True
 
 
-def _configure_custom_files_path():
-    print("\n🎯 Custom Files Path")
-    print("Enter the exact path where uploaded files should be stored.")
-    try:
-        custom = input("Path: ").strip()
-        if not custom:
-            return
-        expanded = os.path.abspath(os.path.expanduser(custom))
-        if not _confirm_path(expanded, "Files storage"):
-            return
-        if set_custom_storage_path(expanded, use_subfolder=False):
-            importlib.reload(config)
-            print(f"✅ Files storage set to: {expanded}")
-    except KeyboardInterrupt:
-        print("\n👋 Cancelled")
+# ------------------------------------------------------------------
+# Module-level singleton
+# ------------------------------------------------------------------
 
-
-# ---------------------------------------------------------------------------
-# DB directory configuration
-# ---------------------------------------------------------------------------
-
-
-def _db_cache_examples(kind):
-    home = os.path.expanduser("~")
-    platform_type = detect_platform()
-    if kind == "db":
-        subfolder = "cloudinator_db"
-    elif kind == "cache":
-        subfolder = "cloudinator_cache"
-    else:  # hls
-        subfolder = "cloudinator_hls"
-
-    if platform_type == "windows":
-        appdata = os.environ.get("APPDATA", os.path.join(home, "AppData", "Roaming"))
-        return [
-            os.path.join(appdata, "CloudinatorFTP", subfolder),
-            os.path.join(home, ".cloudinator", subfolder),
-        ]
-    elif platform_type == "termux":
-        return [
-            os.path.join(home, ".cloudinator", subfolder),
-            f"/data/data/com.termux/files/home/.cloudinator/{subfolder}",
-        ]
-    else:
-        return [
-            os.path.join(home, ".cloudinator", subfolder),
-            f"/etc/cloudinator/{subfolder}",
-            f"/var/lib/cloudinator/{subfolder}",
-        ]
-
-
-def _pick_suggested_path(kind, examples):
-    print()
-    for i, ex in enumerate(examples, 1):
-        exists, writable = _check_path(ex)
-        if writable:
-            note = "✅ exists & writable"
-        elif not exists:
-            note = "📁 will be created"
-        else:
-            note = "❌ not writable"
-        print(f"{i}. {ex}  [{note}]")
-    print(f"{len(examples) + 1}. ↩️  Back")
-    print()
-    choice = _get_choice(len(examples) + 1)
-    if choice == 0 or choice == len(examples) + 1:
-        return
-    path = examples[choice - 1]
-    label = {"db": "Database", "cache": "Cache", "hls": "HLS Cache"}.get(kind, kind)
-    if not _confirm_path(path, label):
-        return
-    if kind == "db":
-        set_db_dir(path)
-    elif kind == "cache":
-        set_cache_dir(path)
-    else:
-        set_hls_cache_dir(path)
-
-
-def _configure_custom_dir(kind):
-    label = {"db": "Database", "cache": "Cache", "hls": "HLS Cache"}.get(kind, kind)
-    subfolder = {"db": "db", "cache": "cache", "hls": "hls"}.get(kind, kind)
-    print(f"\n🎯 Custom {label} Directory")
-    print(f"   Enter a parent folder — '{subfolder}' will be appended automatically.")
-    print(f"   Example: C:\\Server  →  C:\\Server\\{subfolder}")
-    try:
-        custom = input("Path: ").strip()
-        if not custom:
-            return
-        expanded = os.path.abspath(os.path.expanduser(custom))
-        if os.path.basename(expanded).lower() != subfolder:
-            final = os.path.join(expanded, subfolder)
-        else:
-            final = expanded
-        if not _confirm_path(final, label):
-            return
-        if kind == "db":
-            set_db_dir(expanded)
-        elif kind == "cache":
-            set_cache_dir(expanded)
-        else:
-            set_hls_cache_dir(expanded)
-    except KeyboardInterrupt:
-        print("\n👋 Cancelled")
-
-
-def configure_db_path():
-    print("\n🔐 Database Directory Configuration")
-    print("=" * 50)
-    print(f"Current: {get_db_dir()}")
-    print()
-    print("This directory holds three sensitive files:")
-    print("  • cloudinator.db  — SQLite user accounts database")
-    print("  • secret.key      — Fernet AES-128 encryption key")
-    print("  • session.secret  — Flask session cookie signing key")
-    print()
-    print("⚠️  SECURITY: Move this OUTSIDE the server root so that")
-    print("   a path traversal or misconfigured web server cannot")
-    print("   serve these files to an attacker.")
-    print()
-    print("⚠️  After moving: copy your existing db/ files to the new")
-    print("   location BEFORE restarting, or you will lose all accounts.")
-    print()
-
-    examples = _db_cache_examples("db")
-    print("Suggested secure locations:")
-    for ex in examples:
-        print(f"  • {ex}")
-    print()
-
-    print("1. 📁 Use a suggested location")
-    print("2. 🎯 Enter custom path")
-    print("3. 🔄 Reset to default  (inside server root — less secure)")
-    print("4. ↩️  Back")
-    print()
-
-    choice = _get_choice(4)
-    if choice == 0 or choice == 4:
-        return
-    elif choice == 1:
-        _pick_suggested_path("db", examples)
-    elif choice == 2:
-        _configure_custom_dir("db")
-    elif choice == 3:
-        reset_db_dir()
-
-
-# ---------------------------------------------------------------------------
-# Cache directory configuration
-# ---------------------------------------------------------------------------
-
-
-def configure_cache_path():
-    print("\n⚡ Cache Directory Configuration")
-    print("=" * 50)
-    print(f"Current: {get_cache_dir()}")
-    print()
-    print("This directory holds two auto-generated index files:")
-    print("  • storage_index.json — recursive file/dir counts per folder")
-    print("  • file_index.json    — cached directory listings (speeds up browsing)")
-    print()
-    print("These files are fully rebuilt on next server start if missing.")
-    print("Moving cache outside the server root prevents directory-structure")
-    print("metadata from leaking via a misconfigured web server.")
-    print()
-
-    examples = _db_cache_examples("cache")
-    print("Suggested locations:")
-    for ex in examples:
-        print(f"  • {ex}")
-    print()
-
-    print("1. 📁 Use a suggested location")
-    print("2. 🎯 Enter custom path")
-    print("3. 🔄 Reset to default  (inside server root)")
-    print("4. ↩️  Back")
-    print()
-
-    choice = _get_choice(4)
-    if choice == 0 or choice == 4:
-        return
-    elif choice == 1:
-        _pick_suggested_path("cache", examples)
-    elif choice == 2:
-        _configure_custom_dir("cache")
-    elif choice == 3:
-        reset_cache_dir()
-
-
-# ---------------------------------------------------------------------------
-# Main menu
-# ---------------------------------------------------------------------------
-
-
-def configure_hls_cache_path():
-    print("\n🎬 HLS Cache Directory Configuration")
-    print("=" * 50)
-    print(f"Current: {get_hls_cache_dir()}")
-    print()
-    print("This directory holds ffmpeg-transcoded HLS segments:")
-    print("  • <cache_key>/master.m3u8  — adaptive bitrate playlist")
-    print("  • <cache_key>/<quality>/   — .ts segment files")
-    print("  • <cache_key>/.status.json — transcode progress/state")
-    print()
-    print("It can grow large for long videos. Point it at a drive")
-    print("with plenty of free space. Safe to delete at any time —")
-    print("videos will simply be re-transcoded on next play.")
-    print()
-
-    examples = _db_cache_examples("hls")
-    print("Suggested locations:")
-    for ex in examples:
-        print(f"  • {ex}")
-    print()
-
-    print("1. 📁 Use a suggested location")
-    print("2. 🎯 Enter custom path")
-    print("3. 🔄 Reset to default  (inside cache dir)")
-    print("4. ↩️  Back")
-    print()
-
-    choice = _get_choice(4)
-    if choice == 0 or choice == 4:
-        return
-    elif choice == 1:
-        _pick_suggested_path("hls", examples)
-    elif choice == 2:
-        _configure_custom_dir("hls")
-    elif choice == 3:
-        reset_hls_cache_dir()
-
-
-def main_menu():
-    while True:
-        clear_screen()
-        print_banner()
-        print_current_config()
-
-        print("🔧 Configuration Options:")
-        print("1. 🗂️  Configure Files storage path   (ROOT_DIR)")
-        print("2. 🔐 Configure Database directory    (DB_DIR)  ← keys & secrets")
-        print("3. ⚡ Configure Cache directory       (CACHE_DIR)")
-        print("4. 🎬 Configure HLS Cache directory   (HLS_CACHE_DIR)")
-        print("5. 📋 Refresh current settings")
-        print("6. ❌ Exit")
-        print()
-
-        choice = _get_choice(6)
-
-        if choice == 0 or choice == 6:
-            print("👋 Goodbye!")
-            break
-        elif choice == 1:
-            configure_files_path()
-            input("\nPress Enter to continue...")
-        elif choice == 2:
-            configure_db_path()
-            input("\nPress Enter to continue...")
-        elif choice == 3:
-            configure_cache_path()
-            input("\nPress Enter to continue...")
-        elif choice == 4:
-            configure_hls_cache_path()
-            input("\nPress Enter to continue...")
-        elif choice == 5:
-            pass  # loop re-prints print_current_config
-
-
-def main():
-    try:
-        print("🚀 CloudinatorFTP Storage Setup")
-        print("Configure where files, the database, and the cache are stored.\n")
-
-        if not os.path.exists("config.py"):
-            print("❌ Error: config.py not found!")
-            print("Run this script from the project directory.")
-            return 1
-
-        main_menu()
-        print("\n🎯 Setup Complete!")
-        return 0
-
-    except KeyboardInterrupt:
-        print("\n\n👋 Setup cancelled")
-        return 1
-    except Exception as e:
-        print(f"\n❌ Unexpected error: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+search_index_manager = SearchIndexManager()
