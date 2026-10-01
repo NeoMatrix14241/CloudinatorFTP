@@ -584,7 +584,10 @@ class SearchIndexManager:
                 modified = datetime.fromtimestamp(st.st_mtime).strftime(
                     "%Y-%m-%d %H:%M:%S"
                 )
-            except OSError:
+            except OSError as e:
+                # Was silent. Row is dropped (stale index entry or unreadable
+                # path) - total_count can then exceed the rows returned.
+                print(f"⚠️  Search: dropped {rel_path!r} (os.stat failed: {e})")
                 continue
             _, ext = os.path.splitext(name)
             file_type = "folder" if is_dir else (ext[1:].upper() if ext else "FILE")
