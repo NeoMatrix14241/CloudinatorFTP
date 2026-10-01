@@ -424,6 +424,14 @@ function smartTableColumnizer() {
             if (row.classList.contains('empty-folder-row')) return;
             if (row.cells.length && row.cells[0].colSpan > 1) return;
 
+            // Deep-search rows are two-line (name + path) and are centred
+            // vertically; folder/file rows are top-aligned. These inline
+            // !important styles re-run on every ResizeObserver tick, so without
+            // this a sort/reset (which resizes the toolbar) flipped the checkbox
+            // and size cells of search rows to the top.
+            const isSearchRow = row.classList.contains('search-result-row');
+            const vaCell = isSearchRow ? 'middle' : 'top';
+
             Array.from(row.cells).forEach((td, i) => {
                 const w = colDefs[i];
                 if (w === 0) { _set(td, 'display', 'none'); return; }
@@ -434,9 +442,9 @@ function smartTableColumnizer() {
 
                 if (i === 0) {
                     _set(td, 'overflow', 'visible');
-                    _set(td, 'padding', padTop + ' 0 0 0');
+                    _set(td, 'padding', isSearchRow ? '0' : padTop + ' 0 0 0');
                     _set(td, 'text-align', 'center');
-                    _set(td, 'vertical-align', 'top');
+                    _set(td, 'vertical-align', vaCell);
                     _set(td, 'line-height', 'normal');
                     const cb = td.querySelector('input[type="checkbox"]');
                     if (cb) {
@@ -454,14 +462,14 @@ function smartTableColumnizer() {
 
                 _set(td, 'overflow', 'hidden');
                 _set(td, 'padding', pad);
-                _set(td, 'vertical-align', 'top');
+                _set(td, 'vertical-align', vaCell);
                 _set(td, 'line-height', '1.3');
 
                 if (i === 1) {
                     // Name: word-wrap on all breakpoints
                     _set(td, 'white-space', 'normal');
                     _set(td, 'text-overflow', 'unset');
-                    _set(td, 'vertical-align', 'top');
+                    _set(td, 'vertical-align', vaCell);
                     const fn = td.querySelector('.file-name');
                     if (fn) {
                         _set(fn, 'display', 'flex');
@@ -732,6 +740,9 @@ let _dsQuery = '';          // current query (for next-page requests)
 let _dsExts = [];           // current ext filter
 let _dsSearchTerm = '';     // raw display term for highlight
 let _dsGen = 0;             // bumped on every new search / teardown; guards stale async work
+let _dsSortClickAt = 0;     // time of the last header click handled (double-dispatch guard)
+let _dsSeqNext = 0;         // running index stamped on each result so Reset Sort can restore server order
+let _dsSort = { column: null, direction: 'asc' };   // deep-search sort (separate from the folder's currentSort)
 
 let _dsOffsets = null;      // Float64Array, length _dsAll.length+1 — cumulative top px per row
 let _dsRowH = _DS_DEFAULT_ROW_HEIGHT;   // running estimate for rows never measured
@@ -1003,6 +1014,7 @@ function _dsFetchNextPage() {
         .then(data => {
             if (gen !== _dsGen || !isSearchResultsDisplayed) return;   // search closed or replaced mid-fetch
             const page = data.results || [];
+            page.forEach(r => { r._dsSeq = _dsSeqNext++; });
             _dsAll = _dsAll.concat(page);
             _dsOffset += page.length;
             _dsHasMore = !!data.has_more && page.length > 0;   // an empty page ends paging (no infinite loop)
@@ -1055,6 +1067,141 @@ function _dsRemoveResults(paths) {
     const countEl = document.querySelector('#searchResultsHeader .search-count');
     if (countEl) countEl.textContent = `${_dsHeaderCountLabel()} items found`;
     _dsUpdateCount();
+}
+
+// ── Deep-search sorting ──────────────────────────────────────────────────────
+// VT.applySort bails out in search mode (the results are not in VT's data
+// array), so deep search sorts _dsAll itself. The server returns results in
+// pages of _DS_LIMIT in index order, so sorting only the loaded pages would be
+// wrong while has_more is true: the remaining pages are fetched first, then
+// the whole list is sorted and the window rebuilt. Folders sort first, same as
+// the normal table. The folder's own currentSort is NOT touched.
+function _dsModifiedKey(v) {
+    if (typeof v === 'number') return v;
+    if (!v) return 0;
+    const t = Date.parse(String(v).replace(' ', 'T'));
+    return isNaN(t) ? 0 : t;
+}
+
+function _dsCompare(a, b, col, dir) {
+    if (a.is_dir && !b.is_dir) return dir === 1 ? -1 : 1;
+    if (!a.is_dir && b.is_dir) return dir === 1 ? 1 : -1;
+    let cmp = 0;
+    if (col === 'name') {
+        cmp = String(a.name).localeCompare(String(b.name), undefined, { numeric: true, sensitivity: 'base' });
+    } else if (col === 'size') {
+        cmp = ((a.size != null) ? a.size : -1) - ((b.size != null) ? b.size : -1);
+    } else if (col === 'modified') {
+        cmp = _dsModifiedKey(a.modified) - _dsModifiedKey(b.modified);
+    } else if (col === 'type') {
+        const ta = a.is_dir ? 'Folder' : getFileType(a.name);
+        const tb = b.is_dir ? 'Folder' : getFileType(b.name);
+        cmp = String(ta).localeCompare(String(tb), undefined, { numeric: true, sensitivity: 'base' });
+    }
+    return cmp * dir;
+}
+
+// Header arrows follow the deep-search sort while results are open, and go
+// back to the folder's currentSort when they close or a new search starts.
+function _dsRestoreSortHeaders() {
+    if (currentSort.column) {
+        updateSortHeaders(currentSort.column, currentSort.direction);
+    } else {
+        document.querySelectorAll('.sortable').forEach(header => {
+            header.classList.remove('sort-asc', 'sort-desc');
+            const icon = header.querySelector('.sort-icon');
+            if (icon) icon.className = 'fas fa-sort sort-icon';
+        });
+        updateSortInfo(null, null);
+    }
+}
+
+function _dsLoadAllPages(gen) {
+    // Fetch every remaining page (1000 rows each, the server maximum).
+    const step = () => {
+        if (gen !== _dsGen || !_dsHasMore) return Promise.resolve();
+        let url = `/api/search?q=${encodeURIComponent(_dsQuery)}&offset=${_dsOffset}&limit=1000`;
+        if (_dsExts.length) url += `&ext=${encodeURIComponent(_dsExts.join(','))}`;
+        return fetch(url).then(r => r.json()).then(data => {
+            if (gen !== _dsGen) return;
+            const page = data.results || [];
+            page.forEach(r => { r._dsSeq = _dsSeqNext++; });
+            _dsAll = _dsAll.concat(page);
+            _dsOffset += page.length;
+            _dsHasMore = !!data.has_more && page.length > 0;
+            return step();
+        });
+    };
+    return step();
+}
+
+function _dsApplySort() {
+    const dir = _dsSort.direction === 'asc' ? 1 : -1;
+    const col = _dsSort.column;
+    if (col) _dsAll.sort((a, b) => _dsCompare(a, b, col, dir));
+    else _dsAll.sort((a, b) => (a._dsSeq || 0) - (b._dsSeq || 0));   // Reset Sort: back to server order
+
+    // Indices changed: unmount everything and re-mount from the sorted data.
+    for (const el of _dsMounted.values()) el.remove();
+    _dsMounted = new Map();
+    _dsWinStart = 0; _dsWinEnd = 0;
+    _dsRebuildOffsets();
+    _dsSyncLoadingRow();
+    _dsPositionSpacers();
+    const wrapper = document.getElementById('tableScrollWrapper');
+    if (wrapper) wrapper.scrollTop = 0;
+    _dsRenderWindow(true, 0);
+    _dsUpdateCount();
+}
+
+function _dsResetSort() {
+    _dsSort = { column: null, direction: 'asc' };
+    _dsRestoreSortHeaders();
+    const resetBtn = document.getElementById('resetSort');
+    if (resetBtn && !currentSort.column) resetBtn.style.display = 'none';
+    if (_dsFetching) return;
+    _dsApplySort();
+}
+
+function _dsSortResults(column, forceDirection) {
+    if (_dsFetching) return;   // a page or sort-load is already in flight
+    // One click must toggle once: if the same header's click reaches us twice
+    // (two listeners on the header), the second call would flip it straight back.
+    const now = Date.now();
+    if (!forceDirection && now - _dsSortClickAt < 250) return;
+    _dsSortClickAt = now;
+    if (forceDirection) {
+        _dsSort = { column, direction: forceDirection };
+    } else if (_dsSort.column === column) {
+        _dsSort.direction = _dsSort.direction === 'asc' ? 'desc' : 'asc';
+    } else {
+        _dsSort = { column, direction: 'asc' };
+    }
+    updateSortHeaders(_dsSort.column, _dsSort.direction);
+    const resetBtn = document.getElementById('resetSort');
+    if (resetBtn) resetBtn.style.display = 'inline-block';
+
+    if (!_dsHasMore) { _dsApplySort(); return; }
+
+    const gen = _dsGen;
+    _dsFetching = true;   // blocks the scroll-prefetch while we load everything
+    showSearchLoading(true);   // spinner in the search box while the rest loads
+    _dsLoadAllPages(gen)
+        .then(() => {
+            showSearchLoading(false);
+            if (gen !== _dsGen || !isSearchResultsDisplayed) return;
+            _dsFetching = false;
+            _dsApplySort();
+        })
+        .catch(err => {
+            console.error('❌ Deep search sort load error:', err);
+            showSearchLoading(false);
+            if (gen !== _dsGen) return;
+            _dsFetching = false;
+            _dsHasMore = false;
+            _dsApplySort();   // sort what did load rather than leave the list unsorted
+            showNotification('Sort incomplete', 'Could not load every result; sorted the ones that did load.', 'error');
+        });
 }
 
 // ── *.ext query parser ────────────────────────────────────────────────────────
@@ -1141,6 +1288,9 @@ function performDeepSearch(rawTerm) {
     _dsOffset = 0;
     _dsHasMore = false;
     _dsFetching = false;
+    _dsSort = { column: null, direction: 'asc' };
+    _dsSeqNext = 0;
+    _dsRestoreSortHeaders();
     _dsQuery = query;
     _dsExts = exts;
     _dsSearchTerm = query || exts.join(',');
@@ -1256,6 +1406,7 @@ function displayDeepSearchResults(data, searchTerm, exts) {
     hideLocalResults();
 
     _dsAll = data.results.slice();
+    _dsAll.forEach(r => { r._dsSeq = _dsSeqNext++; });
     _dsTotal = (data.total_count != null) ? data.total_count : null;
     _dsHasMore = data.has_more || false;
     _dsOffset = data.results.length;
@@ -1386,7 +1537,7 @@ function createSearchResultRow(result, searchTerm) {
             </button>
         </div>` :
         `<div class="search-result-actions">
-            <button class="btn btn-sm btn-success" data-fn="downloadItem" data-args="${dataArgs([result.path])}" title="Download file">
+            <button class="btn btn-sm btn-success" data-fn="showDownloadOptionsModal" data-args="${dataArgs([result.path, result.name])}" title="Download">
                 <i class="fas fa-download"></i>
             </button>
             <button class="btn btn-sm btn-outline" data-fn="openFileLocation" data-args="${dataArgs([folderPath])}" title="Open file location">
@@ -1457,6 +1608,7 @@ function hideDeepSearchResults() {
     _dsOffset = 0;
     _dsHasMore = false;
     _dsFetching = false;
+    if (_dsSort.column) { _dsSort = { column: null, direction: 'asc' }; _dsRestoreSortHeaders(); }
     _dsOffsets = null;
     _dsMounted = new Map();
     _dsWinStart = 0; _dsWinEnd = 0;
@@ -1546,6 +1698,12 @@ function clearSearch() {
 
 // Column sorting functionality
 function sortTable(column, forceDirection) {
+    // Deep-search results are not in VT's data array: sort them separately.
+    if (isSearchResultsDisplayed) {
+        _dsSortResults(column, forceDirection);
+        return;
+    }
+
     // Show reset button
     const resetBtn = document.getElementById('resetSort');
     if (resetBtn) resetBtn.style.display = 'inline-block';
@@ -1655,6 +1813,13 @@ function updateSortInfo(column, direction) {
 // Reset sorting to default state, wired from the resetSort button's onclick in index.html
 function resetSorting() {
     console.log('🔄 Resetting table sorting to default');
+
+    // Deep search open: reset only ITS sort (back to the server's order) and keep
+    // the results on screen; the folder's own sort and the search box are untouched.
+    if (isSearchResultsDisplayed) {
+        _dsResetSort();
+        return;
+    }
 
     // Clear deep search results first
     hideDeepSearchResults();
