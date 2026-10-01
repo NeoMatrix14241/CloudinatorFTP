@@ -265,6 +265,11 @@ Crawler Hints: On
 Caching > Tiered Cache > On
 Automatic Upper Tiers: Smart Tiered Cache
 
+Rules > Overview > Create Rule > Response Header Transform Rule
+Rule name: Remove expect-ct header
+If incoming requests match…: All incoming requests
+Then: Remove, Header Name: expect-ct
+
 Network
 IPv6 Compatibility: On
 gRPC: On
