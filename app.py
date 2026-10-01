@@ -1035,8 +1035,20 @@ file_monitor = init_file_monitor()
 file_monitor.add_change_callback(trigger_storage_update)
 print(f"📡 File system monitoring started for: {ROOT_DIR}")
 
-# Start search index crawler (daemon thread, non-blocking)
-if ENABLE_SEARCH_INDEX:
+# Start search index crawler (daemon thread, non-blocking).
+# Only in the MAIN server process: the WebDAV / Version Engine subprocesses
+# import this module too, and a second crawler on the same search_index.db
+# means a duplicate full-tree walk and (when the DB is empty) two processes
+# wiping and refilling the same tables at once.
+_AUX_PROC = os.path.basename(sys.argv[0]).lower() in (
+    "webdav_server.py",
+    "version_engine.py",
+)
+if ENABLE_SEARCH_INDEX and _AUX_PROC:
+    print(
+        "ℹ️  Search index crawler skipped in this helper process (main server owns it)"
+    )
+elif ENABLE_SEARCH_INDEX:
     search_index_manager.start_crawler()
 else:
     print("ℹ️  Search index disabled — using os.walk fallback for all searches")

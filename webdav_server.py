@@ -78,7 +78,11 @@ import time
 from urllib.parse import unquote, urlsplit
 
 import logging_setup
-from app import get_local_ip
+
+# Import from net_utils, NOT app: `from app import ...` executes all of app.py's
+# top-level code inside this subprocess (file monitor + reconciliation walk,
+# search-index crawler, cleanup/assembly workers - all duplicated).
+from net_utils import get_local_ip
 
 # Patch the same real, still-open Hypercorn bug (hypercorn#202) that
 # prod_server.py patches for the main app — see hypercorn_ssl_fix.py's
