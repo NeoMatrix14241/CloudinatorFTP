@@ -978,6 +978,15 @@ async def get_csrf_token():
     return jsonify({"csrf_token": generate_csrf()})
 
 
+# 4.60: coalesce on-demand reconciles. Every mutating route used to start its own
+# full-tree walk thread, so N quick changes (e.g. 10 mkdirs) meant N overlapping
+# walks of the HDD. Now: one walk at a time; changes that arrive while it runs
+# queue exactly ONE follow-up walk (the running walk may have missed them).
+_reconcile_gate = threading.Lock()
+_reconcile_running = False
+_reconcile_rerun = False
+
+
 def _trigger_reconcile(settle=False):
     """Kick off a background reconcile so file/dir counts correct themselves
     immediately after mutations (delete, move, rename, copy) instead of waiting 15 min.
@@ -1008,7 +1017,26 @@ def _trigger_reconcile(settle=False):
     from file_monitor import get_file_monitor
     from realtime_stats import trigger_storage_update
 
+    global _reconcile_running, _reconcile_rerun
+    with _reconcile_gate:
+        if _reconcile_running:
+            _reconcile_rerun = True  # one follow-up walk after the current one
+            print("🔄 Reconcile already running — follow-up queued")
+            return
+        _reconcile_running = True
+
     def _run():
+        global _reconcile_running, _reconcile_rerun
+        while True:
+            _run_once()
+            with _reconcile_gate:
+                if _reconcile_rerun:
+                    _reconcile_rerun = False
+                    continue
+                _reconcile_running = False
+                return
+
+    def _run_once():
         try:
             monitor = get_file_monitor()
             # _reconcile() will push incremental walk-progress SSE + a final
@@ -5635,6 +5663,11 @@ async def bulk_move():
             except Exception as e:
                 errors.append(f"Failed to move {source_path}: {str(e)}")
 
+        if moved_count:
+            # Folder moves do not transfer counts between the old and new
+            # ancestor chains in the watchdog handlers; the walk does.
+            _trigger_reconcile()
+
         if errors:
             return (
                 jsonify(
@@ -5879,6 +5912,7 @@ async def rename_item():
         # Perform the rename
         try:
             os.rename(old_full_path, new_full_path)
+            _trigger_reconcile()
             return (
                 jsonify(
                     {
@@ -5928,6 +5962,7 @@ async def mkdir():
                 409,
             )
         else:
+            _trigger_reconcile()
             return (
                 jsonify(
                     {
