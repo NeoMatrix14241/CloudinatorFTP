@@ -109,6 +109,8 @@ FILE_INDEX_PATH = os.path.join(CACHE_DIR, "file_index.json")
 THRESHOLD = 80
 
 SCHEMA_VERSION = 2
+# Backoff (seconds) between os.replace() attempts when the target is locked (Windows).
+_REPLACE_RETRY_DELAYS = (0, 0.05, 0.1, 0.2, 0.4, 0.8, 1.5)
 _ACCEPTED_VERSIONS = (1, 2)
 
 # Temp files written by save() carry this prefix so the stale-temp sweep can
@@ -415,7 +417,24 @@ class FileIndexManager:
                     tf.flush()
                     os.fsync(tf.fileno())
 
-                os.replace(tmp, FILE_INDEX_PATH)
+                # 4.61: retry the swap. On Windows os.replace() raises
+                # PermissionError (WinError 5/32) when another process (the
+                # WebDAV subprocess' own monitor), antivirus or the indexer has
+                # file_index.json open at that instant. Same backoff as
+                # file_monitor._save_cache() (about 3 s in total).
+                last_err = None
+                for delay in _REPLACE_RETRY_DELAYS:
+                    if delay:
+                        time.sleep(delay)
+                    try:
+                        os.replace(tmp, FILE_INDEX_PATH)
+                        last_err = None
+                        tmp = None  # consumed by the replace
+                        break
+                    except PermissionError as e:  # WinError 5 / 32
+                        last_err = e
+                if last_err is not None:
+                    raise last_err
 
             except Exception as e:
                 print(f"⚠️  Failed to save file index: {e}")
