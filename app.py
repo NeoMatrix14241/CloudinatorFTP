@@ -4495,15 +4495,36 @@ async def admin_rebuild_cache():
             # Trigger a fresh full reconciliation walk to rebuild both.
             monitor = get_file_monitor()
             print("🚶 Rebuilding cache from scratch...")
-            monitor._reconcile()
-            return monitor
+            # force=True: an admin rebuild must be able to accept a genuinely
+            # empty tree (the automatic walks reject a suspect-empty result once).
+            applied = monitor._reconcile(force=True)
+
+            # 4.59: audit the freshly built file index against the disk
+            # (read-only, repair=False). Right after a walk this should report 0
+            # drifted; anything else means files changed during the rebuild.
+            audit = None
+            try:
+                audit = file_index_manager.verify_all(repair=False)
+            except Exception as _ve:
+                print(f"⚠️ file index verify failed: {_ve}")
+            return monitor, applied, audit
 
         # This deletes files and runs a full recursive filesystem walk —
         # previously ran directly on the event loop thread (no threading.Thread,
         # no asyncio.to_thread), so clicking "Rebuild Cache" froze the ENTIRE
         # app for every connected user for the whole walk duration, same class
         # of bug as the ~34 other blocking call sites already fixed elsewhere.
-        monitor = await asyncio.to_thread(_rebuild_cache_sync)
+        monitor, applied, audit = await asyncio.to_thread(_rebuild_cache_sync)
+        if not applied:
+            return (
+                jsonify(
+                    {
+                        "error": "Rebuild walk did not complete (root unreadable?) — "
+                        "previous index kept; see the server log"
+                    }
+                ),
+                500,
+            )
         from realtime_stats import trigger_storage_update
 
         trigger_storage_update(None, monitor.get_current_snapshot())
@@ -4518,6 +4539,12 @@ async def admin_rebuild_cache():
                         f"{monitor._dir_count:,} dirs, {len(monitor._dir_info):,} folders indexed. "
                         f'File index: {fi_stats["indexed_folders"]:,} large folder(s) indexed '
                         f'({fi_stats["total_entries"]:,} entries, threshold={fi_stats["threshold"]})'
+                        + (
+                            f'. Verified {audit["checked"]:,} indexed folder(s) against disk: '
+                            f'{audit["drifted"]:,} drifted, {audit["unreadable"]:,} unreadable'
+                            if audit
+                            else ""
+                        )
                     ),
                 }
             ),

@@ -63,6 +63,22 @@ def _lower_current_thread_priority() -> None:
 CACHE_DIR = get_cache_dir(create=False)
 CACHE_FILE = os.path.join(CACHE_DIR, "storage_index.json")
 
+# storage_index.json schema (4.59). v1 = legacy files with no "version"/"root"
+# keys (still accepted, but re-verified by a quick reconcile after load).
+CACHE_SCHEMA_VERSION = 2
+_ACCEPTED_CACHE_VERSIONS = (1, 2)
+_TMP_PREFIX = "storage_index."
+_TMP_MAX_AGE_SECS = (
+    600  # only sweep temp files older than this (other processes save too)
+)
+# A walk that finds NOTHING while the index holds at least this many files is
+# treated as suspect (drive offline / share unmounted) and rejected once.
+SUSPECT_EMPTY_MIN_FILES = 50
+SUSPECT_RETRY_SECONDS = 60
+# Delay before the post-startup verification walk: normal vs. "cache needed repair".
+POST_START_RECONCILE_DELAY = 30
+POST_START_RECONCILE_DELAY_REPAIRED = 3
+
 # Reconciliation interval
 RECONCILE_INTERVAL = 900  # 15 minutes
 # How long to suppress watchdog counter updates after a bulk-op reconcile.
@@ -132,6 +148,25 @@ def _parents(rel_path: str):
     for i in range(len(parts) - 1, 0, -1):
         yield "/".join(parts[:i])
     yield ""  # root always gets updated
+
+
+def _norm_root(path) -> str:
+    """Comparable form of a root path (case-folded on Windows, no trailing slash)."""
+    try:
+        return os.path.normcase(os.path.abspath(str(path)))
+    except Exception:
+        return str(path)
+
+
+def _nonneg_int(value):
+    """int(value) if it is a sane non-negative number, else None."""
+    if isinstance(value, bool):
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return n if n >= 0 else None
 
 
 class InstantFileEventHandler(FileSystemEventHandler):
@@ -526,6 +561,11 @@ class FileSystemMonitor:
         self.observer = None
         self.event_handler = None
 
+        # 4.59 cache-validation state
+        self._load_repaired: int = 0  # records fixed/dropped by _load_cache()
+        self._suspect_walks: int = 0  # consecutive walks rejected as suspect-empty
+        self._retry_timer: Optional[threading.Timer] = None
+
     # ------------------------------------------------------------------
     # Callbacks
     # ------------------------------------------------------------------
@@ -565,7 +605,35 @@ class FileSystemMonitor:
     # Cache load / save
     # ------------------------------------------------------------------
 
+    def _cleanup_stale_tmp(self):
+        """Remove storage_index.*.tmp files left behind by a crash mid-save."""
+        try:
+            cutoff = time.time() - _TMP_MAX_AGE_SECS
+            for name in os.listdir(CACHE_DIR):
+                if name.startswith(_TMP_PREFIX) and name.endswith(".tmp"):
+                    p = os.path.join(CACHE_DIR, name)
+                    try:
+                        if os.path.getmtime(p) < cutoff:
+                            os.remove(p)
+                            print(f"🧹 Removed stale temp file: {name}")
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+
     def _load_cache(self) -> bool:
+        """Load and VALIDATE storage_index.json.
+
+        Nothing is assigned to self until the whole file has passed validation,
+        so a rejected file can never leave half-loaded counters behind.
+        Discarded outright (-> first-boot walk): not a JSON object, unknown
+        schema version, saved for a different root, bad counters, no dir_info.
+        Repaired in place (-> quick verification walk): individual dir_info
+        records with missing/negative/non-numeric fields or a malformed key,
+        and a missing root record.
+        """
+        self._load_repaired = 0
+        self._cleanup_stale_tmp()
         try:
             if not os.path.exists(CACHE_FILE):
                 print(f"📂 No cache found at {CACHE_FILE} — will do initial walk")
@@ -574,17 +642,100 @@ class FileSystemMonitor:
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            self._file_count = int(data.get("file_count", 0))
-            self._dir_count = int(data.get("dir_count", 0))
-            self._total_size = int(data.get("total_size", 0))
-            self._last_modified = float(data.get("last_modified", 0))
-            self._dir_info = data.get("dir_info", {})
+            if not isinstance(data, dict):
+                print("⚠️ Cache is not a JSON object — discarded, will do initial walk")
+                return False
+
+            version = data.get("version", 1)
+            if version not in _ACCEPTED_CACHE_VERSIONS:
+                print(
+                    f"⚠️ Cache schema version {version!r} not supported — "
+                    f"discarded, will do initial walk"
+                )
+                return False
+
+            saved_root = data.get("root")
+            if saved_root is not None and _norm_root(saved_root) != _norm_root(
+                self.root_path
+            ):
+                print(
+                    f"⚠️ Cache was built for a different root ({saved_root}) — "
+                    f"discarded, will do initial walk"
+                )
+                return False
+
+            file_count = _nonneg_int(data.get("file_count", 0))
+            dir_count = _nonneg_int(data.get("dir_count", 0))
+            total_size = _nonneg_int(data.get("total_size", 0))
+            try:
+                last_modified = float(data.get("last_modified", 0) or 0)
+            except (TypeError, ValueError):
+                last_modified = None
+            if None in (file_count, dir_count, total_size, last_modified):
+                print("⚠️ Cache counters invalid — discarded, will do initial walk")
+                return False
+
+            raw_info = data.get("dir_info")
+            if not isinstance(raw_info, dict) or not raw_info:
+                print(
+                    "⚠️ Cache has no usable dir_info — discarded, will do initial walk"
+                )
+                return False
+
+            repaired = 0
+            dir_info: Dict[str, dict] = {}
+            for key, rec in raw_info.items():
+                # Keys must already be in _rel() form: forward slashes, no
+                # leading/trailing slash; otherwise get_dir_info() never hits them.
+                if not isinstance(key, str) or "\\" in key or key != key.strip("/"):
+                    repaired += 1
+                    continue
+                fixed = {}
+                ok = isinstance(rec, dict)
+                for field in ("file_count", "dir_count", "total_size"):
+                    n = _nonneg_int(rec.get(field)) if ok else None
+                    if n is None:
+                        ok = False
+                        n = 0
+                    fixed[field] = n
+                if not ok:
+                    repaired += 1
+                dir_info[key] = fixed
+
+            if "" not in dir_info:
+                # Root record is what every handler bubbles into — rebuild it
+                dir_info[""] = {
+                    "file_count": file_count,
+                    "dir_count": dir_count,
+                    "total_size": total_size,
+                }
+                repaired += 1
+
+            root_rec = dir_info[""]
+            if root_rec["file_count"] != file_count:
+                print(
+                    f"⚠️ Cache inconsistent: root record has {root_rec['file_count']:,} "
+                    f"files, global counter {file_count:,} — will verify by walk"
+                )
+                repaired += 1
+            if version == 1 and saved_root is None:
+                # Legacy file: cannot prove which tree it describes
+                repaired += 1
+
+            # Validation passed — commit
+            self._file_count = file_count
+            self._dir_count = dir_count
+            self._total_size = total_size
+            self._last_modified = last_modified
+            self._dir_info = dir_info
+            self._load_repaired = repaired
 
             print(
                 f"✅ Loaded cache: {self._file_count:,} files, "
                 f"{self._dir_count:,} dirs, "
                 f"{self._total_size / (1024**3):.2f} GB, "
                 f"{len(self._dir_info):,} folders indexed"
+                + (f" ({repaired} record(s) repaired/flagged)" if repaired else "")
             )
 
             # Load the companion file index
@@ -594,6 +745,8 @@ class FileSystemMonitor:
         except Exception as e:
             print(f"⚠️ Failed to load cache: {e} — will do initial walk")
             self._dir_info = {}
+            self._file_count = self._dir_count = self._total_size = 0
+            self._last_modified = 0.0
             return False
 
     def _save_cache(self):
@@ -624,6 +777,8 @@ class FileSystemMonitor:
                         for k, v in self._dir_info.items()
                     }
                     data = {
+                        "version": CACHE_SCHEMA_VERSION,
+                        "root": str(self.root_path),
                         "file_count": self._file_count,
                         "dir_count": self._dir_count,
                         "total_size": self._total_size,
@@ -638,12 +793,14 @@ class FileSystemMonitor:
                     mode="w",
                     encoding="utf-8",
                     dir=CACHE_DIR,
-                    prefix="storage_index.",
+                    prefix=_TMP_PREFIX,
                     suffix=".tmp",
                     delete=False,
                 ) as tf:
-                    json.dump(data, tf)
                     tmp = tf.name
+                    json.dump(data, tf)
+                    tf.flush()
+                    os.fsync(tf.fileno())  # power cut must not leave a 0-byte file
 
                 last_err = None
                 for delay in (0, 0.05, 0.1, 0.2, 0.4, 0.8, 1.5):
@@ -706,8 +863,27 @@ class FileSystemMonitor:
         dir_info[""] = {"file_count": 0, "dir_count": 0, "total_size": 0}
         direct_entries[""] = []
 
+        # 4.59: os.walk() swallows scandir errors by default, so an offline
+        # drive or an unreadable folder used to look like "an empty tree" and
+        # the result overwrote good data. Collect them; `complete` is False if
+        # the root itself could not be walked or the walk raised.
+        walk_errors: list = []
+        complete = True
+        root_str = str(self.root_path)
+
+        def _on_walk_error(err):
+            walk_errors.append(getattr(err, "filename", None) or str(err))
+
+        if not os.path.isdir(root_str):
+            complete = False
+            print(f"❌ Walk aborted: root is not a readable directory: {root_str}")
+
         try:
-            for root, dirs, files in os.walk(str(self.root_path), topdown=True):
+            for root, dirs, files in (
+                os.walk(root_str, topdown=True, onerror=_on_walk_error)
+                if complete
+                else ()
+            ):
                 # Skip chunk temp directory
                 if ".chunks" in dirs:
                     dirs.remove(".chunks")
@@ -819,7 +995,16 @@ class FileSystemMonitor:
                 )
 
         except Exception as e:
+            complete = False
             print(f"❌ Error during filesystem walk: {e}")
+
+        if root_str in walk_errors:
+            complete = False  # the root itself failed — nothing below is trustworthy
+        if walk_errors:
+            print(
+                f"⚠️ Walk: {len(walk_errors)} folder(s) could not be read "
+                f"(first: {walk_errors[0]}) — their contents are not counted"
+            )
 
         if not silent:
             elapsed = time.time() - walk_start
@@ -830,16 +1015,19 @@ class FileSystemMonitor:
                 f"{len(dir_info):,} folders indexed"
             )
 
-        # Build file_index.json for folders exceeding the direct-entry threshold
-        file_index_manager.build_from_walk(direct_entries)
+        # The walk's per-folder data repairs the two companion indexes — but
+        # only from a walk that finished. An aborted walk must not touch them.
+        if complete:
+            # Build file_index.json for folders exceeding the direct-entry threshold
+            file_index_manager.build_from_walk(direct_entries)
 
-        # Same data repairs the search index (changes missed while a bulk-op
-        # settle was pending, or while the server was down). No-op until the
-        # search index's first crawl has finished.
-        try:
-            search_index_manager.reconcile_from_walk(direct_entries)
-        except Exception as e:
-            print(f"⚠️  Search index reconcile failed: {e}")
+            # Same data repairs the search index (changes missed while a bulk-op
+            # settle was pending, or while the server was down). No-op until the
+            # search index's first crawl has finished.
+            try:
+                search_index_manager.reconcile_from_walk(direct_entries)
+            except Exception as e:
+                print(f"⚠️  Search index reconcile failed: {e}")
 
         return {
             "file_count": file_count,
@@ -847,6 +1035,8 @@ class FileSystemMonitor:
             "total_size": total_size,
             "last_modified": latest_mtime,
             "dir_info": dir_info,
+            "complete": complete,
+            "errors": len(walk_errors),
         }
 
     # ------------------------------------------------------------------
@@ -900,7 +1090,12 @@ class FileSystemMonitor:
             with self._settle_lock:
                 self._settle_timer = None
 
-    def _reconcile(self):
+    def _reconcile(self, force: bool = False) -> bool:
+        """Ground-truth walk. Returns True if the result was applied, False if it
+        was rejected (aborted walk, or suspect-empty and not `force`).
+
+        force=True (the admin "Rebuild Cache" button) accepts an empty result.
+        """
         # Every caller of _reconcile() runs it on a background thread (the
         # periodic reconcile_loop thread, the post-startup delayed_reconcile
         # thread, the settle timer, reconcile_async's on-demand thread, and
@@ -944,6 +1139,37 @@ class FileSystemMonitor:
 
         result = self._full_walk(silent=True, on_progress=_on_progress)
 
+        # ── Reject a walk that cannot be trusted ────────────────────────────
+        # (4.59) An aborted walk (root unreadable / exception) or one that finds
+        # nothing while the index holds many files (drive offline, share not
+        # mounted) must not replace good counters or be saved over good data.
+        reject = None
+        if not result.get("complete", True):
+            reject = "walk did not complete"
+        elif (
+            not force
+            and result["file_count"] == 0
+            and result["dir_count"] == 0
+            and self._file_count >= SUSPECT_EMPTY_MIN_FILES
+        ):
+            # Accept only if the NEXT walk is empty too (tree really was emptied).
+            self._suspect_walks += 1
+            if self._suspect_walks < 2:
+                reject = (
+                    f"walk found 0 files but the index holds {self._file_count:,} "
+                    f"— suspect (drive offline?)"
+                )
+        if reject is None:
+            self._suspect_walks = 0
+        else:
+            print(f"🛑 Reconcile rejected, previous index kept: {reject}")
+            with self.lock:
+                self._pending_reconcile = False  # nothing was applied; resume counting
+            self._schedule_retry()
+            return False
+
+        old_dir_info = self._dir_info  # for the per-folder drift report below
+
         with self.lock:
             self._file_count = result["file_count"]
             self._dir_count = result["dir_count"]
@@ -975,17 +1201,58 @@ class FileSystemMonitor:
             _true_old_snapshot or new_snapshot, new_snapshot, reconcile_complete=True
         )
 
+        # Per-folder drift: the global counters can match while individual
+        # folder records are wrong (e.g. a moved folder's ancestors), so compare
+        # every record old-vs-new and report how many were corrected.
+        f_added = f_removed = f_changed = 0
+        try:
+            new_info = result["dir_info"]
+            f_added = sum(1 for k in new_info if k not in old_dir_info)
+            f_removed = sum(1 for k in old_dir_info if k not in new_info)
+            f_changed = sum(
+                1
+                for k, v in new_info.items()
+                if k in old_dir_info and old_dir_info[k] != v
+            )
+        except Exception:
+            pass
+        folder_drift = f_added + f_removed + f_changed
+
         if _true_old_snapshot and (
             _true_old_snapshot.file_count != new_snapshot.file_count
+            or _true_old_snapshot.dir_count != new_snapshot.dir_count
             or _true_old_snapshot.total_size != new_snapshot.total_size
+            or folder_drift
         ):
             print(
                 f"🔄 Reconciliation corrected drift: "
                 f"files {_true_old_snapshot.file_count}→{new_snapshot.file_count}, "
-                f"dirs {_true_old_snapshot.dir_count}→{new_snapshot.dir_count}"
+                f"dirs {_true_old_snapshot.dir_count}→{new_snapshot.dir_count}, "
+                f"folder records +{f_added} −{f_removed} ~{f_changed}"
             )
         else:
             print("✅ Reconciliation complete — no drift detected")
+        return True
+
+    def _schedule_retry(self):
+        """One-shot retry of a rejected reconcile (does not stack)."""
+        with self._settle_lock:
+            if self._retry_timer is not None or not self.monitoring:
+                return
+
+            def _go():
+                try:
+                    self._reconcile()
+                except Exception as e:
+                    print(f"⚠️ Retry reconcile error: {e}")
+                finally:
+                    with self._settle_lock:
+                        self._retry_timer = None
+
+            self._retry_timer = threading.Timer(SUSPECT_RETRY_SECONDS, _go)
+            self._retry_timer.daemon = True
+            self._retry_timer.start()
+        print(f"🔁 Reconcile retry scheduled in {SUSPECT_RETRY_SECONDS}s")
 
     # ------------------------------------------------------------------
     # Snapshot
@@ -1051,15 +1318,20 @@ class FileSystemMonitor:
 
         cache_loaded = self._load_cache()
 
+        first_walk_complete = True
         if not cache_loaded:
             result = self._full_walk()
+            first_walk_complete = bool(result.get("complete", True))
             with self.lock:
                 self._file_count = result["file_count"]
                 self._dir_count = result["dir_count"]
                 self._total_size = result["total_size"]
                 self._last_modified = result["last_modified"]
                 self._dir_info = result["dir_info"]
-            self._save_cache()
+            if first_walk_complete:
+                self._save_cache()
+            else:
+                print("⚠️ First walk incomplete — not saving; will retry shortly")
 
         self.last_snapshot = self._build_snapshot()
         print(
@@ -1079,6 +1351,10 @@ class FileSystemMonitor:
             print("⚡ Watchdog started — instant change detection active")
         except Exception as e:
             print(f"⚠️ Failed to start watchdog: {e}")
+            # 4.59: do not keep an observer that never started — stop_monitoring()
+            # would raise "cannot join thread before it is started" on shutdown.
+            self.observer = None
+            self.event_handler = None
 
         # Start reconcile thread
         self.reconcile_thread = threading.Thread(
@@ -1087,11 +1363,17 @@ class FileSystemMonitor:
         self.reconcile_thread.start()
         print(f"🔄 Reconciliation every {RECONCILE_INTERVAL // 60} minutes")
 
-        # Post-startup reconcile to catch offline changes
-        if cache_loaded:
+        # Post-startup reconcile to catch offline changes (also re-verifies a
+        # cache that needed repair, or a first walk that did not complete)
+        if cache_loaded or not first_walk_complete:
+            _delay = (
+                POST_START_RECONCILE_DELAY_REPAIRED
+                if (self._load_repaired or not first_walk_complete)
+                else POST_START_RECONCILE_DELAY
+            )
 
             def delayed_reconcile():
-                time.sleep(30)
+                time.sleep(_delay)
                 if self.monitoring:
                     print(
                         "🔄 Post-startup reconciliation (catching offline changes)..."
@@ -1131,7 +1413,10 @@ class FileSystemMonitor:
         # Normalize path separators
         rel_path = rel_path.replace("\\", "/").strip("/")
         with self.lock:
-            return self._dir_info.get(rel_path, None)
+            rec = self._dir_info.get(rel_path, None)
+            # Copy: callers (JSON responses) must never see a record the
+            # watchdog is mutating under the lock.
+            return dict(rec) if isinstance(rec, dict) else rec
 
     def force_check(self) -> Optional[StorageSnapshot]:
         """Force immediate reconciliation — kept for API compatibility"""
