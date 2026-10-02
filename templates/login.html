@@ -6,9 +6,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="robots" content="noindex, nofollow">
     <title>Login - Cloudinator FTP</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}">
-    <link href="{{ url_for('static', filename='css/login.css') }}" rel="stylesheet">
-    <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}"
+        integrity="sha384-5xIjiXmIqBXreuPUUtpnwCKFRm0p7kMWRihzZymGZltbTKgyd/X8uGJBfpfdBsvw" />
+    <link href="{{ url_for('static', filename='css/login.css') }}" rel="stylesheet"
+        integrity="sha384-ylrQmDXNE8umgV0ssRQ7E4AvEbNETyW6QuUwKu2JPM7lh9U/LcVqO5XEePAeF30x" />
+    <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp"
+        integrity="sha384-mTiIzUOmh2SfP6u6yyTJHcQnVqctGnma9JMZGwuIrFkKfjVtO7Ok8CMTjA8szFUp" />
 </head>
 
 <body>
@@ -63,6 +66,11 @@
 
     <script src="{{ url_for('static', filename='js/login.js') }}"
         integrity="sha384-anAwuewjrQBgVjPwpRQICWlgF73fE/2rvlDoPVZRqc4+dQ28PhpPOIxI8IaCp26w"></script>
+    <audio id="bgMusic" autoplay loop preload="auto">
+        <source src="{{ url_for('static', filename='audio/bg_mus.opus') }}" type="audio/ogg">
+    </audio>
+    <script src="{{ url_for('static', filename='js/bg_audio.js') }}"
+        integrity="sha384-zKKwynklM+FAe3fTXAeV2eqsmTFe5hev33WXyk3Ac+ebo5jzquGmawtupMCxiWNL" defer></script>
 </body>
 
 </html>

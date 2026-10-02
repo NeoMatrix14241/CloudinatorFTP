@@ -6,8 +6,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="robots" content="noindex, nofollow">
     <title>{% if valid %}{{ name }} — Shared File{% else %}Link Not Available{% endif %} — Cloudinator FTP</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/shared.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}"
+        integrity="sha384-5xIjiXmIqBXreuPUUtpnwCKFRm0p7kMWRihzZymGZltbTKgyd/X8uGJBfpfdBsvw" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/shared.css') }}"
+        integrity="sha384-fIYHCuJAHpXvVTnYl91yLMsS013aeC9OlzrPb5ARaWcA8OMaOGBXOSjpdcUe41dE" />
+    <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp"
+        integrity="sha384-mTiIzUOmh2SfP6u6yyTJHcQnVqctGnma9JMZGwuIrFkKfjVtO7Ok8CMTjA8szFUp" />
 </head>
 
 <body{% if valid %} data-security-mode="{{ security_mode }}" data-request-state="{{ request_state or '' }}"
@@ -124,8 +128,14 @@
 
     {% if valid and ((security_mode == 'passkey' and not unlocked) or security_mode == 'approval' or (unlocked and
     is_dir)) %}
-    <script src="{{ url_for('static', filename='js/shared.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/shared.js') }}"
+        integrity="sha384-fhy7D5ZO3UlQh0o7Vs/JfXcwcj+K9JaNWCHe4W6QxhTH/M+Cm/yRoKSFjjrJ/n6O"></script>
     {% endif %}
+    <audio id="bgMusic" autoplay loop preload="auto">
+        <source src="{{ url_for('static', filename='audio/bg_mus.opus') }}" type="audio/ogg">
+    </audio>
+    <script src="{{ url_for('static', filename='js/bg_audio.js') }}"
+        integrity="sha384-zKKwynklM+FAe3fTXAeV2eqsmTFe5hev33WXyk3Ac+ebo5jzquGmawtupMCxiWNL" defer></script>
     </body>
 
 </html>
