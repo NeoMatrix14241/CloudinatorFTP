@@ -418,9 +418,10 @@ class FileIndexManager:
                     os.fsync(tf.fileno())
 
                 # 4.61: retry the swap. On Windows os.replace() raises
-                # PermissionError (WinError 5/32) when another process (the
-                # WebDAV subprocess' own monitor), antivirus or the indexer has
-                # file_index.json open at that instant. Same backoff as
+                # PermissionError (WinError 5/32) when another process (antivirus,
+                # the Windows indexer, or a second server instance on the same
+                # cache dir; since 4.52 the WebDAV subprocess runs no monitor)
+                # has file_index.json open at that instant. Same backoff as
                 # file_monitor._save_cache() (about 3 s in total).
                 last_err = None
                 for delay in _REPLACE_RETRY_DELAYS:

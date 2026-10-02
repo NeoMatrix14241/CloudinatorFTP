@@ -143,7 +143,14 @@ def _parents(rel_path: str):
     """
     Yield all parent relative paths from closest to root.
     e.g. 'a/b/c' → ['a/b', 'a', '']
+
+    4.62: the root itself ('') has NO parents. It used to yield '' as well, so
+    every caller that first updated the record for `rel_path` and then looped
+    over _parents(rel_path) counted anything directly inside the root twice in
+    the root record (walk, on_created, on_deleted).
     """
+    if not rel_path:
+        return
     parts = rel_path.split("/")
     for i in range(len(parts) - 1, 0, -1):
         yield "/".join(parts[:i])
@@ -562,6 +569,14 @@ class FileSystemMonitor:
         self.event_handler = None
 
         # 4.59 cache-validation state
+        # 4.62: exactly one reconcile walk at a time. A request that was made
+        # BEFORE the last applied walk started is satisfied by that walk.
+        self._walk_lock = threading.Lock()
+        self._walk_started_at: float = 0.0  # time.monotonic() of the last walk start
+        self._walk_applied: bool = False  # that walk's result was applied
+        # 4.62: generation of the post-walk drain timer; a stale timer must not
+        # lift the suppression flag while a newer walk/settle owns it.
+        self._drain_gen: int = 0
         self._load_repaired: int = 0  # records fixed/dropped by _load_cache()
         self._suspect_walks: int = 0  # consecutive walks rejected as suspect-empty
         self._retry_timer: Optional[threading.Timer] = None
@@ -753,10 +768,11 @@ class FileSystemMonitor:
         """Atomically persist storage_index.json.
 
         2026-09-28 (WinError 32 fix): the old code wrote to a FIXED
-        "storage_index.json.tmp" and called os.replace() once. prod_server.py
-        and the WebDAV subprocess each run their own FileMonitor against the
-        same cache dir, and threads inside one process also call this
-        concurrently (reconcile + watchdog), so two writers collided on the
+        "storage_index.json.tmp" and called os.replace() once. At that time
+        prod_server.py and the WebDAV subprocess each ran their own FileMonitor
+        against the same cache dir (since 4.52 webdav_server.py no longer imports
+        app.py, so only the main process runs one), and threads inside one
+        process also call this concurrently (reconcile + watchdog), so two writers collided on the
         same .tmp / on the target while the other side (or antivirus/indexer)
         had it open -> "[WinError 32] The process cannot access the file".
         Now: (1) in-process saves are serialised by _save_lock (it existed
@@ -764,8 +780,9 @@ class FileSystemMonitor:
         (3) os.replace() is retried with short backoff on the Windows
         sharing-violation errors (5/32), (4) the dict is copied under
         self.lock first so json.dump never sees a dict mutating mid-write.
-        Cross-process is last-writer-wins, which is fine: both processes
-        compute the same index from the same disk.
+        Cross-process (only possible with a second server instance on the same
+        cache dir) is last-writer-wins, which is fine: both compute the same
+        index from the same disk. The retry now mainly covers antivirus/indexer.
         """
         with self._save_lock:
             tmp = None
@@ -1062,6 +1079,7 @@ class FileSystemMonitor:
                 self._settle_timer.cancel()
             with self.lock:
                 self._pending_reconcile = True
+                self._drain_gen += 1  # invalidate any older post-walk drain timer
             self._settle_timer = threading.Timer(SETTLE_DELAY, self._settle_reconcile)
             self._settle_timer.daemon = True
             self._settle_timer.start()
@@ -1069,13 +1087,22 @@ class FileSystemMonitor:
             f"🔄 Settle reconcile armed — counter updates suppressed for {SETTLE_DELAY}s"
         )
 
-    def _clear_pending_reconcile(self):
+    def _clear_pending_reconcile(self, gen=None):
         """
         Called by the post-walk drain timer to re-enable watchdog increments.
         Does NOT trigger another walk — it only lifts the suppression flag so
         genuine new events (created after the drain window ends) are counted.
+
+        4.62: `gen` is the drain generation the timer was armed for. If a newer
+        walk or settle has started since, that one owns the flag and this
+        (stale) timer must not clear it mid-walk.
         """
         with self.lock:
+            if gen is not None and gen != self._drain_gen:
+                print(
+                    "⏭️ Stale post-walk drain timer ignored (a newer walk owns the flag)"
+                )
+                return
             self._pending_reconcile = False
         print("✅ Post-walk drain complete — watchdog increments resumed")
 
@@ -1091,7 +1118,41 @@ class FileSystemMonitor:
                 self._settle_timer = None
 
     def _reconcile(self, force: bool = False) -> bool:
-        """Ground-truth walk. Returns True if the result was applied, False if it
+        """Ground-truth walk, ONE AT A TIME (4.62). Returns True if the result was
+        applied (or an equally fresh walk already was), False if it was rejected.
+
+        Every caller (15-minute loop, startup, settle timer, retry timer,
+        reconcile_async, force_check, /admin/rebuild_cache, _trigger_reconcile)
+        used to start its own walk with no lock, so walks could overlap: a stale
+        drain timer lifted the suppression flag mid-walk, an older walk could
+        finish last and overwrite a newer result, and _suspect_walks raced.
+        Now callers queue on _walk_lock. A caller that had to wait is skipped if
+        a walk that STARTED after its request was applied meanwhile (that walk
+        saw every change made before the request). force=True always walks.
+        """
+        requested_at = time.monotonic()
+        with self._walk_lock:
+            if (
+                not force
+                and self._walk_applied
+                and self._walk_started_at > requested_at
+            ):
+                print(
+                    "🔄 Reconcile request covered by a walk that started after it — skipped"
+                )
+                return True
+            self._walk_started_at = time.monotonic()
+            self._walk_applied = False
+            applied = False
+            try:
+                applied = self._reconcile_walk(force)
+                return applied
+            finally:
+                self._walk_applied = applied
+
+    def _reconcile_walk(self, force: bool = False) -> bool:
+        """The actual ground-truth walk (callers must hold _walk_lock via
+        _reconcile()). Returns True if the result was applied, False if it
         was rejected (aborted walk, or suspect-empty and not `force`).
 
         force=True (the admin "Rebuild Cache" button) accepts an empty result.
@@ -1123,6 +1184,7 @@ class FileSystemMonitor:
         #   _clear_pending_reconcile() then re-enables normal watchdog counting.
         with self.lock:
             self._pending_reconcile = True  # keep suppression on for entire walk
+            self._drain_gen += 1  # any drain timer of an earlier walk is now stale
 
         _true_old_snapshot = self.last_snapshot
 
@@ -1183,9 +1245,12 @@ class FileSystemMonitor:
             # Stay suppressed — OS queue may still hold thousands of events
             # for files the walk already counted.  POST_WALK_DRAIN flushes them.
             self._pending_reconcile = True
+            drain_gen = self._drain_gen
 
         # Drain timer: lifts suppression after OS queue drains.  No walk.
-        drain_timer = threading.Timer(POST_WALK_DRAIN, self._clear_pending_reconcile)
+        drain_timer = threading.Timer(
+            POST_WALK_DRAIN, self._clear_pending_reconcile, args=(drain_gen,)
+        )
         drain_timer.daemon = True
         drain_timer.start()
         print(f"🔄 Post-walk drain armed for {POST_WALK_DRAIN}s")

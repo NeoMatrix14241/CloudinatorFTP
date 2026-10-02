@@ -76,11 +76,12 @@ def list_dir(path):
     # of thousands of files this avoids a slow os.scandir() + stat() loop and
     # makes the response nearly instant (pure in-memory dict lookup).
     #
-    # The cache is kept up-to-date by the watchdog: on_created/on_deleted/
-    # on_moved each call file_index_manager.update_folder() on the affected
-    # parent folder immediately after the filesystem change completes, so by
-    # the time the browser's refreshFileTable() request arrives the cache
-    # already reflects the post-operation state.
+    # Freshness (4.58+): get_entries() validates every read - the first read of
+    # a record loaded from disk does a full re-scan, every later read stats the
+    # folder and re-scans it when its mtime changed. The watchdog handlers
+    # (on_created/on_deleted/on_moved) also call update_folder() on the affected
+    # parent, but they skip that while a reconcile is pending, so the per-read
+    # mtime check is what guarantees the listing is current.
     fim = _get_file_index_manager()
     if fim is not None:
         rel_path = path.replace("\\", "/").strip("/")

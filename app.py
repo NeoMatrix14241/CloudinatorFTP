@@ -5642,10 +5642,12 @@ async def bulk_move():
                     if resolution == "skip":
                         continue
                     elif resolution == "overwrite":
+                        # 4.62: blocking disk work runs in a worker thread,
+                        # not on the event loop
                         if os.path.isdir(dest_full):
-                            shutil.rmtree(dest_full)
+                            await asyncio.to_thread(shutil.rmtree, dest_full)
                         else:
-                            os.remove(dest_full)
+                            await asyncio.to_thread(os.remove, dest_full)
                     elif resolution == "rename":
                         dest_full = os.path.join(
                             dest_dir, _find_free_name(dest_dir, filename)
@@ -5657,7 +5659,9 @@ async def bulk_move():
                         continue
 
                 # Perform the move
-                shutil.move(source_full, dest_full)
+                # 4.62: a cross-volume or big-folder move copies data; run it in a
+                # worker thread so SSE, searches and every other request keep going.
+                await asyncio.to_thread(shutil.move, source_full, dest_full)
                 moved_count += 1
 
             except Exception as e:
