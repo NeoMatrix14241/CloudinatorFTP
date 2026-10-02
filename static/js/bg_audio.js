@@ -5,6 +5,7 @@
     const STORAGE_PLAYING = "cloudinator_bg_music_playing";
 
     let audio = null;
+    let leavingPage = false;
 
     function initializeAudio() {
         audio = document.getElementById("bgMusic");
@@ -52,12 +53,25 @@
         });
 
         audio.addEventListener("pause", () => {
+            // Browsers can fire "pause" while a page is being torn down
+            // (refresh / navigation). That is not the listener pausing, so it
+            // must not turn the saved state into "not playing".
+            if (leavingPage) {
+                return;
+            }
             localStorage.setItem(STORAGE_PLAYING, "false");
             saveState();
         });
 
         // Save immediately before navigating to another page
-        window.addEventListener("beforeunload", saveState);
+        window.addEventListener("beforeunload", () => {
+            leavingPage = true;
+            saveState();
+        });
+        window.addEventListener("pagehide", () => {
+            leavingPage = true;
+            saveState();
+        });
 
         // If browser blocks autoplay, start on first user interaction
         setupInteractionFallback();
@@ -79,48 +93,50 @@
     }
 
     function setupInteractionFallback() {
+        // Browsers only allow sound after a real user gesture. Scrolling and
+        // moving the mouse do NOT count, and neither does a lone Shift/Ctrl
+        // key, so the first gesture may still be refused. Keep every listener
+        // in place until play() has actually succeeded (the old version used
+        // { once: true }, which used up the listener even when play() failed).
+        const events = [
+            "pointerdown",
+            "mousedown",
+            "click",
+            "keydown",
+            "touchstart",
+            "touchend"
+        ];
+
+        const stopListening = () => {
+            events.forEach((name) => {
+                document.removeEventListener(name, startOnInteraction, true);
+            });
+        };
+
         const startOnInteraction = () => {
-            if (!audio || !audio.paused) {
+            if (!audio) {
+                stopListening();
+                return;
+            }
+
+            if (!audio.paused) {
+                stopListening();
                 return;
             }
 
             audio.play()
                 .then(() => {
                     localStorage.setItem(STORAGE_PLAYING, "true");
+                    stopListening();
                 })
-                .catch(() => {});
-
-            document.removeEventListener(
-                "click",
-                startOnInteraction
-            );
-            document.removeEventListener(
-                "keydown",
-                startOnInteraction
-            );
-            document.removeEventListener(
-                "touchstart",
-                startOnInteraction
-            );
+                .catch(() => {
+                    // Still blocked: stay armed for the next gesture.
+                });
         };
 
-        document.addEventListener(
-            "click",
-            startOnInteraction,
-            { once: true }
-        );
-
-        document.addEventListener(
-            "keydown",
-            startOnInteraction,
-            { once: true }
-        );
-
-        document.addEventListener(
-            "touchstart",
-            startOnInteraction,
-            { once: true }
-        );
+        events.forEach((name) => {
+            document.addEventListener(name, startOnInteraction, true);
+        });
     }
 
     function saveState() {
@@ -135,10 +151,12 @@
             );
         }
 
-        localStorage.setItem(
-            STORAGE_PLAYING,
-            String(!audio.paused)
-        );
+        // Only record "playing" here. "Not playing" is written by the
+        // explicit "pause" event above; writing it from here as well would
+        // turn a browser-blocked autoplay into a saved "paused" state.
+        if (!audio.paused) {
+            localStorage.setItem(STORAGE_PLAYING, "true");
+        }
     }
 
     // Initialize after DOM is ready
