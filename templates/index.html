@@ -20,20 +20,20 @@
     <link href="{{ url_for('static', filename='css/index.css') }}" rel="stylesheet"
         integrity="sha384-oMe36CmzCPTOFpSsJsDXEvgrm8Q2xXqA1/dhedIhdnUwDZ7tPv50twPDjsTc6QRd" />
     <!-- @videojs/html web-component player — served locally, no CDN required -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/video.css') }}" />
-    <script type="module" src="{{ url_for('static', filename='js/video.js') }}"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/video.css') }}" integrity="sha384-+/JVmfKbUsq+XkvsCq1qRmAfIRby5qbGmMtnMZ9P/LPgwaT5v72mWgoPaJ7b6W8H" />
+    <script type="module" src="{{ url_for('static', filename='js/video.js') }}" integrity="sha384-FJ/fyqeaOgG0O2BqU6yZsL34bSa3h5g+gXTFhbLAkyQAnNjPhAQ7vcM7/9V4Y+Jx"></script>
     <!-- PDF.js — local, official viewer UI. Merged inline (no iframe) so the
          CSP directive frame-src 'none' is never triggered. viewer.css and
          viewer.mjs are only meaningful once #pdfjsViewerRoot is shown; they're
          cheap enough to always load, and viewer.mjs self-initializes against
          #outerContainer below regardless of whether a PDF is open yet. -->
-    <link rel="resource" type="application/l10n" href="{{ url_for('static', filename='js/locale/locale.json') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/viewer.css') }}" />
+    <link rel="resource" type="application/l10n" href="{{ url_for('static', filename='js/locale/locale.json') }}" integrity="sha384-jDas7Io0At+AF+HBzyVXUl9kbrp+pKIBUFCZVWzrwlur5bFQZ4/mY8kvolZMDoXL" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/viewer.css') }}" integrity="sha384-0YnXPchE9ShwVSq4Vh8PX6jBreQob/nV9ysIHttXBUx/nBW8WZfhNNRWQ78o6a65" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/pdfjs-viewer-overlay.css') }}"
         integrity="sha384-5+R4kxSC6/vgjIYwAuOCHLkwqRNVnUjADsQYtt9pIXbCmeY5SXU7Y8kkTnaem6qp" />
     <script type="module" src="{{ url_for('static', filename='js/pdfjs-worker-init.mjs') }}"
         integrity="sha384-cT63iCaJ7imUoJ7NbUFSnSvmlSSmgBK8UqFLB6GDpbhCZCkuiC8xMzQczQQrK8pL"></script>
-    <script src="{{ url_for('static', filename='js/viewer.mjs') }}" type="module"></script>
+    <script src="{{ url_for('static', filename='js/viewer.mjs') }}" type="module" integrity="sha384-ay8+pHzr1XHNe3wLy2c5SlHpeIBOUETPUDF0V6mowyIUTExcEbOOCjDaTNYynrS9"></script>
     <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp"
         integrity="sha384-mTiIzUOmh2SfP6u6yyTJHcQnVqctGnma9JMZGwuIrFkKfjVtO7Ok8CMTjA8szFUp">
 </head>

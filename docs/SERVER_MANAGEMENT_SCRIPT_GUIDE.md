@@ -1,10 +1,10 @@
 # 🖥️ manage.sh — Server Management Script Guide
 
-**Last Updated**: 2026-09-30
+**Last Updated**: 2026-10-02
 **Works on**: Windows (Git Bash), Linux, and Android (Termux)
 **Checked against**: `manage.sh` itself (commands, menu numbers, and behaviour below are read from the script, not from memory)
 
-`manage.sh` runs the Cloudinator server in the **background** so your terminal stays free, and gives you one entry point for the maintenance utilities (users, config, SMB, share links, version engine, and so on).
+`manage.sh` runs the Cloudinator server in the **background** so your terminal stays free, and gives you one entry point for the maintenance utilities (users, config, SMB, share links, version engine, SRI hash checking, and so on).
 
 ## 📋 Table of Contents
 
@@ -127,6 +127,7 @@ Utilities run in the **foreground** and are safe to use while the server is up. 
 | `setup-storage` | `setup_storage.py` | Configure storage |
 | `update-modules [-y]` | `setup_pymodules.sh` | Update Python packages (alias: `setup-modules`) |
 | `revoke-shares` | `revoke_sharing.py` | Share link management |
+| `validate-sri [--fix]` | `sri_validator.py` | Check (or repair) the Subresource Integrity hashes in the templates |
 | `termux-setup` | `termux_setup.sh` | First-time setup, Android/Termux only |
 
 When a utility finishes, the script prints whether it finished, was interrupted (Ctrl-C), or exited with an error code.
@@ -163,6 +164,25 @@ Per the script's built-in help:
 ```
 
 Edit options: `--mode public|passkey|approval`, `--passkey KEY` (implies passkey mode unless a mode is already set), `--generate-passkey`, `--clear-passkey`, `--expires-in 1h|2d|30m|7d|SECONDS`, `--never-expire`. `approve` allows **1** download unless you pass `--max-downloads N`.
+
+### validate-sri
+
+Your HTML templates load scripts and stylesheets with an `integrity="sha384-..."` hash. If the hash does not match the file, the browser **silently refuses to run the script** (and ignores the stylesheet), so a forgotten update breaks a page with no visible error. This command compares every hash with the file on disk.
+
+```bash
+./manage.sh validate-sri          # check only; exit code 1 if any hash is wrong or missing
+./manage.sh validate-sri --fix    # write the correct hashes into the templates
+```
+
+- It reads every `<script src>` and `<link href>` in `templates/` that points at a file in `static/` (written as `{{ url_for('static', filename='...') }}` or `/static/...`).
+- The report lists each tag as `OK`, `STALE` (hash differs from the file), `NONE` (no `integrity` yet), `MISS` (the file is not in `static/`), or `skip` (an inline script or an external URL, which cannot be hashed).
+- `--fix` only changes `integrity` values. Line endings and the rest of each template stay exactly as they were.
+- It always looks in the `templates/` and `static/` folders next to `manage.sh`, wherever you run it from. `--templates DIR` and `--static DIR` override that.
+- **When to run it:** after you edit any JS or CSS under `static/` (including `bg_audio.js`, whose hash is repeated in four templates), and after you change a third-party file such as pdf.js. Then open each page once and look for blocked-script errors in the browser console.
+- **From the interactive menu (`./manage.sh menu`, option 21)** it runs the check, and if any hash is stale or missing it asks `Fix the stale/missing hashes now? [y/N]`. `y` runs the same repair as `--fix`; Enter or `n` leaves everything unchanged (and reminds you of the shell command). The question appears only when the check found a fixable problem, not when everything is OK, when you press Ctrl-C, or when the `templates/` or `static/` folder is missing.
+- Because it exits with 1 when something is wrong, you can also use it in a script or git pre-commit hook: `./manage.sh validate-sri || exit 1`.
+
+Limits: browsers only enforce the hash on `<script>` tags and on stylesheet/preload links (icon and `locale.json` links accept the attribute but ignore it). Tags that JavaScript adds at runtime are not in any template, so they are not checked. The hash must match the bytes the **server** sends, so if git converts line endings on checkout, run the command on the server's copy.
 
 ### update-modules
 
@@ -218,6 +238,7 @@ Shows whether a server is running, then a numbered list. Every number is the sam
 | 8 | `restart-webdav` | 18 | `revoke-shares` |
 | 9 | `version-manage` | 19 | `security-txt` |
 | 10 | `config` | 20 | `termux-setup` (shown dimmed when not on Termux) |
+| | | 21 | `validate-sri` (checks, then asks y/N before fixing) |
 
 Type `q` to quit. After each action it waits for Enter before redrawing.
 
@@ -233,6 +254,7 @@ Type `q` to quit. After each action it waits for Enter before redrawing.
 | `.manage_pids/webdav.pid` | PID of the WebDAV process (written by the server, not by `manage.sh`) |
 | `logs/prod_server_YYYY-MM-DD.log`, `logs/dev_server_YYYY-MM-DD.log` | One log per day per server type, written by the app's own logger. It rolls to a new file at midnight without a restart |
 | `static/.well-known/security.txt` | Edited by `security-txt` |
+| `templates/*.html`, `static/` | Read by `validate-sri`; the templates are rewritten only when you add `--fix` |
 
 Because background mode discards raw console output (see [Startup messages](#startup-messages-are-not-shown-in-background-mode)), the log files are where diagnostics live.
 
@@ -287,6 +309,8 @@ This applies to the servers and every utility.
 | `No WebDAV PID file found` (restart-webdav) | WebDAV did not start. Check `WEBDAV_ENABLED` and `WEBDAV_HTTPS_ENABLED` in `config.py`, and the server log |
 | `WebDAV did not come back within 10s` | The respawn failed. Read the server log for the actual error |
 | `Script not found` | A utility file is missing from the project folder |
+| A page loads but a script or stylesheet does nothing; console shows an integrity error | A stale SRI hash. Run `./manage.sh validate-sri --fix`, then reload (hard refresh) |
+| `sri_validator exited with code 1` | `validate-sri` found a stale, missing or unresolvable hash. Read the report above it, then run with `--fix` |
 | `Permission denied` running `./manage.sh` | Run `chmod +x manage.sh`, or use `bash manage.sh <command>` |
 | `termux-setup` says Android-only | You are not on Termux. Follow the message for your platform |
 | Windows: stale Python process locks a log file | Run `./manage.sh stop`, then start again. The script also clears leftover WebDAV processes on every start |

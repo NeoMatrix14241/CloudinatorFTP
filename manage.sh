@@ -1180,6 +1180,42 @@ cmd_security_txt() {
 	_security_txt_apply "$contact" "$expires" "$expires_days" "$plang" "$canonical"
 }
 
+# ── cmd_validate_sri ──────────────────────────────────────────────────────────
+# Checks (default) or repairs (--fix) the Subresource Integrity hash of every
+# local <script src> / <link href> in templates/ via sri_validator.py. The
+# default --templates/--static paths are passed FIRST so they always point at
+# this project folder no matter where you run manage.sh from; anything the user
+# types after the command comes later and wins (argparse keeps the last value).
+# sri_validator.py exits 1 on a stale / missing hash, so that exit code is what
+# this command returns too (usable from a git pre-commit hook or a deploy script).
+cmd_validate_sri() {
+	run_utility "sri_validator.py" --templates "${SCRIPT_DIR}/templates" --static "${SCRIPT_DIR}/static" "$@"
+}
+
+# Menu flavour of validate-sri (menu #21): run the check, and if it found stale
+# or missing hashes (validator exit code 1) offer to repair them right there, so
+# the menu user never has to quit and retype the command with --fix. Only exit
+# code 1 triggers the question: 130 (Ctrl-C) and 2 (templates/static folder not
+# found) are passed through as they are, and a missing sri_validator.py is
+# reported by run_utility without a pointless "fix?" prompt.
+_menu_validate_sri() {
+	local ec=0
+	if [[ ! -f "${SCRIPT_DIR}/sri_validator.py" ]]; then
+		cmd_validate_sri
+		return $?
+	fi
+	cmd_validate_sri || ec=$?
+	if ((ec != 1)); then
+		return $ec
+	fi
+	echo ""
+	if _confirm "Fix the stale/missing hashes now?"; then
+		cmd_validate_sri --fix
+	else
+		info "Left unchanged. Repair later with: ./manage.sh validate-sri --fix"
+	fi
+}
+
 # ── cmd_dashboard ─────────────────────────────────────────────────────────────
 cmd_dashboard() {
 	header "Cloudinator — Server Manager"
@@ -1321,13 +1357,14 @@ cmd_menu() {
 		echo "  17) setup_pymodules.sh  — Setup and Update Python packages"
 		echo "  18) revoke_sharing.py   — Share link management (links, passkeys, approvals)"
 		echo "  19) security.txt        — Update static/.well-known/security.txt"
-		# Always listed so the menu numbers match `./manage.sh help` (20 entries).
+		# Always listed so the menu numbers match `./manage.sh help` (21 entries).
 		# Off Termux, cmd_termux_setup just explains that it is Android-only.
 		if is_termux; then
 			echo "  20) termux_setup.sh     — Termux initial setup (Android only)"
 		else
 			echo -e "  ${DIM}20) termux_setup.sh     — Termux initial setup (Android only — n/a on this system)${NC}"
 		fi
+		echo "  21) sri_validator.py    — Check SRI hashes in templates (offers to fix)"
 		echo ""
 		echo "   q) Quit"
 		echo ""
@@ -1362,6 +1399,7 @@ cmd_menu() {
 		18) _menu_run run_utility "revoke_sharing.py" ;;
 		19) _menu_run cmd_security_txt ;;
 		20) _menu_run cmd_termux_setup ;;
+		21) _menu_run _menu_validate_sri ;;
 		q | Q)
 			echo ""
 			success "Goodbye!"
@@ -1450,6 +1488,13 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
                           in the file are left alone. Expires is normalized to
                           YYYY-MM-DDTHH:MM:SS.sssZ; a date-only value defaults
                           to 23:00:00.000Z that day.
+  validate-sri [--fix]  python sri_validator.py — check the SRI integrity hash of every
+                          local <script src>/<link href> in templates/. No args = check
+                          only (exit code 1 if any hash is stale or missing). --fix
+                          writes the correct hashes into the templates (menu #21 checks,
+                          then asks y/N before fixing). Other options:
+                          --templates DIR, --static DIR. Run it after editing any JS/CSS
+                          under static/, then reload each page once.
   termux-setup          bash termux_setup.sh  (Android/Termux only)
 
 ${BOLD}OTHER${NC}
@@ -1464,7 +1509,8 @@ ${BOLD}MENU ↔ COMMAND MAP${NC}  (in ./manage.sh menu type the number; from the
   10  config                11  setup-smb            12  kick-sessions
   13  manage-users          14  debug-pw             15  reset-db
   16  setup-storage         17  update-modules       18  revoke-shares
-  19  security-txt         20  termux-setup (Android/Termux only; shown dimmed elsewhere)       q  quit
+  19  security-txt         20  termux-setup (Android/Termux only; shown dimmed elsewhere)
+  21  validate-sri         q  quit
 
 ${BOLD}EXAMPLES${NC}
   Servers
@@ -1498,6 +1544,8 @@ ${BOLD}EXAMPLES${NC}
     ./manage.sh setup-storage                    # configure storage
     ./manage.sh update-modules                   # update Python packages (asks first)
     ./manage.sh update-modules -y                # same, without the confirmation question
+    ./manage.sh validate-sri                     # check SRI hashes in templates (exit 1 if any are wrong)
+    ./manage.sh validate-sri --fix               # rewrite stale/missing hashes after editing JS/CSS
     ./manage.sh termux-setup                     # Android/Termux first-time setup
   Share links
     ./manage.sh revoke-shares                    # interactive share-management menu
@@ -1570,6 +1618,7 @@ main() {
 	revoke-shares) run_utility "revoke_sharing.py" "$@" ;;
 	security-txt) cmd_security_txt "$@" ;;
 	termux-setup) cmd_termux_setup ;;
+	validate-sri) cmd_validate_sri "$@" ;;
 	menu) cmd_menu ;;
 	dashboard) cmd_dashboard ;;
 	help | --help | -h) cmd_help ;;
