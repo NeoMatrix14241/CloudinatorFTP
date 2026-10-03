@@ -2272,6 +2272,15 @@ const VT = (() => {
         _dirInfoCache.clear();
     }
 
+    // 4.66: drop every cached folder record EXCEPT the given paths (the ones on
+    // screen, which are re-read in place), so folders that scroll in later are
+    // fetched fresh while the visible size cells never go blank.
+    function pruneDirCache(keepPaths) {
+        for (const k of Array.from(_dirInfoCache.keys())) {
+            if (!keepPaths.has(k)) _dirInfoCache.delete(k);
+        }
+    }
+
     // ── internals ─────────────────────────────────────────────
     function _getDisplayFiles() {
         let list = _allFiles;
@@ -2670,7 +2679,7 @@ const VT = (() => {
 
     return {
         init, applySort, applyFilter, getAll, getPath, markSearchResults, scrollToItem, rowResized,
-        patchFolderSize, cacheDirInfo, getCachedDirInfo, invalidateDirCache, clearDirCache
+        patchFolderSize, cacheDirInfo, getCachedDirInfo, invalidateDirCache, clearDirCache, pruneDirCache
     };
 })();
 
@@ -2719,6 +2728,10 @@ function createFileTableRow(item, currentPath) {
     const safeName = escapeHtml(item.name);
     const itemIcon = item.is_dir ? 'fas fa-folder' : getFileIcon(item.name);
     const itemTypeText = item.is_dir ? 'Folder' : getFileType(item.name);
+    // 4.66: a re-render must not blank the folder size cell. When the folder's
+    // counts are already cached, put them in the new cell straight away.
+    const _cachedDir = item.is_dir ? VT.getCachedDirInfo(itemPath) : null;
+    const _cachedDirOk = !!(_cachedDir && _cachedDir.file_count != null && _cachedDir.dir_count != null);
 
     row.innerHTML = `
         <td>
@@ -2743,9 +2756,9 @@ function createFileTableRow(item, currentPath) {
         </td>
         <td class="size-cell">
             ${item.is_dir ?
-            `<span class="dir-info-cell" data-dir-path="${escapeHtml(itemPath)}" style="color: white; font-size: 13px;">
+            `<span class="dir-info-cell" data-dir-path="${escapeHtml(itemPath)}"${_cachedDirOk ? ` data-sig="${_dirInfoSig(_cachedDir)}"` : ''} style="color: white; font-size: 13px;">${_cachedDirOk ? _dirInfoHtml(_cachedDir) : `
                     <i class="fas fa-spinner fa-spin" style="opacity: 0.4; font-size: 11px;"></i>
-                </span>` :
+                `}</span>` :
             `<span class="file-size" style="color: white; font-weight: 500;">${formatFileSize(item.size)}</span>`
         }
         </td>
@@ -2837,6 +2850,26 @@ function createFileTableRow(item, currentPath) {
     return row;
 }
 
+// 4.66: one place that formats a folder's "N files, M folders / size" cell, and
+// a signature of its content so a refresh can tell "nothing changed" and leave
+// the DOM alone.
+function _dirInfoFmtSize(bytes) {
+    if (!bytes || bytes <= 0) return null;
+    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return bytes + ' bytes';
+}
+function _dirInfoHtml(d) {
+    let html = d.file_count + ' files, ' + d.dir_count + ' folders';
+    const s = _dirInfoFmtSize(d.total_size);
+    if (s) html += '<br><small style="color:white;">' + s + '</small>';
+    return html;
+}
+function _dirInfoSig(d) {
+    return d.file_count + '|' + d.dir_count + '|' + (d.total_size || 0);
+}
+
 // Lazy-load folder size and item count for dir-info-cell spans.
 // `rows`, when given, scopes this to just the rows VT rendered in the most
 // recent pass — with row windowing, most of the folder is never in the DOM,
@@ -2865,12 +2898,13 @@ function loadDirInfoCells(rows) {
         const dirPath = cell.dataset.dirPath;
 
         const cached = VT.getCachedDirInfo(dirPath);
-        if (cached !== null) {
-            var html = cached.file_count + ' files, ' + cached.dir_count + ' folders';
-            if (cached.total_size > 0) {
-                html += '<br><small style="color:white;">' + formatSize(cached.total_size) + '</small>';
+        // (patchFolderSize() can cache a size alone, without counts: not usable here)
+        if (cached !== null && cached.file_count != null && cached.dir_count != null) {
+            const sig = _dirInfoSig(cached);
+            if (cell.dataset.sig !== sig) {
+                cell.innerHTML = _dirInfoHtml(cached);
+                cell.dataset.sig = sig;
             }
-            cell.innerHTML = html;
             return;
         }
 
@@ -2886,12 +2920,8 @@ function loadDirInfoCells(rows) {
                 // DOM — it was recycled/removed when the row scrolled out,
                 // and writing to it would be a wasted, stale DOM mutation.
                 if (!cell.isConnected) return;
-                var html = data.file_count + ' files, ' + data.dir_count + ' folders';
-                var sizeStr = formatSize(data.total_size);
-                if (sizeStr) {
-                    html += '<br><small style="color:white;">' + sizeStr + '</small>';
-                }
-                cell.innerHTML = html;
+                cell.innerHTML = _dirInfoHtml(data);
+                cell.dataset.sig = _dirInfoSig(data);
                 // The cell just grew (spinner -> two lines); tell VT so its
                 // cached row height / offsets are corrected.
                 VT.rowResized(cell.closest('tr'));
@@ -5741,8 +5771,33 @@ function updateItemStatus(fileId, status, error = null) {
     updateQueueDisplay();
 }
 
+// 4.66: is the listing the server just returned the one already on screen?
+// Only the fields a row is built from are compared (name, is_dir, modified,
+// and size for files; a folder's size comes from /api/dir_info), and the order
+// is ignored, so an SSE-triggered refresh that changes nothing visible does
+// not rebuild the table at all.
+function _sameListing(newFiles, path) {
+    try {
+        const norm = p => (p || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        if (norm(VT.getPath()) !== norm(path)) return false;
+        const cur = VT.getAll();
+        if (!Array.isArray(newFiles) || cur.length !== newFiles.length) return false;
+        const byName = new Map(cur.map(f => [f.name, f]));
+        for (const b of newFiles) {
+            const a = byName.get(b.name);
+            if (!a) return false;
+            if (!!a.is_dir !== !!b.is_dir || a.modified !== b.modified) return false;
+            if (!a.is_dir && a.size !== b.size) return false;
+        }
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
 // AJAX function to refresh file table without page reload
-async function refreshFileTable() {
+// opts.onlyIfChanged (4.66): skip the re-render when the listing is identical.
+async function refreshFileTable(opts) {
     const startTime = Date.now();
     console.log('📁 refreshFileTable() started...');
 
@@ -5770,6 +5825,11 @@ async function refreshFileTable() {
 
         if (!data.success) {
             throw new Error(data.error || 'Failed to load files');
+        }
+
+        if (opts && opts.onlyIfChanged && _sameListing(data.files, currentPath || '')) {
+            console.log('📁 Listing unchanged - table left as is');
+            return;
         }
 
         // BUG FIX: Route through updateFileTable (VT.init) instead of updateFileTableContent.
@@ -8425,6 +8485,98 @@ async function updateManualCleanupButton() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 4.66: Rebuild Cache button state lives OUTSIDE the button. The rebuild runs on
+// the server, so after a page refresh (or any rebuild of the toolbar) the button
+// must ask the server and, if a rebuild is still running, come back disabled with
+// its timer - not clickable. ONE follower polls the status route (every 3 s);
+// the label is repainted every second from a clock, so the timer counts 1,2,3...
+// ---------------------------------------------------------------------------
+const _REBUILD_IDLE_HTML = '<i class="fas fa-database"></i> Rebuild Cache';
+let _rebuildFollow = null;   // { t0 } while a rebuild is being followed
+
+function _rebuildBtn() { return document.getElementById('cleanupCacheBtn'); }
+
+function _paintRebuildBtn() {
+    const b = _rebuildBtn();
+    if (!b) return;
+    if (_rebuildFollow) {
+        const secs = Math.max(0, Math.floor((Date.now() - _rebuildFollow.t0) / 1000));
+        b.disabled = true;
+        b.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Rebuilding... ' +
+            Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0');
+    } else {
+        b.disabled = false;
+        b.innerHTML = _REBUILD_IDLE_HTML;
+    }
+}
+
+async function _readJsonSafe(resp) {
+    try { return await resp.json(); } catch (e) { return {}; }
+}
+
+// Follow a running rebuild until it ends. t0 = local ms timestamp of its start.
+async function _followRebuild(t0) {
+    if (_rebuildFollow) return;   // already being followed
+    _rebuildFollow = { t0 };
+    const ticker = setInterval(_paintRebuildBtn, 1000);
+    _paintRebuildBtn();
+    try {
+        let failures = 0;
+        while (true) {
+            await new Promise(r => setTimeout(r, 3000));
+            let st;
+            try {
+                const r = await fetch('/admin/rebuild_cache/status', { cache: 'no-store' });
+                st = await _readJsonSafe(r);
+                if (!r.ok) throw new Error(st.error || `HTTP ${r.status}`);
+                failures = 0;
+            } catch (e) {
+                if (++failures >= 5) {
+                    throw new Error('lost contact with the server while waiting; the rebuild may still be running');
+                }
+                continue;
+            }
+            if (st.state === 'done') {
+                showUploadStatus('✅ ' + (st.message || 'Cache cleared and rebuilt successfully'), 'success');
+                break;
+            }
+            if (st.state === 'error') {
+                throw new Error(st.error || 'Cache rebuild failed');
+            }
+            if (st.state === 'idle') {
+                throw new Error('the server has no rebuild in progress (it may have restarted)');
+            }
+            if ((Date.now() - _rebuildFollow.t0) > 3600 * 1000) {
+                throw new Error('still running after 60 minutes; check the server log');
+            }
+        }
+    } catch (error) {
+        showUploadStatus(`❌ Cache cleanup failed: ${error.message}`, 'error');
+    } finally {
+        clearInterval(ticker);
+        _rebuildFollow = null;
+        _paintRebuildBtn();
+    }
+}
+
+// Called when the button is (re)created: hold it disabled until the server says
+// whether a rebuild is running, then either attach to it or enable the button.
+async function _syncRebuildButton() {
+    if (_rebuildFollow) { _paintRebuildBtn(); return; }
+    const b = _rebuildBtn();
+    if (b) b.disabled = true;
+    try {
+        const r = await fetch('/admin/rebuild_cache/status', { cache: 'no-store' });
+        const st = await _readJsonSafe(r);
+        if (r.ok && st.state === 'running') {
+            _followRebuild(Date.now() - (typeof st.elapsed === 'number' ? st.elapsed * 1000 : 0));
+            return;
+        }
+    } catch (e) { /* fall through: enable the button */ }
+    _paintRebuildBtn();
+}
+
 // Add manual cleanup button for debugging/admin use
 function addManualCleanupButton() {
     const controls = document.querySelector('.controls');
@@ -8498,66 +8650,28 @@ function addManualCleanupButton() {
             if (!confirm('This will delete the storage index cache and rebuild it from scratch.\nThe server re-scans every file in the background - on a large tree this can take several minutes. You can keep using the page.\n\nContinue?')) {
                 return;
             }
-            // Parse a body as JSON without throwing on an HTML error page
-            // (e.g. a proxy/CDN 524 timeout), which used to surface as
-            // "Unexpected token '<'".
-            const readJson = async (resp) => {
-                try { return await resp.json(); } catch (e) { return {}; }
-            };
             try {
                 cacheBtn.disabled = true;
-                cacheBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Rebuilding...';
+                cacheBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting...';
                 const startResp = await fetch('/admin/rebuild_cache', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
                 });
-                const startData = await readJson(startResp);
+                const startData = await _readJsonSafe(startResp);
                 // 202 = started, 409 = one is already running: follow it either way
                 if (!startResp.ok && startResp.status !== 409) {
                     throw new Error(startData.error || `server answered HTTP ${startResp.status}`);
                 }
-                const t0 = Date.now();
-                let failures = 0;
-                while (true) {
-                    await new Promise(r => setTimeout(r, 3000));
-                    let st;
-                    try {
-                        const r = await fetch('/admin/rebuild_cache/status', { cache: 'no-store' });
-                        st = await readJson(r);
-                        if (!r.ok) throw new Error(st.error || `HTTP ${r.status}`);
-                        failures = 0;
-                    } catch (e) {
-                        if (++failures >= 5) {
-                            throw new Error('lost contact with the server while waiting; the rebuild may still be running');
-                        }
-                        continue;
-                    }
-                    const secs = Math.round((Date.now() - t0) / 1000);
-                    cacheBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Rebuilding... ' +
-                        Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0');
-                    if (st.state === 'done') {
-                        showUploadStatus('✅ ' + (st.message || 'Cache cleared and rebuilt successfully'), 'success');
-                        break;
-                    }
-                    if (st.state === 'error') {
-                        throw new Error(st.error || 'Cache rebuild failed');
-                    }
-                    if (st.state === 'idle') {
-                        throw new Error('the server has no rebuild in progress (it may have restarted)');
-                    }
-                    if (secs > 3600) {
-                        throw new Error('still running after 60 minutes; check the server log');
-                    }
-                }
+                const elapsed = (startResp.status === 409 && typeof startData.elapsed === 'number') ? startData.elapsed : 0;
+                await _followRebuild(Date.now() - elapsed * 1000);
             } catch (error) {
                 showUploadStatus(`❌ Cache cleanup failed: ${error.message}`, 'error');
-            } finally {
-                cacheBtn.disabled = false;
-                cacheBtn.innerHTML = '<i class="fas fa-database"></i> Rebuild Cache';
+                _paintRebuildBtn();
             }
         };
 
         adminActions.appendChild(cacheBtn);
+        _syncRebuildButton();
 
         // --- Clean Media Preview button ---
         const mediaPreviewBtn = document.createElement('button');
@@ -11499,49 +11613,80 @@ function _titleBase(title) {
     return String(title).replace(/^(🟢|🔴|🟠|⚡) /, '').replace(/( \((SSE|Polling)\))+$/, '');
 }
 
+// 4.66: reconnect bookkeeping. Every error event used to queue its own reconnect
+// and the previous EventSource (still CONNECTING, retrying by itself) was left
+// open next to the new one: duplicate streams, and late events from the old one
+// reading `storageEventSource` after it had been set to null (the console's
+// "Cannot read properties of null (reading 'readyState')").
+let _sseReconnectTimer = null;
+let _sseRetryTimer = null;
+
+function _scheduleSseReconnect(ms) {
+    if (_sseReconnectTimer) return;   // one pending reconnect is enough
+    _sseReconnectTimer = setTimeout(() => {
+        _sseReconnectTimer = null;
+        connectToStorageStream();
+    }, ms);
+}
+
+// Polling is only the fallback: keep trying to get the stream back (a QUIC/HTTP3
+// reset after the tab was hidden is usually transient). onopen stops the polling.
+function _scheduleSseRetryFromPolling() {
+    if (_sseRetryTimer) return;
+    _sseRetryTimer = setTimeout(() => {
+        _sseRetryTimer = null;
+        if (!pollingEnabled) return;                       // SSE is already back
+        if (document.hidden) { _scheduleSseRetryFromPolling(); return; }
+        console.log('📡 Polling mode - trying to restore the SSE stream');
+        reconnectAttempts = 0;
+        sseFailedPermanently = false;
+        connectToStorageStream();
+    }, 30000);
+}
+
 function connectToStorageStream() {
     try {
-        // Only close existing connection if it's actually dead/errored
-        if (storageEventSource && storageEventSource.readyState === EventSource.CLOSED) {
+        if (storageEventSource) {
+            if (storageEventSource.readyState === EventSource.OPEN) {
+                console.log('📡 SSE connection already active, not creating duplicate');
+                return;
+            }
+            // CONNECTING (the browser is retrying on its own) or CLOSED: drop it.
+            try { storageEventSource.close(); } catch (e) { }
             storageEventSource = null;
-        } else if (storageEventSource && storageEventSource.readyState === EventSource.OPEN) {
-            console.log('📡 SSE connection already active, not creating duplicate');
-            return;
         }
 
         console.log('📡 Connecting to storage stats stream...');
-        console.log('🔍 EventSource URL:', '/api/storage_stats_stream');
 
         // Show connecting state
         document.title = '🟠 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
-        console.log('🟠 Set title to connecting state');
 
-        // Create EventSource with credentials to include session cookies
-        storageEventSource = new EventSource('/api/storage_stats_stream', { withCredentials: true });
-        console.log('🔍 EventSource created with credentials:', storageEventSource);
-        console.log('🔍 Initial readyState:', storageEventSource.readyState);
+        // Create EventSource with credentials to include session cookies.
+        // Everything below uses the local `es`, never the shared variable, and
+        // ignores events from a stream that has since been replaced.
+        const es = new EventSource('/api/storage_stats_stream', { withCredentials: true });
+        storageEventSource = es;
+        const isCurrent = () => es === storageEventSource;
 
         // POLL the readyState to detect connection success
-        let stateCheckInterval = setInterval(() => {
-            console.log('🔍 Checking EventSource readyState:', storageEventSource.readyState);
-            if (storageEventSource.readyState === EventSource.OPEN) {
-                console.log('🎯 EventSource is OPEN! Connection successful!');
+        const stateCheckInterval = setInterval(() => {
+            if (!isCurrent()) { clearInterval(stateCheckInterval); return; }
+            if (es.readyState === EventSource.OPEN) {
                 document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
                 connectionStatus = 'connected';
                 window.storageStatsInitialized = true;
                 clearInterval(stateCheckInterval);
-            } else if (storageEventSource.readyState === EventSource.CLOSED) {
-                console.log('❌ EventSource is CLOSED');
+            } else if (es.readyState === EventSource.CLOSED) {
                 clearInterval(stateCheckInterval);
             }
         }, 100); // Check every 100ms
 
         // IMMEDIATE detection of ANY data
         let dataReceived = false;
-        storageEventSource.addEventListener('message', function (event) {
+        es.addEventListener('message', function (event) {
+            if (!isCurrent()) return;
             if (!dataReceived) {
                 dataReceived = true;
-                console.log('🎯 FIRST MESSAGE DETECTED!', event.data);
                 // Immediately turn green on first message
                 document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
                 connectionStatus = 'connected';
@@ -11549,26 +11694,18 @@ function connectToStorageStream() {
             }
         });
 
-        // Keep connection alive by preventing premature closure
-        storageEventSource.addEventListener('error', function (event) {
-            // A backgrounded/frozen tab getting its HTTP/2 stream reset by
-            // the browser itself (not the server) is expected — the
-            // reconnect/polling-fallback logic below already recovers from
-            // it, so it's not actually an error condition when it happens
-            // while hidden. Keep it at debug level in that case so it
-            // doesn't read as something broken; still warn when visible,
-            // since then it's more likely a real connectivity issue.
+        // A backgrounded/frozen tab getting its HTTP/2 or HTTP/3 stream reset by
+        // the browser itself (not the server) is expected: keep it at debug level
+        // while hidden; the reconnect/polling logic in onerror recovers from it.
+        es.addEventListener('error', function (event) {
+            if (!isCurrent()) return;
             const logFn = document.hidden ? console.debug : console.warn;
-            logFn('⚠️ SSE error event:', event);
-            logFn('⚠️ EventSource readyState:', storageEventSource.readyState);
-            logFn('⚠️ EventSource url:', storageEventSource.url);
-            // Don't immediately close on errors - let the reconnect logic handle it
+            logFn('⚠️ SSE error event, readyState:', es.readyState);
         });
 
-        storageEventSource.onopen = function (event) {
+        es.onopen = function () {
+            if (!isCurrent()) return;
             console.log('✅ SSE connection successful - disabling polling fallback');
-            console.log('🟢 SSE onopen fired - changing title to connected');
-            console.log('🟢 EventSource readyState:', storageEventSource.readyState);
             connectionStatus = 'connected';
             reconnectAttempts = 0;
 
@@ -11580,15 +11717,13 @@ function connectToStorageStream() {
 
             // Add clean connection indicator
             document.title = '🟢 ' + _titleBase(document.title) + ' (SSE)';
-            console.log('🟢 Title set to connected state:', document.title);
         };
 
-        storageEventSource.onmessage = function (event) {
-
+        es.onmessage = function (event) {
+            if (!isCurrent()) return;
 
             // If this is the first message and we're still connecting, treat it as successful connection
             if (document.title.startsWith('🟠')) {
-                console.log('🟢 First SSE message received - treating as successful connection');
                 document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
                 connectionStatus = 'connected';
                 reconnectAttempts = 0;
@@ -11605,26 +11740,25 @@ function connectToStorageStream() {
             }
         };
 
-        storageEventSource.onerror = function (event) {
-            // Same reasoning as the 'error' listener above: while hidden,
-            // this is almost always the browser itself resetting the
-            // stream on a backgrounded/frozen tab, not a real failure —
-            // log it quietly and let the existing reconnect/polling
-            // fallback below do its job.
-            const logFn = document.hidden ? console.debug : console.error;
-            logFn('❌ Storage stats stream error:', event);
-            console.log('🔴 SSE onerror fired - connection failed');
-            console.log('🔴 EventSource readyState:', storageEventSource.readyState);
+        es.onerror = function (event) {
+            if (!isCurrent()) return;   // a replaced stream's late event
+
+            // While hidden this is almost always the browser itself resetting the
+            // stream on a backgrounded/frozen tab, not a real failure.
+            const logFn = document.hidden ? console.debug : console.warn;
+            logFn('❌ Storage stats stream error, readyState:', es.readyState);
             connectionStatus = 'error';
 
             document.title = '🔴 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '');
 
+            // A reconnect is already queued: further error events of the same failing
+            // stream must not use up reconnect attempts (or queue more).
+            if (_sseReconnectTimer) return;
+
             if (isUploading) {
-                console.log('📤 Upload in progress — reconnecting SSE immediately (no give-up limit)');
+                console.log('📤 Upload in progress — reconnecting SSE (no give-up limit)');
                 reconnectAttempts = 0; // Never count against upload sessions
-                setTimeout(() => {
-                    connectToStorageStream();
-                }, 1000); // Reconnect faster during uploads (1s vs 3s)
+                _scheduleSseReconnect(1000); // Reconnect faster during uploads (1s vs 3s)
                 return;
             }
 
@@ -11632,19 +11766,16 @@ function connectToStorageStream() {
             if (reconnectAttempts < 2) {
                 reconnectAttempts++;
                 console.log(`🔄 Attempting SSE reconnect (${reconnectAttempts}/2) in ${reconnectDelay}ms...`);
-                setTimeout(() => {
-                    connectToStorageStream();
-                }, reconnectDelay);
+                _scheduleSseReconnect(reconnectDelay);
             } else {
-                (document.hidden ? console.debug : console.error)('💀 SSE reconnection failed, switching to polling fallback...');
+                (document.hidden ? console.debug : console.warn)('💀 SSE reconnection failed, switching to polling fallback...');
                 sseFailedPermanently = true;
 
-                if (storageEventSource) {
-                    storageEventSource.close();
-                    storageEventSource = null;
-                }
+                try { es.close(); } catch (e) { }
+                if (isCurrent()) storageEventSource = null;
 
                 setupFallbackPolling();
+                _scheduleSseRetryFromPolling();
             }
         };
 
@@ -11652,6 +11783,7 @@ function connectToStorageStream() {
         console.error('❌ Error initializing SSE connection:', error);
         sseFailedPermanently = true;
         setupFallbackPolling();
+        _scheduleSseRetryFromPolling();
     }
 }
 
@@ -11745,31 +11877,103 @@ function stopPolling() {
     }
 }
 
-// 4.64: which folder is on screen, and did the server say something in it (or
-// below it) changed? The totals cannot tell: moving or renaming a file leaves
-// every counter equal, so the list used to stay stale until the next walk.
-function _changedDirsAffectView(data) {
-    if (!data || !Array.isArray(data.changed_dirs)) return false;
-    if (data.changed_dirs_truncated) return true;
+// 4.66: what does a batch of changed folders (changed_dirs = folders whose DIRECT
+// entries changed) mean for the folder on screen?
+//   listing  - the folder on screen itself, or one of its direct sub-folders (its
+//              Date modified may have moved), changed, or the list was truncated:
+//              re-read /api/files (the re-render is skipped if nothing visible differs).
+//   children - Set of the on-screen folder's sub-folders that contain a changed folder
+//              somewhere below. Only THEIR size cell is re-read, in place. null = all.
+//   known    - false when the message carries no changed_dirs (polling, rebuild).
+// Before 4.66 any changed folder anywhere below the view (the root shows everything)
+// wiped the folder cache and rebuilt the table, so a file that kept changing deep in
+// one tree (QuickBooks index files) made every size cell flash all the time.
+function _classifyChangedDirs(data) {
+    const out = { known: false, listing: false, children: new Set() };
+    if (!data || !Array.isArray(data.changed_dirs)) return out;
+    out.known = true;
+    if (data.changed_dirs_truncated) { out.listing = true; out.children = null; return out; }
     const view = (typeof currentPath === 'string' ? currentPath : '').replace(/^\/+|\/+$/g, '');
-    if (view === '') return data.changed_dirs.length > 0;
-    return data.changed_dirs.some(d => d === view || d.startsWith(view + '/'));
+    for (const d of data.changed_dirs) {
+        if (d === view) { out.listing = true; continue; }
+        let rest;
+        if (view === '') rest = d;
+        else if (d.startsWith(view + '/')) rest = d.slice(view.length + 1);
+        else continue;
+        const first = rest.split('/')[0];
+        out.children.add(view ? view + '/' + first : first);
+        if (first === rest) out.listing = true;   // a direct sub-folder changed
+    }
+    return out;
 }
 
-// Refresh the file table now, but at most once per second: a batch may produce
-// two SSE messages (instant + corrected from disk) and bulk operations many.
+// Re-read folder size cells IN PLACE: no spinner, no row rebuild, and the DOM is
+// touched only when the numbers really differ. paths = Set of folder paths, or null
+// for every folder on screen. Folders not on screen just lose their cached record.
+async function _revalidateDirCells(paths) {
+    if (isSearchResultsDisplayed) return;
+    const cells = new Map();
+    document.querySelectorAll('.dir-info-cell').forEach(c => {
+        const p = c.dataset.dirPath;
+        if (p) cells.set(p, c);
+    });
+    if (paths === null) {
+        VT.pruneDirCache(new Set(cells.keys()));
+    } else {
+        paths.forEach(p => { if (!cells.has(p)) VT.invalidateDirCache(p); });
+    }
+    const queue = (paths === null ? Array.from(cells.keys()) : Array.from(paths).filter(p => cells.has(p)));
+    const worker = async () => {
+        while (queue.length) {
+            const p = queue.shift();
+            try {
+                const r = await fetch('/api/dir_info/' + p, { cache: 'no-store' });
+                if (!r.ok) continue;
+                const d = await r.json();
+                if (!d || d.error) continue;
+                VT.cacheDirInfo(p, d);
+                const cell = cells.get(p);
+                if (!cell || !cell.isConnected) continue;
+                const sig = _dirInfoSig(d);
+                if (cell.dataset.sig === sig) continue;   // same numbers: leave it alone
+                cell.innerHTML = _dirInfoHtml(d);
+                cell.dataset.sig = sig;
+                cell.dataset.loaded = 'true';
+                const tr = cell.closest('tr');
+                if (tr) VT.rowResized(tr);
+            } catch (e) { /* keep what is shown */ }
+        }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+}
+
+// Apply an SSE-driven update at most once per second. Several messages in that
+// second are merged: listing refresh if ANY asked for it, union of folder cells.
 let _sseRefreshLast = 0;
 let _sseRefreshTimer = null;
-function _scheduleSseTableRefresh() {
-    if (_sseRefreshTimer) return;  // one already queued - it will show the latest data
+let _ssePendingListing = false;
+let _ssePendingCells = new Set();   // Set of folder paths, or null = all visible
+function _scheduleSseUpdate(listing, cells) {
+    if (listing) _ssePendingListing = true;
+    if (cells === null) _ssePendingCells = null;
+    else if (cells && _ssePendingCells !== null) cells.forEach(c => _ssePendingCells.add(c));
+    if (_sseRefreshTimer) return;  // one already queued - it will use the merged request
     const wait = Math.max(0, 1000 - (Date.now() - _sseRefreshLast));
     _sseRefreshTimer = setTimeout(async () => {
         _sseRefreshTimer = null;
+        const doListing = _ssePendingListing;
+        const cellSet = _ssePendingCells;
+        _ssePendingListing = false;
+        _ssePendingCells = new Set();
         if (isUploading || _mutationInFlight) return;
         _sseRefreshLast = Date.now();
-        try { await refreshFileTable(); } catch (e) { console.warn('SSE table refresh failed', e); }
+        try {
+            if (doListing) await refreshFileTable({ onlyIfChanged: true });
+            if (cellSet === null || cellSet.size > 0) await _revalidateDirCells(cellSet);
+        } catch (e) { console.warn('SSE table refresh failed', e); }
     }, wait);
 }
+function _scheduleSseTableRefresh() { _scheduleSseUpdate(true, new Set()); }
 
 function handleStorageUpdate(data) {
 
@@ -11844,16 +12048,26 @@ function handleStorageUpdate(data) {
                         changes.size_changed !== 0
                     );
 
-                    // Check if we should refresh the file table (broader criteria)
-                    const viewAffected = _changedDirsAffectView(data);
+                    // 4.66: decide WHAT to refresh instead of "everything".
+                    //  refreshListing      - re-read /api/files (skipped if identical)
+                    //  cellsToRevalidate   - folder size cells re-read in place:
+                    //                        a Set of paths, or null = every folder on screen
+                    const cd = _classifyChangedDirs(data);
+                    const countsMoved = hasSignificantChanges;
+                    // content_changed / mtime_changed are only trusted when the message
+                    // has no changed_dirs (the polling endpoint sets both on EVERY new
+                    // snapshot, which is how polling mode refreshed the table non-stop)
+                    const noisy = changes.content_changed === true || changes.mtime_changed === true;
+                    const refreshListing = !!(
+                        data.reconcile_complete ||      // walk done: counters are authoritative
+                        cd.listing ||                   // 4.64: the folder on screen changed (moves/renames/edits)
+                        (!cd.known && (countsMoved || noisy))
+                    );
+                    const cellsToRevalidate = (
+                        data.reconcile_complete || cd.children === null || (!cd.known && countsMoved)
+                    ) ? null : cd.children;
                     const shouldRefresh = (
-                        data.reconcile_complete ||      // always refresh when walk is done
-                        viewAffected ||                 // 4.64: a folder on screen changed (moves/renames/edits)
-                        changes.files_changed !== 0 ||
-                        changes.dirs_changed !== 0 ||
-                        changes.size_changed !== 0 ||
-                        changes.content_changed === true ||
-                        changes.mtime_changed === true
+                        refreshListing || cellsToRevalidate === null || cellsToRevalidate.size > 0
                     );
 
                     if (shouldRefresh) {
@@ -11879,10 +12093,10 @@ function handleStorageUpdate(data) {
                         console.log('🚀 Triggering instant file table refresh via SSE...');
 
                         if (!isUploading && !_mutationInFlight) {
-                            // Clear stale dir-info cache so loadDirInfoCells() re-fetches
-                            // from the server instead of showing cached pre-copy counts.
-                            VT.clearDirCache();
-                            _scheduleSseTableRefresh();
+                            // 4.66: no cache wipe and no spinner: the table is re-read only if
+                            // the listing differs, and the affected folder cells are updated
+                            // in place only if their numbers differ.
+                            _scheduleSseUpdate(refreshListing, cellsToRevalidate);
                         } else if (isUploading && !_mutationInFlight) {
                             const uploadPaths = new Set();
                             folderGroups.forEach(g => {
@@ -11969,8 +12183,8 @@ function handleStorageUpdate(data) {
             // 4.64: files changed while a reconcile walk is running (counters are
             // frozen then). Refresh the listing if the folder on screen is affected;
             // folder-size cells are refreshed when the walk completes.
-            if (!isUploading && !_mutationInFlight && _changedDirsAffectView(data)) {
-                _scheduleSseTableRefresh();
+            if (!isUploading && !_mutationInFlight && _classifyChangedDirs(data).listing) {
+                _scheduleSseUpdate(true, new Set());
             }
             break;
 

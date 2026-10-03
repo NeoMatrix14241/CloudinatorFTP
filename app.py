@@ -4604,6 +4604,9 @@ async def admin_rebuild_cache():
                             "error": "A cache rebuild is already running",
                             "running": True,
                             "started_at": _rebuild_state["started_at"],
+                            "elapsed": round(
+                                time.time() - _rebuild_state["started_at"], 1
+                            ),
                         }
                     ),
                     409,
@@ -4643,6 +4646,10 @@ async def admin_rebuild_cache_status():
         return jsonify({"error": "Permission denied"}), 403
     with _rebuild_state_lock:
         snap = dict(_rebuild_state)
+    # 4.66: seconds the running rebuild has been going, measured on the server,
+    # so a page opened/refreshed mid-rebuild can resume the timer where it is.
+    if snap.get("state") == "running" and snap.get("started_at"):
+        snap["elapsed"] = round(time.time() - snap["started_at"], 1)
     return jsonify(snap), 200
 
 
