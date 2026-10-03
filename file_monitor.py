@@ -29,7 +29,13 @@ from file_index import file_index_manager
 from search_index import search_index_manager
 
 # Cache dir resolved via paths.py — created by ensure_dirs() at server startup.
-from paths import get_cache_dir
+from paths import (
+    get_cache_dir,
+    get_db_dir,
+    get_versions_dir,
+    get_hls_cache_dir,
+    get_img_cache_dir,
+)
 
 
 def _lower_current_thread_priority() -> None:
@@ -134,6 +140,11 @@ MAX_CORRECT_FOLDERS = 400
 # the list was truncated).
 MAX_CHANGED_DIRS_SENT = 300
 
+# 4.65: storage_index.json / file_index.json are written only when their content
+# really changed (digest of the serialised data), and at most once per interval
+# while events keep coming. Walks, the first walk and shutdown save at once.
+SAVE_MIN_INTERVAL = 10.0
+
 
 @dataclass
 class StorageSnapshot:
@@ -190,6 +201,22 @@ def _nonneg_int(value):
     except (TypeError, ValueError, OverflowError):
         return None
     return n if n >= 0 else None
+
+
+def _compute_ignored_prefixes(root: str, dirs) -> tuple:
+    """Normalised absolute paths of the app's own folders (cache, db, versions,
+    HLS/image caches) that lie INSIDE the watched root. Events from them are not
+    user content: a save of storage_index.json would otherwise create events for
+    its own temp file and re-arm the monitor in a loop."""
+    r = os.path.normcase(os.path.abspath(root))
+    out = set()
+    for d in dirs:
+        if not d:
+            continue
+        p = os.path.normcase(os.path.abspath(d))
+        if p != r and p.startswith(r + os.sep):
+            out.add(p)
+    return tuple(sorted(out))
 
 
 def _is_junction(path: str) -> bool:
@@ -397,6 +424,8 @@ class InstantFileEventHandler(FileSystemEventHandler):
         if _name.startswith(".") or ".chunks" in event.src_path:
             return
 
+        if self.monitor.is_ignored_path(event.src_path):
+            return  # 4.65: the app's own cache/db/versions folder
         self._touch(event.src_path)  # 4.64: always mark, even if skipped below
 
         # Snapshot epoch BEFORE any path work (outside the lock).
@@ -479,6 +508,8 @@ class InstantFileEventHandler(FileSystemEventHandler):
         if _name.startswith(".") or ".chunks" in event.src_path:
             return
 
+        if self.monitor.is_ignored_path(event.src_path):
+            return  # 4.65: the app's own cache/db/versions folder
         self._touch(event.src_path)  # 4.64: always mark, even if skipped below
         epoch = self.monitor._reconcile_epoch
 
@@ -580,6 +611,10 @@ class InstantFileEventHandler(FileSystemEventHandler):
         ):
             return
 
+        if self.monitor.is_ignored_path(
+            event.src_path
+        ) and self.monitor.is_ignored_path(event.dest_path):
+            return  # 4.65: moved inside the app's own folders
         self._touch(event.src_path, event.dest_path)  # 4.64: always mark both parents
         if event.is_directory:
             self.monitor.remap_dirty(
@@ -701,8 +736,13 @@ class InstantFileEventHandler(FileSystemEventHandler):
         # the size is corrected within seconds instead of at the next 15-min walk.
         if ".chunks" in event.src_path or event.is_directory:
             return
-        if not os.path.basename(event.src_path).startswith("."):
-            self._touch(event.src_path)
+        # 4.65: hidden files are not counted and the app's own folders are not
+        # user content - neither may wake the save/notify cycle.
+        if os.path.basename(event.src_path).startswith("."):
+            return
+        if self.monitor.is_ignored_path(event.src_path):
+            return
+        self._touch(event.src_path)
         self._schedule_notify()
 
 
@@ -762,6 +802,25 @@ class FileSystemMonitor:
         self._batch_events: int = 0
         self._batch_handler_secs: float = 0.0
         self.activity_callbacks: list = []  # 4.64: fn(changed_dirs, truncated)
+        # 4.65: save only when changed + rate limit; ignore the app's own folders
+        self._last_saved_digest: Optional[str] = None
+        self._last_save_ts: float = -1e9
+        self._save_timer: Optional[threading.Timer] = None
+        self._save_sched_lock = threading.Lock()
+        try:
+            self._ignored_prefixes = _compute_ignored_prefixes(
+                str(root_path),
+                [
+                    CACHE_DIR,
+                    get_db_dir(create=False),
+                    get_versions_dir(create=False),
+                    get_hls_cache_dir(create=False),
+                    get_img_cache_dir(create=False),
+                ],
+            )
+        except Exception as e:
+            print(f"⚠️ Could not resolve the app folders to ignore: {e}")
+            self._ignored_prefixes = ()
         self._last_junction_count: int = (
             -1
         )  # log skipped junctions only when it changes
@@ -1010,6 +1069,7 @@ class FileSystemMonitor:
         cache dir) is last-writer-wins, which is fine: both compute the same
         index from the same disk. The retry now mainly covers antivirus/indexer.
         """
+        self._last_save_ts = time.monotonic()
         with self._save_lock:
             tmp = None
             try:
@@ -1027,37 +1087,47 @@ class FileSystemMonitor:
                         "total_size": self._total_size,
                         "last_modified": self._last_modified,
                         "dir_info": dir_info_copy,
-                        "saved_at": time.time(),
                     }
 
-                import tempfile
+                # 4.65: the digest covers everything EXCEPT saved_at. Identical
+                # content (and the file still on disk) = nothing to write: no
+                # temp file, no fsync, no replace, no antivirus/indexer trigger.
+                body = json.dumps(data)
+                digest = hashlib.md5(body.encode("utf-8")).hexdigest()
+                if digest == self._last_saved_digest and os.path.exists(CACHE_FILE):
+                    pass
+                else:
+                    text = body[:-1] + ', "saved_at": %r}' % time.time()
 
-                with tempfile.NamedTemporaryFile(
-                    mode="w",
-                    encoding="utf-8",
-                    dir=CACHE_DIR,
-                    prefix=_TMP_PREFIX,
-                    suffix=".tmp",
-                    delete=False,
-                ) as tf:
-                    tmp = tf.name
-                    json.dump(data, tf)
-                    tf.flush()
-                    os.fsync(tf.fileno())  # power cut must not leave a 0-byte file
+                    import tempfile
 
-                last_err = None
-                for delay in (0, 0.05, 0.1, 0.2, 0.4, 0.8, 1.5):
-                    if delay:
-                        time.sleep(delay)
-                    try:
-                        os.replace(tmp, CACHE_FILE)
-                        last_err = None
-                        tmp = None  # consumed by the replace
-                        break
-                    except PermissionError as e:  # WinError 5 / 32
-                        last_err = e
-                if last_err is not None:
-                    raise last_err
+                    with tempfile.NamedTemporaryFile(
+                        mode="w",
+                        encoding="utf-8",
+                        dir=CACHE_DIR,
+                        prefix=_TMP_PREFIX,
+                        suffix=".tmp",
+                        delete=False,
+                    ) as tf:
+                        tmp = tf.name
+                        tf.write(text)
+                        tf.flush()
+                        os.fsync(tf.fileno())  # power cut must not leave a 0-byte file
+
+                    last_err = None
+                    for delay in (0, 0.05, 0.1, 0.2, 0.4, 0.8, 1.5):
+                        if delay:
+                            time.sleep(delay)
+                        try:
+                            os.replace(tmp, CACHE_FILE)
+                            last_err = None
+                            tmp = None  # consumed by the replace
+                            break
+                        except PermissionError as e:  # WinError 5 / 32
+                            last_err = e
+                    if last_err is not None:
+                        raise last_err
+                    self._last_saved_digest = digest
             except Exception as e:
                 print(f"⚠️ Failed to save cache: {e}")
                 try:
@@ -1596,6 +1666,38 @@ class FileSystemMonitor:
 
     # -- 4.63 helpers: deferred folder re-index + per-batch timing ----------
 
+    def is_ignored_path(self, path: str) -> bool:
+        """4.65: True for paths inside the app's own cache/db/versions folders
+        when those sit inside the watched root (see _compute_ignored_prefixes)."""
+        if not self._ignored_prefixes:
+            return False
+        p = os.path.normcase(os.path.abspath(path))
+        for pre in self._ignored_prefixes:
+            if p == pre or p.startswith(pre + os.sep):
+                return True
+        return False
+
+    def _request_save(self):
+        """4.65: rate-limited save used by the watchdog debounce. Saves at once if
+        the last save is older than SAVE_MIN_INTERVAL, otherwise arms ONE trailing
+        save for the remaining time. Whether anything is written is decided by the
+        content digest in _save_cache()."""
+        with self._save_sched_lock:
+            wait = SAVE_MIN_INTERVAL - (time.monotonic() - self._last_save_ts)
+            if wait > 0:
+                if self._save_timer is None:
+                    tm = threading.Timer(wait, self._save_timer_fire)
+                    tm.daemon = True
+                    self._save_timer = tm
+                    tm.start()
+                return
+        self._save_cache()
+
+    def _save_timer_fire(self):
+        with self._save_sched_lock:
+            self._save_timer = None
+        self._save_cache()
+
     def mark_folder_dirty(self, rel_path: str, abs_path: str):
         """Called by the watchdog handlers instead of an immediate
         file_index_manager.update_folder() (a full scandir of the folder)."""
@@ -1848,7 +1950,7 @@ class FileSystemMonitor:
 
         n_dirty, flush_secs = self._flush_dirty_folders(dirty)
         t_flushed = time.perf_counter()
-        self._save_cache()
+        self._request_save()
         t_saved = time.perf_counter()
 
         latency = (push_ts - first_ts) if first_ts else 0.0
@@ -1965,6 +2067,10 @@ class FileSystemMonitor:
             self.observer.join(timeout=2)
             self.observer = None
             self.event_handler = None
+        with self._save_sched_lock:
+            if self._save_timer is not None:
+                self._save_timer.cancel()
+                self._save_timer = None
         self._save_cache()
         print("💾 Cache saved on shutdown")
 

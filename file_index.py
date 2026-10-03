@@ -94,6 +94,7 @@ Notes
 """
 
 import os
+import hashlib
 import json
 import time
 import threading
@@ -262,6 +263,7 @@ class FileIndexManager:
     def __init__(self):
         self.lock = threading.Lock()
         self._save_lock = threading.Lock()  # serialises writes to file_index.json
+        self._last_saved_digest = None  # 4.65: digest of the last written content
         self._build_lock = threading.Lock()  # one build_from_walk at a time
         # rel_path → {entry_count: int, indexed_at: float, dir_mtime_ns: int|None, entries: list}
         self._dirs: dict = {}
@@ -399,10 +401,34 @@ class FileIndexManager:
                 data = {
                     "version": SCHEMA_VERSION,
                     "threshold": THRESHOLD,
-                    "saved_at": time.time(),
                     "dir_count": len(dirs_snapshot),
                     "dirs": dirs_snapshot,
                 }
+
+                # 4.65: the digest covers everything except saved_at and each
+                # record's indexed_at (a scan timestamp that changes on every
+                # re-scan of the same entries and is never read back). Identical
+                # content (and the file still on disk) = nothing to write.
+                view = {
+                    "version": data["version"],
+                    "threshold": data["threshold"],
+                    "dir_count": data["dir_count"],
+                    "dirs": {
+                        k: (
+                            {kk: vv for kk, vv in v.items() if kk != "indexed_at"}
+                            if isinstance(v, dict)
+                            else v
+                        )
+                        for k, v in dirs_snapshot.items()
+                    },
+                }
+                digest = hashlib.md5(json.dumps(view).encode("utf-8")).hexdigest()
+                if digest == self._last_saved_digest and os.path.exists(
+                    FILE_INDEX_PATH
+                ):
+                    return
+                body = json.dumps(data)
+                text = body[:-1] + ', "saved_at": %r}' % time.time()
 
                 with tempfile.NamedTemporaryFile(
                     mode="w",
@@ -413,7 +439,7 @@ class FileIndexManager:
                     delete=False,
                 ) as tf:
                     tmp = tf.name
-                    json.dump(data, tf)
+                    tf.write(text)
                     tf.flush()
                     os.fsync(tf.fileno())
 
@@ -436,6 +462,7 @@ class FileIndexManager:
                         last_err = e
                 if last_err is not None:
                     raise last_err
+                self._last_saved_digest = digest
 
             except Exception as e:
                 print(f"⚠️  Failed to save file index: {e}")
