@@ -54,8 +54,15 @@ class StorageStatsEventManager:
         new_snapshot,
         reconcile_complete: bool = False,
         walk_progress: bool = False,
+        changed_dirs=None,
+        changed_dirs_truncated: bool = False,
     ):
         """Broadcast storage stats update to all connected clients.
+
+        4.64: `changed_dirs` = relative paths of the folders whose direct entries
+        changed in this batch ('' = root). The counters alone cannot say that a
+        file was moved or renamed (the totals stay equal), so the browser uses
+        this list to decide whether the folder it is showing must be refreshed.
 
         Safe to call from any thread (e.g. the watchdog reconcile thread
         in file_monitor.py) — pushes are marshalled onto the event loop.
@@ -119,6 +126,10 @@ class StorageStatsEventManager:
                 },
             }
 
+            if changed_dirs is not None:
+                update_data["changed_dirs"] = list(changed_dirs)
+                update_data["changed_dirs_truncated"] = bool(changed_dirs_truncated)
+
             self.last_stats = update_data
 
             # Broadcast to all clients
@@ -139,6 +150,32 @@ class StorageStatsEventManager:
 
         except Exception as e:
             print(f"❌ Error broadcasting update: {e}")
+
+    def broadcast_activity(self, changed_dirs, truncated: bool = False):
+        """4.64: tell every client WHICH folders changed without any counters
+        (sent while a reconcile walk is running and the counters are frozen).
+        Safe to call from any thread."""
+        try:
+            update_data = {
+                "type": "fs_activity",
+                "timestamp": time.time(),
+                "changed_dirs": list(changed_dirs),
+                "changed_dirs_truncated": bool(truncated),
+            }
+            with self.lock:
+                clients_snapshot = list(self.clients)
+                loop = self.loop
+            if loop is not None:
+                for client_queue in clients_snapshot:
+                    loop.call_soon_threadsafe(
+                        self._safe_put_nowait, client_queue, update_data
+                    )
+            print(
+                f"📡 Broadcasted folder activity ({len(update_data['changed_dirs'])} "
+                f"folder(s)) to {len(clients_snapshot)} clients"
+            )
+        except Exception as e:
+            print(f"❌ Error broadcasting activity: {e}")
 
     @staticmethod
     def _safe_put_nowait(client_queue: asyncio.Queue, update_data: dict):
@@ -310,6 +347,8 @@ def trigger_storage_update(
     new_snapshot,
     reconcile_complete: bool = False,
     walk_progress: bool = False,
+    changed_dirs=None,
+    changed_dirs_truncated: bool = False,
 ):
     """Callback function to be registered with file monitor"""
     event_manager.broadcast_update(
@@ -317,7 +356,14 @@ def trigger_storage_update(
         new_snapshot,
         reconcile_complete=reconcile_complete,
         walk_progress=walk_progress,
+        changed_dirs=changed_dirs,
+        changed_dirs_truncated=changed_dirs_truncated,
     )
+
+
+def trigger_fs_activity(changed_dirs, truncated: bool = False):
+    """Callback for FileSystemMonitor.add_activity_callback (4.64)."""
+    event_manager.broadcast_activity(changed_dirs, truncated)
 
 
 def get_event_manager():

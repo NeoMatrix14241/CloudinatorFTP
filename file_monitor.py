@@ -126,6 +126,14 @@ POST_WALK_DRAIN = 6.0  # seconds — enough for OS to drain ~100k queued events
 SLOW_BATCH_LOG_SECS = 1.0
 SLOW_HANDLER_LOG_SECS = 1.0
 
+# 4.64: per-folder correction after watchdog events (see _correct_folders).
+# More changed folders than this in one debounce batch = a bulk operation; the
+# settle walk handles it instead.
+MAX_CORRECT_FOLDERS = 400
+# Max folder paths put into one SSE message (the browser refreshes anyway when
+# the list was truncated).
+MAX_CHANGED_DIRS_SENT = 300
+
 
 @dataclass
 class StorageSnapshot:
@@ -182,6 +190,102 @@ def _nonneg_int(value):
     except (TypeError, ValueError, OverflowError):
         return None
     return n if n >= 0 else None
+
+
+def _is_junction(path: str) -> bool:
+    """True for an NTFS junction / mount point. os.walk() does not recognise
+    these as links, so it descends into them: an access-denied legacy junction
+    (e.g. 'Documents\\My Music') shows up as an unreadable folder on every walk, and
+    an accessible one is counted twice (once here, once at its real location)."""
+    try:
+        fn = getattr(os.path, "isjunction", None)  # Python 3.12+
+        if fn is not None:
+            return bool(fn(path))
+        return getattr(os.lstat(path), "st_reparse_tag", 0) == 0xA0000003
+    except OSError:
+        return False
+
+
+def _scan_direct(abs_dir: str):
+    """Direct contents of one folder under the SAME rules as _full_walk:
+    hidden files are not counted, hidden sub-FOLDERS are visited but not counted
+    as folders, '.chunks' and junctions are skipped, unreadable files are skipped.
+    Returns (file_count, total_size, latest_mtime, subdir_names) or None if the
+    folder cannot be read."""
+    files = size = 0
+    latest = 0.0
+    subdirs = set()
+    try:
+        with os.scandir(abs_dir) as it:
+            for e in it:
+                name = e.name
+                try:
+                    is_dir = e.is_dir()
+                except OSError:
+                    is_dir = False
+                if is_dir:
+                    if name == ".chunks" or _is_junction(e.path):
+                        continue
+                    subdirs.add(name)
+                    continue
+                if name.startswith("."):
+                    continue
+                try:
+                    st = e.stat()
+                except OSError:
+                    continue
+                files += 1
+                size += st.st_size
+                if st.st_mtime > latest:
+                    latest = st.st_mtime
+    except OSError:
+        return None
+    return files, size, latest, subdirs
+
+
+def _walk_subtree(root_str: str, abs_root: str):
+    """Walk a whole sub-tree under the same rules as _full_walk. Returns
+    (dir_info_for_the_subtree, latest_mtime); the sub-tree root's own record
+    (key _rel(abs_root)) holds the recursive totals."""
+    rel_root = _rel(abs_root, root_str)
+    zero = lambda: {"file_count": 0, "dir_count": 0, "total_size": 0}
+    info = {rel_root: zero()}
+    latest = 0.0
+    for root, dirs, files in os.walk(abs_root, topdown=True, onerror=lambda e: None):
+        if ".chunks" in dirs:
+            dirs.remove(".chunks")
+        for d in list(dirs):
+            if _is_junction(os.path.join(root, d)):
+                dirs.remove(d)
+        rr = _rel(root, root_str)
+        if rr not in info:
+            info[rr] = zero()
+        for d in dirs:
+            if d.startswith("."):
+                continue
+            sub = (rr + "/" + d) if rr else d
+            if sub not in info:
+                info[sub] = zero()
+            info[rr]["dir_count"] += 1
+            for anc in _parents(rr):
+                if anc in info:
+                    info[anc]["dir_count"] += 1
+        for fname in files:
+            if fname.startswith("."):
+                continue
+            try:
+                st = os.stat(os.path.join(root, fname))
+            except OSError:
+                continue
+            info[rr]["file_count"] += 1
+            info[rr]["total_size"] += st.st_size
+            for anc in _parents(rr):
+                if anc in info:
+                    info[anc]["file_count"] += 1
+                    info[anc]["total_size"] += st.st_size
+            if st.st_mtime > latest:
+                latest = st.st_mtime
+    return info, latest
 
 
 def _timed_handler(fn):
@@ -251,6 +355,17 @@ class InstantFileEventHandler(FileSystemEventHandler):
             )
             self.monitor.set_pending_reconcile()
 
+    def _touch(self, *abs_paths):
+        """4.64: every event marks the folder whose direct entries changed as
+        dirty - EVEN while a walk is pending or the event is otherwise skipped.
+        The browser is told which folders changed, and _correct_folders() later
+        recomputes each one from disk, so skipped or late events cannot leave the
+        counters wrong."""
+        root = str(self.monitor.root_path)
+        for p in abs_paths:
+            parent = os.path.dirname(p)
+            self.monitor.mark_folder_dirty(_rel(parent, root), parent)
+
     def _schedule_notify(self):
         self.monitor._note_event()
         # Standard debounce: reset timer on every event.
@@ -281,6 +396,8 @@ class InstantFileEventHandler(FileSystemEventHandler):
         _name = os.path.basename(event.src_path)
         if _name.startswith(".") or ".chunks" in event.src_path:
             return
+
+        self._touch(event.src_path)  # 4.64: always mark, even if skipped below
 
         # Snapshot epoch BEFORE any path work (outside the lock).
         # If _reconcile() runs while this event is in flight it will bump the epoch;
@@ -362,6 +479,7 @@ class InstantFileEventHandler(FileSystemEventHandler):
         if _name.startswith(".") or ".chunks" in event.src_path:
             return
 
+        self._touch(event.src_path)  # 4.64: always mark, even if skipped below
         epoch = self.monitor._reconcile_epoch
 
         if self.monitor._pending_reconcile:
@@ -462,6 +580,12 @@ class InstantFileEventHandler(FileSystemEventHandler):
         ):
             return
 
+        self._touch(event.src_path, event.dest_path)  # 4.64: always mark both parents
+        if event.is_directory:
+            self.monitor.remap_dirty(
+                _rel(event.src_path, str(self.monitor.root_path)),
+                _rel(event.dest_path, str(self.monitor.root_path)),
+            )
         epoch = self.monitor._reconcile_epoch
 
         if self.monitor._pending_reconcile:
@@ -487,15 +611,31 @@ class InstantFileEventHandler(FileSystemEventHandler):
                         old_key
                     )
 
-                # Update old parent dir_count down, new parent dir_count up
-                for parent in _parents(src_rel):
-                    if parent in self.monitor._dir_info:
-                        self.monitor._dir_info[parent]["dir_count"] = max(
-                            0, self.monitor._dir_info[parent]["dir_count"] - 1
-                        )
-                for parent in _parents(dest_rel):
-                    if parent in self.monitor._dir_info:
-                        self.monitor._dir_info[parent]["dir_count"] += 1
+                # 4.64: transfer the moved folder's TOTALS (files, size, folders
+                # inside it, plus the folder itself unless hidden) from the old
+                # ancestor chain to the new one. Before, only dir_count moved by 1,
+                # so every ancestor's file count / size stayed wrong until a walk.
+                moved = self.monitor._dir_info.get(dest_rel)
+                if moved is not None:
+                    mf, ms, md = (
+                        moved["file_count"],
+                        moved["total_size"],
+                        moved["dir_count"],
+                    )
+                    inc_src = 0 if _src_name.startswith(".") else 1
+                    inc_dst = 0 if _dst_name.startswith(".") else 1
+                    for parent in _parents(src_rel):
+                        a = self.monitor._dir_info.get(parent)
+                        if a is not None:
+                            a["file_count"] = max(0, a["file_count"] - mf)
+                            a["total_size"] = max(0, a["total_size"] - ms)
+                            a["dir_count"] = max(0, a["dir_count"] - (inc_src + md))
+                    for parent in _parents(dest_rel):
+                        a = self.monitor._dir_info.get(parent)
+                        if a is not None:
+                            a["file_count"] += mf
+                            a["total_size"] += ms
+                            a["dir_count"] += inc_dst + md
             else:
                 # File renamed/moved
                 src_parent = _rel(
@@ -512,18 +652,19 @@ class InstantFileEventHandler(FileSystemEventHandler):
                     except OSError:
                         file_size = 0
 
-                    if src_parent in self.monitor._dir_info:
-                        self.monitor._dir_info[src_parent]["file_count"] = max(
-                            0, self.monitor._dir_info[src_parent]["file_count"] - 1
-                        )
-                        self.monitor._dir_info[src_parent]["total_size"] = max(
-                            0,
-                            self.monitor._dir_info[src_parent]["total_size"]
-                            - file_size,
-                        )
-                    if dest_parent in self.monitor._dir_info:
-                        self.monitor._dir_info[dest_parent]["file_count"] += 1
-                        self.monitor._dir_info[dest_parent]["total_size"] += file_size
+                    # 4.64: the whole ancestor chain of both parents, not only the
+                    # two immediate parents (a file moved between sub-folders used
+                    # to leave every higher ancestor wrong until the next walk).
+                    for k in [src_parent, *_parents(src_parent)]:
+                        a = self.monitor._dir_info.get(k)
+                        if a is not None:
+                            a["file_count"] = max(0, a["file_count"] - 1)
+                            a["total_size"] = max(0, a["total_size"] - file_size)
+                    for k in [dest_parent, *_parents(dest_parent)]:
+                        a = self.monitor._dir_info.get(k)
+                        if a is not None:
+                            a["file_count"] += 1
+                            a["total_size"] += file_size
 
         # --- file index: rename dir keys or update both parent folders ---
         if event.is_directory:
@@ -556,9 +697,12 @@ class InstantFileEventHandler(FileSystemEventHandler):
         self._schedule_notify()
 
     def on_modified(self, event):
-        # File content changed — size may have changed, let reconcile handle it
+        # File content changed (size/mtime). 4.64: mark the parent folder dirty so
+        # the size is corrected within seconds instead of at the next 15-min walk.
         if ".chunks" in event.src_path or event.is_directory:
             return
+        if not os.path.basename(event.src_path).startswith("."):
+            self._touch(event.src_path)
         self._schedule_notify()
 
 
@@ -617,6 +761,10 @@ class FileSystemMonitor:
         self._batch_first_ts: Optional[float] = None
         self._batch_events: int = 0
         self._batch_handler_secs: float = 0.0
+        self.activity_callbacks: list = []  # 4.64: fn(changed_dirs, truncated)
+        self._last_junction_count: int = (
+            -1
+        )  # log skipped junctions only when it changes
         self._walk_lock = threading.Lock()
         self._walk_started_at: float = 0.0  # time.monotonic() of the last walk start
         self._walk_applied: bool = False  # that walk's result was applied
@@ -645,9 +793,17 @@ class FileSystemMonitor:
         new_snapshot: StorageSnapshot,
         reconcile_complete: bool = False,
         walk_progress: bool = False,
+        changed_dirs=None,
+        changed_dirs_truncated: bool = False,
     ):
         with self.lock:
             callbacks = list(self.change_callbacks)
+        extra = {}
+        if changed_dirs is not None:
+            extra = {
+                "changed_dirs": changed_dirs,
+                "changed_dirs_truncated": changed_dirs_truncated,
+            }
         for cb in callbacks:
             try:
                 try:
@@ -656,11 +812,35 @@ class FileSystemMonitor:
                         new_snapshot,
                         reconcile_complete=reconcile_complete,
                         walk_progress=walk_progress,
+                        **extra,
                     )
                 except TypeError:
-                    cb(old_snapshot, new_snapshot)
+                    try:
+                        cb(
+                            old_snapshot,
+                            new_snapshot,
+                            reconcile_complete=reconcile_complete,
+                            walk_progress=walk_progress,
+                        )
+                    except TypeError:
+                        cb(old_snapshot, new_snapshot)
             except Exception as e:
                 print(f"❌ Error in change callback: {e}")
+
+    def add_activity_callback(self, cb):
+        """4.64: cb(changed_dirs: list[str], truncated: bool) is called when files
+        changed but no counters are pushed (walk/drain in progress)."""
+        with self.lock:
+            self.activity_callbacks.append(cb)
+
+    def _notify_activity(self, changed_dirs, truncated):
+        with self.lock:
+            callbacks = list(self.activity_callbacks)
+        for cb in callbacks:
+            try:
+                cb(changed_dirs, truncated)
+            except Exception as e:
+                print(f"❌ Error in activity callback: {e}")
 
     # ------------------------------------------------------------------
     # Cache load / save
@@ -931,6 +1111,7 @@ class FileSystemMonitor:
         # the result overwrote good data. Collect them; `complete` is False if
         # the root itself could not be walked or the walk raised.
         walk_errors: list = []
+        skipped_junctions: list = []
         complete = True
         root_str = str(self.root_path)
 
@@ -950,6 +1131,16 @@ class FileSystemMonitor:
                 # Skip chunk temp directory
                 if ".chunks" in dirs:
                     dirs.remove(".chunks")
+
+                # 4.64: do not descend into NTFS junctions / mount points. Legacy
+                # profile junctions (e.g. "Documents\\My Music") deny listing and were
+                # reported as unreadable on every walk; accessible ones were counted
+                # twice (here and at their real location).
+                for _d in list(dirs):
+                    _jp = os.path.join(root, _d)
+                    if _is_junction(_jp):
+                        dirs.remove(_d)
+                        skipped_junctions.append(_jp)
 
                 # Yield the GIL between directories. Under Hypercorn there is
                 # exactly ONE thread running the whole asyncio event loop, so
@@ -1063,6 +1254,13 @@ class FileSystemMonitor:
 
         if root_str in walk_errors:
             complete = False  # the root itself failed — nothing below is trustworthy
+        if len(skipped_junctions) != self._last_junction_count:
+            self._last_junction_count = len(skipped_junctions)
+            if skipped_junctions:
+                print(
+                    f"↪️ Walk: skipped {len(skipped_junctions)} junction folder(s) "
+                    f"(not followed, not counted; first: {skipped_junctions[0]})"
+                )
         if walk_errors:
             print(
                 f"⚠️ Walk: {len(walk_errors)} folder(s) could not be read "
@@ -1151,6 +1349,16 @@ class FileSystemMonitor:
                 return
             self._pending_reconcile = False
         print("✅ Post-walk drain complete — watchdog increments resumed")
+        # 4.64: events that arrived during the walk/drain only marked their
+        # folders dirty. Correct those folders now (the walk may have scanned
+        # them before the change) and tell the browser.
+        with self._dirty_lock:
+            has_dirty = bool(self._dirty_folders)
+        if has_dirty:
+            try:
+                self._notify_and_save()
+            except Exception as e:
+                print(f"⚠️ Post-walk folder correction failed: {e}")
 
     def _settle_reconcile(self):
         """Fired by the hard timer — ground-truth walk after suppression window."""
@@ -1394,18 +1602,170 @@ class FileSystemMonitor:
         with self._dirty_lock:
             self._dirty_folders[rel_path] = abs_path
 
-    def _flush_dirty_folders(self):
-        """Re-scan every marked folder once. Returns (folders, seconds)."""
-        with self._dirty_lock:
-            items = list(self._dirty_folders.items())
-            self._dirty_folders.clear()
+    def _flush_dirty_folders(self, items=None):
+        """Re-scan every marked folder once. Returns (folders, seconds).
+        `items` = {rel: abs} already taken by the caller; None = take the set."""
+        if items is None:
+            with self._dirty_lock:
+                items = dict(self._dirty_folders)
+                self._dirty_folders.clear()
         t0 = time.perf_counter()
-        for rel, abs_p in items:
+        for rel, abs_p in items.items():
             try:
                 file_index_manager.update_folder(rel, abs_p)
             except Exception as e:
                 print(f"⚠️ File index re-scan of '{rel}' failed: {e}")
         return len(items), time.perf_counter() - t0
+
+    @staticmethod
+    def _changed_dirs_payload(dirty):
+        """(sorted folder list capped for SSE, truncated flag)."""
+        keys = sorted(dirty)
+        return keys[:MAX_CHANGED_DIRS_SENT], len(keys) > MAX_CHANGED_DIRS_SENT
+
+    def _correct_folders(self, dirty: Dict[str, str]) -> bool:
+        """4.64: recompute the folders whose direct entries changed FROM DISK and
+        apply the difference to dir_info, every ancestor and the global counters.
+
+        The watchdog handlers still update the counters instantly, but they cannot
+        get everything right (size of a deleted file, size of a file still being
+        copied, file/folder moves between folders, in-place edits, events dropped
+        while a walk runs). Every event marks its folder dirty, so within one
+        debounce cycle each such folder is re-read (one scandir, plus a sub-tree
+        walk only for a NEW sub-folder) and the record is set to what is really on
+        disk. It is idempotent: a late or duplicate event just marks the folder
+        again and the next pass finds nothing to change. The 15-minute walk
+        remains the independent validation. Returns True if a counter changed."""
+        if not dirty:
+            return False
+        root_str = str(self.root_path)
+        with self.lock:
+            epoch = self._reconcile_epoch
+            if "" not in self._dir_info:
+                return False  # no baseline yet; the first walk builds it
+            known = self._dir_info
+            targets = set()
+            for rel in dirty:
+                r = rel
+                while r and r not in known:
+                    r = r.rpartition("/")[0]
+                targets.add(r)
+        resolved = set()
+        for r in targets:
+            # a folder that vanished is handled by its parent's pass
+            while r and not os.path.isdir(os.path.join(root_str, r)):
+                r = r.rpartition("/")[0]
+            resolved.add(r)
+        if len(resolved) > MAX_CORRECT_FOLDERS:
+            print(
+                f"⚠️ {len(resolved)} folders changed in one batch - arming a settle "
+                f"walk instead of per-folder correction"
+            )
+            self.set_pending_reconcile()
+            return False
+
+        with self.lock:  # children index: parent -> {child rel}
+            children: Dict[str, set] = {}
+            for k in self._dir_info:
+                if k:
+                    children.setdefault(k.rpartition("/")[0], set()).add(k)
+
+        def _drop_subtree(top):
+            """Remove `top` and everything below it from dir_info + the index."""
+            stack = [top]
+            while stack:
+                k = stack.pop()
+                self._dir_info.pop(k, None)
+                stack.extend(children.pop(k, ()))
+            parent = top.rpartition("/")[0]
+            children.get(parent, set()).discard(top)
+
+        order = sorted(resolved, key=lambda r: (-(r.count("/") + (1 if r else 0)), r))
+        changed_any = False
+        for idx, rel in enumerate(order):
+            abs_p = os.path.join(root_str, rel) if rel else root_str
+            scan = _scan_direct(abs_p)
+            if scan is None:
+                continue  # unreadable: leave the record to the next walk
+            files_n, files_sz, latest, subdirs = scan
+            prefix = (rel + "/") if rel else ""
+            with self.lock:
+                unknown = [d for d in subdirs if (prefix + d) not in self._dir_info]
+            walked = {}
+            for d in unknown:
+                walked[prefix + d] = _walk_subtree(root_str, os.path.join(abs_p, d))
+            with self.lock:
+                if self._reconcile_epoch != epoch or self._pending_reconcile:
+                    # a walk replaced the data meanwhile: it is authoritative.
+                    # Re-mark what is left so it is checked after the walk.
+                    for r in order[idx:]:
+                        self.mark_folder_dirty(
+                            r, os.path.join(root_str, r) if r else root_str
+                        )
+                    return changed_any
+                rec = self._dir_info.get(rel)
+                if rec is None:
+                    self.mark_folder_dirty(rel, abs_p)
+                    continue
+                new_files, new_size, new_dirs = files_n, files_sz, 0
+                for d in subdirs:
+                    crel = prefix + d
+                    inc = 0 if d.startswith(".") else 1
+                    if crel in walked:
+                        sub_info, sub_latest = walked[crel]
+                        top = sub_info[crel]
+                        _drop_subtree(crel)  # a partial record made by a handler
+                        self._dir_info.update(sub_info)
+                        for k in sub_info:
+                            children.setdefault(k.rpartition("/")[0], set()).add(k)
+                        if sub_latest > self._last_modified:
+                            self._last_modified = sub_latest
+                    else:
+                        top = self._dir_info.get(crel)
+                        if top is None:
+                            continue
+                    new_files += top["file_count"]
+                    new_size += top["total_size"]
+                    new_dirs += inc + top["dir_count"]
+                for c in list(children.get(rel, ())):
+                    if c in self._dir_info and c.rpartition("/")[2] not in subdirs:
+                        _drop_subtree(c)  # sub-folder no longer on disk
+                df = new_files - rec["file_count"]
+                dd = new_dirs - rec["dir_count"]
+                ds = new_size - rec["total_size"]
+                if df or dd or ds:
+                    rec["file_count"] = new_files
+                    rec["dir_count"] = new_dirs
+                    rec["total_size"] = new_size
+                    for anc in _parents(rel):
+                        a = self._dir_info.get(anc)
+                        if a is not None:
+                            a["file_count"] = max(0, a["file_count"] + df)
+                            a["dir_count"] = max(0, a["dir_count"] + dd)
+                            a["total_size"] = max(0, a["total_size"] + ds)
+                    self._file_count = max(0, self._file_count + df)
+                    self._dir_count = max(0, self._dir_count + dd)
+                    self._total_size = max(0, self._total_size + ds)
+                    changed_any = True
+                if latest > self._last_modified:
+                    self._last_modified = latest
+        return changed_any
+
+    def remap_dirty(self, src_rel: str, dest_rel: str):
+        """A folder was moved/renamed: folders already marked dirty below its OLD
+        path now live below the new one. Without this the mark would point at a
+        path that no longer exists and the (moved) record would keep stale totals
+        until the next walk."""
+        root = str(self.root_path)
+        prefix = src_rel + "/"
+        with self._dirty_lock:
+            moved = {}
+            for k in list(self._dirty_folders):
+                if k == src_rel or k.startswith(prefix):
+                    nk = dest_rel + k[len(src_rel) :]
+                    del self._dirty_folders[k]
+                    moved[nk] = os.path.join(root, nk) if nk else root
+            self._dirty_folders.update(moved)
 
     def _note_event(self):
         with self._dirty_lock:
@@ -1418,8 +1778,16 @@ class FileSystemMonitor:
             self._batch_handler_secs += secs
 
     def _notify_and_save(self):
-        # Skip SSE push if suppressed — the hard settle timer will push after SETTLE_DELAY
+        # While a walk or its drain window is active the counters are not
+        # touched (the walk is authoritative) - but the browser is still told
+        # WHICH folders changed so the visible listing refreshes at once, and the
+        # folders stay marked for correction after the walk (_clear_pending_reconcile).
         if self._pending_reconcile:
+            with self._dirty_lock:
+                pending_dirs = dict(self._dirty_folders)
+            if pending_dirs:
+                dirs_list, truncated = self._changed_dirs_payload(pending_dirs)
+                self._notify_activity(dirs_list, truncated)
             return
 
         t_start = time.perf_counter()
@@ -1430,24 +1798,55 @@ class FileSystemMonitor:
             self._batch_first_ts = None
             self._batch_events = 0
             self._batch_handler_secs = 0.0
+            dirty = dict(self._dirty_folders)
+            self._dirty_folders.clear()
+        dirs_list, truncated = self._changed_dirs_payload(dirty)
 
         old_snapshot = self.last_snapshot
         new_snapshot = self._build_snapshot()
         self.last_snapshot = new_snapshot
 
-        # 4.63: push the SSE update FIRST. It used to come after _save_cache(),
-        # i.e. after a whole-file rewrite + fsync of storage_index.json and
-        # file_index.json on the HDD, so the browser waited for the disk.
+        # 4.63: push the SSE update FIRST (before any disk work).
         if old_snapshot:
-            self._notify_changes(old_snapshot, new_snapshot)
+            self._notify_changes(
+                old_snapshot,
+                new_snapshot,
+                changed_dirs=dirs_list,
+                changed_dirs_truncated=truncated,
+            )
             print(
                 f"📊 Notified: files={new_snapshot.file_count:,}, "
                 f"dirs={new_snapshot.dir_count:,}"
+                + (f", {len(dirty)} folder(s) changed" if dirty else "")
             )
         push_ts = time.time()
         t_pushed = time.perf_counter()
 
-        n_dirty, flush_secs = self._flush_dirty_folders()
+        # 4.64: correct the changed folders from disk; push again if that moved
+        # any counter (deleted-file sizes, moves, edits, files still growing...).
+        corrected = False
+        try:
+            corrected = self._correct_folders(dirty)
+        except Exception as e:
+            print(f"⚠️ Folder correction failed (the 15-min walk will fix it): {e}")
+        t_corrected = time.perf_counter()
+        if corrected:
+            snap_after = self._build_snapshot()
+            before = self.last_snapshot
+            self.last_snapshot = snap_after
+            if before:
+                self._notify_changes(
+                    before,
+                    snap_after,
+                    changed_dirs=dirs_list,
+                    changed_dirs_truncated=truncated,
+                )
+                print(
+                    f"📊 Corrected from disk: files={snap_after.file_count:,}, "
+                    f"dirs={snap_after.dir_count:,}, size={snap_after.total_size:,}"
+                )
+
+        n_dirty, flush_secs = self._flush_dirty_folders(dirty)
         t_flushed = time.perf_counter()
         self._save_cache()
         t_saved = time.perf_counter()
@@ -1460,8 +1859,9 @@ class FileSystemMonitor:
             print(
                 f"⏱️ Watchdog batch: {n_events} event(s); first event → SSE push "
                 f"{latency:.2f}s (handlers {handler_secs:.2f}s total, snapshot+push "
-                f"{t_pushed - t_start:.2f}s); {n_dirty} folder(s) re-indexed in "
-                f"{flush_secs:.2f}s; save {t_saved - t_flushed:.2f}s"
+                f"{t_pushed - t_start:.2f}s); correction {t_corrected - t_pushed:.2f}s; "
+                f"{n_dirty} folder(s) re-indexed in {flush_secs:.2f}s; "
+                f"save {t_saved - t_flushed:.2f}s"
             )
 
     # ------------------------------------------------------------------

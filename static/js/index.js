@@ -7953,24 +7953,70 @@ function isValidPath(path) {
     return !/[<>:"|?*\\]/.test(path) && !path.includes('..');
 }
 
+// 4.64: bulk move/copy are background jobs on the server (a big one outlives the
+// ~100 s a Cloudflare-style proxy waits for a response and used to fail with a
+// 524 even though the server finished it). POST answers 202 + job id, then we
+// poll /bulk_job/<id>. Resolves to {ok, status, result} - the same shape the old
+// synchronous answer had - so the callers below did not have to change.
+async function postBulkJob(url, payload, verb) {
+    const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    let first = {};
+    try { first = await resp.json(); } catch (e) { first = {}; }
+    if (resp.status !== 202 || !first.job_id) {
+        return {
+            ok: resp.ok,
+            status: resp.status,
+            result: (resp.ok || first.error) ? first : { error: `server answered HTTP ${resp.status}` }
+        };
+    }
+    let failures = 0;
+    const t0 = Date.now();
+    while (true) {
+        await new Promise(r => setTimeout(r, 2000));
+        let st = {};
+        let httpStatus = 0;
+        try {
+            const r = await fetch('/bulk_job/' + encodeURIComponent(first.job_id), { cache: 'no-store' });
+            httpStatus = r.status;
+            try { st = await r.json(); } catch (e) { st = {}; }
+            if (r.status === 404) {
+                throw new Error('the server no longer knows this operation (it may have restarted)');
+            }
+            if (!r.ok) throw new Error(st.error || `HTTP ${r.status}`);
+            failures = 0;
+        } catch (e) {
+            if (httpStatus === 404 || ++failures >= 5) {
+                throw new Error(httpStatus === 404 ? e.message
+                    : 'lost contact with the server; the operation may still be running');
+            }
+            continue;
+        }
+        if (st.state === 'done') {
+            const code = st.status || 500;
+            return { ok: code >= 200 && code < 300, status: code, result: st.result || {} };
+        }
+        const secs = Math.round((Date.now() - t0) / 1000);
+        showUploadStatus(
+            `<i class="fas fa-circle-notch fa-spin"></i> ${verb} ${st.done || 0}/${st.total || '?'}` +
+            (st.current ? `: ${st.current}` : '') + ` (${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')})`,
+            'info');
+    }
+}
+
 async function performBulkMove(paths, destination, conflictResolutions = {}) {
     try {
-        const response = await fetch('/bulk_move', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                paths: paths,
-                destination: destination,
-                current_path: currentPath || '',
-                conflict_resolutions: conflictResolutions
-            })
-        });
+        const { ok, result } = await postBulkJob('/bulk_move', {
+            paths: paths,
+            destination: destination,
+            current_path: currentPath || '',
+            conflict_resolutions: conflictResolutions
+        }, 'Moving');
 
-        const result = await response.json();
-
-        if (response.ok) {
+        if (ok) {
             showNotification('Move Successful', `Successfully moved ${result.moved_count} item(s)`, 'success');
             // Clear selection first, then refresh file table
             clearSelection();
@@ -7988,22 +8034,14 @@ async function performBulkMove(paths, destination, conflictResolutions = {}) {
 
 async function performBulkCopy(paths, destination, conflictResolutions = {}) {
     try {
-        const response = await fetch('/bulk_copy', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                paths: paths,
-                destination: destination,
-                current_path: currentPath || '',
-                conflict_resolutions: conflictResolutions
-            })
-        });
+        const { ok, result } = await postBulkJob('/bulk_copy', {
+            paths: paths,
+            destination: destination,
+            current_path: currentPath || '',
+            conflict_resolutions: conflictResolutions
+        }, 'Copying');
 
-        const result = await response.json();
-
-        if (response.ok) {
+        if (ok) {
             showNotification('Copy Successful', `Successfully copied ${result.copied_count} item(s)`, 'success');
             clearSelection();
 
@@ -11454,6 +11492,13 @@ async function refreshStorageStats(reason = 'manual') {
 }
 
 
+// 4.64: the connection indicator used to APPEND " (SSE)" / " (Polling)" to the
+// current title on every (re)connect, so the tab title kept growing. Strip the
+// status prefix and any suffix first, then add exactly one.
+function _titleBase(title) {
+    return String(title).replace(/^(🟢|🔴|🟠|⚡) /, '').replace(/( \((SSE|Polling)\))+$/, '');
+}
+
 function connectToStorageStream() {
     try {
         // Only close existing connection if it's actually dead/errored
@@ -11534,7 +11579,7 @@ function connectToStorageStream() {
             window.storageStatsInitialized = true;
 
             // Add clean connection indicator
-            document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '') + ' (SSE)';
+            document.title = '🟢 ' + _titleBase(document.title) + ' (SSE)';
             console.log('🟢 Title set to connected state:', document.title);
         };
 
@@ -11626,7 +11671,7 @@ function setupFallbackPolling() {
         lastPollingCheck = 0; // Start with 0 for instant initial load
 
         // Update title to show polling mode
-        document.title = '🟠 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '') + ' (Polling)';
+        document.title = '🟠 ' + _titleBase(document.title) + ' (Polling)';
 
         // Start polling with configurable interval
         const pollingIntervalTime = INSTANT_LOAD_SETTINGS.pollingIntervalTime || 2000;
@@ -11661,7 +11706,7 @@ async function performPollingCheck() {
         // Update connection status on successful poll
         if (connectionStatus !== 'connected') {
             connectionStatus = 'connected';
-            document.title = '🟢 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '') + ' (Polling)';
+            document.title = '🟢 ' + _titleBase(document.title) + ' (Polling)';
             console.log('🟢 Polling connection established');
         }
 
@@ -11687,7 +11732,7 @@ async function performPollingCheck() {
     } catch (error) {
         console.error('❌ Polling check failed:', error);
         connectionStatus = 'error';
-        document.title = '🔴 ' + document.title.replace(/^🟢 |^🔴 |^🟠 |^⚡ /, '') + ' (Polling)';
+        document.title = '🔴 ' + _titleBase(document.title) + ' (Polling)';
     }
 }
 
@@ -11698,6 +11743,32 @@ function stopPolling() {
         pollingEnabled = false;
         console.log('🛑 Polling stopped');
     }
+}
+
+// 4.64: which folder is on screen, and did the server say something in it (or
+// below it) changed? The totals cannot tell: moving or renaming a file leaves
+// every counter equal, so the list used to stay stale until the next walk.
+function _changedDirsAffectView(data) {
+    if (!data || !Array.isArray(data.changed_dirs)) return false;
+    if (data.changed_dirs_truncated) return true;
+    const view = (typeof currentPath === 'string' ? currentPath : '').replace(/^\/+|\/+$/g, '');
+    if (view === '') return data.changed_dirs.length > 0;
+    return data.changed_dirs.some(d => d === view || d.startsWith(view + '/'));
+}
+
+// Refresh the file table now, but at most once per second: a batch may produce
+// two SSE messages (instant + corrected from disk) and bulk operations many.
+let _sseRefreshLast = 0;
+let _sseRefreshTimer = null;
+function _scheduleSseTableRefresh() {
+    if (_sseRefreshTimer) return;  // one already queued - it will show the latest data
+    const wait = Math.max(0, 1000 - (Date.now() - _sseRefreshLast));
+    _sseRefreshTimer = setTimeout(async () => {
+        _sseRefreshTimer = null;
+        if (isUploading || _mutationInFlight) return;
+        _sseRefreshLast = Date.now();
+        try { await refreshFileTable(); } catch (e) { console.warn('SSE table refresh failed', e); }
+    }, wait);
 }
 
 function handleStorageUpdate(data) {
@@ -11774,8 +11845,10 @@ function handleStorageUpdate(data) {
                     );
 
                     // Check if we should refresh the file table (broader criteria)
+                    const viewAffected = _changedDirsAffectView(data);
                     const shouldRefresh = (
                         data.reconcile_complete ||      // always refresh when walk is done
+                        viewAffected ||                 // 4.64: a folder on screen changed (moves/renames/edits)
                         changes.files_changed !== 0 ||
                         changes.dirs_changed !== 0 ||
                         changes.size_changed !== 0 ||
@@ -11809,7 +11882,7 @@ function handleStorageUpdate(data) {
                             // Clear stale dir-info cache so loadDirInfoCells() re-fetches
                             // from the server instead of showing cached pre-copy counts.
                             VT.clearDirCache();
-                            requestAnimationFrame(async () => { await refreshFileTable(); });
+                            _scheduleSseTableRefresh();
                         } else if (isUploading && !_mutationInFlight) {
                             const uploadPaths = new Set();
                             folderGroups.forEach(g => {
@@ -11889,6 +11962,15 @@ function handleStorageUpdate(data) {
                 }
 
                 console.log(`📊 Updated file counts: ${lastKnownFileCount} files, ${lastKnownDirCount} dirs`);
+            }
+            break;
+
+        case 'fs_activity':
+            // 4.64: files changed while a reconcile walk is running (counters are
+            // frozen then). Refresh the listing if the folder on screen is affected;
+            // folder-size cells are refreshed when the walk completes.
+            if (!isUploading && !_mutationInFlight && _changedDirsAffectView(data)) {
+                _scheduleSseTableRefresh();
             }
             break;
 

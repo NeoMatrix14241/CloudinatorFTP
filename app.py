@@ -280,7 +280,12 @@ rate_limiter = RateLimiter()
 # File monitoring and real-time updates
 from file_monitor import get_file_monitor, init_file_monitor
 from search_index import search_index_manager
-from realtime_stats import storage_stats_sse, trigger_storage_update, get_event_manager
+from realtime_stats import (
+    storage_stats_sse,
+    trigger_storage_update,
+    trigger_fs_activity,
+    get_event_manager,
+)
 from realtime_shares import (
     share_events_sse,
     trigger_share_event,
@@ -1061,6 +1066,7 @@ storage.ensure_root()
 # Initialize file system monitoring
 file_monitor = init_file_monitor()
 file_monitor.add_change_callback(trigger_storage_update)
+file_monitor.add_activity_callback(trigger_fs_activity)  # 4.64
 print(f"📡 File system monitoring started for: {ROOT_DIR}")
 
 # Start search index crawler (daemon thread, non-blocking).
@@ -5632,10 +5638,208 @@ async def api_files(path):
         return jsonify({"error": "Failed to load files"}), 500
 
 
-@app.route("/bulk_move", methods=["POST"])
-@login_required
-async def bulk_move():
-    """Move multiple files/folders to a new location"""
+# ---------------------------------------------------------------------------
+# 4.64: bulk move / copy run as background jobs.
+# A big move or copy can take longer than a reverse proxy / CDN waits for the
+# response (Cloudflare gives up after ~100 s with an HTML 524 page), so the POST
+# validates the request, starts a worker thread and returns 202 with a job id;
+# the page polls GET /bulk_job/<id>. The copy used to run shutil.copytree /
+# copy2 / rmtree directly on the event loop, freezing the whole server too.
+# ---------------------------------------------------------------------------
+_bulk_jobs = {}
+_bulk_jobs_lock = threading.Lock()
+_BULK_JOB_KEEP_SECS = 900  # finished jobs stay pollable for 15 minutes
+
+
+def _bulk_job_start(kind, user, total, worker, *args):
+    """Register a job, start its worker thread, return the job id."""
+    now = time.time()
+    job_id = _secrets.token_hex(8)
+    job = {
+        "id": job_id,
+        "kind": kind,
+        "user": user,
+        "state": "running",
+        "total": total,
+        "done": 0,
+        "current": "",
+        "status": None,
+        "result": None,
+        "started_at": now,
+        "finished_at": None,
+    }
+    with _bulk_jobs_lock:
+        for jid in [
+            j
+            for j, v in _bulk_jobs.items()
+            if v["finished_at"] and now - v["finished_at"] > _BULK_JOB_KEEP_SECS
+        ]:
+            _bulk_jobs.pop(jid, None)
+        _bulk_jobs[job_id] = job
+
+    def _target():
+        try:
+            status, payload = worker(job, *args)
+        except Exception as e:
+            print(f"❌ Bulk {kind} job error: {e}")
+            status, payload = 500, {"error": f"Bulk {kind} error: {str(e)}"}
+        with _bulk_jobs_lock:
+            job.update(
+                state="done", status=status, result=payload, finished_at=time.time()
+            )
+
+    threading.Thread(target=_target, name=f"bulk-{kind}", daemon=True).start()
+    return job_id
+
+
+def _bulk_find_free_name(dest_dir, filename):
+    base, ext = os.path.splitext(filename)
+    for i in range(1, 1000):
+        candidate = f"{base} ({i}){ext}"
+        if not os.path.exists(os.path.join(dest_dir, candidate)):
+            return candidate
+    return f"{base} ({int(time.time())}){ext}"
+
+
+def _bulk_move_worker(job, paths, destination, conflict_resolutions):
+    """Runs in a worker thread. Returns (http_status, payload)."""
+    moved_count = 0
+    errors = []
+    for source_path in paths:
+        job["current"] = os.path.basename(source_path)
+        try:
+            # Security check
+            if not storage.is_safe_path(source_path):
+                errors.append(f"Invalid source path: {source_path}")
+                continue
+
+            source_full = os.path.join(ROOT_DIR, source_path)
+            if not os.path.exists(source_full):
+                errors.append(f"Source not found: {source_path}")
+                continue
+
+            # Determine destination
+            filename = os.path.basename(source_path)
+            dest_dir = os.path.join(ROOT_DIR, destination) if destination else ROOT_DIR
+            dest_full = os.path.join(dest_dir, filename)
+
+            # Create destination directory if it doesn't exist
+            os.makedirs(dest_dir, exist_ok=True)
+
+            # Handle conflict
+            if os.path.exists(dest_full):
+                resolution = conflict_resolutions.get(filename, "error")
+                if resolution == "skip":
+                    continue
+                elif resolution == "overwrite":
+                    if os.path.isdir(dest_full):
+                        shutil.rmtree(dest_full)
+                    else:
+                        os.remove(dest_full)
+                elif resolution == "rename":
+                    dest_full = os.path.join(
+                        dest_dir, _bulk_find_free_name(dest_dir, filename)
+                    )
+                else:
+                    errors.append(
+                        f"Destination already exists: {os.path.join(destination, filename) if destination else filename}"
+                    )
+                    continue
+
+            # Perform the move (cross-volume / big folder = a copy; that is why
+            # this runs in a worker thread and not in the request).
+            shutil.move(source_full, dest_full)
+            moved_count += 1
+
+        except Exception as e:
+            errors.append(f"Failed to move {source_path}: {str(e)}")
+        finally:
+            job["done"] += 1
+
+    if moved_count:
+        # The per-folder correction fixes counts, but a full walk remains the
+        # ground truth after a web-UI mutation (4.60).
+        _trigger_reconcile()
+
+    if errors:
+        return 207, {
+            "moved_count": moved_count,
+            "errors": errors,
+            "error": f"Some items could not be moved. Moved {moved_count} items with {len(errors)} errors.",
+        }  # Multi-status
+    return 200, {"moved_count": moved_count, "success": True}
+
+
+def _bulk_copy_worker(job, paths, destination, conflict_resolutions):
+    """Runs in a worker thread. Returns (http_status, payload)."""
+    copied_count = 0
+    errors = []
+    for source_path in paths:
+        job["current"] = os.path.basename(source_path)
+        try:
+            # Security check
+            if not storage.is_safe_path(source_path):
+                errors.append(f"Invalid source path: {source_path}")
+                continue
+
+            source_full = os.path.join(ROOT_DIR, source_path)
+            if not os.path.exists(source_full):
+                errors.append(f"Source not found: {source_path}")
+                continue
+
+            # Determine destination
+            filename = os.path.basename(source_path)
+            dest_dir = os.path.join(ROOT_DIR, destination) if destination else ROOT_DIR
+            dest_full = os.path.join(dest_dir, filename)
+
+            # Create destination directory if it doesn't exist
+            os.makedirs(dest_dir, exist_ok=True)
+
+            # Handle conflict
+            if os.path.exists(dest_full):
+                resolution = conflict_resolutions.get(
+                    filename, "rename"
+                )  # default: auto-rename
+                if resolution == "skip":
+                    continue
+                elif resolution == "overwrite":
+                    if os.path.isdir(dest_full):
+                        shutil.rmtree(dest_full)
+                    else:
+                        os.remove(dest_full)
+                else:  # 'rename' or default
+                    dest_full = os.path.join(
+                        dest_dir, _bulk_find_free_name(dest_dir, filename)
+                    )
+
+            # Perform the copy
+            if os.path.isdir(source_full):
+                shutil.copytree(source_full, dest_full)
+            else:
+                shutil.copy2(source_full, dest_full)
+
+            copied_count += 1
+
+        except Exception as e:
+            errors.append(f"Failed to copy {source_path}: {str(e)}")
+        finally:
+            job["done"] += 1
+
+    if copied_count > 0:
+        _trigger_reconcile(settle=True)  # copytree fires a backlog storm
+
+    if errors:
+        return 207, {
+            "copied_count": copied_count,
+            "errors": errors,
+            "error": f"Some items could not be copied. Copied {copied_count} items with {len(errors)} errors.",
+        }  # Multi-status
+    return 200, {"copied_count": copied_count, "success": True}
+
+
+async def _bulk_start(kind, worker):
+    """Shared request handling for /bulk_move and /bulk_copy: validate, start the
+    job, answer 202 at once."""
     try:
         role = get_role(current_user())
         if role != "readwrite":
@@ -5647,7 +5851,6 @@ async def bulk_move():
 
         paths = data["paths"]
         destination = data.get("destination", "").strip()
-        current_path = data.get("current_path", "")
 
         if not paths:
             return jsonify({"error": "No paths provided"}), 400
@@ -5659,200 +5862,57 @@ async def bulk_move():
         # conflict_resolutions maps filename -> 'overwrite' | 'rename' | 'skip'
         conflict_resolutions = data.get("conflict_resolutions", {})
 
-        moved_count = 0
-        errors = []
-
-        def _find_free_name(dest_dir, filename):
-            base, ext = os.path.splitext(filename)
-            for i in range(1, 1000):
-                candidate = f"{base} ({i}){ext}"
-                if not os.path.exists(os.path.join(dest_dir, candidate)):
-                    return candidate
-            return f"{base} ({int(time.time())}){ext}"
-
-        for source_path in paths:
-            try:
-                # Security check
-                if not storage.is_safe_path(source_path):
-                    errors.append(f"Invalid source path: {source_path}")
-                    continue
-
-                source_full = os.path.join(ROOT_DIR, source_path)
-                if not os.path.exists(source_full):
-                    errors.append(f"Source not found: {source_path}")
-                    continue
-
-                # Determine destination
-                filename = os.path.basename(source_path)
-                dest_dir = (
-                    os.path.join(ROOT_DIR, destination) if destination else ROOT_DIR
-                )
-                dest_full = os.path.join(dest_dir, filename)
-
-                # Create destination directory if it doesn't exist
-                os.makedirs(dest_dir, exist_ok=True)
-
-                # Handle conflict
-                if os.path.exists(dest_full):
-                    resolution = conflict_resolutions.get(filename, "error")
-                    if resolution == "skip":
-                        continue
-                    elif resolution == "overwrite":
-                        # 4.62: blocking disk work runs in a worker thread,
-                        # not on the event loop
-                        if os.path.isdir(dest_full):
-                            await asyncio.to_thread(shutil.rmtree, dest_full)
-                        else:
-                            await asyncio.to_thread(os.remove, dest_full)
-                    elif resolution == "rename":
-                        dest_full = os.path.join(
-                            dest_dir, _find_free_name(dest_dir, filename)
-                        )
-                    else:
-                        errors.append(
-                            f"Destination already exists: {os.path.join(destination, filename) if destination else filename}"
-                        )
-                        continue
-
-                # Perform the move
-                # 4.62: a cross-volume or big-folder move copies data; run it in a
-                # worker thread so SSE, searches and every other request keep going.
-                await asyncio.to_thread(shutil.move, source_full, dest_full)
-                moved_count += 1
-
-            except Exception as e:
-                errors.append(f"Failed to move {source_path}: {str(e)}")
-
-        if moved_count:
-            # Folder moves do not transfer counts between the old and new
-            # ancestor chains in the watchdog handlers; the walk does.
-            _trigger_reconcile()
-
-        if errors:
-            return (
-                jsonify(
-                    {
-                        "moved_count": moved_count,
-                        "errors": errors,
-                        "error": f"Some items could not be moved. Moved {moved_count} items with {len(errors)} errors.",
-                    }
-                ),
-                207,
-            )  # Multi-status
-        else:
-            return jsonify({"moved_count": moved_count, "success": True}), 200
+        job_id = _bulk_job_start(
+            kind,
+            current_user(),
+            len(paths),
+            worker,
+            paths,
+            destination,
+            conflict_resolutions,
+        )
+        return jsonify({"job_id": job_id, "started": True, "total": len(paths)}), 202
 
     except Exception as e:
-        return jsonify({"error": f"Bulk move error: {str(e)}"}), 500
+        return jsonify({"error": f"Bulk {kind} error: {str(e)}"}), 500
+
+
+@app.route("/bulk_move", methods=["POST"])
+@login_required
+async def bulk_move():
+    """Move multiple files/folders to a new location (background job, 202)."""
+    return await _bulk_start("move", _bulk_move_worker)
 
 
 @app.route("/bulk_copy", methods=["POST"])
 @login_required
 async def bulk_copy():
-    """Copy multiple files/folders to a new location"""
-    try:
-        role = get_role(current_user())
-        if role != "readwrite":
-            return jsonify({"error": "Permission denied"}), 403
+    """Copy multiple files/folders to a new location (background job, 202)."""
+    return await _bulk_start("copy", _bulk_copy_worker)
 
-        data = await request.get_json()
-        if not data or "paths" not in data:
-            return jsonify({"error": "Paths are required"}), 400
 
-        paths = data["paths"]
-        destination = data.get("destination", "").strip()
-        current_path = data.get("current_path", "")
-
-        if not paths:
-            return jsonify({"error": "No paths provided"}), 400
-
-        # Validate destination path
-        if destination and not storage.is_safe_path(destination):
-            return jsonify({"error": "Invalid destination path"}), 400
-
-        # conflict_resolutions maps filename -> 'overwrite' | 'rename' | 'skip'
-        conflict_resolutions = data.get("conflict_resolutions", {})
-
-        copied_count = 0
-        errors = []
-
-        def _find_free_name_copy(dest_dir, filename):
-            base, ext = os.path.splitext(filename)
-            for i in range(1, 1000):
-                candidate = f"{base} ({i}){ext}"
-                if not os.path.exists(os.path.join(dest_dir, candidate)):
-                    return candidate
-            return f"{base} ({int(time.time())}){ext}"
-
-        for source_path in paths:
-            try:
-                # Security check
-                if not storage.is_safe_path(source_path):
-                    errors.append(f"Invalid source path: {source_path}")
-                    continue
-
-                source_full = os.path.join(ROOT_DIR, source_path)
-                if not os.path.exists(source_full):
-                    errors.append(f"Source not found: {source_path}")
-                    continue
-
-                # Determine destination
-                filename = os.path.basename(source_path)
-                dest_dir = (
-                    os.path.join(ROOT_DIR, destination) if destination else ROOT_DIR
-                )
-                dest_full = os.path.join(dest_dir, filename)
-
-                # Create destination directory if it doesn't exist
-                os.makedirs(dest_dir, exist_ok=True)
-
-                # Handle conflict
-                if os.path.exists(dest_full):
-                    resolution = conflict_resolutions.get(
-                        filename, "rename"
-                    )  # default: auto-rename
-                    if resolution == "skip":
-                        continue
-                    elif resolution == "overwrite":
-                        if os.path.isdir(dest_full):
-                            shutil.rmtree(dest_full)
-                        else:
-                            os.remove(dest_full)
-                    else:  # 'rename' or default
-                        dest_full = os.path.join(
-                            dest_dir, _find_free_name_copy(dest_dir, filename)
-                        )
-
-                # Perform the copy
-                if os.path.isdir(source_full):
-                    shutil.copytree(source_full, dest_full)
-                else:
-                    shutil.copy2(source_full, dest_full)
-
-                copied_count += 1
-
-            except Exception as e:
-                errors.append(f"Failed to copy {source_path}: {str(e)}")
-
-        if copied_count > 0:
-            _trigger_reconcile(settle=True)  # copytree fires a backlog storm
-
-        if errors:
-            return (
-                jsonify(
-                    {
-                        "copied_count": copied_count,
-                        "errors": errors,
-                        "error": f"Some items could not be copied. Copied {copied_count} items with {len(errors)} errors.",
-                    }
-                ),
-                207,
-            )  # Multi-status
-        else:
-            return jsonify({"copied_count": copied_count, "success": True}), 200
-
-    except Exception as e:
-        return jsonify({"error": f"Bulk copy error: {str(e)}"}), 500
+@app.route("/bulk_job/<job_id>", methods=["GET"])
+@login_required
+async def bulk_job_status(job_id):
+    """State of a bulk move/copy job: running -> done (with the final HTTP status
+    and the payload the old synchronous route used to return)."""
+    role = get_role(current_user())
+    if role != "readwrite":
+        return jsonify({"error": "Permission denied"}), 403
+    with _bulk_jobs_lock:
+        job = _bulk_jobs.get(job_id)
+        if job is None or job["user"] != current_user():
+            return jsonify({"error": "Unknown job"}), 404
+        snap = {
+            "state": job["state"],
+            "kind": job["kind"],
+            "total": job["total"],
+            "done": job["done"],
+            "current": job["current"],
+            "status": job["status"],
+            "result": job["result"],
+        }
+    return jsonify(snap), 200
 
 
 @app.route("/bulk_delete", methods=["POST"])
