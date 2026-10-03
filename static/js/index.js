@@ -8457,21 +8457,59 @@ function addManualCleanupButton() {
         cacheBtn.title = 'Delete storage_index.json and rebuild the index from scratch';
 
         cacheBtn.onclick = async function () {
-            if (!confirm('This will delete the storage index cache and rebuild it from scratch.\nThe server will re-scan all files — this may take a few seconds.\n\nContinue?')) {
+            if (!confirm('This will delete the storage index cache and rebuild it from scratch.\nThe server re-scans every file in the background - on a large tree this can take several minutes. You can keep using the page.\n\nContinue?')) {
                 return;
             }
+            // Parse a body as JSON without throwing on an HTML error page
+            // (e.g. a proxy/CDN 524 timeout), which used to surface as
+            // "Unexpected token '<'".
+            const readJson = async (resp) => {
+                try { return await resp.json(); } catch (e) { return {}; }
+            };
             try {
                 cacheBtn.disabled = true;
                 cacheBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Rebuilding...';
-                const response = await fetch('/admin/rebuild_cache', {
+                const startResp = await fetch('/admin/rebuild_cache', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
                 });
-                const result = await response.json();
-                if (response.ok) {
-                    showUploadStatus('✅ Cache cleared and rebuilt successfully', 'success');
-                } else {
-                    throw new Error(result.error || 'Cache cleanup failed');
+                const startData = await readJson(startResp);
+                // 202 = started, 409 = one is already running: follow it either way
+                if (!startResp.ok && startResp.status !== 409) {
+                    throw new Error(startData.error || `server answered HTTP ${startResp.status}`);
+                }
+                const t0 = Date.now();
+                let failures = 0;
+                while (true) {
+                    await new Promise(r => setTimeout(r, 3000));
+                    let st;
+                    try {
+                        const r = await fetch('/admin/rebuild_cache/status', { cache: 'no-store' });
+                        st = await readJson(r);
+                        if (!r.ok) throw new Error(st.error || `HTTP ${r.status}`);
+                        failures = 0;
+                    } catch (e) {
+                        if (++failures >= 5) {
+                            throw new Error('lost contact with the server while waiting; the rebuild may still be running');
+                        }
+                        continue;
+                    }
+                    const secs = Math.round((Date.now() - t0) / 1000);
+                    cacheBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Rebuilding... ' +
+                        Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0');
+                    if (st.state === 'done') {
+                        showUploadStatus('✅ ' + (st.message || 'Cache cleared and rebuilt successfully'), 'success');
+                        break;
+                    }
+                    if (st.state === 'error') {
+                        throw new Error(st.error || 'Cache rebuild failed');
+                    }
+                    if (st.state === 'idle') {
+                        throw new Error('the server has no rebuild in progress (it may have restarted)');
+                    }
+                    if (secs > 3600) {
+                        throw new Error('still running after 60 minutes; check the server log');
+                    }
                 }
             } catch (error) {
                 showUploadStatus(`❌ Cache cleanup failed: ${error.message}`, 'error');

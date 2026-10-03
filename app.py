@@ -4491,97 +4491,153 @@ def _clear_media_preview_sync():
         return jsonify({"error": str(e)}), 500
 
 
+# 4.63: Rebuild Cache runs in the background. The walk of a big tree on the HDD
+# takes minutes; running it inside the request made a reverse proxy / CDN give up
+# first (HTTP 524 after ~100 s with an HTML body), and the browser then failed
+# with "Unexpected token '<'" while the server finished the rebuild anyway.
+_rebuild_state = {
+    "state": "idle",  # idle | running | done | error
+    "started_at": None,
+    "finished_at": None,
+    "message": "",
+    "error": "",
+}
+_rebuild_state_lock = threading.Lock()
+
+
+def _rebuild_cache_worker():
+    """Delete both JSON caches, force a ground-truth walk, audit the file index,
+    then record the outcome in _rebuild_state (polled by the status route)."""
+    state, message, error = "error", "", ""
+    try:
+        import os
+        from file_monitor import get_file_monitor, CACHE_FILE
+        from file_index import file_index_manager, FILE_INDEX_PATH
+
+        # Delete storage_index.json
+        if os.path.exists(CACHE_FILE):
+            os.remove(CACHE_FILE)
+            print(f"🗑️ Cache file deleted: {CACHE_FILE}")
+        else:
+            print("ℹ️ No cache file found — nothing to delete")
+
+        # Delete file_index.json
+        if os.path.exists(FILE_INDEX_PATH):
+            os.remove(FILE_INDEX_PATH)
+            file_index_manager.clear()
+            print(f"🗑️ File index deleted: {FILE_INDEX_PATH}")
+        else:
+            print("ℹ️ No file index found — nothing to delete")
+
+        monitor = get_file_monitor()
+        print("🚶 Rebuilding cache from scratch...")
+        # force=True: an admin rebuild must be able to accept a genuinely
+        # empty tree (the automatic walks reject a suspect-empty result once).
+        applied = monitor._reconcile(force=True)
+
+        # 4.59: audit the freshly built file index against the disk
+        # (read-only, repair=False). Right after a walk this should report 0
+        # drifted; anything else means files changed during the rebuild.
+        audit = None
+        try:
+            audit = file_index_manager.verify_all(repair=False)
+        except Exception as _ve:
+            print(f"⚠️ file index verify failed: {_ve}")
+
+        if not applied:
+            error = (
+                "Rebuild walk did not complete (root unreadable?) — "
+                "previous index kept; see the server log"
+            )
+        else:
+            from realtime_stats import trigger_storage_update
+
+            trigger_storage_update(None, monitor.get_current_snapshot())
+            fi_stats = file_index_manager.get_stats()
+            message = (
+                f"Cache cleared and rebuilt: {monitor._file_count:,} files, "
+                f"{monitor._dir_count:,} dirs, {len(monitor._dir_info):,} folders indexed. "
+                f'File index: {fi_stats["indexed_folders"]:,} large folder(s) indexed '
+                f'({fi_stats["total_entries"]:,} entries, threshold={fi_stats["threshold"]})'
+                + (
+                    f'. Verified {audit["checked"]:,} indexed folder(s) against disk: '
+                    f'{audit["drifted"]:,} drifted, {audit["unreadable"]:,} unreadable'
+                    if audit
+                    else ""
+                )
+            )
+            state = "done"
+    except Exception as e:
+        print(f"❌ Error during cache cleanup: {e}")
+        error = str(e) or e.__class__.__name__
+    finally:
+        with _rebuild_state_lock:
+            _rebuild_state.update(
+                state=state,
+                finished_at=time.time(),
+                message=message,
+                error=error,
+            )
+
+
 @app.route("/admin/rebuild_cache", methods=["POST"])
 @login_required
 async def admin_rebuild_cache():
-    """Delete storage_index.json and trigger a fresh full walk to rebuild it"""
+    """Start a cache rebuild in the background (returns at once; poll
+    /admin/rebuild_cache/status for the outcome)."""
     try:
         role = get_role(current_user())
         if role != "readwrite":
             return jsonify({"error": "Permission denied"}), 403
 
-        from file_monitor import get_file_monitor, CACHE_FILE
-        from file_index import file_index_manager, FILE_INDEX_PATH
-        import os
-
-        def _rebuild_cache_sync():
-            # Delete storage_index.json
-            if os.path.exists(CACHE_FILE):
-                os.remove(CACHE_FILE)
-                print(f"🗑️ Cache file deleted: {CACHE_FILE}")
-            else:
-                print("ℹ️ No cache file found — nothing to delete")
-
-            # Delete file_index.json
-            if os.path.exists(FILE_INDEX_PATH):
-                os.remove(FILE_INDEX_PATH)
-                file_index_manager.clear()
-                print(f"🗑️ File index deleted: {FILE_INDEX_PATH}")
-            else:
-                print("ℹ️ No file index found — nothing to delete")
-
-            # Trigger a fresh full reconciliation walk to rebuild both.
-            monitor = get_file_monitor()
-            print("🚶 Rebuilding cache from scratch...")
-            # force=True: an admin rebuild must be able to accept a genuinely
-            # empty tree (the automatic walks reject a suspect-empty result once).
-            applied = monitor._reconcile(force=True)
-
-            # 4.59: audit the freshly built file index against the disk
-            # (read-only, repair=False). Right after a walk this should report 0
-            # drifted; anything else means files changed during the rebuild.
-            audit = None
-            try:
-                audit = file_index_manager.verify_all(repair=False)
-            except Exception as _ve:
-                print(f"⚠️ file index verify failed: {_ve}")
-            return monitor, applied, audit
-
-        # This deletes files and runs a full recursive filesystem walk —
-        # previously ran directly on the event loop thread (no threading.Thread,
-        # no asyncio.to_thread), so clicking "Rebuild Cache" froze the ENTIRE
-        # app for every connected user for the whole walk duration, same class
-        # of bug as the ~34 other blocking call sites already fixed elsewhere.
-        monitor, applied, audit = await asyncio.to_thread(_rebuild_cache_sync)
-        if not applied:
-            return (
-                jsonify(
-                    {
-                        "error": "Rebuild walk did not complete (root unreadable?) — "
-                        "previous index kept; see the server log"
-                    }
-                ),
-                500,
+        with _rebuild_state_lock:
+            if _rebuild_state["state"] == "running":
+                return (
+                    jsonify(
+                        {
+                            "error": "A cache rebuild is already running",
+                            "running": True,
+                            "started_at": _rebuild_state["started_at"],
+                        }
+                    ),
+                    409,
+                )
+            _rebuild_state.update(
+                state="running",
+                started_at=time.time(),
+                finished_at=None,
+                message="",
+                error="",
             )
-        from realtime_stats import trigger_storage_update
-
-        trigger_storage_update(None, monitor.get_current_snapshot())
-
-        fi_stats = file_index_manager.get_stats()
+        threading.Thread(
+            target=_rebuild_cache_worker, name="rebuild-cache", daemon=True
+        ).start()
         return (
             jsonify(
                 {
                     "success": True,
-                    "message": (
-                        f"Cache cleared and rebuilt: {monitor._file_count:,} files, "
-                        f"{monitor._dir_count:,} dirs, {len(monitor._dir_info):,} folders indexed. "
-                        f'File index: {fi_stats["indexed_folders"]:,} large folder(s) indexed '
-                        f'({fi_stats["total_entries"]:,} entries, threshold={fi_stats["threshold"]})'
-                        + (
-                            f'. Verified {audit["checked"]:,} indexed folder(s) against disk: '
-                            f'{audit["drifted"]:,} drifted, {audit["unreadable"]:,} unreadable'
-                            if audit
-                            else ""
-                        )
-                    ),
+                    "started": True,
+                    "message": "Cache rebuild started in the background",
                 }
             ),
-            200,
+            202,
         )
 
     except Exception as e:
-        print(f"❌ Error during cache cleanup: {e}")
+        print(f"❌ Error starting cache rebuild: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/rebuild_cache/status", methods=["GET"])
+@login_required
+async def admin_rebuild_cache_status():
+    """Outcome of the last/current Rebuild Cache: state idle|running|done|error."""
+    role = get_role(current_user())
+    if role != "readwrite":
+        return jsonify({"error": "Permission denied"}), 403
+    with _rebuild_state_lock:
+        snap = dict(_rebuild_state)
+    return jsonify(snap), 200
 
 
 @app.route("/admin/cleanup_chunks", methods=["POST"])

@@ -18,6 +18,7 @@ import json
 import time
 import threading
 import hashlib
+import functools
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Dict, Set, Optional, Callable
@@ -118,6 +119,13 @@ WALK_YIELD_SECONDS = 0.001
 # triggering another full walk.
 POST_WALK_DRAIN = 6.0  # seconds — enough for OS to drain ~100k queued events
 
+# 4.63: slow-path timing logs. A watchdog batch (first event -> SSE push) or a
+# single handler call slower than this is logged with a ⏱️ line so a slow
+# "I deleted files in Explorer, the stats took 5-10 s" report shows WHERE the
+# time went (handler work, folder re-index, SSE push, JSON save).
+SLOW_BATCH_LOG_SECS = 1.0
+SLOW_HANDLER_LOG_SECS = 1.0
+
 
 @dataclass
 class StorageSnapshot:
@@ -176,6 +184,30 @@ def _nonneg_int(value):
     return n if n >= 0 else None
 
 
+def _timed_handler(fn):
+    """4.63: time each watchdog handler call, add it to the monitor's per-batch
+    total and log the call when it is slower than SLOW_HANDLER_LOG_SECS."""
+
+    @functools.wraps(fn)
+    def wrapper(self, event):
+        t0 = time.perf_counter()
+        try:
+            return fn(self, event)
+        finally:
+            dt = time.perf_counter() - t0
+            try:
+                self.monitor._note_handler_time(dt)
+                if dt >= SLOW_HANDLER_LOG_SECS:
+                    print(
+                        f"⏱️ Slow watchdog handler {fn.__name__}: {dt:.2f}s "
+                        f"({os.path.basename(getattr(event, 'src_path', ''))})"
+                    )
+            except Exception:
+                pass
+
+    return wrapper
+
+
 class InstantFileEventHandler(FileSystemEventHandler):
     """
     Handles watchdog events.
@@ -220,6 +252,7 @@ class InstantFileEventHandler(FileSystemEventHandler):
             self.monitor.set_pending_reconcile()
 
     def _schedule_notify(self):
+        self.monitor._note_event()
         # Standard debounce: reset timer on every event.
         # BUT cap at max_wait=3s so continuous uploads still fire SSE periodically.
         with self.debounce_lock:
@@ -242,6 +275,7 @@ class InstantFileEventHandler(FileSystemEventHandler):
                 )
             self.debounce_timer.start()
 
+    @_timed_handler
     def on_created(self, event):
         # Skip hidden files/dirs (matches _full_walk) and anything inside .chunks
         _name = os.path.basename(event.src_path)
@@ -305,11 +339,11 @@ class InstantFileEventHandler(FileSystemEventHandler):
         # --- file index: re-scan the parent folder (outside monitor lock) ---
         _parent_abs = os.path.dirname(event.src_path)
         _parent_rel = _rel(_parent_abs, str(self.monitor.root_path))
-        file_index_manager.update_folder(_parent_rel, _parent_abs)
+        self.monitor.mark_folder_dirty(_parent_rel, _parent_abs)
         # If a new subdirectory was created, seed it in the index (starts empty,
         # update_folder will skip it; it will be added once it exceeds threshold)
         if event.is_directory:
-            file_index_manager.update_folder(src_rel, event.src_path)
+            self.monitor.mark_folder_dirty(src_rel, event.src_path)
 
         # --- search index: add the new entry ---
         _entry_name = os.path.basename(event.src_path)
@@ -321,6 +355,7 @@ class InstantFileEventHandler(FileSystemEventHandler):
 
         self._schedule_notify()
 
+    @_timed_handler
     def on_deleted(self, event):
         # Skip hidden files/dirs (matches _full_walk) and anything inside .chunks
         _name = os.path.basename(event.src_path)
@@ -403,11 +438,11 @@ class InstantFileEventHandler(FileSystemEventHandler):
             # Parent folder lost one entry — re-scan it
             _parent_abs = os.path.dirname(event.src_path)
             _parent_rel = _rel(_parent_abs, str(self.monitor.root_path))
-            file_index_manager.update_folder(_parent_rel, _parent_abs)
+            self.monitor.mark_folder_dirty(_parent_rel, _parent_abs)
         else:
             _parent_abs = os.path.dirname(event.src_path)
             _parent_rel = _rel(_parent_abs, str(self.monitor.root_path))
-            file_index_manager.update_folder(_parent_rel, _parent_abs)
+            self.monitor.mark_folder_dirty(_parent_rel, _parent_abs)
 
         # --- search index: remove the deleted entry ---
         if event.is_directory:
@@ -417,6 +452,7 @@ class InstantFileEventHandler(FileSystemEventHandler):
 
         self._schedule_notify()
 
+    @_timed_handler
     def on_moved(self, event):
         # Skip hidden files/dirs (matches _full_walk) and pure .chunks-to-.chunks moves
         _src_name = os.path.basename(event.src_path)
@@ -497,17 +533,17 @@ class InstantFileEventHandler(FileSystemEventHandler):
             _dest_parent_abs = os.path.dirname(event.dest_path)
             _src_parent_rel = _rel(_src_parent_abs, str(self.monitor.root_path))
             _dest_parent_rel = _rel(_dest_parent_abs, str(self.monitor.root_path))
-            file_index_manager.update_folder(_src_parent_rel, _src_parent_abs)
+            self.monitor.mark_folder_dirty(_src_parent_rel, _src_parent_abs)
             if _src_parent_rel != _dest_parent_rel:
-                file_index_manager.update_folder(_dest_parent_rel, _dest_parent_abs)
+                self.monitor.mark_folder_dirty(_dest_parent_rel, _dest_parent_abs)
         else:
             _src_parent_abs = os.path.dirname(event.src_path)
             _dest_parent_abs = os.path.dirname(event.dest_path)
             _src_parent_rel = _rel(_src_parent_abs, str(self.monitor.root_path))
             _dest_parent_rel = _rel(_dest_parent_abs, str(self.monitor.root_path))
-            file_index_manager.update_folder(_src_parent_rel, _src_parent_abs)
+            self.monitor.mark_folder_dirty(_src_parent_rel, _src_parent_abs)
             if _src_parent_rel != _dest_parent_rel:
-                file_index_manager.update_folder(_dest_parent_rel, _dest_parent_abs)
+                self.monitor.mark_folder_dirty(_dest_parent_rel, _dest_parent_abs)
 
         # --- search index: rename the moved entry or tree ---
         _dest_name = os.path.basename(event.dest_path)
@@ -571,6 +607,16 @@ class FileSystemMonitor:
         # 4.59 cache-validation state
         # 4.62: exactly one reconcile walk at a time. A request that was made
         # BEFORE the last applied walk started is satisfied by that walk.
+        # 4.63: folders whose file-index record must be re-scanned. The handlers only
+        # MARK a parent dirty; one re-scan per folder happens in _notify_and_save
+        # (deleting 500 files in a 20k-entry folder used to do 500 full scans).
+        # get_entries() re-validates by folder mtime on every read, so a read that
+        # arrives before the flush still gets a fresh listing.
+        self._dirty_lock = threading.Lock()
+        self._dirty_folders: Dict[str, str] = {}
+        self._batch_first_ts: Optional[float] = None
+        self._batch_events: int = 0
+        self._batch_handler_secs: float = 0.0
         self._walk_lock = threading.Lock()
         self._walk_started_at: float = 0.0  # time.monotonic() of the last walk start
         self._walk_applied: bool = False  # that walk's result was applied
@@ -1340,20 +1386,82 @@ class FileSystemMonitor:
     # Notify + save (called after debounce)
     # ------------------------------------------------------------------
 
+    # -- 4.63 helpers: deferred folder re-index + per-batch timing ----------
+
+    def mark_folder_dirty(self, rel_path: str, abs_path: str):
+        """Called by the watchdog handlers instead of an immediate
+        file_index_manager.update_folder() (a full scandir of the folder)."""
+        with self._dirty_lock:
+            self._dirty_folders[rel_path] = abs_path
+
+    def _flush_dirty_folders(self):
+        """Re-scan every marked folder once. Returns (folders, seconds)."""
+        with self._dirty_lock:
+            items = list(self._dirty_folders.items())
+            self._dirty_folders.clear()
+        t0 = time.perf_counter()
+        for rel, abs_p in items:
+            try:
+                file_index_manager.update_folder(rel, abs_p)
+            except Exception as e:
+                print(f"⚠️ File index re-scan of '{rel}' failed: {e}")
+        return len(items), time.perf_counter() - t0
+
+    def _note_event(self):
+        with self._dirty_lock:
+            if self._batch_first_ts is None:
+                self._batch_first_ts = time.time()
+            self._batch_events += 1
+
+    def _note_handler_time(self, secs: float):
+        with self._dirty_lock:
+            self._batch_handler_secs += secs
+
     def _notify_and_save(self):
         # Skip SSE push if suppressed — the hard settle timer will push after SETTLE_DELAY
         if self._pending_reconcile:
             return
 
+        t_start = time.perf_counter()
+        with self._dirty_lock:
+            first_ts = self._batch_first_ts
+            n_events = self._batch_events
+            handler_secs = self._batch_handler_secs
+            self._batch_first_ts = None
+            self._batch_events = 0
+            self._batch_handler_secs = 0.0
+
         old_snapshot = self.last_snapshot
         new_snapshot = self._build_snapshot()
         self.last_snapshot = new_snapshot
-        self._save_cache()
+
+        # 4.63: push the SSE update FIRST. It used to come after _save_cache(),
+        # i.e. after a whole-file rewrite + fsync of storage_index.json and
+        # file_index.json on the HDD, so the browser waited for the disk.
         if old_snapshot:
             self._notify_changes(old_snapshot, new_snapshot)
             print(
                 f"📊 Notified: files={new_snapshot.file_count:,}, "
                 f"dirs={new_snapshot.dir_count:,}"
+            )
+        push_ts = time.time()
+        t_pushed = time.perf_counter()
+
+        n_dirty, flush_secs = self._flush_dirty_folders()
+        t_flushed = time.perf_counter()
+        self._save_cache()
+        t_saved = time.perf_counter()
+
+        latency = (push_ts - first_ts) if first_ts else 0.0
+        if (
+            latency >= SLOW_BATCH_LOG_SECS
+            or (t_saved - t_pushed) >= SLOW_BATCH_LOG_SECS
+        ):
+            print(
+                f"⏱️ Watchdog batch: {n_events} event(s); first event → SSE push "
+                f"{latency:.2f}s (handlers {handler_secs:.2f}s total, snapshot+push "
+                f"{t_pushed - t_start:.2f}s); {n_dirty} folder(s) re-indexed in "
+                f"{flush_secs:.2f}s; save {t_saved - t_flushed:.2f}s"
             )
 
     # ------------------------------------------------------------------
