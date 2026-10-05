@@ -21,7 +21,7 @@ import threading
 from typing import Set
 from dataclasses import asdict
 
-from quart import Response
+from quart import Response, request
 
 
 class StorageStatsEventManager:
@@ -56,6 +56,8 @@ class StorageStatsEventManager:
         walk_progress: bool = False,
         changed_dirs=None,
         changed_dirs_truncated: bool = False,
+        change_seq=None,
+        seq_epoch=None,
     ):
         """Broadcast storage stats update to all connected clients.
 
@@ -129,6 +131,9 @@ class StorageStatsEventManager:
             if changed_dirs is not None:
                 update_data["changed_dirs"] = list(changed_dirs)
                 update_data["changed_dirs_truncated"] = bool(changed_dirs_truncated)
+            if change_seq is not None:  # 4.67: lets the client ask for a catch-up
+                update_data["change_seq"] = change_seq
+                update_data["seq_epoch"] = seq_epoch
 
             self.last_stats = update_data
 
@@ -151,7 +156,9 @@ class StorageStatsEventManager:
         except Exception as e:
             print(f"❌ Error broadcasting update: {e}")
 
-    def broadcast_activity(self, changed_dirs, truncated: bool = False):
+    def broadcast_activity(
+        self, changed_dirs, truncated: bool = False, seq=None, epoch=None
+    ):
         """4.64: tell every client WHICH folders changed without any counters
         (sent while a reconcile walk is running and the counters are frozen).
         Safe to call from any thread."""
@@ -162,6 +169,9 @@ class StorageStatsEventManager:
                 "changed_dirs": list(changed_dirs),
                 "changed_dirs_truncated": bool(truncated),
             }
+            if seq is not None:  # 4.67
+                update_data["change_seq"] = seq
+                update_data["seq_epoch"] = epoch
             with self.lock:
                 clients_snapshot = list(self.clients)
                 loop = self.loop
@@ -248,7 +258,14 @@ event_manager = StorageStatsEventManager()
 async def storage_stats_sse():
     """Server-Sent Events endpoint for real-time storage stats — async
     generator streamed via Hypercorn (HTTP/1.1 chunked, or native DATA
-    frames under HTTP/2 and HTTP/3 — no special headers needed for either)."""
+    frames under HTTP/2 and HTTP/3 — no special headers needed for either).
+
+    4.67: optional query string ?last_seq=N&seq_epoch=E (the last batch number the
+    browser saw). If something newer exists the stream sends ONE catch-up
+    fs_activity message right after the initial stats, so a tab that was hidden or
+    lost its stream learns which folders changed meanwhile."""
+    last_seq = request.args.get("last_seq", type=int)
+    seq_epoch = request.args.get("seq_epoch")
 
     async def event_stream():
         client_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
@@ -304,10 +321,35 @@ async def storage_stats_sse():
                 },
             }
 
+            if last_seq is None:
+                # a brand-new client learns the current batch number; a returning
+                # one gets it from the catch-up message / the next batch instead
+                initial_stats.update(file_monitor.seq_info())
+
             print(
                 f"📡 Sending instant initial storage stats to new client: files={initial_stats['data']['file_count']}, total_space={initial_stats['data']['total_space']}"
             )
             yield f"data: {json.dumps(initial_stats)}\n\n".encode("utf-8")
+
+            if last_seq is not None:
+                info = file_monitor.changes_since(last_seq, seq_epoch)
+                if info["changed"]:
+                    catch_up = {
+                        "type": "fs_activity",
+                        "catch_up": True,
+                        "timestamp": time.time(),
+                        "changed_dirs": info["dirs"],
+                        "changed_dirs_truncated": bool(
+                            info["everything"] or info["truncated"]
+                        ),
+                        "change_seq": info["change_seq"],
+                        "seq_epoch": info["seq_epoch"],
+                    }
+                    print(
+                        f"📡 Catch-up for returning client: everything={info['everything']}, "
+                        f"{len(info['dirs'])} folder(s)"
+                    )
+                    yield f"data: {json.dumps(catch_up)}\n\n".encode("utf-8")
 
             # Keep connection alive and send updates
             while True:
@@ -349,6 +391,8 @@ def trigger_storage_update(
     walk_progress: bool = False,
     changed_dirs=None,
     changed_dirs_truncated: bool = False,
+    change_seq=None,
+    seq_epoch=None,
 ):
     """Callback function to be registered with file monitor"""
     event_manager.broadcast_update(
@@ -358,12 +402,14 @@ def trigger_storage_update(
         walk_progress=walk_progress,
         changed_dirs=changed_dirs,
         changed_dirs_truncated=changed_dirs_truncated,
+        change_seq=change_seq,
+        seq_epoch=seq_epoch,
     )
 
 
-def trigger_fs_activity(changed_dirs, truncated: bool = False):
-    """Callback for FileSystemMonitor.add_activity_callback (4.64)."""
-    event_manager.broadcast_activity(changed_dirs, truncated)
+def trigger_fs_activity(changed_dirs, truncated: bool = False, seq=None, epoch=None):
+    """Callback for FileSystemMonitor.add_activity_callback (4.64; seq/epoch 4.67)."""
+    event_manager.broadcast_activity(changed_dirs, truncated, seq, epoch)
 
 
 def get_event_manager():

@@ -5152,6 +5152,7 @@ async def storage_stats_poll():
                 },
             }
 
+            response_data.update(file_monitor.seq_info())  # 4.67: baseline for last_seq
             print(f"📊 Instant polling response: files={file_count}, dirs={dir_count}")
             return jsonify(response_data), 200
 
@@ -5204,6 +5205,38 @@ async def storage_stats_poll():
                     "mtime_changed": True,  # Modification time changed
                 }
 
+        # 4.67: a client that sends last_seq gets change detection from the monitor's
+        # change sequence instead of "the snapshot is newer than last_check" (that was
+        # true after EVERY batch and made polling mode refresh the table non-stop).
+        # changed / content_changed are true only when something really changed, and
+        # the folders that changed ride along as changed_dirs. Old clients (no
+        # last_seq) keep the previous behaviour above.
+        seq_extra = {}
+        seq_arg = request.args.get("last_seq", type=int)
+        if seq_arg is not None and current_snapshot:
+            info = file_monitor.changes_since(seq_arg, request.args.get("seq_epoch"))
+            lf = request.args.get("last_files", type=int, default=0)
+            ld = request.args.get("last_dirs", type=int, default=0)
+            ls = request.args.get("last_size", type=int, default=0)
+            files_diff = current_snapshot.file_count - lf if lf > 0 else 0
+            dirs_diff = current_snapshot.dir_count - ld if ld > 0 else 0
+            size_diff = current_snapshot.total_size - ls if ls > 0 else 0
+            counts_moved = bool(files_diff or dirs_diff or size_diff)
+            has_changes = bool(info["changed"] or counts_moved)
+            changes_data = {
+                "files_changed": files_diff,
+                "dirs_changed": dirs_diff,
+                "size_changed": size_diff,
+                "content_changed": counts_moved,
+                "mtime_changed": False,
+            }
+            seq_extra = {
+                "change_seq": info["change_seq"],
+                "seq_epoch": info["seq_epoch"],
+                "changed_dirs": info["dirs"],
+                "changed_dirs_truncated": bool(info["everything"] or info["truncated"]),
+            }
+
         # Debug logging for timestamp comparison
         print(
             f"📊 Polling debug: last_check={last_check}, snapshot_timestamp={current_snapshot.timestamp if current_snapshot else 'None'}, has_changes={has_changes}"
@@ -5234,6 +5267,8 @@ async def storage_stats_poll():
             },
         }
 
+        # a client without last_seq still gets a baseline, so its NEXT poll can use it
+        response_data.update(seq_extra or file_monitor.seq_info())
         print(
             f"📊 Polling response: changed={has_changes}, files={response_data['data']['file_count']}"
         )

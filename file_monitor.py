@@ -19,6 +19,7 @@ import time
 import threading
 import hashlib
 import functools
+from collections import deque
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Dict, Set, Optional, Callable
@@ -139,6 +140,9 @@ MAX_CORRECT_FOLDERS = 400
 # Max folder paths put into one SSE message (the browser refreshes anyway when
 # the list was truncated).
 MAX_CHANGED_DIRS_SENT = 300
+# 4.67: how many recent notified batches are remembered so a client that was away
+# (hidden tab, dropped stream, polling) can be told which folders changed.
+CHANGE_RING_SIZE = 500
 
 # 4.65: storage_index.json / file_index.json are written only when their content
 # really changed (digest of the serialised data), and at most once per interval
@@ -802,6 +806,14 @@ class FileSystemMonitor:
         self._batch_events: int = 0
         self._batch_handler_secs: float = 0.0
         self.activity_callbacks: list = []  # 4.64: fn(changed_dirs, truncated)
+        # 4.67: every notified batch gets a sequence number; a bounded ring keeps the
+        # changed folders of the last CHANGE_RING_SIZE batches. seq_epoch changes on
+        # every server start so a client can tell that its last number is from an
+        # earlier run.
+        self._seq_lock = threading.Lock()
+        self._change_seq: int = 0
+        self._seq_epoch: int = int(time.time() * 1000)
+        self._change_ring: deque = deque(maxlen=CHANGE_RING_SIZE)
         # 4.65: save only when changed + rate limit; ignore the app's own folders
         self._last_saved_digest: Optional[str] = None
         self._last_save_ts: float = -1e9
@@ -846,6 +858,80 @@ class FileSystemMonitor:
         with self.lock:
             self.change_callbacks.discard(callback)
 
+    def _record_change(self, changed_dirs, everything: bool = False) -> int:
+        """4.67: give a notified batch the next sequence number. `everything` marks a
+        batch whose folder list is incomplete (truncated) or meaningless (a finished
+        walk): a client that missed it must refresh everything."""
+        with self._seq_lock:
+            self._change_seq += 1
+            self._change_ring.append(
+                (self._change_seq, tuple(changed_dirs or ()), bool(everything))
+            )
+            return self._change_seq
+
+    def seq_info(self) -> dict:
+        """Current sequence number + epoch (a baseline for a new client)."""
+        with self._seq_lock:
+            return {"change_seq": self._change_seq, "seq_epoch": self._seq_epoch}
+
+    def changes_since(self, last_seq, epoch=None) -> dict:
+        """4.67: what happened after the batch numbered `last_seq`?
+
+        Returns {change_seq, seq_epoch, changed, everything, dirs, truncated}:
+          changed    - anything newer than last_seq exists
+          everything - the client must refresh everything (it is further behind than
+                       the ring remembers, the server restarted since its last
+                       message, a walk finished meanwhile, or a batch had a truncated
+                       folder list)
+          dirs       - union of the changed folders (at most MAX_CHANGED_DIRS_SENT)
+          truncated  - dirs was cut"""
+        with self._seq_lock:
+            cur = self._change_seq
+            ep = self._seq_epoch
+            ring = list(self._change_ring)
+        out = {
+            "change_seq": cur,
+            "seq_epoch": ep,
+            "changed": False,
+            "everything": False,
+            "dirs": [],
+            "truncated": False,
+        }
+        try:
+            last = int(last_seq)
+        except (TypeError, ValueError):
+            last = None
+        if last is None or last < 0:
+            out.update(changed=True, everything=True)
+            return out
+        if epoch is not None and str(epoch) != str(ep):
+            out.update(changed=True, everything=True)  # server restarted
+            return out
+        if last == cur:
+            return out
+        if last > cur:
+            out.update(changed=True, everything=True)  # cannot happen in one epoch
+            return out
+        oldest = ring[0][0] if ring else cur + 1
+        if last + 1 < oldest:
+            out.update(
+                changed=True, everything=True
+            )  # missed batches fell out of the ring
+            return out
+        dirs = set()
+        for seq, ds, everything in ring:
+            if seq <= last:
+                continue
+            if everything:
+                out.update(changed=True, everything=True)
+                return out
+            dirs.update(ds)
+        lst = sorted(dirs)
+        out["changed"] = True
+        out["dirs"] = lst[:MAX_CHANGED_DIRS_SENT]
+        out["truncated"] = len(lst) > MAX_CHANGED_DIRS_SENT
+        return out
+
     def _notify_changes(
         self,
         old_snapshot: StorageSnapshot,
@@ -857,47 +943,69 @@ class FileSystemMonitor:
     ):
         with self.lock:
             callbacks = list(self.change_callbacks)
+        # 4.67: number every batch a client can act on (walk-progress ticks carry
+        # no folder information and are not numbered).
+        seq = None
+        if not walk_progress:
+            if reconcile_complete:
+                seq = self._record_change((), True)
+            elif changed_dirs is not None:
+                seq = self._record_change(changed_dirs, changed_dirs_truncated)
         extra = {}
         if changed_dirs is not None:
             extra = {
                 "changed_dirs": changed_dirs,
                 "changed_dirs_truncated": changed_dirs_truncated,
             }
+        if seq is not None:
+            extra["change_seq"] = seq
+            extra["seq_epoch"] = self._seq_epoch
+        # Newest signature first, then older callbacks: one that knows changed_dirs
+        # but not change_seq (4.64), then one with only the walk flags, then the
+        # original (old, new) form.
+        dirs_only = {k: v for k, v in extra.items() if k.startswith("changed_dirs")}
+        attempts = [extra]
+        if dirs_only != extra:
+            attempts.append(dirs_only)
+        if dirs_only:
+            attempts.append({})
         for cb in callbacks:
             try:
-                try:
-                    cb(
-                        old_snapshot,
-                        new_snapshot,
-                        reconcile_complete=reconcile_complete,
-                        walk_progress=walk_progress,
-                        **extra,
-                    )
-                except TypeError:
+                delivered = False
+                for kw in attempts:
                     try:
                         cb(
                             old_snapshot,
                             new_snapshot,
                             reconcile_complete=reconcile_complete,
                             walk_progress=walk_progress,
+                            **kw,
                         )
+                        delivered = True
+                        break
                     except TypeError:
-                        cb(old_snapshot, new_snapshot)
+                        continue
+                if not delivered:
+                    cb(old_snapshot, new_snapshot)
             except Exception as e:
                 print(f"❌ Error in change callback: {e}")
 
     def add_activity_callback(self, cb):
-        """4.64: cb(changed_dirs: list[str], truncated: bool) is called when files
-        changed but no counters are pushed (walk/drain in progress)."""
+        """4.64: cb(changed_dirs: list[str], truncated: bool[, seq, epoch]) is called
+        when files changed but no counters are pushed (walk/drain in progress)."""
         with self.lock:
             self.activity_callbacks.append(cb)
 
     def _notify_activity(self, changed_dirs, truncated):
+        seq = self._record_change(changed_dirs, truncated)  # 4.67
         with self.lock:
             callbacks = list(self.activity_callbacks)
         for cb in callbacks:
             try:
-                cb(changed_dirs, truncated)
+                try:
+                    cb(changed_dirs, truncated, seq, self._seq_epoch)
+                except TypeError:
+                    cb(changed_dirs, truncated)
             except Exception as e:
                 print(f"❌ Error in activity callback: {e}")
 

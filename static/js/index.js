@@ -9892,6 +9892,22 @@ function _startManageSharedBadgePolling() {
     _startShareEventsStream();
 }
 
+// 4.67: paused while the tab stays hidden (see _pauseLiveStreams); on return the badge
+// is polled once and the stream reopened.
+let _shareStreamPaused = false;
+function _pauseShareEventsStream() {
+    if (!_shareEventsSource) return;   // not running (or already in fallback polling)
+    try { _shareEventsSource.close(); } catch (e) { }
+    _shareEventsSource = null;
+    _shareStreamPaused = true;
+}
+function _resumeShareEventsStream() {
+    if (!_shareStreamPaused) return;
+    _shareStreamPaused = false;
+    _pollManageSharedBadge();          // catch up on anything missed while paused
+    _startShareEventsStream();
+}
+
 function _startShareEventsStream() {
     if (typeof EventSource === 'undefined') {
         _fallBackToBadgePolling();
@@ -11473,6 +11489,11 @@ let pollingInterval = null;
 let pollingEnabled = false;
 let lastPollingCheck = 0;
 let sseFailedPermanently = false;
+// 4.67: the last change batch this tab has seen (number + server epoch) and the last
+// total size, so a returning stream or a poll can ask "what changed since?".
+let lastChangeSeq = null;
+let lastSeqEpoch = null;
+let lastKnownTotalSize = null;
 
 // MANUAL TIMING CONTROLS - Edit these for instant loading
 const INSTANT_LOAD_SETTINGS = {
@@ -11664,7 +11685,12 @@ function connectToStorageStream() {
         // Create EventSource with credentials to include session cookies.
         // Everything below uses the local `es`, never the shared variable, and
         // ignores events from a stream that has since been replaced.
-        const es = new EventSource('/api/storage_stats_stream', { withCredentials: true });
+        // 4.67: a returning tab tells the server the last batch it saw; the server then
+        // sends one catch-up message if anything newer exists.
+        const seqQuery = (lastChangeSeq !== null && lastSeqEpoch !== null)
+            ? `?last_seq=${encodeURIComponent(lastChangeSeq)}&seq_epoch=${encodeURIComponent(lastSeqEpoch)}`
+            : '';
+        const es = new EventSource('/api/storage_stats_stream' + seqQuery, { withCredentials: true });
         storageEventSource = es;
         const isCurrent = () => es === storageEventSource;
 
@@ -11820,7 +11846,13 @@ async function performPollingCheck() {
         const currentFiles = lastKnownFileCount || 0;
         const currentDirs = lastKnownDirCount || 0;
 
-        const response = await fetch(`/api/storage_stats_poll?last_check=${lastPollingCheck}&last_files=${currentFiles}&last_dirs=${currentDirs}`, {
+        let pollUrl = `/api/storage_stats_poll?last_check=${lastPollingCheck}&last_files=${currentFiles}&last_dirs=${currentDirs}`;
+        if (lastChangeSeq !== null && lastSeqEpoch !== null) {
+            // 4.67: the server then reports a change only when something changed
+            // and says which folders (changed_dirs), like the SSE stream does
+            pollUrl += `&last_seq=${encodeURIComponent(lastChangeSeq)}&seq_epoch=${encodeURIComponent(lastSeqEpoch)}&last_size=${lastKnownTotalSize || 0}`;
+        }
+        const response = await fetch(pollUrl, {
             method: 'GET',
             cache: 'no-cache',
             headers: {
@@ -11844,6 +11876,7 @@ async function performPollingCheck() {
 
         // Update last check timestamp
         lastPollingCheck = data.timestamp;
+        _noteChangeSeq(data);   // 4.67: keep the baseline even when nothing changed
 
         // Handle the data same way as SSE
         if (data.changed || !window.storageStatsInitialized) {
@@ -11856,6 +11889,14 @@ async function performPollingCheck() {
                 initial: !window.storageStatsInitialized,
                 data: data.data
             };
+            if (data.change_seq !== undefined) {   // 4.67
+                sseData.change_seq = data.change_seq;
+                sseData.seq_epoch = data.seq_epoch;
+            }
+            if (Array.isArray(data.changed_dirs)) {
+                sseData.changed_dirs = data.changed_dirs;
+                sseData.changed_dirs_truncated = !!data.changed_dirs_truncated;
+            }
 
             handleStorageUpdate(sseData);
             window.storageStatsInitialized = true;
@@ -11876,6 +11917,64 @@ function stopPolling() {
         console.log('🛑 Polling stopped');
     }
 }
+
+// 4.67: remember the newest change batch this tab has seen.
+function _noteChangeSeq(data) {
+    if (!data || typeof data.change_seq !== 'number') return;
+    lastChangeSeq = data.change_seq;
+    if (data.seq_epoch !== undefined && data.seq_epoch !== null) lastSeqEpoch = data.seq_epoch;
+}
+
+// 4.67: a tab that stays hidden does not need live streams. Browsers freeze or
+// throttle background tabs and HTTP/3 resets the long-lived streams (that is where
+// the ERR_QUIC_PROTOCOL_ERROR lines came from), so after a while hidden the storage
+// stream, the polling fallback and the shares stream are closed. On return the
+// storage stream reconnects with last_seq (the server replays what changed) and the
+// shares badge is polled once.
+const STREAM_PAUSE_AFTER_HIDDEN_MS = 45000;
+let _streamPauseTimer = null;
+let _streamsPaused = false;
+
+function _pauseLiveStreams() {
+    _streamPauseTimer = null;
+    if (!document.hidden) return;
+    if (isUploading) {            // never pause while an upload is running
+        _streamPauseTimer = setTimeout(_pauseLiveStreams, 30000);
+        return;
+    }
+    _streamsPaused = true;
+    console.debug('⏸️ Tab hidden - pausing live streams');
+    if (_sseReconnectTimer) { clearTimeout(_sseReconnectTimer); _sseReconnectTimer = null; }
+    if (_sseRetryTimer) { clearTimeout(_sseRetryTimer); _sseRetryTimer = null; }
+    if (storageEventSource) {
+        try { storageEventSource.close(); } catch (e) { }
+        storageEventSource = null;
+    }
+    stopPolling();
+    connectionStatus = 'paused';
+    if (typeof _pauseShareEventsStream === 'function') _pauseShareEventsStream();
+}
+
+function _resumeLiveStreams() {
+    if (_streamPauseTimer) { clearTimeout(_streamPauseTimer); _streamPauseTimer = null; }
+    if (!_streamsPaused) return;
+    _streamsPaused = false;
+    console.log('▶️ Tab visible - resuming live streams');
+    reconnectAttempts = 0;
+    sseFailedPermanently = false;
+    connectToStorageStream();      // sends last_seq: the server replays what was missed
+    if (typeof _resumeShareEventsStream === 'function') _resumeShareEventsStream();
+}
+
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        if (!_streamPauseTimer && !_streamsPaused) {
+            _streamPauseTimer = setTimeout(_pauseLiveStreams, STREAM_PAUSE_AFTER_HIDDEN_MS);
+        }
+    } else {
+        _resumeLiveStreams();
+    }
+});
 
 // 4.66: what does a batch of changed folders (changed_dirs = folders whose DIRECT
 // entries changed) mean for the folder on screen?
@@ -11976,7 +12075,7 @@ function _scheduleSseUpdate(listing, cells) {
 function _scheduleSseTableRefresh() { _scheduleSseUpdate(true, new Set()); }
 
 function handleStorageUpdate(data) {
-
+    _noteChangeSeq(data);   // 4.67
 
     switch (data.type) {
         case 'connected':
@@ -12005,6 +12104,9 @@ function handleStorageUpdate(data) {
                 }
                 if (data.data.dir_count !== undefined) {
                     lastKnownDirCount = data.data.dir_count;
+                }
+                if (data.data.total_size !== undefined) {
+                    lastKnownTotalSize = data.data.total_size;   // 4.67: sent with polls
                 }
 
                 // ── Walk-progress event ────────────────────────────────────────────
@@ -12179,14 +12281,20 @@ function handleStorageUpdate(data) {
             }
             break;
 
-        case 'fs_activity':
+        case 'fs_activity': {
             // 4.64: files changed while a reconcile walk is running (counters are
             // frozen then). Refresh the listing if the folder on screen is affected;
             // folder-size cells are refreshed when the walk completes.
-            if (!isUploading && !_mutationInFlight && _classifyChangedDirs(data).listing) {
-                _scheduleSseUpdate(true, new Set());
+            // 4.67: catch_up = the server telling a returning tab (hidden / dropped
+            // stream) what changed meanwhile. Not a walk, so the affected folder
+            // cells are re-read too (children null = everything on screen).
+            const cd = _classifyChangedDirs(data);
+            if (!isUploading && !_mutationInFlight) {
+                if (data.catch_up) _scheduleSseUpdate(cd.listing, cd.children);
+                else if (cd.listing) _scheduleSseUpdate(true, new Set());
             }
             break;
+        }
 
         case 'ping':
             // Keep-alive ping, just log it
