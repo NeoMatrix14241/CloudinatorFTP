@@ -1,7 +1,15 @@
 # CloudinatorFTP — Complete Codebase Reference for AI-Assisted Development
 
-**Version**: 4.67 (`file_monitor.py` + `realtime_stats.py` + `app.py` + `index.js`: every notified change batch gets a sequence number (`change_seq` + `seq_epoch`) and the last 500 batches are remembered, so a tab that was hidden, lost its stream or is in polling mode is told which folders changed instead of refreshing blindly (SSE catch-up via `?last_seq=`, polling via `last_seq`; polling now reports a change only when something changed); the browser closes the storage and shares live streams after 45 s hidden and reopens them with a catch-up on return; the Version Engine is untouched; `index.js`, `app.py`, `file_monitor.py` and `realtime_stats.py` changed, so re-run `./manage.sh validate-sri --fix` and restart; 2026-10-03) on top of 4.66 (`index.js` + `app.py`: folder size cells no longer flash or refetch on every watchdog batch, Rebuild Cache button survives a page refresh and its timer counts every second, SSE reconnect no longer throws `Cannot read properties of null`; `index.js` changed, so re-run `./manage.sh validate-sri --fix` and restart; 2026-10-03) on top of 4.65 (`file_monitor.py` + `file_index.py`: `storage_index.json` and `file_index.json` are rewritten only when their content really changed (content digest), at most once per 10 s while events keep coming, and events from hidden files and from the app's own cache/db/versions folders (when those lie inside the storage root) no longer wake the save cycle; no template, JS or `realtime_stats.py` change, so no SRI re-run is needed; 2026-10-03) on top of 4.64 (`file_monitor.py` + `app.py` + `realtime_stats.py` + `index.js`: files changed directly in the backend (Explorer, FTP/SFTP/SMB/WebDAV) now refresh the visible listing at once and have their counters corrected from disk within one debounce cycle instead of waiting for the 15-minute walk; moves/renames/edits are reported by folder (`changed_dirs`) because the totals do not change for them; walks skip NTFS junctions (the `My Music` warning); `/bulk_move` and `/bulk_copy` are background jobs polled through `GET /bulk_job/<id>` (no more Cloudflare 524); the page title no longer grows `(SSE)`; `index.js` and `realtime_stats.py` changed, so re-run `./manage.sh validate-sri --fix` and restart; 2026-10-03) on top of 4.63 (`file_monitor.py` + `app.py` + `index.js`: Rebuild Cache runs in the background and the button polls a new status route, so a proxy timeout (HTTP 524) no longer shows "Unexpected token"; the watchdog sends the SSE update before saving the JSON files, re-scans each changed folder once per debounce window instead of once per event, and logs slow batches with ⏱️ lines; `index.js` changed, so re-run `./manage.sh validate-sri --fix`; 2026-10-02) on top of 4.62 (`file_monitor.py` + `app.py`, comment-only edits in `file_index.py` and `storage.py`: the root folder's `dir_info` record no longer counts anything directly inside the root twice; `_reconcile()` runs one walk at a time with a generation-checked drain timer; `/bulk_move` no longer runs `shutil.move`/`rmtree`/`remove` on the event loop; stale "WebDAV subprocess runs its own monitor" comments corrected; no re-index or file deletion needed; 2026-10-02) on top of 4.61 (`file_index.py` only: `save()` now retries the `os.replace()` swap on Windows sharing violations like `storage_index.json` already did; `search_index.db` locking audited, not changed; 2026-10-02) on top of 4.60 (`app.py` only: web-UI move, rename and new-folder now trigger the background reconcile like delete/copy/upload already did, and `_trigger_reconcile()` coalesces overlapping requests into at most one running walk plus one queued follow-up; the 15-minute validation walk is unchanged; 2026-10-02) on top of 4.59 (`file_monitor.py` + `app.py`: `storage_index.json` is now validated on load (schema version, root path, counters, every `dir_info` record) and an aborted or suspect-empty walk can no longer overwrite good counters or the saved cache; reconcile logs per-folder drift; `/admin/rebuild_cache` now audits the file index with `verify_all()`; closes the open items of 4.58; no re-index or file deletion needed; 2026-10-02) on top of 4.58 (`file_index.py` only: `file_index.json` is now validated on load, on every read and on every walk, so the large-folder cache can no longer serve data that is stale after a restart or after a skipped watchdog event; the `storage_index.json` half (`file_monitor.py`) is NOT audited yet because that file was not available; no re-index or file deletion needed; 2026-10-02) on top of 4.57 (`static/js/bg_audio.js` only: background music now keeps retrying on every user gesture until the browser really lets it play, and a blocked autoplay no longer saves a false "paused" state; the 4 templates need their `integrity` hash recomputed (`./manage.sh validate-sri`, menu #21); 2026-10-02) on top of 4.56 (`manage.sh` gains `validate-sri` (runs `sri_validator.py`; menu #21 asks y/N to fix after a failed check, appended so no number shifts); `SERVER_MANAGEMENT_SCRIPT_GUIDE.md` updated; 2026-10-02) on top of 4.55 (`check_search_index.py` deleted by the owner (no longer needed); new `sri_validator.py` checks/repairs the SRI `integrity` hash of every local `<script src>`/`<link href>` in the templates; tooling only, no app code change; 2026-10-02) on top of 4.54 (frontend only: new optional background-music script `static/js/bg_audio.js` + `<audio id="bgMusic">` element added to `index.html`, `login.html`, `shared.html`, `404.html`; every new tag carries an SRI `integrity` hash; cosmetic feature, no backend change; 2026-10-02) on top of 4.53 (`search_index.py` + `file_monitor.py` + `app.py` + new `check_search_index.py`: search index kept correct after the first crawl — `reconcile_from_walk()` hooked into every `_full_walk`, `crawl_complete` marker so a half-built index is never trusted, DB keep-warm thread for the HDD cold-cache stalls, per-step `timing` in `/api/search`, dropped results now logged; owner's index found ~52% built and holding a stale path; 2026-10-01) on top of 4.52 (`app.py` + `search_index.py` + `webdav_server.py`: deep-search routes no longer block the event loop (`asyncio.to_thread`), event-loop stall watchdog, `fallback_reason` in `/api/search`, search crawler only in the main process, and `webdav_server.py` no longer re-runs all of `app.py` via `from app import get_local_ip` (now `from net_utils import get_local_ip`); root cause of the intermittent 20-53 s deep search NOT proven yet; 2026-10-01) on top of 4.51 (`app.py` + `static/js/index.js`: folder navigation no longer replays a cached 301-to-`/login` as "Session expired"; `validate_session` now returns 401 JSON to `/api/*`/XHR callers, `_lean_redirect()` sends `Cache-Control: no-store`, `navigateToFolder()` fetches with `cache:'no-store'`; 2026-10-01) on top of 4.50 (`static/js/index.js` only: deep-search FILE rows now open the Download options modal (Download current version / Version History) instead of downloading directly; column-header sorting now works on deep-search results; 2026-10-01) on top of 4.49 (CSS + `templates/index.html`: search-wrapper layout moved from an inline `style=""` into `.search-wrapper` in CSS because the CSP blocks unhashed inline styles — this was the real cause of the short search box and the floating icon; plus: `.search-row` `max-width` 800px -> 60vw, scales with the screen; the owner's local `min-width: 50vw !important` on `#tableSearch` is to be deleted; 2026-10-01) on top of 4.48 (`templates/index.html` only: removed the floating magnifier `<i>` inside `.search-wrapper` and the 🔍 emoji from the `#tableSearch` placeholder; 2026-10-01) on top of 4.47 (CSS only, `static/css/index.css`: `#tableSearch` left padding 45px -> 15px so text/placeholder start at the left edge; `.search-row` desktop `max-width` 480px -> 800px; the <=480px override is unchanged; 2026-09-30) on top of 4.46 (frontend: search no longer runs while typing — new Search button + Enter key trigger it; `static/js/index.js` + `templates/index.html` + `static/css/index.css`; 2026-09-30) on top of 4.45 (frontend, `static/js/index.js` only: the local-filter search highlight no longer turns into a full-width yellow bar — `smartTableColumnizer()` was restyling `span.search-highlight` with inline `!important` `display:block`; 2026-09-30) on top of 4.44 (frontend: deep search now starts at 3+ characters — 1-2 character terms only filter the current folder, `*.ext` terms still go deep; stale-response guard in `performDeepSearch()`; `index.html` placeholder/title say "3+"; `static/js/index.js` + `templates/index.html`; 2026-09-30) on top of 4.43 (backend fix in `search_index.py`: 1- and 2-character deep-search queries no longer return zero rows — the FTS5 trigram index cannot match under 3 characters, so short queries now use a parameterised `LIKE` on `files_meta`; `count()` now escapes `%`/`_` like the search does; no re-index needed; 2026-09-30) on top of 4.42 (search follow-up in `static/js/index.js`: highlight in FILE rows no longer splits the flex name cell; the "No results found" toast no longer fires while the local-filter fallback is showing a hit; 2026-09-30; the backend 2-char deep search was still open at 4.42 and is fixed in 4.43) on top of 4.41 (search-highlight fixes in `static/js/index.js` + `static/css/index.css`: full-width yellow bar, gaps inside highlighted words, broken markup on entity-like queries, `highlightSearchTerm()` wiping row icons; 2026-09-30) on top of 4.40 (deep search now uses true row windowing in `static/js/index.js`, replacing its append-only infinite scroll; `highlightText()` regex-escape fix; small `index.css` addition; 2026-09-30) on top of 4.39 (`manage.sh` WebDAV orphan-port sweep now follows `server_config.json`; docs clarify that background mode hides startup banners; 2026-09-30) on top of 4.38 (docs only: new `docs/MANAGE_SCRIPT_GUIDE.md` for `manage.sh`, README manage.sh section corrected, 2026-09-30; no code changes) on top of 4.37 (text-only code fixes: `webdav_server.py` startup message, `config.py` SMB comment + prompt; README Deployment Guides table completed; 2026-09-30; no logic changes) on top of 4.36 (docs only: WebDAV-HTTPS-by-default documentation sweep across README / RCLONE_DEPLOYMENT / USER_GUIDE / SETUP_TUNNEL_ADVANCED / SMB_PROTOCOL_DEPLOYMENT / CONFIG_PY_REFERENCE, 2026-09-30; no code changes) on top of 4.35 (docs only: `config.py` settings documentation audit, 2026-09-29; no code changes) on top of 4.34 (+ 2026-09-29 VT rubber-band ROOT-CAUSE fix in `static/js/index.js` + `static/css/index.css` — spacer height moved from the spacer `<tr>` (which `index.css`'s `#filesTable tbody tr{height:auto!important}` override can never lose to) onto its `<td>`, native scroll anchoring instead of JS `scrollTop` compensation, folder-row re-measure after `dir_info` loads; **reproduced and verified in real Chromium**; the two same-day CSP explanations that follow (4.33/4.32) are SUPERSEDED, see the part-8 sync note; earlier same-day entry, SUPERSEDED: 2026-09-29 VT spacer-height CSP fix in `static/js/index.js` — the two windowing spacer `<tr>`s had their dynamic height set via `tr.style.height = ...`, which this app's CSP silently blocks (`style-src-attr`'s precomputed hash allowlist can never match an arbitrary/changing px value); with spacer height never actually applied in a real browser, the wrapper's true scrollable area was far smaller than the windowing math assumed, and the browser clamped `scrollTop` back down on almost every layout pass — likely the dominant real cause of the "rubber band" bug, on top of the `_renderAll()` issue below. Fixed by inserting CSSOM rules into the already-CSP-permitted external stylesheet and mutating those instead of any element's `style` attribute; + 2026-09-29 VT scroll-position "rubber band" fix in `static/js/index.js` — `VT._renderAll()` briefly clears the table body on every refresh (SSE, polling, sort, filter, rename, not just real navigation), which collapses the wrapper's scrollable height and makes the browser clamp `scrollTop` back to 0 as a side effect; the scroll position is now captured before the clear and restored once the spacers give the wrapper its real height back, while `navigateToFolder()`'s own explicit `scrollTop = 0` still wins on real navigation; + 2026-09-28 VT row windowing / virtual scroll rewrite in `static/js/index.js` — replaces the append-only infinite-scroll table body with true windowed rendering, bounded DOM node count on folders with tens of thousands of entries; + 2026-09-28 Version History front-end restore/download loading state in `static/js/index.js`; + 2026-09-28 restore double-click guard + streaming version download: `version_history.py`, `version_engine.py`, `app.py`; 2026-09-28 write gate + storage_index.json WinError 32 fix: `_GatedConnection` in `version_engine.py`, unique-temp/locked `_save_cache` in `file_monitor.py`; 2026-09-28 follow-up: bounded GC transactions, transient-lock retry with self-requeue, `synchronous=NORMAL`, traceback logging; 2026-09-28 SQLite write-lock fix in `version_engine.py` — chunked captures no longer hold the write lock across chunk I/O, plus web-side lock-retry/error handling in `version_history.py`/`app.py`/`index.js`; 2026-09-28 Version History polish — "X of 50 versions kept" line, hide/clear failed attempts, Retry result shown inline, notification modal no longer hidden behind other modals; 2026-09-27 Version History web UI — `version_history.py`, five `/api/versions/*` routes + `/download/recovered/*`, Download-options/Version-History modals, Retry Now, plus three fixes found while verifying it: `call_on_close` doesn't exist in Quart, `/csrf-token` was unreachable anonymously, and `version_engine.py` was storing a generic "capture error" instead of the real exception; 2026-09-26 manage.sh integration for the Version Engine — `version-manage` inserted as menu #9, `config` moved to #10, everything else shifted down; `version_manage.py` gained a full interactive menu alongside its CLI subcommands, plus hardened Ctrl-C handling verified with real SIGINT delivery; 2026-09-25 new subsystem: Universal File Versioning Engine — `version_engine.py`, `version_manage.py`, plus `config.py`/`paths.py`/`dev_server.py`/`prod_server.py` changes; 2026-09-24 WebDAV client-IP trust-chain fix, confirmed tunneled on 8443; 2026-09-24 WebDAV audit logging + client-IP attribution for TLS-teardown errors; 2026-09-24 SFTP/FTP/SMB audit logging, SFTP upload flag bug fix; 2026-09-23 app.py client-IP logging change; 2026-09-22 database.py verification pass; 2026-09-21 ops-tooling sync: manage.sh, setup_pymodules.sh, revoke_sharing.py; earlier 2026-08-28 protocol-hardening, route-sync, and video-skin-overrides.css notes) | **Last Updated**: 2026-10-02  
+**Version**: 4.68 (docs + `tests/refactor/` only, NO application code changed: the `app.py` split is planned and mapped (new section "app.py SPLIT MAP" above the Table of Contents), with one automated test script per phase, a frozen baseline of the pristine `app.py` and a handoff script; no restart and no `validate-sri` re-run needed; 2026-10-06) on top of 4.67 (`file_monitor.py` + `realtime_stats.py` + `app.py` + `index.js`: every notified change batch gets a sequence number (`change_seq` + `seq_epoch`) and the last 500 batches are remembered, so a tab that was hidden, lost its stream or is in polling mode is told which folders changed instead of refreshing blindly (SSE catch-up via `?last_seq=`, polling via `last_seq`; polling now reports a change only when something changed); the browser closes the storage and shares live streams after 45 s hidden and reopens them with a catch-up on return; the Version Engine is untouched; `index.js`, `app.py`, `file_monitor.py` and `realtime_stats.py` changed, so re-run `./manage.sh validate-sri --fix` and restart; 2026-10-03) on top of 4.66 (`index.js` + `app.py`: folder size cells no longer flash or refetch on every watchdog batch, Rebuild Cache button survives a page refresh and its timer counts every second, SSE reconnect no longer throws `Cannot read properties of null`; `index.js` changed, so re-run `./manage.sh validate-sri --fix` and restart; 2026-10-03) on top of 4.65 (`file_monitor.py` + `file_index.py`: `storage_index.json` and `file_index.json` are rewritten only when their content really changed (content digest), at most once per 10 s while events keep coming, and events from hidden files and from the app's own cache/db/versions folders (when those lie inside the storage root) no longer wake the save cycle; no template, JS or `realtime_stats.py` change, so no SRI re-run is needed; 2026-10-03) on top of 4.64 (`file_monitor.py` + `app.py` + `realtime_stats.py` + `index.js`: files changed directly in the backend (Explorer, FTP/SFTP/SMB/WebDAV) now refresh the visible listing at once and have their counters corrected from disk within one debounce cycle instead of waiting for the 15-minute walk; moves/renames/edits are reported by folder (`changed_dirs`) because the totals do not change for them; walks skip NTFS junctions (the `My Music` warning); `/bulk_move` and `/bulk_copy` are background jobs polled through `GET /bulk_job/<id>` (no more Cloudflare 524); the page title no longer grows `(SSE)`; `index.js` and `realtime_stats.py` changed, so re-run `./manage.sh validate-sri --fix` and restart; 2026-10-03) on top of 4.63 (`file_monitor.py` + `app.py` + `index.js`: Rebuild Cache runs in the background and the button polls a new status route, so a proxy timeout (HTTP 524) no longer shows "Unexpected token"; the watchdog sends the SSE update before saving the JSON files, re-scans each changed folder once per debounce window instead of once per event, and logs slow batches with ⏱️ lines; `index.js` changed, so re-run `./manage.sh validate-sri --fix`; 2026-10-02) on top of 4.62 (`file_monitor.py` + `app.py`, comment-only edits in `file_index.py` and `storage.py`: the root folder's `dir_info` record no longer counts anything directly inside the root twice; `_reconcile()` runs one walk at a time with a generation-checked drain timer; `/bulk_move` no longer runs `shutil.move`/`rmtree`/`remove` on the event loop; stale "WebDAV subprocess runs its own monitor" comments corrected; no re-index or file deletion needed; 2026-10-02) on top of 4.61 (`file_index.py` only: `save()` now retries the `os.replace()` swap on Windows sharing violations like `storage_index.json` already did; `search_index.db` locking audited, not changed; 2026-10-02) on top of 4.60 (`app.py` only: web-UI move, rename and new-folder now trigger the background reconcile like delete/copy/upload already did, and `_trigger_reconcile()` coalesces overlapping requests into at most one running walk plus one queued follow-up; the 15-minute validation walk is unchanged; 2026-10-02) on top of 4.59 (`file_monitor.py` + `app.py`: `storage_index.json` is now validated on load (schema version, root path, counters, every `dir_info` record) and an aborted or suspect-empty walk can no longer overwrite good counters or the saved cache; reconcile logs per-folder drift; `/admin/rebuild_cache` now audits the file index with `verify_all()`; closes the open items of 4.58; no re-index or file deletion needed; 2026-10-02) on top of 4.58 (`file_index.py` only: `file_index.json` is now validated on load, on every read and on every walk, so the large-folder cache can no longer serve data that is stale after a restart or after a skipped watchdog event; the `storage_index.json` half (`file_monitor.py`) is NOT audited yet because that file was not available; no re-index or file deletion needed; 2026-10-02) on top of 4.57 (`static/js/bg_audio.js` only: background music now keeps retrying on every user gesture until the browser really lets it play, and a blocked autoplay no longer saves a false "paused" state; the 4 templates need their `integrity` hash recomputed (`./manage.sh validate-sri`, menu #21); 2026-10-02) on top of 4.56 (`manage.sh` gains `validate-sri` (runs `sri_validator.py`; menu #21 asks y/N to fix after a failed check, appended so no number shifts); `SERVER_MANAGEMENT_SCRIPT_GUIDE.md` updated; 2026-10-02) on top of 4.55 (`check_search_index.py` deleted by the owner (no longer needed); new `sri_validator.py` checks/repairs the SRI `integrity` hash of every local `<script src>`/`<link href>` in the templates; tooling only, no app code change; 2026-10-02) on top of 4.54 (frontend only: new optional background-music script `static/js/bg_audio.js` + `<audio id="bgMusic">` element added to `index.html`, `login.html`, `shared.html`, `404.html`; every new tag carries an SRI `integrity` hash; cosmetic feature, no backend change; 2026-10-02) on top of 4.53 (`search_index.py` + `file_monitor.py` + `app.py` + new `check_search_index.py`: search index kept correct after the first crawl — `reconcile_from_walk()` hooked into every `_full_walk`, `crawl_complete` marker so a half-built index is never trusted, DB keep-warm thread for the HDD cold-cache stalls, per-step `timing` in `/api/search`, dropped results now logged; owner's index found ~52% built and holding a stale path; 2026-10-01) on top of 4.52 (`app.py` + `search_index.py` + `webdav_server.py`: deep-search routes no longer block the event loop (`asyncio.to_thread`), event-loop stall watchdog, `fallback_reason` in `/api/search`, search crawler only in the main process, and `webdav_server.py` no longer re-runs all of `app.py` via `from app import get_local_ip` (now `from net_utils import get_local_ip`); root cause of the intermittent 20-53 s deep search NOT proven yet; 2026-10-01) on top of 4.51 (`app.py` + `static/js/index.js`: folder navigation no longer replays a cached 301-to-`/login` as "Session expired"; `validate_session` now returns 401 JSON to `/api/*`/XHR callers, `_lean_redirect()` sends `Cache-Control: no-store`, `navigateToFolder()` fetches with `cache:'no-store'`; 2026-10-01) on top of 4.50 (`static/js/index.js` only: deep-search FILE rows now open the Download options modal (Download current version / Version History) instead of downloading directly; column-header sorting now works on deep-search results; 2026-10-01) on top of 4.49 (CSS + `templates/index.html`: search-wrapper layout moved from an inline `style=""` into `.search-wrapper` in CSS because the CSP blocks unhashed inline styles — this was the real cause of the short search box and the floating icon; plus: `.search-row` `max-width` 800px -> 60vw, scales with the screen; the owner's local `min-width: 50vw !important` on `#tableSearch` is to be deleted; 2026-10-01) on top of 4.48 (`templates/index.html` only: removed the floating magnifier `<i>` inside `.search-wrapper` and the 🔍 emoji from the `#tableSearch` placeholder; 2026-10-01) on top of 4.47 (CSS only, `static/css/index.css`: `#tableSearch` left padding 45px -> 15px so text/placeholder start at the left edge; `.search-row` desktop `max-width` 480px -> 800px; the <=480px override is unchanged; 2026-09-30) on top of 4.46 (frontend: search no longer runs while typing — new Search button + Enter key trigger it; `static/js/index.js` + `templates/index.html` + `static/css/index.css`; 2026-09-30) on top of 4.45 (frontend, `static/js/index.js` only: the local-filter search highlight no longer turns into a full-width yellow bar — `smartTableColumnizer()` was restyling `span.search-highlight` with inline `!important` `display:block`; 2026-09-30) on top of 4.44 (frontend: deep search now starts at 3+ characters — 1-2 character terms only filter the current folder, `*.ext` terms still go deep; stale-response guard in `performDeepSearch()`; `index.html` placeholder/title say "3+"; `static/js/index.js` + `templates/index.html`; 2026-09-30) on top of 4.43 (backend fix in `search_index.py`: 1- and 2-character deep-search queries no longer return zero rows — the FTS5 trigram index cannot match under 3 characters, so short queries now use a parameterised `LIKE` on `files_meta`; `count()` now escapes `%`/`_` like the search does; no re-index needed; 2026-09-30) on top of 4.42 (search follow-up in `static/js/index.js`: highlight in FILE rows no longer splits the flex name cell; the "No results found" toast no longer fires while the local-filter fallback is showing a hit; 2026-09-30; the backend 2-char deep search was still open at 4.42 and is fixed in 4.43) on top of 4.41 (search-highlight fixes in `static/js/index.js` + `static/css/index.css`: full-width yellow bar, gaps inside highlighted words, broken markup on entity-like queries, `highlightSearchTerm()` wiping row icons; 2026-09-30) on top of 4.40 (deep search now uses true row windowing in `static/js/index.js`, replacing its append-only infinite scroll; `highlightText()` regex-escape fix; small `index.css` addition; 2026-09-30) on top of 4.39 (`manage.sh` WebDAV orphan-port sweep now follows `server_config.json`; docs clarify that background mode hides startup banners; 2026-09-30) on top of 4.38 (docs only: new `docs/MANAGE_SCRIPT_GUIDE.md` for `manage.sh`, README manage.sh section corrected, 2026-09-30; no code changes) on top of 4.37 (text-only code fixes: `webdav_server.py` startup message, `config.py` SMB comment + prompt; README Deployment Guides table completed; 2026-09-30; no logic changes) on top of 4.36 (docs only: WebDAV-HTTPS-by-default documentation sweep across README / RCLONE_DEPLOYMENT / USER_GUIDE / SETUP_TUNNEL_ADVANCED / SMB_PROTOCOL_DEPLOYMENT / CONFIG_PY_REFERENCE, 2026-09-30; no code changes) on top of 4.35 (docs only: `config.py` settings documentation audit, 2026-09-29; no code changes) on top of 4.34 (+ 2026-09-29 VT rubber-band ROOT-CAUSE fix in `static/js/index.js` + `static/css/index.css` — spacer height moved from the spacer `<tr>` (which `index.css`'s `#filesTable tbody tr{height:auto!important}` override can never lose to) onto its `<td>`, native scroll anchoring instead of JS `scrollTop` compensation, folder-row re-measure after `dir_info` loads; **reproduced and verified in real Chromium**; the two same-day CSP explanations that follow (4.33/4.32) are SUPERSEDED, see the part-8 sync note; earlier same-day entry, SUPERSEDED: 2026-09-29 VT spacer-height CSP fix in `static/js/index.js` — the two windowing spacer `<tr>`s had their dynamic height set via `tr.style.height = ...`, which this app's CSP silently blocks (`style-src-attr`'s precomputed hash allowlist can never match an arbitrary/changing px value); with spacer height never actually applied in a real browser, the wrapper's true scrollable area was far smaller than the windowing math assumed, and the browser clamped `scrollTop` back down on almost every layout pass — likely the dominant real cause of the "rubber band" bug, on top of the `_renderAll()` issue below. Fixed by inserting CSSOM rules into the already-CSP-permitted external stylesheet and mutating those instead of any element's `style` attribute; + 2026-09-29 VT scroll-position "rubber band" fix in `static/js/index.js` — `VT._renderAll()` briefly clears the table body on every refresh (SSE, polling, sort, filter, rename, not just real navigation), which collapses the wrapper's scrollable height and makes the browser clamp `scrollTop` back to 0 as a side effect; the scroll position is now captured before the clear and restored once the spacers give the wrapper its real height back, while `navigateToFolder()`'s own explicit `scrollTop = 0` still wins on real navigation; + 2026-09-28 VT row windowing / virtual scroll rewrite in `static/js/index.js` — replaces the append-only infinite-scroll table body with true windowed rendering, bounded DOM node count on folders with tens of thousands of entries; + 2026-09-28 Version History front-end restore/download loading state in `static/js/index.js`; + 2026-09-28 restore double-click guard + streaming version download: `version_history.py`, `version_engine.py`, `app.py`; 2026-09-28 write gate + storage_index.json WinError 32 fix: `_GatedConnection` in `version_engine.py`, unique-temp/locked `_save_cache` in `file_monitor.py`; 2026-09-28 follow-up: bounded GC transactions, transient-lock retry with self-requeue, `synchronous=NORMAL`, traceback logging; 2026-09-28 SQLite write-lock fix in `version_engine.py` — chunked captures no longer hold the write lock across chunk I/O, plus web-side lock-retry/error handling in `version_history.py`/`app.py`/`index.js`; 2026-09-28 Version History polish — "X of 50 versions kept" line, hide/clear failed attempts, Retry result shown inline, notification modal no longer hidden behind other modals; 2026-09-27 Version History web UI — `version_history.py`, five `/api/versions/*` routes + `/download/recovered/*`, Download-options/Version-History modals, Retry Now, plus three fixes found while verifying it: `call_on_close` doesn't exist in Quart, `/csrf-token` was unreachable anonymously, and `version_engine.py` was storing a generic "capture error" instead of the real exception; 2026-09-26 manage.sh integration for the Version Engine — `version-manage` inserted as menu #9, `config` moved to #10, everything else shifted down; `version_manage.py` gained a full interactive menu alongside its CLI subcommands, plus hardened Ctrl-C handling verified with real SIGINT delivery; 2026-09-25 new subsystem: Universal File Versioning Engine — `version_engine.py`, `version_manage.py`, plus `config.py`/`paths.py`/`dev_server.py`/`prod_server.py` changes; 2026-09-24 WebDAV client-IP trust-chain fix, confirmed tunneled on 8443; 2026-09-24 WebDAV audit logging + client-IP attribution for TLS-teardown errors; 2026-09-24 SFTP/FTP/SMB audit logging, SFTP upload flag bug fix; 2026-09-23 app.py client-IP logging change; 2026-09-22 database.py verification pass; 2026-09-21 ops-tooling sync: manage.sh, setup_pymodules.sh, revoke_sharing.py; earlier 2026-08-28 protocol-hardening, route-sync, and video-skin-overrides.css notes) | **Last Updated**: 2026-10-06  
 **For**: AI assistants and developers modifying/extending CloudinatorFTP
+
+**🆕 2026-10-06 sync note, part 15 — `app.py` split planned, mapped and test-gated; NO application code changed (Version 4.68, docs + `tests/refactor/` only).** Owner decided to split `app.py` (8,152 lines, 85 route functions, 11 hooks) into modules in phases, with ONE automated test script per phase and a handoff script, and asked that this file carry the whole map so a later chat needs only CLAUDE.md (plus the code being cut). New section **"app.py SPLIT MAP"** (right above the Table of Contents): rules, target layout, PHASE TABLE (phases 0-10 = versions 4.68-4.78), per-phase route tables and symbol lists, HOOK ORDER, STARTUP SIDE EFFECTS, ENDPOINT-NAME DEPENDENCIES, core exports, gotchas, TESTS, HANDOFF PROMPT, PROGRESS LOG. New files: `tests/refactor/` = `common.py`, `phases.py`, `baseline_routes.json`, `snapshot_baseline.py`, `run_phase_tests.py`, `handoff.py`, `test_phase00_baseline.py` ... `test_phase10_login_final.py`. Base files read for this pass: `app.py` (all 8,152 lines, by AST), `prod_server.py`, `dev_server.py`, `SERVER_MANAGEMENT_SCRIPT_GUIDE.md`, this file; `config.py`, `auth.py`, `storage.py`, `sftp_server.py`, `ftp_server.py`, `smb_server.py` and the templates were NOT supplied.
+
+**Findings that shaped the plan (from the code, not measured at runtime):** (1) **No Blueprints**: `validate_session`, `after_request` and `CSRFProtect` compare `request.endpoint` / `view.__name__` by bare name; a Blueprint would rename `shared_request_access` to `shares.shared_request_access` and silently break the CSRF exemption and the public-page whitelist. Modules keep plain `@app.route` on a shared `core.app`. (2) **Hidden hook**: `csrf = CSRFProtect(app)` (line 966) registers `_protect` as a `before_request` between `_start_request_timer` and `validate_session`; it has no decorator, so a naive move into `core.py` would run CSRF first. Plan: `csrf = CSRFProtect()` in `core.py`, `csrf.init_app(app)` in `middleware.py` at that position. (3) Import-time statements that are not definitions (`ensure_dirs()`, two `mimetypes.add_type`, `app.secret_key`, `app.session_interface`, `app.config.update`, `storage.ensure_root()`, monitor callbacks, search crawler, `version_history.init()`) must move with Phase 1 and keep their order. (4) `get_local_ip` is re-exported from `app.py` for `sftp_server.py` / `ftp_server.py` / `smb_server.py` (per `app.py`'s own comment); it must stay importable from `app`. (5) `config.py` is listed as a utility in `manage.sh` but is core to `app.py` (about 18 imported settings): it stays at the root, untouched. (6) The route groups are nearly independent: only four cross-group links exist (HLS/image cache helpers used by `_clear_media_preview_sync` -> Phase 6 needs 2 and 3; `_prune_expired_shares` -> Phase 8 needs 7; startup functions used by `initialize_cleanup`). (7) Latent leftover, not fixed: `after_request` tests `request.endpoint in [..., "admin"]` but no endpoint is named `admin`.
+
+**Tested (Linux sandbox, real 4.67 `app.py`, AST only):** all 20 invariant checks pass in every phase script with `--pre`; Phase 0 passes in full; a mechanical Phase 2 move was simulated in a copy and the suite reported exactly the missing imports (pyflakes) while the structural checks passed; four deliberate breakages (changed methods, route left in `app.py`, new module doing `from app import`, duplicate endpoint) were each detected. **Not tested:** the optional `--runtime` comparison (needs a scratch copy and `baseline_runtime.json`; its Quart attribute access was only checked against a toy app), the Windows server, the real project tree (only `app.py`, `prod_server.py`, `dev_server.py` were available).
+
+**Before Phase 1:** `pip install pyflakes`; confirm the project root has no `core.py` / `middleware.py` / `routes/`; run `grep -rn "from app import\|import app" --include=*.py .` and add any extra names to `COMPAT_EXPORTS` in `phases.py`; if `app.py` changed after 2026-10-06 run `python tests/refactor/snapshot_baseline.py` and commit the new `baseline_routes.json`; then `python tests/refactor/run_phase_tests.py --before 1`.
 
 **🆕 2026-10-03 sync note, part 14 — change sequence, catch-up replay, polling that reports real changes, live streams paused while a tab is hidden (Version 4.67, `file_monitor.py` + `realtime_stats.py` + `app.py` + `index.js`).** Owner approved parts "A" and "B" of the plan below on condition that the folder size column does not go back to constant refreshing and SSE keeps working, and said **not to touch the Version Engine**: its re-checks of the QuickBooks files only repeat because the server was restarted (the engine stat-polls tracked files every 3 s, reads and hashes a file only when its mtime or size differs from what it remembered, and after a restart its memory is empty so the first pass checks every file once; a hash equal to the latest version is logged at debug level as "Snapshot skipped (unchanged)" and discarded). My earlier remark that those files were "versioned constantly" was not supported by the code and is withdrawn; nothing in the Version Engine was changed or recommended for change. Base files: the owner's committed 4.66 `index.js`, `app.py`, `file_monitor.py` (formatter re-wrapped, same logic), `file_index.py`, `storage.py`; `realtime_stats.py` was rebuilt from the 4.64 delivery because the copy in the session upload folder was the pre-4.64 one (the 4.66 handoff says it is unchanged since 4.64; if the repository copy was re-formatted, replace it wholesale or merge by hand).
 
@@ -321,6 +329,455 @@ Root cause of the UI half of the double-click bug: `restoreVersionAction()` only
 
 ---
 
+## 🧩 app.py SPLIT MAP — phases, tests, handoff (started 2026-10-06, CLAUDE.md 4.68)
+
+> **Read this section first when the task is about splitting `app.py`.** It is the permanent map: where every route, helper and global of the pristine 4.67 `app.py` goes, in which phase, with which test. `tests/refactor/phases.py` is its machine-readable twin (the tests read that file), `tests/refactor/baseline_routes.json` is the frozen description of the pristine `app.py`. If this section and the code disagree, the CODE is right: fix the section in the same commit.
+
+**What Claude can and cannot do with only this file.** With CLAUDE.md alone Claude can answer "where does X live / will live", plan or review a phase, read a failing test's output, and write the CLAUDE.md update and the commit message. Claude CANNOT move code it has not seen: for a phase, attach the CURRENT `app.py` (and the files `python tests/refactor/handoff.py` lists for that phase) plus this file.
+
+### Why a split, and the shape of the problem (measured on 4.67 `app.py`, 8,152 lines)
+
+- 85 route functions (some with two URL rules), 11 hooks (3 `before_request`, 3 `after_request`, 3 `errorhandler`, 1 `before_serving`, 1 `template_filter`), 276 top-level functions/classes, ~40 module-level globals.
+- The route groups are almost independent: the AST dependency analysis found only four cross-group links (HLS/image cache helpers used by `_clear_media_preview_sync`, `_prune_expired_shares` used by the cleanup scheduler, and the startup functions used by `initialize_cleanup`). Everything else that groups share lives in the old top 1,900 lines (Phase 1).
+
+### Rules for every phase (the tests enforce the checkable ones)
+
+1. **Pure move.** Function bodies are copied verbatim. No renames, no "improvements", no fixes in the same commit (note bugs, fix them in a separate version).
+2. **Endpoint names, URL rules, methods, defaults and decorator ORDER stay identical.** Plain `@app.route(...)` stays; **no Blueprints in this refactor.** Reason: `validate_session`, `after_request` and `CSRFProtect` compare `request.endpoint` / `view.__name__` by bare name (see ENDPOINT-NAME DEPENDENCIES below); a Blueprint would rename `shared_request_access` to `shares.shared_request_access` and silently break the CSRF exemption and the public-page whitelist.
+3. New modules do `from core import app, csrf, ...` (Phase 1 creates `core.py`). **They never import `app`** (circular) and never use `import *`.
+4. **All `before_request` / `after_request` / `errorhandler` / `template_filter` hooks live in `middleware.py`, in the baseline order** (HOOK ORDER below). Quart runs `before_request` in registration order and `after_request` in reverse; splitting them over files would reorder them.
+5. **Import-time side effects keep their order** (STARTUP SIDE EFFECTS below). `app.py` must stay importable as `from app import app` (prod_server.py, dev_server.py).
+6. **One phase = one commit = one CLAUDE.md version** (4.69 ... 4.78). Gate before starting: `python tests/refactor/run_phase_tests.py --before N`. Check after finishing: `python tests/refactor/run_phase_tests.py N`.
+7. After each phase Claude updates CLAUDE.md (version bump, sync note at the top, changelog entry, tick the PHASE TABLE and the PROGRESS LOG, correct this map and `phases.py` if a symbol was re-assigned) and gives the commit message.
+8. `static/`, `templates/` and `index.js` are not touched by this refactor, so no `validate-sri` re-run is needed; a restart is (Python code changed).
+9. Project files use CRLF line endings; keep them. The tests hash `app.py` with newlines normalised, so git autocrlf does not matter.
+
+### Target layout
+
+```
+app.py              thin composition root: ensure_dirs() -> import core -> import middleware -> import routes.* ->
+                    initialize_cleanup() -> __main__ block. Must still expose `app` and `get_local_ip` (+ COMPAT_EXPORTS).
+core.py            (Phase 1) Quart app, loggers, CSP/CORS/CSRF/session setup, RateLimiter, ChunkTracker, AssemblyQueue,
+                    login_required, reconcile helpers, file_monitor + search + version_history startup. Imports nothing
+                    from middleware/routes/services.
+middleware.py      (Phase 1) every hook + the CORS OPTIONS route, in baseline order.
+routes/__init__.py
+routes/hls.py            (P2)   routes/image_preview.py (P3)   routes/versions.py (P4)   routes/previews.py (P5)
+routes/stats.py + routes/admin.py (P6)   routes/shares.py (P7)   routes/uploads.py (P8)   routes/files.py (P9)
+routes/login.py + routes/site_meta.py (P10)
+tests/refactor/   common.py phases.py baseline_routes.json snapshot_baseline.py run_phase_tests.py handoff.py test_phaseNN_*.py
+```
+
+Name check before Phase 1: make sure the project root has no existing `core.py`, `middleware.py` or `routes/` (the project already has `auth.py`, `config.py`, `storage.py`, ... so `routes/login.py` was chosen instead of `routes/auth.py`).
+
+### PHASE TABLE (tick when its test script passes and it is committed)
+
+| Done | # | CLAUDE.md | Phase | Target module(s) | Routes | Symbols | Lines moved* | Needs first | Test script |
+|---|---|---|---|---|---|---|---|---|---|
+| [x] | 0 | 4.68 | Baseline, documentation and test harness (no code moved) | - | 0 | 0 | 0 | - | `test_phase00_baseline.py` |
+| [ ] | 1 | 4.69 | core.py + middleware.py (shared objects, hooks, startup side effects) | `core.py`, `middleware.py` | 1 | 62 | ~1,524 | - | `test_phase01_core_middleware.py` |
+| [ ] | 2 | 4.70 | HLS video streaming -> routes/hls.py | `routes/hls.py` | 3 | 22 | ~908 | P1 | `test_phase02_hls.py` |
+| [ ] | 3 | 4.71 | Image preview/conversion -> routes/image_preview.py | `routes/image_preview.py` | 3 | 22 | ~516 | P1 | `test_phase03_image_preview.py` |
+| [ ] | 4 | 4.72 | Version History routes -> routes/versions.py | `routes/versions.py` | 7 | 7 | ~207 | P1 | `test_phase04_versions.py` |
+| [ ] | 5 | 4.73 | Office + archive preview -> routes/previews.py | `routes/previews.py` | 2 | 4 | ~565 | P1 | `test_phase05_previews.py` |
+| [ ] | 6 | 4.74 | Stats / SSE / health / search / speedtest / admin cache -> routes/stats.py + routes/admin.py | `routes/stats.py`, `routes/admin.py` | 15 | 25 | ~807 | P1, P2, P3 | `test_phase06_stats_admin.py` |
+| [ ] | 7 | 4.75 | Share links (owner API, public /shared/*, admin) -> routes/shares.py | `routes/shares.py` | 21 | 34 | ~991 | P1 | `test_phase07_shares.py` |
+| [ ] | 8 | 4.76 | Uploads, chunks, assembly, cleanup schedulers -> routes/uploads.py | `routes/uploads.py` | 9 | 15 | ~787 | P1, P7 | `test_phase08_uploads.py` |
+| [ ] | 9 | 4.77 | Browse, download, file operations, bulk jobs -> routes/files.py | `routes/files.py` | 16 | 24 | ~865 | P1 | `test_phase09_files.py` |
+| [ ] | 10 | 4.78 | Login/session pages + site meta -> routes/login.py + routes/site_meta.py; app.py becomes thin | `routes/login.py`, `routes/site_meta.py` | 8 | 8 | ~157 | P1 | `test_phase10_login_final.py` |
+
+\* Lines of the pristine 4.67 `app.py` covered by the phase's definitions (imports and comment banners between them not counted). Phase 1 is the big one (~1,500 lines, 62 named definitions + 10 hooks + the import-time statements); `app.py` keeps ~76 lines (`initialize_cleanup()` and the `__main__` block) until Phase 10 thins it. The pristine total is 8,152.
+
+Order is fixed: 1 first (everything depends on it), then 2..10 in numeric order. Dependencies other than Phase 1: **P6 needs P2 and P3** (imports `_hls_cache_root`, `_hls_read_status`, `_img_cache_root`, `_img_conv_events`, `_img_events_mutex`); **P8 needs P7** (imports `_prune_expired_shares`). Until a phase moves a helper that a later, still-unmoved block uses, `app.py` imports it from the new module (the phase tests check this with `from routes.x import ...`).
+
+#### Phase 1 - core.py + middleware.py (shared objects, hooks, startup side effects)  (CLAUDE.md 4.69)
+
+Everything that is not a route in the old top 1,900 lines of app.py: app/Quart object, CSP/CORS/CSRF/session, rate limiter, ChunkTracker, AssemblyQueue, login_required, reconcile helpers, file_monitor init, startup side effects; ALL before_request/after_request/errorhandler/template_filter hooks (middleware.py, same order); the CORS OPTIONS route.
+
+**Hooks that move to `middleware.py`** (baseline definition lines; see HOOK ORDER):
+
+- `@app.before_request` `_start_request_timer` (line 657)
+- `@app.after_request` `_log_request_duration` (line 662)
+- `@app.after_request` `_apply_cors_headers` (line 737)
+- `@app.before_request` `validate_session` (line 1145)
+- `@app.template_filter` `timestamp_to_date_filter` (line 1276)
+- `@app.before_request` `before_request` (line 1596)
+- `@app.after_request` `after_request` (line 1674)
+- `@app.errorhandler` `too_large` (line 6256)
+- `@app.errorhandler` `not_found` (line 6261)
+- `@app.errorhandler` `internal_error` (line 6266)
+
+**Route that moves with them:** `_cors_preflight` (`OPTIONS /` and `OPTIONS /<path:cors_any_path>`, line 753).
+
+**Import-time statements that are not definitions but must move too** (the symbol check cannot see them; the Phase 1 test does): `ensure_dirs()` (7), `sys.stdout.reconfigure(line_buffering=True)` (116), two `mimetypes.add_type(...)` (416-417), the `if _PUBLIC_DOMAIN:` CORS-pattern append (727), `app.secret_key = SESSION_SECRET` (774), `app.session_interface = _DynamicSecureSessionInterface()` (880), `app.config.update(...)` (886), `storage.ensure_root()` (1064), the file-monitor callback registration (1068-1069), the search-crawler `if/elif` (1081-1090), `version_history.init()` (1100).
+
+**Named definitions moving to `core.py` / `middleware.py`:**
+
+```
+bulk_zip_progress, bulk_zip_cancelled, _stream_from_thread, get_local_ip, SESSION_SECRET, _share_unlock_signer, _SHARE_UNLOCK_MAX_AGE, get_client_ip, RateLimiter, rate_limiter, AssemblyJob, AssemblyQueue, assembly_queue, _INLINE_STYLE_HASHES, _INLINE_STYLE_ELEMENT_HASHES, app, SLOW_REQUEST_THRESHOLD_SECONDS, request_logger, app_logger, _start_request_timer, _log_request_duration, _PUBLIC_DOMAIN, _CORS_ORIGIN_PATTERNS, _CORS_ORIGIN_REGEXES, _cors_origin_allowed, _apply_cors_headers, _cors_preflight, app, _request_is_secure, _request_via_trusted_tls, _DynamicSecureSessionInterface, app, _CSRF_HEADER_NAMES, _CSRF_SAFE_METHODS, generate_csrf, CSRFProtect, csrf, _reconcile_gate, _reconcile_running, _reconcile_rerun, _trigger_reconcile, file_monitor, _AUX_PROC, _lean_redirect, _wants_json_auth_error, _unauthenticated_response, validate_session, timestamp_to_date_filter, ChunkTracker, chunk_tracker, _revoke_all_codes, _revoke_all_codes_lock, _REVOKE_CODE_TTL, _issue_revoke_all_code, _check_revoke_all_code, secrets_compare, login_required, get_protected_files, cleanup_stale_chunks_on_request, before_request, after_request, too_large, not_found, internal_error
+```
+
+**Exports later phases need from `core`** (`CORE_EXPORTS` in `phases.py`, checked by the Phase 1 test): `RateLimiter, _REVOKE_CODE_TTL, _SHARE_UNLOCK_MAX_AGE, _check_revoke_all_code, _issue_revoke_all_code, _request_is_secure, _share_unlock_signer, _stream_from_thread, _trigger_reconcile, app, app_logger, assembly_queue, bulk_zip_cancelled, bulk_zip_progress, chunk_tracker, csrf, file_monitor, generate_csrf, get_local_ip, get_protected_files, login_required, rate_limiter`.
+
+#### Phase 2 - HLS video streaming -> routes/hls.py  (CLAUDE.md 4.70)
+
+/hls_start, /hls_status, /hls_files + ffmpeg probing/transcoding helpers, HLS constants and locks.
+
+Test: `python tests/refactor/test_phase02_hls.py`. Target: `routes/hls.py`. Baseline code: 23 top-level nodes, ~908 lines.
+
+| URL rule | Methods | Endpoint (= function) | Baseline line |
+|---|---|---|---|
+| `/hls_start/<path:video_path>` | GET | `hls_start` (async) | 7334 |
+| `/hls_status/<cache_key>` | GET | `hls_status_route` (async) | 7414 |
+| `/hls_files/<cache_key>/<path:hls_path>` | GET | `hls_files` (async) | 7423 |
+
+**Definitions that move with the routes (22):** `_VIDEO_EXTS_HLS`, `_HLS_BASE_PROFILES`, `_HLS_HFR_PROFILES`, `_HLS_SEG_DURATION`, `_SUBPROCESS_FLAGS`, `_hls_cache_root`, `_hls_cache_key`, `_hls_output_dir`, `_hls_status_lock`, `_hls_read_status`, `_hls_write_status`, `_probe_video`, `_probe_streams`, `_resolve_ffmpeg`, `_ffmpeg_available`, `_run_hls_transcode`, `_extract_subtitles`, `_fix_fmp4_init_uris`, `_patch_master_m3u8_subtitles`, `hls_start`, `hls_status_route`, `hls_files`
+
+**Needs from core:** `app`, `login_required`.
+**Imports this block references (hint from the AST; pyflakes is the judge):** `ENABLE_FFMPEG`, `HLS_FORCE_FORMATS`, `HLS_MIN_SIZE`, `ROOT_DIR`, `_get_hls_cache_dir`, `asyncio`, `hashlib`, `json`, `jsonify`, `os`, `re`, `send_file`, `storage`, `subprocess`, `threading`.
+
+#### Phase 3 - Image preview/conversion -> routes/image_preview.py  (CLAUDE.md 4.71)
+
+/image_preview, /image_preview_status, /image_info + pyvips/WebP conversion helpers, image cache constants and locks.
+
+Test: `python tests/refactor/test_phase03_image_preview.py`. Target: `routes/image_preview.py`. Baseline code: 22 top-level nodes, ~516 lines.
+
+| URL rule | Methods | Endpoint (= function) | Baseline line |
+|---|---|---|---|
+| `/image_preview/<path:path>` | GET | `image_preview` (async) | 7824 |
+| `/image_preview_status/<cache_key>` | GET | `image_preview_status` (async) | 7976 |
+| `/image_info/<path:path>` | GET | `image_info` (async) | 8012 |
+
+**Definitions that move with the routes (22):** `_IMG_CACHE_THRESHOLD`, `_IMG_NON_NATIVE`, `_IMG_NATIVE`, `_ALL_IMG_EXTS`, `_img_status_lock`, `_img_events_mutex`, `_img_conv_events`, `_img_cache_root`, `_img_cache_key`, `_img_cached_path`, `_img_cached_path_jpg`, `_img_cached_path_png`, `_img_find_cached`, `_img_meta_path`, `_img_write_meta`, `_img_read_meta`, `_pyvips_available`, `_convert_to_webp`, `_run_img_conversion`, `image_preview`, `image_preview_status`, `image_info`
+
+**Needs from core:** `app`, `login_required`.
+**Imports this block references (hint from the AST; pyflakes is the judge):** `ENABLE_LIBVIPS`, `IMG_COMPRESS_MIN_SIZE`, `IMG_WEBP_QUALITY`, `ROOT_DIR`, `asyncio`, `hashlib`, `json`, `jsonify`, `os`, `re`, `send_file`, `send_from_directory`, `storage`, `threading`, `time`.
+
+#### Phase 4 - Version History routes -> routes/versions.py  (CLAUDE.md 4.72)
+
+/api/versions/* (7 routes incl. /download/recovered): thin wrappers over version_history.py.
+
+Test: `python tests/refactor/test_phase04_versions.py`. Target: `routes/versions.py`. Baseline code: 7 top-level nodes, ~207 lines.
+
+| URL rule | Methods | Endpoint (= function) | Baseline line |
+|---|---|---|---|
+| `/api/versions/list` | GET | `api_versions_list` (async) | 2143 |
+| `/api/versions/restore` | POST | `api_versions_restore` (async) | 2171 |
+| `/api/versions/download` | GET | `api_versions_download` (async) | 2216 |
+| `/download/recovered/<path:recovered_rel>` | GET | `download_recovered` (async) | 2262 |
+| `/api/versions/retry` | POST | `api_versions_retry` (async) | 2285 |
+| `/api/versions/clear-failed` | POST | `api_versions_clear_failed` (async) | 2310 |
+| `/api/versions/delete` | POST | `api_versions_delete` (async) | 2336 |
+
+**Definitions that move with the routes (7):** `api_versions_list`, `api_versions_restore`, `api_versions_download`, `download_recovered`, `api_versions_retry`, `api_versions_clear_failed`, `api_versions_delete`
+
+**Needs from core:** `app`, `app_logger`, `login_required`.
+**Imports this block references (hint from the AST; pyflakes is the judge):** `ROOT_DIR`, `Response`, `asyncio`, `current_user`, `get_role`, `jsonify`, `logging`, `mimetypes`, `os`, `request`, `send_from_directory`, `storage`, `version_history`.
+
+#### Phase 5 - Office + archive preview -> routes/previews.py  (CLAUDE.md 4.73)
+
+/office_preview, /archive_preview and their *_sync helpers.
+
+Test: `python tests/refactor/test_phase05_previews.py`. Target: `routes/previews.py`. Baseline code: 4 top-level nodes, ~565 lines.
+
+| URL rule | Methods | Endpoint (= function) | Baseline line |
+|---|---|---|---|
+| `/office_preview/<path:path>` | GET | `office_preview` (async) | 3271 |
+| `/archive_preview/<path:path>` | GET | `archive_preview` (async) | 3418 |
+
+**Definitions that move with the routes (4):** `office_preview`, `_office_preview_sync`, `archive_preview`, `_archive_preview_sync`
+
+**Needs from core:** `app`, `login_required`.
+**Imports this block references (hint from the AST; pyflakes is the judge):** `ROOT_DIR`, `asyncio`, `datetime`, `jsonify`, `logging`, `os`, `request`, `storage`, `zipfile`.
+
+#### Phase 6 - Stats / SSE / health / search / speedtest / admin cache -> routes/stats.py + routes/admin.py  (CLAUDE.md 4.74)
+
+storage stats (+SSE, polling), monitoring, disk, health_check, event-loop watchdog (before_serving), /api/search, speedtest -> stats.py; /admin/rebuild_cache(+status), /admin/clear_media_preview -> admin.py. Imports HLS/image cache helpers from routes.hls / routes.image_preview.
+
+Test: `python tests/refactor/test_phase06_stats_admin.py`. Target: `routes/stats.py`, `routes/admin.py`. Baseline code: 25 top-level nodes, ~807 lines.
+
+| URL rule | Methods | Endpoint (= function) | Baseline line |
+|---|---|---|---|
+| `/admin/clear_media_preview` | POST | `clear_media_preview` (async) | 4386 |
+| `/admin/rebuild_cache` | POST | `admin_rebuild_cache` (async) | 4589 |
+| `/admin/rebuild_cache/status` | GET | `admin_rebuild_cache_status` (async) | 4640 |
+| `/api/storage_stats` | GET | `storage_stats_api` (async) | 4982 |
+| `/api/storage_stats_slow` | GET | `storage_stats_slow_api` (async) | 5037 |
+| `/api/storage_stats_debug` | GET | `storage_stats_debug` (async) | 5057 |
+| `/api/storage_stats_stream` | GET | `storage_stats_stream` (async) | 5085 |
+| `/api/storage_stats_poll` | GET | `storage_stats_poll` (async) | 5095 |
+| `/api/monitoring_status` | GET | `monitoring_status` (async) | 5282 |
+| `/api/disk_stats_fast` | GET | `disk_stats_fast` (async) | 5306 |
+| `/api/health_check` | GET | `health_check` (async) | 5364 |
+| `/api/search` | GET | `search_files` (async) | 5434 |
+| `/api/speedtest/ping` | GET | `speedtest_ping` (async) | 6226 |
+| `/api/speedtest/upload` | POST | `speedtest_upload` (async) | 6232 |
+| `/api/speedtest/download` | GET | `speedtest_download` (async) | 6243 |
+
+**Definitions that move with the routes (25):** `clear_media_preview`, `_clear_media_preview_sync`, `_rebuild_state`, `_rebuild_state_lock`, `_rebuild_cache_worker`, `admin_rebuild_cache`, `admin_rebuild_cache_status`, `storage_stats_api`, `storage_stats_slow_api`, `storage_stats_debug`, `storage_stats_stream`, `storage_stats_poll`, `monitoring_status`, `disk_stats_fast`, `health_check`, `_LOOP_STALL_SECS`, `_loop_beat`, `_loop_wd_started`, `_loop_heartbeat`, `_loop_watchdog_thread`, `_start_loop_watchdog`, `search_files`, `speedtest_ping`, `speedtest_upload`, `speedtest_download`
+
+**Needs from core:** `app`, `file_monitor`, `login_required`.
+**Needs from other phases:** P2: `_hls_cache_root`, `_hls_read_status`; P3: `_img_cache_root`, `_img_conv_events`, `_img_events_mutex`.
+**Imports this block references (hint from the AST; pyflakes is the judge):** `ENABLE_SEARCH_INDEX`, `ROOT_DIR`, `asyncio`, `current_user`, `get_event_manager`, `get_file_monitor`, `get_role`, `io`, `is_logged_in`, `jsonify`, `os`, `request`, `search_index_manager`, `send_file`, `session`, `shutil`, `storage`, `storage_stats_sse`, `sys`, `threading`, `time`, `trigger_storage_update`.
+
+#### Phase 7 - Share links (owner API, public /shared/*, admin) -> routes/shares.py  (CLAUDE.md 4.75)
+
+/api/share*, /api/unshare, /shared/<token>/*, /admin/shares*, revoke-all codes. CSRF-exempt endpoints live here: keep @csrf.exempt exactly.
+
+Test: `python tests/refactor/test_phase07_shares.py`. Target: `routes/shares.py`. Baseline code: 34 top-level nodes, ~991 lines.
+
+| URL rule | Methods | Endpoint (= function) | Baseline line |
+|---|---|---|---|
+| `/api/share` | POST | `create_share` (async) | 2468 |
+| `/api/share/settings` | POST | `update_share_settings` (async) | 2527 |
+| `/api/unshare` | POST | `revoke_share` (async) | 2594 |
+| `/api/share/status` | GET | `share_status` (async) | 2612 |
+| `/api/share/bulk` | POST | `bulk_share` (async) | 2636 |
+| `/shared/<token>` | GET | `shared_download` (async) | 2733 |
+| `/shared/<token>/passkey` | POST | `shared_verify_passkey` (async) | 2823 |
+| `/shared/<token>/request` | POST | `shared_request_access` (async) | 2851 |
+| `/shared/<token>/status` | GET | `shared_request_status` (async) | 2897 |
+| `/shared/<token>/download` | GET | `shared_file_download` (async) | 3037 |
+| `/shared/<token>/browse` | GET | `shared_browse` (async) | 3096 |
+| `/shared/<token>/browse/<path:subpath>` | GET | `shared_browse` (async) | 3096 |
+| `/shared/<token>/download-item/<path:subpath>` | GET | `shared_download_item` (async) | 3130 |
+| `/shared/<token>/zip` | POST | `shared_zip_selected` (async) | 3166 |
+| `/admin/shares/count` | GET | `admin_shares_count` (async) | 4748 |
+| `/admin/shares` | GET | `admin_shares_list` (async) | 4759 |
+| `/admin/shares/requests` | GET | `admin_shares_pending_requests` (async) | 4773 |
+| `/admin/shares/requests/stream` | GET | `admin_shares_requests_stream` (async) | 4785 |
+| `/admin/shares/requests/<int:request_id>/approve` | POST | `admin_approve_share_request` (async) | 4800 |
+| `/admin/shares/requests/<int:request_id>/deny` | POST | `admin_deny_share_request` (async) | 4830 |
+| `/admin/revoke_all_shares/code` | POST | `admin_revoke_all_shares_code` (async) | 4849 |
+| `/admin/revoke_all_shares` | POST | `admin_revoke_all_shares` (async) | 4868 |
+
+**Definitions that move with the routes (34):** `_generate_passkey`, `_extract_security_fields`, `_passkey_cookie_name`, `_approval_cookie_name`, `_share_is_expired`, `_prune_expired_shares`, `_get_live_share`, `_is_passkey_unlocked`, `create_share`, `update_share_settings`, `revoke_share`, `share_status`, `bulk_share`, `_human_size`, `_dir_size`, `shared_download`, `shared_verify_passkey`, `shared_request_access`, `shared_request_status`, `_resolve_shared_subpath`, `_shared_access_granted`, `_stream_folder_zip`, `shared_file_download`, `shared_browse`, `shared_download_item`, `shared_zip_selected`, `admin_shares_count`, `admin_shares_list`, `admin_shares_pending_requests`, `admin_shares_requests_stream`, `admin_approve_share_request`, `admin_deny_share_request`, `admin_revoke_all_shares_code`, `admin_revoke_all_shares`
+
+**Needs from core:** `_REVOKE_CODE_TTL`, `_SHARE_UNLOCK_MAX_AGE`, `_check_revoke_all_code`, `_issue_revoke_all_code`, `_share_unlock_signer`, `_stream_from_thread`, `app`, `csrf`, `login_required`.
+**Imports this block references (hint from the AST; pyflakes is the judge):** `BadSignature`, `ROOT_DIR`, `Response`, `SignatureExpired`, `_secrets`, `abort`, `asyncio`, `current_user`, `db`, `get_role`, `jsonify`, `logging`, `os`, `redirect`, `render_template`, `request`, `send_from_directory`, `session`, `share_events_sse`, `storage`, `time`, `trigger_active_shares_changed`, `trigger_share_event`, `url_for`, `uuid`, `zipstream`.
+
+#### Phase 8 - Uploads, chunks, assembly, cleanup schedulers -> routes/uploads.py  (CLAUDE.md 4.76)
+
+/upload, /cleanup_chunks, /cancel_upload, /admin/cleanup_chunks, /admin/chunk_stats, /admin/upload_status, /api/assembly_status*, /api/protect_assembly; cleanup schedulers, assembly worker, detect_ready_assemblies. Imports _prune_expired_shares from routes.shares (so Phase 7 must be done first).
+
+Test: `python tests/refactor/test_phase08_uploads.py`. Target: `routes/uploads.py`. Baseline code: 15 top-level nodes, ~787 lines.
+
+| URL rule | Methods | Endpoint (= function) | Baseline line |
+|---|---|---|---|
+| `/upload` | POST | `upload` (async) | 4042 |
+| `/cleanup_chunks` | POST | `cleanup_chunks` (async) | 4250 |
+| `/cancel_upload` | POST | `cancel_upload` (async) | 4302 |
+| `/admin/cleanup_chunks` | POST | `admin_cleanup_chunks` (async) | 4656 |
+| `/admin/chunk_stats` | GET | `chunk_stats` (async) | 4900 |
+| `/admin/upload_status` | GET | `upload_status` (async) | 4934 |
+| `/api/assembly_status` | GET | `get_assembly_status` (async) | 5584 |
+| `/api/protect_assembly/<file_id>` | POST | `protect_assembly_job` (async) | 5609 |
+| `/api/assembly_status/<file_id>` | GET | `get_single_assembly_status` (async) | 5628 |
+
+**Definitions that move with the routes (15):** `upload`, `cleanup_chunks`, `cancel_upload`, `admin_cleanup_chunks`, `chunk_stats`, `upload_status`, `get_assembly_status`, `protect_assembly_job`, `get_single_assembly_status`, `start_enhanced_cleanup_scheduler`, `start_orphan_cleanup_scheduler`, `start_expired_share_cleanup_scheduler`, `assembly_worker`, `start_assembly_worker`, `detect_ready_assemblies`
+
+**Needs from core:** `_trigger_reconcile`, `app`, `assembly_queue`, `chunk_tracker`, `get_protected_files`, `login_required`.
+**Needs from other phases:** P7: `_prune_expired_shares`.
+**Imports this block references (hint from the AST; pyflakes is the judge):** `ALLOWED_EXTENSIONS`, `CHUNK_SIZE`, `ClientDisconnected`, `ENABLE_CHUNKED_UPLOADS`, `ROOT_DIR`, `asyncio`, `current_user`, `db`, `get_role`, `json`, `jsonify`, `os`, `queue`, `request`, `session`, `shutil`, `storage`, `threading`, `time`, `uuid`.
+
+#### Phase 9 - Browse, download, file operations, bulk jobs -> routes/files.py  (CLAUDE.md 4.77)
+
+/, /<path>, /download, /view, /bulk-download, /cancel_bulk_zip, /api/files, /api/dir_info, /bulk_move|copy|job|delete, /rename, /mkdir, /delete, /api/check_conflicts, /api/exists.
+
+Test: `python tests/refactor/test_phase09_files.py`. Target: `routes/files.py`. Baseline code: 24 top-level nodes, ~865 lines.
+
+| URL rule | Methods | Endpoint (= function) | Baseline line |
+|---|---|---|---|
+| `/cancel_bulk_zip` | POST | `cancel_bulk_zip` (async) | 1265 |
+| `/` | GET | `index` (async) | 2043 |
+| `/<path:path>` | GET | `index` (async) | 2043 |
+| `/download/<path:path>` | GET | `download` (async) | 2111 |
+| `/view/<path:path>` | GET | `view_file` (async) | 2129 |
+| `/bulk-download` | POST | `bulk_download` (async) | 3844 |
+| `/api/dir_info/` | GET | `dir_info` (async) | 5545 |
+| `/api/dir_info/<path:path>` | GET | `dir_info` (async) | 5545 |
+| `/api/files/` | GET | `api_files` (async) | 5656 |
+| `/api/files/<path:path>` | GET | `api_files` (async) | 5656 |
+| `/bulk_move` | POST | `bulk_move` (async) | 5922 |
+| `/bulk_copy` | POST | `bulk_copy` (async) | 5929 |
+| `/bulk_job/<job_id>` | GET | `bulk_job_status` (async) | 5936 |
+| `/bulk_delete` | POST | `bulk_delete` (async) | 5960 |
+| `/rename` | POST | `rename_item` (async) | 6026 |
+| `/mkdir` | POST | `mkdir` (async) | 6097 |
+| `/delete` | POST | `delete` (async) | 6142 |
+| `/api/check_conflicts` | POST | `api_check_conflicts` (async) | 6176 |
+| `/api/exists` | GET | `api_exists` (async) | 6213 |
+
+**Definitions that move with the routes (24):** `cancel_bulk_zip`, `index`, `download`, `view_file`, `bulk_download`, `dir_info`, `api_files`, `_bulk_jobs`, `_bulk_jobs_lock`, `_BULK_JOB_KEEP_SECS`, `_bulk_job_start`, `_bulk_find_free_name`, `_bulk_move_worker`, `_bulk_copy_worker`, `_bulk_start`, `bulk_move`, `bulk_copy`, `bulk_job_status`, `bulk_delete`, `rename_item`, `mkdir`, `delete`, `api_check_conflicts`, `api_exists`
+
+**Needs from core:** `_stream_from_thread`, `_trigger_reconcile`, `app`, `bulk_zip_cancelled`, `bulk_zip_progress`, `login_required`.
+**Imports this block references (hint from the AST; pyflakes is the judge):** `CHUNK_SIZE`, `ROOT_DIR`, `Response`, `_secrets`, `abort`, `asyncio`, `current_user`, `flash`, `get_file_monitor`, `get_role`, `json`, `jsonify`, `logging`, `make_response`, `os`, `redirect`, `render_template`, `request`, `send_from_directory`, `session`, `shutil`, `storage`, `threading`, `time`, `url_for`, `zipstream`.
+
+#### Phase 10 - Login/session pages + site meta -> routes/login.py + routes/site_meta.py; app.py becomes thin  (CLAUDE.md 4.78)
+
+/login, /logout, /check_session, /csrf-token -> login.py; /robots.txt, /sitemap.xml, /.well-known/security.txt, /debug/headers -> site_meta.py. app.py keeps only the imports, initialize_cleanup() and the __main__ block.
+
+Test: `python tests/refactor/test_phase10_login_final.py`. Target: `routes/login.py`, `routes/site_meta.py`. Baseline code: 8 top-level nodes, ~157 lines.
+
+| URL rule | Methods | Endpoint (= function) | Baseline line |
+|---|---|---|---|
+| `/csrf-token` | GET | `get_csrf_token` (async) | 969 |
+| `/robots.txt` | GET | `robots_txt` (async) | 1231 |
+| `/.well-known/security.txt` | GET | `security_txt` (async) | 1242 |
+| `/sitemap.xml` | GET | `sitemap_xml` (async) | 1253 |
+| `/check_session` | GET | `check_session` (async) | 1258 |
+| `/debug/headers` | GET | `_debug_headers` (async) | 1919 |
+| `/login` | GET/POST | `login` (async) | 1929 |
+| `/logout` | GET | `logout` (async) | 2002 |
+
+**Definitions that move with the routes (8):** `get_csrf_token`, `robots_txt`, `security_txt`, `sitemap_xml`, `check_session`, `_debug_headers`, `login`, `logout`
+
+**Needs from core:** `RateLimiter`, `_request_is_secure`, `app`, `chunk_tracker`, `generate_csrf`, `rate_limiter`.
+**Imports this block references (hint from the AST; pyflakes is the judge):** `abort`, `asyncio`, `check_login`, `flash`, `get_role`, `is_logged_in`, `jsonify`, `logging`, `login_user`, `make_response`, `redirect`, `render_template`, `request`, `send_from_directory`, `session`, `time`, `url_for`, `uuid`.
+
+**What `app.py` keeps until Phase 10:** `initialize_cleanup()` (line 8072) + its call (8105) + the `if __name__ == "__main__":` block. It uses `get_protected_files`, `chunk_tracker` (core) and the five startup functions of Phase 8 (`detect_ready_assemblies`, `start_assembly_worker`, `start_enhanced_cleanup_scheduler`, `start_expired_share_cleanup_scheduler`, `start_orphan_cleanup_scheduler`).
+
+### HOOK ORDER (baseline, registration order = source order in 4.67 `app.py`)
+
+| Kind | Order (function, definition line) |
+|---|---|
+| `before_request` | `_start_request_timer` (658) -> `validate_session` (1146) -> `before_request` (1597) |
+| `after_request` | `_log_request_duration` (663) -> `_apply_cors_headers` (738) -> `after_request` (1675) |
+| `before_serving` | `_start_loop_watchdog` (5423) |
+| `errorhandler` | `too_large`(413) (6257) -> `not_found`(404) (6262) -> `internal_error`(500) (6267) |
+| `template_filter` | `timestamp_to_date_filter`(timestamp_to_date) (1277) |
+
+**Real runtime order of `before_request` (what `--runtime` records):** `_start_request_timer` (657) -> `CSRFProtect._protect` (registered by `csrf = CSRFProtect(app)` at line 966 via `init_app`, invisible in the table because it has no decorator) -> `validate_session` (1145) -> `before_request` (1596). Keep exactly that.
+
+`before_request` runs in this order; `after_request` runs in REVERSE order (Quart/Flask rule). All `before_request`/`after_request` hooks must stay in ONE file (`middleware.py`) in this order; the invariant check in every phase script enforces it. `before_serving` (`_start_loop_watchdog`) moves with the stats routes in Phase 6 (it is the only one of its kind).
+
+### STARTUP SIDE EFFECTS (run at import time; order must not change)
+
+Baseline order of the calls the tests track (`SIDE_EFFECT_CALLS`): `ensure_dirs` -> `storage.ensure_root` -> `init_file_monitor` -> `file_monitor.add_change_callback` -> `file_monitor.add_activity_callback` -> `search_index_manager.start_crawler` -> `version_history.init` -> `initialize_cleanup`.
+
+| Baseline line | Statement | Why the position matters |
+|---|---|---|
+| 7 | `ensure_dirs()` | creates db/cache/logs/versions folders BEFORE any heavy import (config, database, storage) touches them |
+| 116 | `sys.stdout.reconfigure(line_buffering=True)` | ffmpeg/thread prints appear immediately |
+| 416 | `mimetypes.add_type` x2 | `.js` / `.mjs` MIME types before the first static response |
+| 774 | `app.secret_key = SESSION_SECRET` | sessions |
+| 880 | `app.session_interface = _DynamicSecureSessionInterface()` | cookie `Secure` flag decided per request |
+| 886 | `app.config.update(...)` | cookie flags, session lifetime |
+| 966 | `csrf = CSRFProtect(app)` | `init_app` registers `_protect` as a `before_request` BETWEEN `_start_request_timer` and `validate_session`; creating it in core.py with the app would put it FIRST. Phase 1: `csrf = CSRFProtect()` in core.py, `csrf.init_app(app)` in middleware.py at that position |
+| 1064 | `storage.ensure_root()` | storage root exists before the monitor starts |
+| 1067 | `file_monitor = init_file_monitor()` + 2 callbacks | watchdog starts; SSE callbacks registered |
+| 1086 | `search_index_manager.start_crawler()` | skipped when `_AUX_PROC` (webdav_server.py / version_engine.py import this module too) |
+| 1100 | `version_history.init()` | schema/dirs bootstrap, exactly once (NOT `version_engine.start()`, which lives in dev/prod_server.py) |
+| 8105 | `initialize_cleanup()` | starts cleanup schedulers + assembly worker; must run after every route module is imported |
+
+`dev_server.py` / `prod_server.py` rely on `from app import app` being the line that runs all of this (their comments say so) and then call `protocol_manager.start_all()` and `version_engine.start()` themselves.
+
+### ENDPOINT-NAME DEPENDENCIES (why endpoint names are frozen)
+
+Code that branches on the bare endpoint name (all in the Phase 1 region, so it moves to `middleware.py` / `core.py` and must keep matching):
+
+- `validate_session` (`before_request`): skips login validation for `login`, `get_csrf_token`, `static`, `robots_txt`, `security_txt`, `sitemap_xml`, `shared_download`, `shared_file_download`, `shared_verify_passkey`, `shared_request_access`, `shared_request_status`, `shared_browse`, `shared_download_item`, `shared_zip_selected`; special-cases `index` (stale-session redirect, `%` in path).
+- `after_request` (no-cache headers): `index`, `download`, `upload`, `admin` (**`admin` is not a real endpoint**, a latent leftover; recorded as known so the tests do not flag it), and `login` (adds `Vary`).
+- `before_request` (line ~1619): `index`.
+- `CSRFProtect.exempt()` stores `view.__name__` and compares it with `request.endpoint`. Exempt: `shared_request_access`, `shared_verify_passkey`, `shared_zip_selected` (all `@route` then `@csrf.exempt`).
+- `url_for(...)` literals: `index`, `login`, `shared_download` (17 call sites).
+
+| Name | Defined in phase | Used by |
+|---|---|---|
+| `admin` | - (not an endpoint) |  |
+| `download` | P9 | after_request |
+| `get_csrf_token` | P10 | validate_session |
+| `index` | P9 | validate_session, before_request, after_request, url_for |
+| `login` | P10 | validate_session, after_request, url_for |
+| `robots_txt` | P10 | validate_session |
+| `security_txt` | P10 | validate_session |
+| `shared_browse` | P7 | validate_session whitelist |
+| `shared_download` | P7 | validate_session whitelist, url_for |
+| `shared_download_item` | P7 | validate_session whitelist |
+| `shared_file_download` | P7 | validate_session whitelist |
+| `shared_request_access` | P7 | validate_session whitelist |
+| `shared_request_status` | P7 | validate_session whitelist |
+| `shared_verify_passkey` | P7 | validate_session whitelist |
+| `shared_zip_selected` | P7 | validate_session whitelist |
+| `sitemap_xml` | P10 | validate_session |
+| `upload` | P8 | after_request |
+
+### Names other modules import from `app` (must stay importable)
+
+- `from app import app`: `prod_server.py:227`, `dev_server.py:63` (verified in the uploaded files).
+- `from app import get_local_ip`: `sftp_server.py`, `ftp_server.py`, `smb_server.py` (per `app.py`'s own comment at line ~100; those files were NOT re-read for this map). `get_local_ip` is a thin wrapper over `net_utils.get_local_ip`; keep it importable from `app.py` (Phase 1: define it in `core.py`, re-export in `app.py`).
+- Before Phase 1 run `grep -rn "from app import\|import app" --include=*.py .` in the real project and add every other name to `COMPAT_EXPORTS` in `tests/refactor/phases.py`. `webdav_server.py` already imports `net_utils` instead; `_AUX_PROC` in `app.py` shows `webdav_server.py` and `version_engine.py` may still import this module in some path - check.
+
+### Shared module-level state in the old top region (-> `core.py`)
+
+| Global | Baseline line | Who else uses it |
+|---|---|---|
+| bulk_zip_progress / bulk_zip_cancelled | 10 / 13 | P9 (bulk-download, cancel_bulk_zip) |
+| SESSION_SECRET | 144 | core only |
+| _share_unlock_signer, _SHARE_UNLOCK_MAX_AGE | 160 / 163 | P7 |
+| rate_limiter = RateLimiter() | 278 | login/upload routes (instantiate ONCE) |
+| assembly_queue = AssemblyQueue() | 412 | P8 (instantiate ONCE) |
+| app = Quart(__name__) | 624 | everyone (see gotcha about `__name__`) |
+| request_logger, app_logger | 645 / 654 | hooks |
+| _CORS_ORIGIN_PATTERNS / _REGEXES, _PUBLIC_DOMAIN | 718-730 | CORS hooks |
+| _CSRF_HEADER_NAMES, csrf = CSRFProtect(app) | 911 / 966 | P7 (`@csrf.exempt`) |
+| _reconcile_gate / _running / _rerun + `_trigger_reconcile` | 990-995 | P8, P9, P6 (one reconcile gate for the whole app) |
+| file_monitor = init_file_monitor() | 1067 | P6, P9 |
+| chunk_tracker = ChunkTracker() | 1492 | P8, initialize_cleanup (instantiate ONCE) |
+| _revoke_all_codes (+lock, TTL, issue/check helpers) | 1502-1540 | P7 admin revoke-all (could move to shares.py later; kept in core in Phase 1 by the region rule) |
+
+Private to one group (move with it, never shared): `_bulk_jobs*` (P9), `_rebuild_state*` (P6), `_loop_*` (P6), `_hls_*` / `_HLS_*` (P2), `_img_*` (P3).
+
+### Gotchas and open questions
+
+1. **`Quart(__name__)` in `core.py`** makes `app.name == "core"` (was `"app"`). `app.py` never reads `app.name` / `import_name`; only `app.static_folder` is used (robots.txt, security.txt), and `core.py` sits in the same folder, so static/templates still resolve. If anything odd shows up, try `Quart("app", root_path=os.path.dirname(os.path.abspath(__file__)))` first.
+2. **CSRF hook position (verified in the code).** `CSRFProtect.init_app` does `app.before_request(self._protect)` and `csrf = CSRFProtect(app)` runs at line 966, i.e. after `_start_request_timer` (657) and before `validate_session` (1145). Creating the object inside `core.py` would register `_protect` before everything. Resolution for Phase 1: `core.py` creates `csrf = CSRFProtect()` (no app) so routes can import it; `middleware.py` calls `csrf.init_app(app)` between the `_start_request_timer` and `validate_session` definitions. The Phase 1 test checks that position statically; `--runtime` proves the real order.
+3. **Mid-file import**: `from paths import get_hls_cache_dir as _get_hls_cache_dir` (line 6556) belongs to Phase 2.
+4. **`_AUX_PROC`** (search crawler skipped when `sys.argv[0]` is `webdav_server.py` / `version_engine.py`) reads `sys.argv`, so it keeps working from `core.py`.
+5. **Python files outside the scan.** The tests scan only `app.py`, `core.py`, `middleware.py`, `routes/**`, `services/**`; other modules are never judged.
+6. **`get_session_secret()` / database import order**: `SESSION_SECRET = get_session_secret()` (line 144) runs at import; keep it after `ensure_dirs()`.
+
+### TESTS (`tests/refactor/`)
+
+One script per phase (`test_phase00_baseline.py` ... `test_phase10_login_final.py`), all stdlib-only static analysis (they never import `app.py`, which would start the file monitor, the search crawler and the cleanup threads); `pip install pyflakes` adds the undefined-name check (without it that single check is reported as SKIP, so install it).
+
+Every script runs: (1) **invariants** - all modules parse; every endpoint exists exactly once; the 85 baseline endpoints keep URL rules, methods, defaults and decorator order (`login_required`, `csrf.exempt` ...); the 11 hooks exist, `before_request`/`after_request` sit in one file in baseline order; every `url_for` / `request.endpoint` name resolves; `app.py` still exposes `COMPAT_EXPORTS`; no new module imports `app`, uses `import *`, or joins an import cycle; startup side effects run in baseline order; pyflakes finds no new undefined names. (2) **phase done** - its routes and definitions live in its target modules, are gone from `app.py`, are defined once, and `app.py` imports the new module. (3) **extras** specific to the phase (e.g. P1: core exposes the 22 CORE_EXPORTS and the import-time configuration; P7: the three CSRF-exempt endpoints; P8: singletons instantiated once; P9: catch-all route and shared bulk-zip dicts; P10: `app.py` is a thin composition root).
+
+```
+python tests/refactor/snapshot_baseline.py           # ONCE on the pristine tree (already committed for 4.67 app.py)
+python tests/refactor/run_phase_tests.py --before 2  # gate: may I start phase 2?  (0..1 full + 2 invariants)
+python tests/refactor/test_phase02_hls.py --pre      # same gate for one phase
+python tests/refactor/test_phase02_hls.py            # after the move: invariants + done + extras
+python tests/refactor/run_phase_tests.py 2           # after the move: phases 0..2 (regression)
+python tests/refactor/run_phase_tests.py all         # final acceptance
+python tests/refactor/handoff.py                     # status + paste-ready message for a new chat
+```
+
+**Proven by the tests:** nothing was lost, renamed, re-ordered, left behind, duplicated or forgotten-to-import, and the dependency direction is `routes -> core`. **NOT proven (static only):** actual behaviour. Optional runtime check: in a SCRATCH COPY of the project (throwaway storage/db/cache) set `CLOUDINATOR_REFACTOR_SCRATCH=1`, run `python tests/refactor/snapshot_baseline.py --runtime` on the pristine tree once, then `--runtime` on any phase script; it compares Quart's real `url_map` and hook order. After every phase also click through: login/logout, browse, upload (chunked), download, bulk zip, share link (public + passkey + approval), video (HLS), image preview, office/archive preview, version history, live updates (SSE).
+
+**State of the tests at 4.68:** run against the real 4.67 `app.py` in a Linux sandbox: all 20 invariants pass in every phase script (`--pre`); a mechanical Phase 2 move was simulated and the suite flagged exactly the missing imports; deliberate breakages (changed methods, duplicate route, `from app import`) were each detected. The runtime comparison and the Windows/real-project run were NOT exercised.
+
+### HANDOFF PROMPT (paste into a new chat together with CLAUDE.md and the files `handoff.py` lists)
+
+```
+Continue the CloudinatorFTP app.py split. CLAUDE.md is attached: read the section
+"app.py SPLIT MAP" first - it is the source of truth for rules, target layout, the phase
+table, hook order, startup order and endpoint-name dependencies. Current state: <paste the
+output of `python tests/refactor/handoff.py`>. Task: do Phase <N> from the PHASE TABLE.
+Pure move, verbatim bodies, endpoint names/URLs/decorators unchanged, new modules import
+`core` never `app`. Then: update CLAUDE.md (version bump, sync note at top, changelog entry,
+tick the PHASE TABLE + PROGRESS LOG, fix the map and tests/refactor/phases.py if you
+re-assigned anything), give me the commit message, and tell me which test to run.
+```
+
+### PROGRESS LOG (add one row per finished phase)
+
+| Phase | Date | CLAUDE.md | Commit | Test result | Notes |
+|---|---|---|---|---|---|
+| 0 | 2026-10-06 | 4.68 | (fill in) | invariants 20/20 on pristine 4.67 `app.py` | map + 11 test scripts + baseline + handoff script; no app code changed |
+
+---
+
 ## 📋 Table of Contents
 
 1. [Quick Reference](#quick-reference)
@@ -343,6 +800,7 @@ Root cause of the UI half of the double-click bug: `restoreVersionAction()` only
 18. [Admin Tools & Utilities](#admin-tools--utilities)
 19. [Performance Characteristics](#performance-characteristics)
 20. [Troubleshooting & Edge Cases](#troubleshooting--edge-cases)
+21. **app.py Split Map** (refactor in progress; the section sits right above this table of contents)
 
 ---
 
@@ -3216,6 +3674,15 @@ Works at the database level only — it's a separate process, same constraint `m
 ---
 
 ## 📝 Changelog
+
+### Version 4.68 — 2026-10-06 `app.py` Split Plan, Map and Phase Tests (docs + `tests/refactor/` only)
+
+No application code, template, JS or CSS changed, so no restart and no `validate-sri` re-run. Findings, tests and limits are in the 2026-10-06 part 15 sync note at the top and in the "app.py SPLIT MAP" section.
+
+- **Added:** CLAUDE.md section "app.py SPLIT MAP": rules, target layout, PHASE TABLE (10 phases, versions 4.69-4.78), route table per phase, HOOK ORDER (incl. the undecorated CSRF hook), STARTUP SIDE EFFECTS, ENDPOINT-NAME DEPENDENCIES, shared state, gotchas, TESTS, HANDOFF PROMPT, PROGRESS LOG.
+- **Added:** `tests/refactor/`: 11 phase test scripts (static AST checks + optional pyflakes), `common.py`, `phases.py` (machine-readable phase table), `baseline_routes.json` (85 endpoints, 11 hooks, endpoint-name references, startup order, recorded from the pristine 4.67 `app.py`), `snapshot_baseline.py` (also `--runtime` for a scratch copy), `run_phase_tests.py` (`N`, `--before N`, `all`, `--status`), `handoff.py` (status + paste-ready message, saved to `tests/refactor/last_handoff.md`).
+- **Found, not fixed:** `after_request` lists the endpoint name `admin`, which does not exist (recorded as known in the baseline).
+- **Tested:** see the part 15 sync note; the runtime comparison and the real project tree were not available.
 
 ### Version 4.67 — 2026-10-03 Change Sequence + Catch-Up + Honest Polling + Hidden-Tab Stream Pause (`file_monitor.py` + `realtime_stats.py` + `app.py` + `index.js`)
 
