@@ -168,24 +168,38 @@ def main():
         )
         if unmet:
             w(f"- BLOCKED: depends on phase(s) {unmet} which are not done yet.")
-        need = ["CLAUDE.md", "app.py"]
-        if nxt >= 2:
-            need.append("core.py")
-        if nxt >= 1 and path_of("middleware.py").is_file() and nxt >= 10:
-            need.append("middleware.py")
+        need = [
+            (
+                "docs/CLAUDE.md"
+                if (ROOT / "docs" / "CLAUDE.md").is_file()
+                else "CLAUDE.md"
+            ),
+            "app.py",
+        ]
+        for extra in ("core.py", "middleware.py"):
+            if path_of(extra).is_file():
+                need.append(extra)
         for d in ph["depends"]:
             for m in PHASES[d]["modules"]:
                 if m not in need and d != 1:
                     need.append(m)
+        need.append("refactor_kit.py")
         w(
             f"- Give Claude these files: {', '.join('`%s`' % x for x in need)}  (plus the test output if something failed)"
+        )
+        w(
+            "- `refactor_kit.py` = the whole tests/refactor/ folder in ONE file: run `python tests/refactor/pack_kit.py` first "
+            "(re-pack after every phase). Claude runs `python refactor_kit.py` to unpack it."
         )
         w("")
         w("## Paste this into the new chat")
         w("")
         w("```")
         w(
-            "Continue the CloudinatorFTP app.py split. CLAUDE.md is attached: read its section"
+            "Continue the CloudinatorFTP app.py split. First run `python refactor_kit.py` (attached) from the"
+        )
+        w(
+            "project root of your sandbox: it recreates tests/refactor/. CLAUDE.md is attached: read its section"
         )
         w(
             "'app.py SPLIT MAP' first (rules, target layout, phase table, hook order, startup order,"

@@ -23,7 +23,7 @@
     "ts",
     "wmv"
   ],
-  "IMG_COMPRESS_MIN_SIZE": 3145728,
+  "IMG_COMPRESS_MIN_SIZE": 1048576,
   "IMG_WEBP_QUALITY": 50,
   "WEBDAV_ENABLED": true,
   "WEBDAV_PORT": 8080,
@@ -71,5 +71,5 @@
   "VERSION_FOLLOW_SYMLINKS": false,
   "VERSION_ALLOW_RESTORE_OVERWRITE": false,
   "VERSION_SHUTDOWN_TIMEOUT": 30,
-  "configured_at": "2026-09-25 23:57:37"
+  "configured_at": "2026-10-08 17:20:27"
 }
