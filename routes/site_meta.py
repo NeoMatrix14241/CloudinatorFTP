@@ -1,6 +1,6 @@
 """
-routes/site_meta.py - site metadata routes: /robots.txt, /.well-known/security.txt, /sitemap.xml and
-/debug/headers (Phase 10 of the split, CLAUDE.md 4.78).
+routes/site_meta.py - site metadata routes: /robots.txt, /.well-known/security.txt and /sitemap.xml
+(Phase 10 of the split, CLAUDE.md 4.78; /debug/headers was removed in 4.79).
 
 Moved verbatim from app.py. Gets shared objects via `from core import ...`; imports no other route
 module.
@@ -8,7 +8,7 @@ module.
 
 from core import app
 
-from quart import abort, jsonify, request, send_from_directory
+from quart import abort, send_from_directory
 
 
 # Route to robots.txt
@@ -37,13 +37,3 @@ async def security_txt():
 @app.route("/sitemap.xml")
 async def sitemap_xml():
     abort(404)
-
-
-@app.route("/debug/headers")
-async def _debug_headers():
-    """
-    TEMPORARY — remove after diagnosing the HSTS/X-Forwarded-Proto issue.
-    Shows exactly what headers reached Flask, so we can see what the
-    Cloudflare tunnel actually forwards instead of guessing.
-    """
-    return jsonify(dict(request.headers))

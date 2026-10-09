@@ -4725,26 +4725,37 @@ async function _imgStartPreview(itemPath, filename) {
         if (label && _alive()) label.textContent = text;
     }
 
-    // ── Small native image: load directly, no backend processing needed ───
-    if (isNative) {
+    // ── Native formats that must never be re-encoded (animated gif, svg, ico, avif,
+    //    jfif): load directly, no backend processing ───────────────────────────────
+    const _COMPRESSIBLE_NATIVE = new Set(['jpg', 'jpeg', 'png', 'webp']);
+    if (isNative && !_COMPRESSIBLE_NATIVE.has(ext)) {
         _setLabel('Loading image…');
         _showImage(viewUrl);
         return;
     }
 
-    // ── Non-native / potentially large: ask backend for info first ────────
+    // ── Non-native, or a jpg/png/webp that may be large: ask backend for info first.
+    //    Small native files come back needs_processing=false and load raw below; files
+    //    above IMG_COMPRESS_MIN_SIZE are compressed to WebP by /image_preview. ───────
     let info;
     try {
-        _setLabel('Checking image…');
+        _setLabel(isNative ? 'Loading image…' : 'Checking image…');
         const r = await fetch(`/image_info/${encodePathForUrl(itemPath)}`);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         info = await r.json();
     } catch (e) {
-        _showImage(previewUrl);
+        _showImage(isNative ? viewUrl : previewUrl);
         return;
     }
 
     if (!_alive()) return;
+
+    // Small native image: the original is fine, load it directly
+    if (isNative && !info.needs_processing) {
+        _setLabel('Loading image…');
+        _showImage(viewUrl);
+        return;
+    }
 
     // Already cached or no processing needed → serve immediately
     if (!info.needs_processing || info.cached) {

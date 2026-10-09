@@ -26,7 +26,7 @@ import routes.shares  # noqa: F401  (Phase 7: share links, /shared/*, /admin/sha
 import routes.uploads  # noqa: F401  (Phase 8: uploads, chunks, assembly status, admin chunk routes)
 import routes.files  # noqa: F401  (Phase 9: /, /<path>, /download, /view, bulk jobs, file operations)
 import routes.login  # noqa: F401  (Phase 10: /login, /logout, /check_session, /csrf-token)
-import routes.site_meta  # noqa: F401  (Phase 10: /robots.txt, /sitemap.xml, /.well-known/security.txt, /debug/headers)
+import routes.site_meta  # noqa: F401  (Phase 10: /robots.txt, /sitemap.xml, /.well-known/security.txt)
 from routes.uploads import (
     detect_ready_assemblies,
     start_assembly_worker,
