@@ -894,13 +894,13 @@ def _select_port(preferred: int, fallback: int, state_path: str) -> int:
         else:
             print(
                 f"⚠️  SMB: port {preferred} is in use (likely Windows' own file "
-                f"sharing). Run `python smb_setup.py` once — see "
+                f"sharing). Run `python tools/smb_setup.py` once — see "
                 f"SMB_PROTOCOL_DEPLOYMENT.md for details."
             )
     else:
         print(
             f"⚠️  SMB: could not bind port {preferred} (needs root, or a one-time "
-            f"capability grant). Run `python smb_setup.py` once — see "
+            f"capability grant). Run `python tools/smb_setup.py` once — see "
             f"SMB_PROTOCOL_DEPLOYMENT.md for details."
         )
 

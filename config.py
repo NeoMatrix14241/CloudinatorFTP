@@ -90,7 +90,7 @@ FTP_TLS_REQUIRE_DATA = True  # False → allow plaintext data channel for a lega
 # still always TLS-required whenever FTP_TLS_ENABLED and pyOpenSSL are both on).
 SMB_ENABLED = False  # \\HOST\ShareName — off by default even with impacket installed.
 # Unlike WebDAV/SFTP/FTP, having the library installed isn't enough to be useful —
-# port 445 needs a one-time machine setup first. Run `python smb_setup.py` (or
+# port 445 needs a one-time machine setup first. Run `python tools/smb_setup.py` (or
 # `./manage.sh setup-smb`) once, then flip this to True (it can do that for you).
 SMB_PORT = 445  # standard SMB port; see smb_setup.py for how to actually claim it
 SMB_FALLBACK_PORT = 8445  # used automatically when 445 can't be bound
@@ -2408,7 +2408,7 @@ def _configure_smb():
         print(
             f"💡 Port {SMB_PORT} needs a one-time machine setup before it'll actually"
         )
-        print(f"   bind — run `python smb_setup.py` or `./manage.sh setup-smb`.")
+        print(f"   bind — run `python tools/smb_setup.py` or `./manage.sh setup-smb`.")
         print(
             f"   Until then, SMB automatically falls back to port {SMB_FALLBACK_PORT}."
         )

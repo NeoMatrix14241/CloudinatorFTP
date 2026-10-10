@@ -1388,7 +1388,7 @@ cmd_menu() {
 		8) _menu_run cmd_restart_webdav ;;
 		9) _menu_run run_utility "tools/version_manage.py" ;;
 		10) _menu_run run_utility "config.py" ;;
-		11) _menu_run run_utility "smb_setup.py" ;;
+		11) _menu_run run_utility "tools/smb_setup.py" ;;
 		12) _menu_run run_utility "tools/kick_sessions.py" ;;
 		13) _menu_run run_utility "tools/manage_users.py" ;;
 		14) _menu_run run_utility "tools/reset_db.py" ;;
@@ -1451,7 +1451,7 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
                           Ctrl-C at any prompt cancels that action and returns to
                           the menu (interactive mode) or exits cleanly (CLI mode) —
                           never leaves a partial restore/delete in place.
-  setup-smb             python smb_setup.py — Configure SMB protocol storage (Windows/Linux)
+  setup-smb             python tools/smb_setup.py — Configure SMB protocol storage (Windows/Linux)
   kick-sessions         python tools/kick_sessions.py — Force logout of all active
                           sessions (server must be running)
   config                python config.py
@@ -1602,7 +1602,7 @@ main() {
 	status) cmd_status ;;
 	logs) cmd_logs "$@" ;;
 	clean-logs) cmd_clean_logs ;;
-	setup-smb) run_utility "smb_setup.py" "$@" ;;
+	setup-smb) run_utility "tools/smb_setup.py" "$@" ;;
 	kick-sessions) run_utility "tools/kick_sessions.py" "$@" ;;
 	config) run_utility "config.py" "$@" ;;
 	version-manage) run_utility "tools/version_manage.py" "$@" ;;

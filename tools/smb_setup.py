@@ -7,8 +7,8 @@ reset_db.py — it is NEVER invoked automatically by prod_server.py or
 dev_server.py. Run it once, when you decide you want CloudinatorFTP's
 SMB server to use the real port 445 instead of the 8445 fallback.
 
-    python smb_setup.py
-    ./manage.sh smb-setup
+    python tools/smb_setup.py
+    ./manage.sh setup-smb
 
 What it does, per platform:
 
@@ -49,8 +49,10 @@ import platform
 import subprocess
 import sys
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, _HERE)
+# tools/ sits one level below the project root: put the root on sys.path so the
+# root modules (lanman_guard, paths, config, ...) are still importable from here.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
 
 import lanman_guard
 from paths import get_db_dir
