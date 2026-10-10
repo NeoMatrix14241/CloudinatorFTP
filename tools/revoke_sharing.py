@@ -11,17 +11,17 @@ Talks directly to the same SQLite-backed `db` singleton the Flask app
 uses (database.py) — no HTTP calls, no running server required.
 
 CLI USAGE (unchanged — safe to call from scripts or manage.sh directly)
-    python revoke_sharing.py list
-    python revoke_sharing.py revoke <token>
-    python revoke_sharing.py revoke-path <path>
-    python revoke_sharing.py revoke-all               [--yes]
-    python revoke_sharing.py requests                 # pending access requests
-    python revoke_sharing.py approve <request_id>      [--max-downloads N]
-    python revoke_sharing.py deny <request_id>
-    python revoke_sharing.py edit <token>              [--mode MODE] [--passkey KEY]
+    python tools/revoke_sharing.py list
+    python tools/revoke_sharing.py revoke <token>
+    python tools/revoke_sharing.py revoke-path <path>
+    python tools/revoke_sharing.py revoke-all               [--yes]
+    python tools/revoke_sharing.py requests                 # pending access requests
+    python tools/revoke_sharing.py approve <request_id>      [--max-downloads N]
+    python tools/revoke_sharing.py deny <request_id>
+    python tools/revoke_sharing.py edit <token>              [--mode MODE] [--passkey KEY]
                                                         [--generate-passkey] [--clear-passkey]
                                                         [--expires-in DURATION] [--never-expire]
-    python revoke_sharing.py edit-path <path>          [same flags as edit]
+    python tools/revoke_sharing.py edit-path <path>          [same flags as edit]
 
 Every destructive action (single revoke, revoke-all) asks for confirmation
 before touching the database. revoke-all additionally requires typing back
@@ -32,7 +32,7 @@ link by accident. --yes only skips the initial y/N prompt; the typed-code
 step always runs.
 
 INTERACTIVE MODE
-    python revoke_sharing.py           # no subcommand → menu loop
+    python tools/revoke_sharing.py           # no subcommand → menu loop
 
 Run with no arguments and it drops into a numbered menu instead of a
 single one-shot action, so an operator can list shares, revoke one, edit
@@ -45,9 +45,15 @@ manage.sh) exactly like any single CLI command does.
 import argparse
 import getpass
 import random
+import os
 import re
 import sys
 import time
+
+# tools/ sits one level below the project root: put the root on sys.path so the
+# root modules (database, config, paths, ...) are still importable from here.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
 
 from database import db
 

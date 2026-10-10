@@ -18,11 +18,11 @@ concurrent access.
 Two ways to run it — same underlying logic either way (do_list/do_restore/
 do_delete), never duplicated:
 
-    python version_manage.py                          # interactive menu
-    python version_manage.py list                      # every tracked file + version count
-    python version_manage.py list <file_path>           # every version of one file
-    python version_manage.py restore <version_id> <destination> [--overwrite]
-    python version_manage.py delete <version_id> [--run-gc-now]
+    python tools/version_manage.py                          # interactive menu
+    python tools/version_manage.py list                      # every tracked file + version count
+    python tools/version_manage.py list <file_path>           # every version of one file
+    python tools/version_manage.py restore <version_id> <destination> [--overwrite]
+    python tools/version_manage.py delete <version_id> [--run-gc-now]
 
 Ctrl-C behavior (both modes): cancels whatever prompt/action is in progress
 and returns to the menu (interactive mode) or exits cleanly with code 130
@@ -44,6 +44,11 @@ import argparse
 import os
 import sys
 import time
+
+# tools/ sits one level below the project root: put the root on sys.path so the
+# root modules (database, config, paths, ...) are still importable from here.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
 
 import config
 import version_engine as ve

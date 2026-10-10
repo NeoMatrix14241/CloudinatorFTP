@@ -49,7 +49,7 @@ Welcome to **The Cloudinator** — a lightweight, secure file sharing platform t
 
 **Change Default Credentials**:
 ```bash
-python create_user.py
+python tools/manage_users.py
 # Select: 2. Add user
 # Or: 3. Change password
 ```
@@ -74,7 +74,7 @@ Sessions can end for two reasons:
    - Default in `config.py`: `PERMANENT_SESSION_LIFETIME = 31536000`; a value saved in `server_config.json` overrides it
    - To get a real timeout back, run `python config.py` → Server Settings → Session Timeout, then Save & Exit
 
-2. **Token Revoked**: An admin ran `python kick_sessions.py` (this replaced the older `revoke_session.py` script)
+2. **Token Revoked**: An admin ran `python tools/kick_sessions.py` (this replaced the older `revoke_session.py` script)
    - `kick-all` logs out every connected user within a few seconds
    - `logout-web` logs out only the web UI, leaving WebDAV/SFTP/FTP/SMB sessions alone
    - Also used to instantly revoke one user (`rotate`/`delete`) — useful for security incidents or testing
@@ -368,10 +368,10 @@ From the file table: open the share modal for that item again and click **Revoke
 
 For scripting or when you don't want to use the web UI:
 ```bash
-python revoke_sharing.py            # interactive menu (loops until Exit)
-python revoke_sharing.py list       # list all active shares
-python revoke_sharing.py revoke <token>
-python revoke_sharing.py revoke-all # requires its own typed confirmation
+python tools/revoke_sharing.py            # interactive menu (loops until Exit)
+python tools/revoke_sharing.py list       # list all active shares
+python tools/revoke_sharing.py revoke <token>
+python tools/revoke_sharing.py revoke-all # requires its own typed confirmation
 ```
 
 ### What the Visitor Sees
@@ -1044,14 +1044,14 @@ Watch **"Orphaned chunks"** stat (shows incomplete uploads):
 
 Upgrade your own account to readwrite:
 ```bash
-python create_user.py
+python tools/manage_users.py
 # Select: 4. Change role
 # Choose: readwrite
 ```
 
 Or set up a readwrite user:
 ```bash
-python create_user.py
+python tools/manage_users.py
 # Select: 2. Add user
 # Enter credentials and select "readwrite" role
 ```
@@ -1168,7 +1168,7 @@ On Windows, restart the machine afterward (use **Restart**, not Shut Down) — p
 
 **Cause**: Your account existed before SMB support was added — SMB needs a special hash of your password that can only be captured the moment it's set
 
-**Solution**: Reset your password once (even to the same value) via `create_user.py` or the web UI
+**Solution**: Reset your password once (even to the same value) via `tools/manage_users.py` or the web UI
 
 ---
 
@@ -1176,8 +1176,8 @@ On Windows, restart the machine afterward (use **Restart**, not Shut Down) — p
 
 | Issue | Command |
 |-------|----------|
-| Account permissions wrong | `python create_user.py` → change role |
-| Reset default credentials | `python reset_db.py` (destructive) or `python create_user.py` |
+| Account permissions wrong | `python tools/manage_users.py` → change role |
+| Reset default credentials | `python tools/reset_db.py` (destructive) or `python tools/manage_users.py` |
 | Cache stale | `curl -X POST http://localhost:5000/admin/rebuild_cache` |
 | Orphaned upload chunks | `curl -X POST http://localhost:5000/admin/cleanup_chunks` |
 | Storage full | Check `ROOT_DIR` in `config.py` → configure larger path |
@@ -1186,8 +1186,8 @@ On Windows, restart the machine afterward (use **Restart**, not Shut Down) — p
 | Check health | `curl http://localhost:5000/api/health_check` |
 | Regenerate WebDAV cert | `python ssl_cert.py --regenerate` |
 | Set up SMB (port 445) | `python smb_setup.py` |
-| Lock someone out quickly | `python kick_sessions.py` |
-| Revoke a share link (or all of them) | `python revoke_sharing.py` |
+| Lock someone out quickly | `python tools/kick_sessions.py` |
+| Revoke a share link (or all of them) | `python tools/revoke_sharing.py` |
 | See who has active share links | `curl http://localhost:5000/admin/shares` (readwrite session required) |
 
 ---
@@ -1219,7 +1219,7 @@ On Windows, restart the machine afterward (use **Restart**, not Shut Down) — p
 
 2. **Same Server**: Create additional user accounts
    ```bash
-   python create_user.py  # Add new user
+   python tools/manage_users.py  # Add new user
    ```
    They can then browse and download shared files.
 
@@ -1279,7 +1279,7 @@ print(f"Files stored in: {ROOT_DIR}")
 
 **Change location**:
 ```bash
-python setup_storage.py  # Interactive configuration
+python tools/setup_storage.py  # Interactive configuration
 # Or manually edit storage_config.json
 ```
 

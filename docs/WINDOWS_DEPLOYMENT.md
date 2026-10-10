@@ -15,7 +15,7 @@ A comprehensive guide to deploy CloudinatorFTP on Windows systems, enabling file
 9. [Launch Server](#launch-server)
 10. [Server Management Script (manage.sh)](#-server-management-script-managesh)
 11. [Updating Python Dependencies](#-updating-python-dependencies)
-12. [Batch Script Setup](#batch-script-setup)
+12. [Launcher Shortcut Setup](#launcher-shortcut-setup)
 13. [Windows Service Setup](#windows-service-setup)
 14. [Protocol Servers — WebDAV, SFTP, FTP, SMB](#protocol-servers--webdav-sftp-ftp)
 12. [Cloudflare Tunnel](#cloudflare-tunnel)
@@ -262,7 +262,7 @@ pip install wsgidav cheroot paramiko pyftpdlib impacket
 ### Step 7.2: Configure Storage Location
 
 ```cmd
-python setup_storage.py
+python tools/setup_storage.py
 ```
 
 Follow the prompts to set:
@@ -311,7 +311,7 @@ Customize:
 #### Add/Modify Users
 
 ```cmd
-python create_user.py
+python tools/manage_users.py
 ```
 
 **Menu Options:**
@@ -321,16 +321,14 @@ python create_user.py
 4. Change role
 5. Delete user
 
-#### Test Authentication
+#### Check a Login
 
-```cmd
-python debug_passwords.py
-```
+The old `debug_passwords.py` tester was removed in 4.80. To check who can log in, use `python tools/manage_users.py` → option 1 (list users, flags accounts that still have a default password) or option 3 (change a password).
 
 #### Revoke Access Quickly (Security Incident)
 
 ```cmd
-python kick_sessions.py
+python tools/kick_sessions.py
 ```
 
 Interactive tool for "something's wrong, lock this person out now" situations — rotate a password, delete a user, or log everyone out of the web UI instantly. See [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md) for the timing breakdown per protocol (some are instant, some take up to ~30 seconds, none can forcibly close a connection that's already open).
@@ -355,17 +353,19 @@ venv\Scripts\activate.bat
 python dev_server.py
 ```
 
-#### Method 2: Batch Scripts (Easier)
+#### Method 2: manage.sh (Git Bash, runs in the background)
 
 **Production:**
-```cmd
-start_prod_server.bat
+```bash
+./manage.sh start server
 ```
 
 **Development:**
-```cmd
-start_dev_server.bat
+```bash
+./manage.sh start dev_server
 ```
+
+See [Server Management Script](#-server-management-script-managesh) below. (The `start_prod_server.bat` / `start_dev_server.bat` files that older versions shipped were removed in 4.80; see [Launcher Shortcut Setup](#launcher-shortcut-setup) if you want a double-click launcher of your own.)
 
 ### Expected Startup Output
 
@@ -435,10 +435,9 @@ Run any of these **while a server is running in the same Git Bash window**:
 | Command | Equivalent |
 |---------|------------|
 | `./manage.sh config` | `python config.py` |
-| `./manage.sh create-user` | `python create_user.py` |
-| `./manage.sh debug-pw` | `python debug_passwords.py` |
-| `./manage.sh reset-db` | `python reset_db.py` |
-| `./manage.sh setup-storage` | `python setup_storage.py` |
+| `./manage.sh manage-users` | `python tools/manage_users.py` |
+| `./manage.sh reset-db` | `python tools/reset_db.py` |
+| `./manage.sh setup-storage` | `python tools/setup_storage.py` |
 | `./manage.sh update-modules` | `bash update_pymodules.sh` |
 
 ### 🎛️ Interactive Menu
@@ -454,7 +453,7 @@ Run any of these **while a server is running in the same Git Bash window**:
 ./manage.sh start server
 
 # Run utilities in the same Git Bash window while the server is up
-./manage.sh create-user
+./manage.sh manage-users
 ./manage.sh config
 
 # Check server is still running (also shown on open with no args)
@@ -491,35 +490,26 @@ This script will:
 
 ---
 
-## Batch Script Setup
+## Launcher Shortcut Setup
 
-### Step 10: Automatic Batch Scripts
+### Step 10: Optional Double-Click Launcher
 
-The project includes ready-to-use batch scripts:
+Older versions shipped `start_prod_server.bat` and `start_dev_server.bat`. They were removed in 4.80: start the server with `python prod_server.py` (Method 1) or `./manage.sh start server` (Method 2) instead.
 
-#### `start_prod_server.bat`
-- Activates virtual environment
-- Runs production server
-- Auto-restarts on error
+If you still want a launcher you can double-click, create your own `start_server.bat` in the project folder:
 
-#### `start_dev_server.bat`
-- Activates virtual environment
-- Runs development server
-- Debug mode enabled
-
-### Using Batch Scripts
-
-**Option 1: Double-click from Explorer**
-1. Navigate to project folder
-2. Double-click `start_prod_server.bat`
-
-**Option 2: Command Prompt**
-```cmd
-start_prod_server.bat
+```bat
+@echo off
+cd /d "%~dp0"
+call venv\Scripts\activate.bat
+python prod_server.py
+pause
 ```
 
-**Option 3: Create Desktop Shortcut**
-1. Right-click `start_prod_server.bat`
+(The old scripts could restart the server after an error; this one does not. For automatic restarts use NSSM (Option A below) or the Task Scheduler "restart on failure" setting.)
+
+**Create a desktop shortcut to it:**
+1. Right-click `start_server.bat`
 2. "Create shortcut"
 3. Move shortcut to Desktop
 4. Right-click shortcut → "Properties"
@@ -578,9 +568,11 @@ nssm remove CloudinatorFTP confirm
 3. **Name**: CloudinatorFTP
 4. **Trigger**: At startup
 5. **Action**: Start a program
-   - Program: `C:\path\to\start_prod_server.bat`
+   - Program: `C:\path\to\CloudinatorFTP\venv\Scripts\python.exe`
+   - Add arguments: `prod_server.py`
    - Start in: `C:\path\to\CloudinatorFTP`
 6. Click "Finish"
+7. Open the task's Properties → **Settings** and tick "If the task fails, restart every" (1 minute) so it restarts after an error
 
 ---
 
@@ -984,7 +976,7 @@ netsh advfirewall firewall add rule name="CloudinatorFTP-SMB-Fallback" dir=in ac
 | Issue | Solution |
 |-------|----------|
 | Port 5000 in use | Change port in config.py or: `netstat -ano \| findstr :5000` |
-| Server won't start | Run `python debug_passwords.py` to check |
+| Server won't start | Read the newest file in `logs/` (`./manage.sh logs`) for the error |
 | High CPU usage | Reduce HLS settings or check file count |
 | Blank white screen | Check browser console for errors |
 
@@ -992,11 +984,11 @@ netsh advfirewall firewall add rule name="CloudinatorFTP-SMB-Fallback" dir=in ac
 
 | Issue | Solution |
 |-------|----------|
-| Login fails | Run: `python debug_passwords.py` |
-| Database corrupted | Run: `python reset_db.py` |
-| Password reset | Use: `python create_user.py` |
+| Login fails | Run: `python tools/manage_users.py` (list users / change password) |
+| Database corrupted | Run: `python tools/reset_db.py` |
+| Password reset | Use: `python tools/manage_users.py` |
 
-### Batch Script Issues
+### Launcher Issues (only if you made your own `.bat`; the repo no longer ships one)
 
 | Issue | Solution |
 |-------|----------|

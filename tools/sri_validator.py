@@ -8,9 +8,9 @@ points at a local file under static/, this computes the SHA-384 of the file
 bytes as they are on disk and compares it with the tag's `integrity`
 attribute.
 
-    python sri_validator.py                 # check only, exit 1 on any problem
-    python sri_validator.py --fix           # add missing / repair stale hashes
-    python sri_validator.py --templates templates --static static
+    python tools/sri_validator.py                 # check only, exit 1 on any problem
+    python tools/sri_validator.py --fix           # add missing / repair stale hashes
+    python tools/sri_validator.py --templates templates --static static
 
 Recognised URL forms inside href/src:
     {{ url_for('static', filename='js/index.js') }}

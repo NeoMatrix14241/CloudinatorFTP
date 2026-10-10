@@ -206,7 +206,7 @@ pip install wsgidav cheroot paramiko pyftpdlib impacket
 ### Step 7.2: Configure Storage Location
 
 ```bash
-python setup_storage.py
+python tools/setup_storage.py
 ```
 
 Follow the interactive prompts to configure:
@@ -264,7 +264,7 @@ When initialized, the system creates:
 #### Add/Modify Users
 
 ```bash
-python create_user.py
+python tools/manage_users.py
 ```
 
 **Available Options:**
@@ -277,23 +277,26 @@ python create_user.py
 #### Example: Create Admin User
 
 ```bash
-python create_user.py
+python tools/manage_users.py
 # Select: Add user (2)
 # Username: alice
 # Password: [secure password]
 # Role: readwrite
 ```
 
-#### Test Authentication
+#### Check a Login
+
+The old `debug_passwords.py` tester was removed in 4.80. List the users or change a password with:
 
 ```bash
-python debug_passwords.py
+python tools/manage_users.py
+# 1. List users   3. Change password
 ```
 
 #### Revoke Access Quickly (Security Incident)
 
 ```bash
-python kick_sessions.py
+python tools/kick_sessions.py
 ```
 
 Interactive tool for "lock this person out now" situations — rotate a password, delete a user, or instantly log everyone out of the web UI. See [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md) for the per-protocol timing breakdown.
@@ -400,10 +403,9 @@ Run any of these **while a server is running in the same terminal**:
 | Command | Equivalent |
 |---------|------------|
 | `./manage.sh config` | `python config.py` |
-| `./manage.sh create-user` | `python create_user.py` |
-| `./manage.sh debug-pw` | `python debug_passwords.py` |
-| `./manage.sh reset-db` | `python reset_db.py` |
-| `./manage.sh setup-storage` | `python setup_storage.py` |
+| `./manage.sh manage-users` | `python tools/manage_users.py` |
+| `./manage.sh reset-db` | `python tools/reset_db.py` |
+| `./manage.sh setup-storage` | `python tools/setup_storage.py` |
 | `./manage.sh update-modules` | `bash update_pymodules.sh` |
 
 ### 🎛️ Interactive Menu
@@ -419,7 +421,7 @@ Run any of these **while a server is running in the same terminal**:
 ./manage.sh start server
 
 # Run utilities in the same terminal while the server is up
-./manage.sh create-user
+./manage.sh manage-users
 ./manage.sh config
 
 # Check server is still running (also shown on open with no args)
@@ -864,7 +866,7 @@ sudo chmod 755 /srv/cloudinator/files
 | Issue | Solution |
 |-------|----------|
 | Port 5000 in use | Kill process: `lsof -i :5000` then `kill -9 PID` |
-| Server won't start | Check logs: `python debug_passwords.py` |
+| Server won't start | Check logs: `./manage.sh logs` |
 | High CPU usage | Reduce HLS in `config.py`, check file count |
 | Out of memory | Check: `free -h`, reduce chunk size |
 
@@ -872,8 +874,8 @@ sudo chmod 755 /srv/cloudinator/files
 
 | Issue | Solution |
 |-------|----------|
-| Login fails | Run: `python debug_passwords.py` |
-| Database corrupted | Run: `python reset_db.py` |
+| Login fails | Run: `python tools/manage_users.py` (list users / change password) |
+| Database corrupted | Run: `python tools/reset_db.py` |
 | Users not found | Check DB path: `ls -la /var/lib/cloudinator/db/` |
 
 ### Cloudflare Tunnel Issues

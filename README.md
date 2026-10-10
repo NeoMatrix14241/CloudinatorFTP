@@ -141,7 +141,7 @@ pip install wsgidav cheroot paramiko pyftpdlib
 
 **Storage & Cache**
 ```bash
-python setup_storage.py
+python tools/setup_storage.py
 ```
 
 **Server, Storage, & Cache (Advanced)**
@@ -172,7 +172,7 @@ static\robots.txt
 
 **Add/Modify Users:**
 ```bash
-python create_user.py
+python tools/manage_users.py
 ```
 
 #### 6. 🎯 Launch the Server
@@ -182,21 +182,11 @@ python create_user.py
 For Waitress WSGI (Production/Live)
 ```bash
 python prod_server.py # Waitress Server (WSGI)
-
-or
-
-launch:
-- start_prod_server.bat > Waitress Server (WSGI)
 ```
 
 For Flask WSGI (Development/Testing)
 ```bash
 python dev_server.py # Flask Server (WSGI)
-
-or
-
-launch:
-- start_dev_server.bat > Flask Server (WSGI)
 ```
 
 Protocol servers (WebDAV, SFTP, FTP) start **automatically** alongside the web server — no extra command needed.
@@ -378,10 +368,9 @@ Run any utility **while a server is running in the same terminal**:
 | Command | Equivalent |
 |---------|------------|
 | `./manage.sh config` | `python config.py` |
-| `./manage.sh manage-users` | `python manage_users.py` |
-| `./manage.sh debug-pw` | `python debug_passwords.py` |
-| `./manage.sh reset-db` | `python reset_db.py` |
-| `./manage.sh setup-storage` | `python setup_storage.py` |
+| `./manage.sh manage-users` | `python tools/manage_users.py` |
+| `./manage.sh reset-db` | `python tools/reset_db.py` |
+| `./manage.sh setup-storage` | `python tools/setup_storage.py` |
 
 ### 🎛️ Interactive Menu
 
@@ -477,7 +466,7 @@ Both roles apply equally to the web UI, WebDAV, SFTP, and FTP.
 
 Run the user management tool:
 ```bash
-python create_user.py
+python tools/manage_users.py
 ```
 
 **Available Options:**
@@ -498,10 +487,11 @@ python create_user.py
 
 ### 🐛 Password Troubleshooting
 
-If you're having login issues:
+If you're having login issues, list the users and change the password if needed (the old `debug_passwords.py` tester was removed in 4.80):
 
 ```bash
-python debug_passwords.py
+python tools/manage_users.py
+# 1. List users   3. Change password
 ```
 
 This tool helps:
@@ -525,11 +515,11 @@ This tool helps:
 
 | Issue | Solution |
 |-------|----------|
-| Login fails with correct password | Run `python debug_passwords.py` |
-| Forgot password | Use `create_user.py` to reset password |
-| Users file corrupted | Run `debug_passwords.py` → option 4 to regenerate |
-| Looping web refresh | Run `revoke_sessions.py` |
-| Database gets corrupted | Run `reset_db.py` |
+| Login fails with correct password | Run `python tools/manage_users.py` (list users / change password) |
+| Forgot password | Use `tools/manage_users.py` to reset password |
+| Users file corrupted | Run `python tools/reset_db.py` (destructive: recreates the default accounts) |
+| Looping web refresh | Run `python tools/kick_sessions.py logout-web` |
+| Database gets corrupted | Run `python tools/reset_db.py` |
 
 ### Protocol Server Issues
 

@@ -4,7 +4,7 @@ reset_db.py — Wipe and recreate cloudinator.db from scratch
 ------------------------------------------------------------
 Use this if the database is corrupted or you want a clean slate.
 
-    python reset_db.py
+    python tools/reset_db.py
 
 Deletes the entire db/ folder and recreates it with default credentials:
   admin / admin123  (readwrite)
@@ -21,9 +21,13 @@ import os
 import shutil
 import sys
 
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
+# tools/ sits one level below the project root: put the root on sys.path so the
+# root modules (database, config, paths, ...) are still importable from here.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+os.chdir(_ROOT)
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
+_HERE = _ROOT
 
 
 def main():

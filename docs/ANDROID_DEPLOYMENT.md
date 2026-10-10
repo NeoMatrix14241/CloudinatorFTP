@@ -138,7 +138,7 @@ pip install -r requirements.txt
 Choose where your files will be stored:
 
 ```bash
-python setup_storage.py
+python tools/setup_storage.py
 ```
 
 #### Storage Options
@@ -187,7 +187,7 @@ When the server starts for the first time, it creates:
 #### Add/Modify Users
 
 ```bash
-python create_user.py
+python tools/manage_users.py
 ```
 
 **Menu Options:**
@@ -200,7 +200,7 @@ python create_user.py
 #### Example: Add a New User
 
 ```bash
-python create_user.py
+python tools/manage_users.py
 # Select option 2 (Add user)
 # Enter username: alice
 # Enter password: [your secure password]
@@ -209,10 +209,11 @@ python create_user.py
 
 #### Test Authentication
 
-If you're having login issues:
+If you're having login issues, list the users and change the password if needed (the old `debug_passwords.py` tester was removed in 4.80):
 
 ```bash
-python debug_passwords.py
+python tools/manage_users.py
+# 1. List users   3. Change password
 ```
 
 This tool allows you to:
@@ -224,7 +225,7 @@ This tool allows you to:
 #### Revoke Access Quickly (Security Incident)
 
 ```bash
-python kick_sessions.py
+python tools/kick_sessions.py
 ```
 
 Interactive tool for "lock this person out now" situations — rotate a password, delete a user, or instantly log everyone out of the web UI. See [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md) for the per-protocol timing breakdown.
@@ -300,10 +301,9 @@ Run any of these **while a server is running in the same Termux session**:
 | Command | Equivalent |
 |---------|------------|
 | `./manage.sh config` | `python config.py` |
-| `./manage.sh create-user` | `python create_user.py` |
-| `./manage.sh debug-pw` | `python debug_passwords.py` |
-| `./manage.sh reset-db` | `python reset_db.py` |
-| `./manage.sh setup-storage` | `python setup_storage.py` |
+| `./manage.sh manage-users` | `python tools/manage_users.py` |
+| `./manage.sh reset-db` | `python tools/reset_db.py` |
+| `./manage.sh setup-storage` | `python tools/setup_storage.py` |
 | `./manage.sh update-modules` | `bash update_pymodules.sh` |
 | `./manage.sh termux-setup` | `bash termux_setup.sh` |
 
@@ -322,7 +322,7 @@ A numbered menu covering all server and utility commands with live status at the
 ./manage.sh start server
 
 # Run utilities in the same Termux session while the server is up
-./manage.sh create-user
+./manage.sh manage-users
 ./manage.sh config
 
 # Check server is still running (also shows on open with no args)
@@ -542,18 +542,18 @@ For a persistent domain setup, refer to [Advanced Cloudflared Tunneling Setup](h
 
 | Issue | Solution |
 |-------|----------|
-| Login fails with correct password | Run: `python debug_passwords.py` |
-| Forgot password | Use: `python create_user.py` > Change password |
-| Users file corrupted | Run: `python reset_db.py` |
+| Login fails with correct password | Run: `python tools/manage_users.py` (list users / change password) |
+| Forgot password | Use: `python tools/manage_users.py` > Change password |
+| Users file corrupted | Run: `python tools/reset_db.py` |
 | Looping redirects on login | Run: `python revoke_session.py` |
-| Database corrupted | Run: `python reset_db.py` |
+| Database corrupted | Run: `python tools/reset_db.py` |
 
 ### Server Issues
 
 | Issue | Solution |
 |-------|----------|
 | Port 5000 already in use | Change port in `config.py` or kill process |
-| Server won't start | Check: `python debug_passwords.py` |
+| Server won't start | Check the newest file in `logs/` (`./manage.sh logs`) |
 | Cloudflare tunnel fails | Restart Termux, check internet connection |
 | High CPU/Battery drain | Reduce HLS settings in `config.py` |
 | SMB won't bind port 445 | Expected on non-rooted devices — falls back to 8445 automatically. Rooted? Run server via `su -c` or `tsu` |

@@ -4,13 +4,14 @@ User management CLI for CloudinatorFTP.
 Uses the same SQLite + Fernet-encrypted database as the server.
 Users created here work immediately for login — no server restart needed.
 
-Run: python create_user.py
+Run: python tools/manage_users.py
 """
 
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
 
 # Ensure db/ directory exists at configured path before database.py writes to it
 from paths import ensure_dirs

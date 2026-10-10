@@ -428,7 +428,7 @@ cmd_start() {
 		echo ""
 		info "Logs saved to: ${DIM}${log}${NC}"
 		echo ""
-		info "Utilities:   ./manage.sh version-manage | config | manage-users | debug-pw | reset-db"
+		info "Utilities:   ./manage.sh version-manage | config | manage-users | reset-db"
 		info "Follow logs: ./manage.sh logs $(display_name_for "$type") -f"
 		info "Stop server: ./manage.sh stop"
 	else
@@ -901,7 +901,7 @@ run_utility() {
 	"$PYTHON" "${SCRIPT_DIR}/${script}" "$@" || ec=$?
 	trap - INT # restore default signal handling
 	divider
-	_report_exit "${script%.py}" "$ec"
+	_report_exit "$(basename "${script%.py}")" "$ec"
 	return $ec
 }
 
@@ -1189,10 +1189,10 @@ cmd_security_txt() {
 # sri_validator.py exits 1 on a stale / missing hash, so that exit code is what
 # this command returns too (usable from a git pre-commit hook or a deploy script).
 cmd_validate_sri() {
-	run_utility "sri_validator.py" --templates "${SCRIPT_DIR}/templates" --static "${SCRIPT_DIR}/static" "$@"
+	run_utility "tools/sri_validator.py" --templates "${SCRIPT_DIR}/templates" --static "${SCRIPT_DIR}/static" "$@"
 }
 
-# Menu flavour of validate-sri (menu #21): run the check, and if it found stale
+# Menu flavour of validate-sri (menu #20): run the check, and if it found stale
 # or missing hashes (validator exit code 1) offer to repair them right there, so
 # the menu user never has to quit and retype the command with --fix. Only exit
 # code 1 triggers the question: 130 (Ctrl-C) and 2 (templates/static folder not
@@ -1200,7 +1200,7 @@ cmd_validate_sri() {
 # reported by run_utility without a pointless "fix?" prompt.
 _menu_validate_sri() {
 	local ec=0
-	if [[ ! -f "${SCRIPT_DIR}/sri_validator.py" ]]; then
+	if [[ ! -f "${SCRIPT_DIR}/tools/sri_validator.py" ]]; then
 		cmd_validate_sri
 		return $?
 	fi
@@ -1351,20 +1351,19 @@ cmd_menu() {
 		echo "  11) smb_setup.py        — Configure SMB storage"
 		echo "  12) kick_sessions.py    — Force logout of all active sessions"
 		echo "  13) manage_users.py     — Manage user credentials"
-		echo "  14) debug_passwords.py  — Debug passwords"
-		echo "  15) reset_db.py         — Reset database"
-		echo "  16) setup_storage.py    — Configure storage"
-		echo "  17) setup_pymodules.sh  — Setup and Update Python packages"
-		echo "  18) revoke_sharing.py   — Share link management (links, passkeys, approvals)"
-		echo "  19) security.txt        — Update static/.well-known/security.txt"
-		# Always listed so the menu numbers match `./manage.sh help` (21 entries).
+		echo "  14) reset_db.py         — Reset database"
+		echo "  15) setup_storage.py    — Configure storage"
+		echo "  16) setup_pymodules.sh  — Setup and Update Python packages"
+		echo "  17) revoke_sharing.py   — Share link management (links, passkeys, approvals)"
+		echo "  18) security.txt        — Update static/.well-known/security.txt"
+		# Always listed so the menu numbers match `./manage.sh help` (20 entries).
 		# Off Termux, cmd_termux_setup just explains that it is Android-only.
 		if is_termux; then
-			echo "  20) termux_setup.sh     — Termux initial setup (Android only)"
+			echo "  19) termux_setup.sh     — Termux initial setup (Android only)"
 		else
-			echo -e "  ${DIM}20) termux_setup.sh     — Termux initial setup (Android only — n/a on this system)${NC}"
+			echo -e "  ${DIM}19) termux_setup.sh     — Termux initial setup (Android only — n/a on this system)${NC}"
 		fi
-		echo "  21) sri_validator.py    — Check SRI hashes in templates (offers to fix)"
+		echo "  20) sri_validator.py    — Check SRI hashes in templates (offers to fix)"
 		echo ""
 		echo "   q) Quit"
 		echo ""
@@ -1387,19 +1386,18 @@ cmd_menu() {
 		6) _menu_run _menu_logs ;;
 		7) _menu_run cmd_clean_logs ;;
 		8) _menu_run cmd_restart_webdav ;;
-		9) _menu_run run_utility "version_manage.py" ;;
+		9) _menu_run run_utility "tools/version_manage.py" ;;
 		10) _menu_run run_utility "config.py" ;;
 		11) _menu_run run_utility "smb_setup.py" ;;
-		12) _menu_run run_utility "kick_sessions.py" ;;
-		13) _menu_run run_utility "manage_users.py" ;;
-		14) _menu_run run_utility "debug_passwords.py" ;;
-		15) _menu_run run_utility "reset_db.py" ;;
-		16) _menu_run run_utility "setup_storage.py" ;;
-		17) _menu_run cmd_setup_modules ;;
-		18) _menu_run run_utility "revoke_sharing.py" ;;
-		19) _menu_run cmd_security_txt ;;
-		20) _menu_run cmd_termux_setup ;;
-		21) _menu_run _menu_validate_sri ;;
+		12) _menu_run run_utility "tools/kick_sessions.py" ;;
+		13) _menu_run run_utility "tools/manage_users.py" ;;
+		14) _menu_run run_utility "tools/reset_db.py" ;;
+		15) _menu_run run_utility "tools/setup_storage.py" ;;
+		16) _menu_run cmd_setup_modules ;;
+		17) _menu_run run_utility "tools/revoke_sharing.py" ;;
+		18) _menu_run cmd_security_txt ;;
+		19) _menu_run cmd_termux_setup ;;
+		20) _menu_run _menu_validate_sri ;;
 		q | Q)
 			echo ""
 			success "Goodbye!"
@@ -1445,7 +1443,7 @@ ${BOLD}SERVER COMMANDS${NC}  (mutually exclusive — only one server at a time)
 
 ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
   Any extra arguments after a utility command are passed straight to its script.
-  version-manage        python version_manage.py — Version Engine: browse, restore,
+  version-manage        python tools/version_manage.py — Version Engine: browse, restore,
                           and delete file versions. No args → interactive menu.
                           subcommands: list [file_path] |
                           restore <version_id> <destination> [--overwrite] |
@@ -1454,20 +1452,19 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
                           the menu (interactive mode) or exits cleanly (CLI mode) —
                           never leaves a partial restore/delete in place.
   setup-smb             python smb_setup.py — Configure SMB protocol storage (Windows/Linux)
-  kick-sessions         python kick_sessions.py — Force logout of all active
+  kick-sessions         python tools/kick_sessions.py — Force logout of all active
                           sessions (server must be running)
   config                python config.py
-  manage-users          python manage_users.py
-  debug-pw              python debug_passwords.py
-  reset-db              python reset_db.py
-  setup-storage         python setup_storage.py
+  manage-users          python tools/manage_users.py
+  reset-db              python tools/reset_db.py
+  setup-storage         python tools/setup_storage.py
   update-modules [-y]   bash setup_pymodules.sh — rewrites requirements.txt /
                           constraints.txt, checks for conflicts, then offers to
                           install. Asks for confirmation first (-y / --yes skips
                           that question). Ctrl-C at any point stops it and, if
                           it was still generating the files, restores the old ones.
                           (alias: setup-modules)
-  revoke-shares         python revoke_sharing.py [no args → interactive menu]
+  revoke-shares         python tools/revoke_sharing.py [no args → interactive menu]
                           subcommands: list | revoke <token> [--yes] |
                           revoke-path <path> [--yes] | revoke-all [--yes] |
                           edit <token> [opts] | edit-path <path> [opts] |
@@ -1488,10 +1485,10 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
                           in the file are left alone. Expires is normalized to
                           YYYY-MM-DDTHH:MM:SS.sssZ; a date-only value defaults
                           to 23:00:00.000Z that day.
-  validate-sri [--fix]  python sri_validator.py — check the SRI integrity hash of every
+  validate-sri [--fix]  python tools/sri_validator.py — check the SRI integrity hash of every
                           local <script src>/<link href> in templates/. No args = check
                           only (exit code 1 if any hash is stale or missing). --fix
-                          writes the correct hashes into the templates (menu #21 checks,
+                          writes the correct hashes into the templates (menu #20 checks,
                           then asks y/N before fixing). Other options:
                           --templates DIR, --static DIR. Run it after editing any JS/CSS
                           under static/, then reload each page once.
@@ -1507,10 +1504,10 @@ ${BOLD}MENU ↔ COMMAND MAP${NC}  (in ./manage.sh menu type the number; from the
    4  restart               5  status                6  logs [server|dev_server] [-f]
    7  clean-logs            8  restart-webdav        9  version-manage
   10  config                11  setup-smb            12  kick-sessions
-  13  manage-users          14  debug-pw             15  reset-db
-  16  setup-storage         17  update-modules       18  revoke-shares
-  19  security-txt         20  termux-setup (Android/Termux only; shown dimmed elsewhere)
-  21  validate-sri         q  quit
+  13  manage-users          14  reset-db             15  setup-storage
+  16  update-modules        17  revoke-shares        18  security-txt
+  19  termux-setup (Android/Termux only; shown dimmed elsewhere)
+  20  validate-sri         q  quit
 
 ${BOLD}EXAMPLES${NC}
   Servers
@@ -1539,7 +1536,6 @@ ${BOLD}EXAMPLES${NC}
     ./manage.sh kick-sessions                    # force logout of every active session
     ./manage.sh config                           # edit configuration
     ./manage.sh manage-users                     # run tool while server is still up
-    ./manage.sh debug-pw                         # debug passwords
     ./manage.sh reset-db                         # reset the database
     ./manage.sh setup-storage                    # configure storage
     ./manage.sh update-modules                   # update Python packages (asks first)
@@ -1607,15 +1603,14 @@ main() {
 	logs) cmd_logs "$@" ;;
 	clean-logs) cmd_clean_logs ;;
 	setup-smb) run_utility "smb_setup.py" "$@" ;;
-	kick-sessions) run_utility "kick_sessions.py" "$@" ;;
+	kick-sessions) run_utility "tools/kick_sessions.py" "$@" ;;
 	config) run_utility "config.py" "$@" ;;
-	version-manage) run_utility "version_manage.py" "$@" ;;
-	manage-users) run_utility "manage_users.py" "$@" ;;
-	debug-pw) run_utility "debug_passwords.py" "$@" ;;
-	reset-db) run_utility "reset_db.py" "$@" ;;
-	setup-storage) run_utility "setup_storage.py" "$@" ;;
+	version-manage) run_utility "tools/version_manage.py" "$@" ;;
+	manage-users) run_utility "tools/manage_users.py" "$@" ;;
+	reset-db) run_utility "tools/reset_db.py" "$@" ;;
+	setup-storage) run_utility "tools/setup_storage.py" "$@" ;;
 	update-modules | setup-modules) cmd_setup_modules "$@" ;;
-	revoke-shares) run_utility "revoke_sharing.py" "$@" ;;
+	revoke-shares) run_utility "tools/revoke_sharing.py" "$@" ;;
 	security-txt) cmd_security_txt "$@" ;;
 	termux-setup) cmd_termux_setup ;;
 	validate-sri) cmd_validate_sri "$@" ;;

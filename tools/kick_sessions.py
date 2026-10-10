@@ -30,12 +30,14 @@ TIMING, PER PROTOCOL (measured directly against the real libraries):
                was unaffected either way.
 """
 
+import os
 import secrets
 import sys
 
-sys.path.insert(
-    0, __import__("os").path.dirname(__import__("os").path.abspath(__file__))
-)
+# tools/ sits one level below the project root: put the root on sys.path so the
+# root modules (database, config, paths, ...) are still importable from here.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
 
 from database import db
 
@@ -192,13 +194,13 @@ def _print_help():
     print(__doc__)
     print()
     print("Usage:")
-    print("  python kick_sessions.py                          interactive menu")
-    print("  python kick_sessions.py list")
-    print("  python kick_sessions.py rotate <username>")
-    print("  python kick_sessions.py delete <username>")
-    print("  python kick_sessions.py kick-all [--include-admins]")
-    print("  python kick_sessions.py logout-web        instant, web UI only")
-    print("  python kick_sessions.py --help")
+    print("  python tools/kick_sessions.py                          interactive menu")
+    print("  python tools/kick_sessions.py list")
+    print("  python tools/kick_sessions.py rotate <username>")
+    print("  python tools/kick_sessions.py delete <username>")
+    print("  python tools/kick_sessions.py kick-all [--include-admins]")
+    print("  python tools/kick_sessions.py logout-web        instant, web UI only")
+    print("  python tools/kick_sessions.py --help")
 
 
 def logout_web():
