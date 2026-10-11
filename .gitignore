@@ -13,5 +13,4 @@ constraints.txt
 cache/
 db/
 logs/
-tests/
 uploads/
