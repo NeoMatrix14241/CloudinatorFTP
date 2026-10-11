@@ -11,7 +11,7 @@ import os
 import sys
 import signal
 
-# get_local_ip() lives in net_utils.py, not app.py (2026-09-25) — a
+# get_local_ip() lives in helpers/net_utils.py, not app.py (2026-09-25) — a
 # small, side-effect-free module (see its docstring). This used to be
 # `from app import get_local_ip`, which happened to be the line that
 # first triggered app.py's full module-level init (file_monitor,
@@ -21,7 +21,7 @@ import signal
 # real ordering dependency here — app.py's heavy init now happens at
 # the `from app import app` line instead, which is where the comment
 # already at that import correctly says it belongs.
-from net_utils import get_local_ip
+from helpers.net_utils import get_local_ip
 
 LOCAL_IP = get_local_ip()
 

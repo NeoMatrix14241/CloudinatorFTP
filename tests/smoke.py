@@ -20,7 +20,8 @@ What it catches (the mistakes the 4.68-4.82 refactor was most exposed to):
      (+ the event-loop watchdog's before_serving in routes/stats.py)
   6  no `from app import` except the launchers; no `from x import *`; no import cycle through
      app / core / middleware / routes
-  7  routes/ modules only import each other where the design allows it
+  7  routes/ modules only import each other where the design allows it; helpers/ modules stay leaf
+     utilities (they may not import app, core, middleware, routes, tools or tests)
   8  every routes/*.py is imported by app.py (otherwise its routes silently never register)
   9  every tools/*.py that imports a root module puts the project root on sys.path first
  10  manage.sh: every .py it launches exists, `bash -n` passes
@@ -476,6 +477,28 @@ def check_imports(files, trees):
         "7 routes/ modules do not import each other (except the documented pairs)",
         route_bad,
     )
+    helper_bad = []
+    for f, t in trees.items():
+        if isinstance(t, SyntaxError) or f.parent != ROOT / "helpers":
+            continue
+        for mod, _star, line in imports_of(t, module_level_only=False):
+            if mod.split(".")[0] in (
+                "app",
+                "core",
+                "middleware",
+                "routes",
+                "tools",
+                "tests",
+            ):
+                helper_bad.append(
+                    f"{rel(f)}:{line}: helpers/ modules must stay leaf utilities but import '{mod}'"
+                )
+    if (ROOT / "helpers").is_dir():
+        report(
+            "FAIL" if helper_bad else "PASS",
+            "7b helpers/ modules stay leaf utilities (no app/core/middleware/routes/tools imports)",
+            helper_bad,
+        )
 
 
 def check_app_registers_routes(trees):

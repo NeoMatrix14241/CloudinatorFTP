@@ -60,7 +60,7 @@ import logging_setup
 # walk thread's 30s countdown.
 sys.setswitchinterval(0.001)
 
-# get_local_ip() lives in net_utils.py, not app.py (2026-09-25) — a
+# get_local_ip() lives in helpers/net_utils.py, not app.py (2026-09-25) — a
 # small, side-effect-free module (see its docstring). This used to be
 # `from app import get_local_ip`, which was actually the line that
 # first triggered app.py's heavy module-level init (the comment above
@@ -71,7 +71,7 @@ sys.setswitchinterval(0.001)
 # call above is process-global and stays in effect regardless of which
 # later line actually imports app.py, so moving this import doesn't
 # affect the timing this section depends on.
-from net_utils import get_local_ip
+from helpers.net_utils import get_local_ip
 
 LOCAL_IP = get_local_ip()
 
@@ -227,13 +227,13 @@ if _BG:
 from app import app
 
 # Patch a real, still-open Hypercorn bug (hypercorn#202) before any
-# Hypercorn server in THIS process starts — see hypercorn_ssl_fix.py's
+# Hypercorn server in THIS process starts — see helpers/hypercorn_ssl_fix.py's
 # module docstring. Must run before the `await serve(...)` call in
 # _run() below; applying it here at import time is the simplest way to
 # guarantee that. NOTE: WebDAV runs as its own separate OS process (see
 # protocol_manager.py) with its own Hypercorn instance, so this call does
 # NOT cover it — webdav_server.py applies the identical patch for itself.
-import hypercorn_ssl_fix
+from helpers import hypercorn_ssl_fix
 
 hypercorn_ssl_fix.apply()
 

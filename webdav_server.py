@@ -82,14 +82,14 @@ import logging_setup
 # Import from net_utils, NOT app: `from app import ...` executes all of app.py's
 # top-level code inside this subprocess (file monitor + reconciliation walk,
 # search-index crawler, cleanup/assembly workers - all duplicated).
-from net_utils import get_local_ip
+from helpers.net_utils import get_local_ip
 
 # Patch the same real, still-open Hypercorn bug (hypercorn#202) that
-# prod_server.py patches for the main app — see hypercorn_ssl_fix.py's
+# prod_server.py patches for the main app — see helpers/hypercorn_ssl_fix.py's
 # module docstring. WebDAV runs as its own separate OS process with its
 # own independent Hypercorn instance (see protocol_manager.py), so it
 # needs this call too; prod_server.py's own call does not cover it.
-import hypercorn_ssl_fix
+from helpers import hypercorn_ssl_fix
 
 hypercorn_ssl_fix.apply()
 
@@ -783,7 +783,7 @@ class _DisconnectAbortMiddleware:
 # used to escape Hypercorn's TCPServer._close() as an anonymous "Unhandled
 # exception in client_connected_cb" traceback (no client address — asyncio no
 # longer knows it by then). That is now handled where the rest of the
-# _close() fixes live: hypercorn_ssl_fix.py's patched _close(), applied at the
+# _close() fixes live: helpers/hypercorn_ssl_fix.py's patched _close(), applied at the
 # top of this file, reads the peer before teardown and logs one IP-tagged
 # line. Nothing needed here.
 

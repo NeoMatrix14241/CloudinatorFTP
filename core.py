@@ -55,12 +55,12 @@ import logging
 import uuid
 import socket
 
-# get_local_ip's real implementation now lives in net_utils.py (no
+# get_local_ip's real implementation now lives in helpers/net_utils.py (no
 # side effects on import) — aliased here so the wrapper below can
 # re-export it under its original name without self-recursion. See
-# net_utils.py's docstring and the wrapper function for why this split
+# helpers/net_utils.py's docstring and the wrapper function for why this split
 # exists.
-from net_utils import get_local_ip as _get_local_ip
+from helpers.net_utils import get_local_ip as _get_local_ip
 
 
 async def _stream_from_thread(sync_generator):
@@ -108,7 +108,7 @@ def get_local_ip() -> str:
     to pick the right outbound interface, revealing the real LAN IP.
     Falls back to 127.0.0.1 if the device has no network.
 
-    MOVED to net_utils.py (2026-09-25), re-exported here so every other
+    MOVED to helpers/net_utils.py (2026-09-25), re-exported here so every other
     module that already does `from app import get_local_ip`
     (sftp_server.py, ftp_server.py, smb_server.py) keeps working
     unchanged — they run as threads inside this same process, so

@@ -56,7 +56,7 @@ def main():
     # file's existence, so wiping it away here is harmless, just loses the
     # reminder text. No action needed; this is purely informational.
     try:
-        import lanman_guard
+        from helpers import lanman_guard
 
         state_path = os.path.join(db_dir, ".smb_lanman_state.json")
         pending = lanman_guard.get_pending_state(state_path)
@@ -67,7 +67,7 @@ def main():
             print("   If you haven't restarted since then for port 445 to take")
             print("   effect, that's still worth doing — this reset doesn't change it.")
     except ImportError:
-        pass  # lanman_guard.py not present — nothing to check, nothing lost
+        pass  # helpers/lanman_guard.py not present — nothing to check, nothing lost
 
     # Wipe the db/ folder (removes .db, -wal, -shm and anything else inside,
     # including secret.key, session.secret, sftp_host.rsa, webdav.crt/key —

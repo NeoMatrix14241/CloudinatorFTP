@@ -40,13 +40,13 @@ import time
 import logging
 import logging_setup
 
-# get_local_ip() lives in net_utils.py, not app.py (2026-09-25) — a
-# small, side-effect-free module. See net_utils.py's docstring: this
+# get_local_ip() lives in helpers/net_utils.py, not app.py (2026-09-25) — a
+# small, side-effect-free module. See helpers/net_utils.py's docstring: this
 # used to be `from app import get_local_ip`, which works fine wherever
 # app.py gets fully imported anyway, but importing the lightweight
 # function from the lightweight module is one less thing to reason
 # about if that ever changes.
-from net_utils import get_local_ip
+from helpers.net_utils import get_local_ip
 
 LOCAL_IP = get_local_ip()
 

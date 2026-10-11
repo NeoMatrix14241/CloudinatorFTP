@@ -39,7 +39,7 @@ import logging_setup
 # app.py gets fully imported anyway, but importing the lightweight
 # function from the lightweight module is one less thing to reason
 # about if that ever changes.
-from net_utils import get_local_ip
+from helpers.net_utils import get_local_ip
 
 LOCAL_IP = get_local_ip()
 
@@ -868,7 +868,7 @@ def _select_port(preferred: int, fallback: int, state_path: str) -> int:
     touches the OS itself — see smb_setup.py for the actual setup."""
     if _try_bind(preferred):
         if _IS_WINDOWS:
-            import lanman_guard
+            import helpers.lanman_guard as lanman_guard
 
             if lanman_guard.get_pending_state(state_path):
                 lanman_guard.clear_pending_state(state_path)
@@ -878,7 +878,7 @@ def _select_port(preferred: int, fallback: int, state_path: str) -> int:
         return preferred
 
     if _IS_WINDOWS:
-        import lanman_guard
+        import helpers.lanman_guard as lanman_guard
 
         pending = lanman_guard.get_pending_state(state_path)
         if pending:
