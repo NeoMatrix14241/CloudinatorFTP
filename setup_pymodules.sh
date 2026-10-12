@@ -95,6 +95,7 @@ packages=(
 	pyppmd
 	impacket
 	pyOpenSSL
+	pyflakes
 )
 
 # Exception case 1: Termux. Maps a pip package name -> its Termux apt
