@@ -22,18 +22,18 @@ Certificate source, in priority order:
      cert for this device's `*.ts.net` name. No browser warning, no
      per-client cert import, but only reachable via the tailnet (Tailscale
      installed + logged in on the client) at https://<device>.<tailnet>.ts.net:PORT/.
-  2. ssl_cert.py fallback — if Tailscale isn't installed/logged in, or
+  2. helpers/ssl_cert.py fallback — if Tailscale isn't installed/logged in, or
      HTTPS Certificates isn't enabled for the tailnet, or the `tailscale
      cert` call fails for any reason (e.g. no internet), falls back to the
      self-signed CA cert (db/webdav.crt + db/webdav.key) — the same one
      WebDAV HTTPS already uses. Reachable at https://HOST:PORT/ via LAN IP
      or localhost, but browsers show a warning until that cert is imported
-     as a trusted root — see ssl_cert.py's module docstring for per-OS
+     as a trusted root — see helpers/ssl_cert.py's module docstring for per-OS
      import steps.
 
 Both paths can be used at once (Tailscale cert is what's actually bound to
 Hypercorn, but the self-signed one is still generated/available for
-LAN-only clients that aren't on the tailnet — see ssl_cert.py directly).
+LAN-only clients that aren't on the tailnet — see helpers/ssl_cert.py directly).
 """
 
 import os
@@ -109,7 +109,7 @@ def _build_hypercorn_logger(name: str) -> logging.Logger:
 # If this machine is on a tailnet with MagicDNS + HTTPS Certificates
 # enabled, `tailscale cert` gets us a real Let's Encrypt cert for our
 # *.ts.net name — no self-signed warning, no per-client cert import.
-# Falls back silently to ssl_cert.py's self-signed cert if anything here
+# Falls back silently to helpers/ssl_cert.py's self-signed cert if anything here
 # isn't available (Tailscale not installed, not logged in, HTTPS not
 # enabled for the tailnet, no internet, etc.) — this is best-effort, never
 # a hard requirement to start the server.
@@ -157,7 +157,7 @@ async def _get_tailscale_cert(
     """Issue or renew a real cert for `dns_name` via `tailscale cert`,
     writing it into db_dir alongside the self-signed fallback. Returns
     (cert_path, key_path) on success, None on any failure — caller falls
-    back to ssl_cert.py's self-signed cert."""
+    back to helpers/ssl_cert.py's self-signed cert."""
     cert_path = os.path.join(db_dir, "tailscale.crt")
     key_path = os.path.join(db_dir, "tailscale.key")
     try:
@@ -254,7 +254,7 @@ version_engine.start()
 async def _run():
     from config import ROOT_DIR, HOST, PORT, PERMANENT_SESSION_LIFETIME
     from paths import get_db_dir
-    import ssl_cert
+    from helpers import ssl_cert
     from hypercorn.config import Config as HyperConfig
     from hypercorn.asyncio import serve
 
@@ -348,14 +348,14 @@ async def _run():
         print()
         print(f"🌐 Local network:  https://{LOCAL_IP}:{PORT}  (self-signed cert")
         print("   still generated for LAN clients not on the tailnet — see")
-        print("   ssl_cert.py for per-OS trust-import steps if you use this.)")
+        print("   helpers/ssl_cert.py for per-OS trust-import steps if you use this.)")
     else:
         print(f"🌐 Local network:  https://{LOCAL_IP}:{PORT}")
         print(f"🔁 Localhost:      https://localhost:{PORT}")
         print()
         print("⚠️  First connection from a new client will show a self-signed")
         print(f"   certificate warning until {cert_path} is imported as a")
-        print("   trusted root — see ssl_cert.py's module docstring for the")
+        print("   trusted root — see helpers/ssl_cert.py's module docstring for the")
         print("   per-OS steps (same cert/steps WebDAV HTTPS already uses).")
         if tailscale_exe and not tailscale_dns_name:
             print()

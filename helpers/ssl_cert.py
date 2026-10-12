@@ -11,6 +11,10 @@ Why HTTPS over HTTP for WebDAV:
   • BasicAuthLevel registry key NOT needed
   • Credentials are encrypted in transit
 
+Command line (from the project root):
+  python helpers/ssl_cert.py               # show cert paths and the import command
+  python helpers/ssl_cert.py --regenerate  # force-regenerate (use after an IP change)
+
 One-time Windows setup after cert is generated:
   1. Copy  db/webdav.crt  to the Windows machine
   2. Run in elevated PowerShell:
@@ -187,7 +191,10 @@ def regenerate(db_dir: str) -> tuple[str, str]:
 if __name__ == "__main__":
     import sys
 
-    sys.path.insert(0, os.path.dirname(__file__))
+    # helpers/ sits one level below the project root: put the root on sys.path so
+    # `from paths import ...` / `from config import ...` below still resolve
+    # (run as `python helpers/ssl_cert.py` or `python -m helpers.ssl_cert`).
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from paths import get_db_dir
 
     db = get_db_dir(create=True)

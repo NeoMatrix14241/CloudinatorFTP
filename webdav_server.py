@@ -895,7 +895,7 @@ def start() -> bool:
     if https_port:
         try:
             from paths import get_db_dir
-            import ssl_cert
+            from helpers import ssl_cert
 
             db_dir = get_db_dir(create=True)
             cert_path, key_path = ssl_cert.get_cert_paths(db_dir)
