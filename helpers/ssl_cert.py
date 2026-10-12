@@ -96,7 +96,7 @@ def _generate(cert_path: str, key_path: str):
         except ValueError:
             pass
 
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.UTC)
 
     cert = (
         x509.CertificateBuilder()
