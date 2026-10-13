@@ -133,7 +133,7 @@ async def login():
     # explicitly deletes cookies via response.delete_cookie(), not a
     # session-modification-triggered Set-Cookie.
     if _request_is_secure():
-        response.headers["Clear-Site-Data"] = '"storage"'
+        response.headers["Clear-Site-Data"] = '"executionContexts"'
     return response
 
 
@@ -162,7 +162,7 @@ async def logout():
             }
         )
 
-        # Tell the browser to wipe cookies/cache/storage for this origin now
+        # Tell the browser to wipe cookies/cache/storage/etc. for this origin now
         # that the session is gone, rather than relying solely on cookie
         # expiry — helps on shared/public machines. Browsers only honor this
         # header on secure origins (HTTPS) — sending it over plain HTTP (e.g.
