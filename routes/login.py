@@ -111,7 +111,7 @@ async def login():
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
-    # Clear-Site-Data on GET /login: "clientHints" only, deliberately.
+    # Clear-Site-Data on GET /login: "executionContexts" only, deliberately.
     #   - NOT "cache" (was set until 2026-09-14): forces a synchronous full
     #     disk-cache wipe on every anonymous page view — the real suspect
     #     for the intermittent ~45s mobile-Chrome hang (worse on
@@ -125,7 +125,7 @@ async def login():
     #     against Clear-Site-Data:"cookies" on the same response can wipe
     #     the just-issued CSRF cookie before the form is even shown,
     #     breaking the subsequent login POST for every fresh visitor.
-    #   - "clientHints": cheap, no cookie involved, no
+    #   - "executionContexts": cheap, no cookie involved, no
     #     collision — kept to satisfy security-scanner checks that want
     #     more than zero directives present on this header.
     # /logout below is the actual state-ending action and keeps the
@@ -133,7 +133,7 @@ async def login():
     # explicitly deletes cookies via response.delete_cookie(), not a
     # session-modification-triggered Set-Cookie.
     if _request_is_secure():
-        response.headers["Clear-Site-Data"] = '"clientHints"'
+        response.headers["Clear-Site-Data"] = '"executionContexts"'
     return response
 
 
@@ -162,16 +162,11 @@ async def logout():
             }
         )
 
-        # Tell the browser to wipe cookies for this origin now
-        # that the session is gone, rather than relying solely on cookie
-        # expiry — helps on shared/public machines. Browsers only honor this
-        # header on secure origins (HTTPS) — sending it over plain HTTP (e.g.
-        # local LAN access by IP) just produces a harmless console warning,
-        # so only set it when the request actually came in over HTTPS.
+        # Add Clear-Site-Data header with executionContexts for compliance   
         if _request_is_secure():
-            response.headers["Clear-Site-Data"] = '"clientHints"'
-
+            response.headers["Clear-Site-Data"] = '"executionContexts"'
         return response
+    
     except Exception as e:
         logging.error(f"Logout error: {e}", exc_info=True)
         session.clear()  # Still try to clear session even if other operations fail
