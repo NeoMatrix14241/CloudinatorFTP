@@ -133,7 +133,7 @@ async def login():
     # explicitly deletes cookies via response.delete_cookie(), not a
     # session-modification-triggered Set-Cookie.
     if _request_is_secure():
-        response.headers["Clear-Site-Data"] = '"executionContexts"'
+        response.headers["Clear-Site-Data"] = '"storage"'
     return response
 
 
@@ -169,7 +169,7 @@ async def logout():
         # local LAN access by IP) just produces a harmless console warning,
         # so only set it when the request actually came in over HTTPS.
         if _request_is_secure():
-            response.headers["Clear-Site-Data"] = '"cache", "cookies", "storage", "executionContexts", "prefetchCache", "prerenderCache"'
+            response.headers["Clear-Site-Data"] = '"*"'
 
         return response
     except Exception as e:
