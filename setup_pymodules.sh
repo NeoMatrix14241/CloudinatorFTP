@@ -96,6 +96,7 @@ packages=(
 	impacket
 	pyOpenSSL
 	pyflakes
+	pandas
 )
 
 # Exception case 1: Termux. Maps a pip package name -> its Termux apt

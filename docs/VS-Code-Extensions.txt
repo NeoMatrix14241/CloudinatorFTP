@@ -7,3 +7,4 @@ Python Debugger - Microsoft
 Python Environments - Microsoft
 Python Indent - Kevin Rose
 shfmt - Martin Kühl
+YAML - Red Hat

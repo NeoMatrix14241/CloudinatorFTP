@@ -11,6 +11,8 @@ tests/check.py - per-module checker with parameters (CLAUDE.md 4.84).
     python tests/check.py --list               list the targets (size, imported by, __main__), run no checks
     python tests/check.py helpers --json       machine-readable result
     options: -q (only problems)  --strict (WARN counts as failure)  --force (allow --import of app/core/...)
+             --skip-packages (do not warn about third-party packages that are not installed: for CI
+             machines that only have pyflakes, not the server's requirements)
 
 Per module (static, read-only, safe while the server runs):
   syntax        parses
@@ -475,6 +477,7 @@ def main():
     ap.add_argument("-q", "--quiet", action="store_true")
     ap.add_argument("--strict", action="store_true")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--skip-packages", action="store_true")
     args = ap.parse_args()
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -520,7 +523,7 @@ def main():
             checks.append(("pyflakes", "FAIL" if fatal else "PASS", fatal))
         r = check_imports(f)
         checks.append(("imports", r[0], r[1]))
-        if r[2]:
+        if r[2] and not args.skip_packages:
             checks.append(("imports(warn)", "WARN", r[2]))
         lay = check_layering(f)
         if lay:

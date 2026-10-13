@@ -1,0 +1,43 @@
+# Static safety checks for CloudinatorFTP on every push and pull request to main and dev.
+# Same commands as on the developer machine; nothing is imported or started (see CLAUDE.md,
+# part 33/34): tests/smoke.py = project wiring, tests/check.py = per-module checks.
+name: Tests
+
+on:
+    push:
+        branches: ["main", "dev"]
+    pull_request:
+        branches: ["main", "dev"]
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: tests-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    static-checks:
+        name: smoke + check
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v7
+
+            - name: Set up Python
+              uses: actions/setup-python@v6
+              with:
+                  python-version: "3.12"
+
+            - name: Install pyflakes
+              run: python -m pip install --upgrade pip pyflakes
+
+            # syntax, pyflakes, route table + snapshot, import rules, hooks, tools/, helpers/, manage.sh
+            - name: Smoke test
+              run: python tests/smoke.py
+
+            # per-module: syntax, pyflakes, project-import resolution, helpers layering.
+            # --skip-packages: this runner does not install the server's requirements.txt.
+            - name: Module checks
+              run: python tests/check.py -q --skip-packages

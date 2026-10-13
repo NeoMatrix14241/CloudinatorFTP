@@ -170,9 +170,9 @@ It manages:
 
 The module is designed to avoid creating paths or files on import. It only initializes on the first real database query or write. This choice matters because tools like setup scripts and config loaders need to import database logic without immediately creating directories.
 
-### 6.3 RSA-style analogy for the design
+### 6.3 Separation of secrets
 
-Not literally RSA, but the pattern is similar to security-first persistence: sensitive fields are encrypted at rest, and the app does not trust raw file state alone. The code intentionally separates:
+Sensitive fields are encrypted at rest, and the app does not trust raw file state alone. The code intentionally separates:
 
 - the password hash for web auth
 - the NT hash for SMB authentication
@@ -256,7 +256,7 @@ The route modules follow a shared pattern:
 - they import the shared app from [../core.py](../core.py)
 - they do not define their own app instance
 - they use plain quart decorators directly on the shared app
-- they sometimes import helper functions from other route modules only when needed
+- they do not import each other, with two documented exceptions enforced by `tests/smoke.py` (check 7): [../routes/admin.py](../routes/admin.py) imports the HLS and image-preview cache helpers, and [../routes/uploads.py](../routes/uploads.py) imports the share-pruning helper from [../routes/shares.py](../routes/shares.py)
 - they rely on middleware for auth, CSRF, and CORS checks
 
 ## 9. Request lifecycle and middleware
@@ -357,7 +357,7 @@ The project can expose file access through alternate protocols in addition to th
 
 ### 13.3 Operational pattern
 
-Some services are started as background threads in-process; WebDAV is separated into its own process for resilience and recovery, as described in the module comments and the architecture notes. This is a deliberate choice to avoid a wedged WebDAV loop taking down the entire app.
+Some services are started as background threads in-process; WebDAV is separated into its own process for resilience and recovery, as described in the module comments and the architecture notes. This is a deliberate choice to avoid a wedged WebDAV loop taking down the entire app. The Version Engine ([../version_engine.py](../version_engine.py)) is also a separate OS process, started by the launcher (`version_engine.start()` in [../dev_server.py](../dev_server.py) / [../prod_server.py](../prod_server.py)) independently of `protocol_manager.py`.
 
 ## 14. Front-end structure
 
@@ -424,7 +424,7 @@ The helper folder contains utility modules with leaf-style responsibilities:
 - [../helpers/hypercorn_ssl_fix.py](../helpers/hypercorn_ssl_fix.py)
 - [../helpers/ssl_cert.py](../helpers/ssl_cert.py)
 
-These are designed to stay lightweight, side-effect minimal, and not import the full runtime app stack.
+These are designed to stay lightweight and side-effect minimal. They may import other root modules such as `logging_setup`, `paths` and `config`, but never `app`, `core`, `middleware`, `routes`, `tools` or `tests`; `tests/smoke.py` (check 7b) and `tests/check.py` (layering) enforce this.
 
 ## 17. server management and shells
 
@@ -438,7 +438,7 @@ These are not the app logic itself, but they are critical for development, insta
 
 ## 18. Testing philosophy and validation
 
-The project includes both runtime-oriented checks and static safety checks. Examples include:
+The project's automated checks are static: they read the source and do not start the app. Examples include:
 
 - [../tests/smoke.py](../tests/smoke.py)
 - [../tests/check.py](../tests/check.py)
@@ -449,10 +449,25 @@ The project’s internal notes in [../docs/CLAUDE.md](../docs/CLAUDE.md) describ
 - static syntax validation
 - pyflakes checks
 - route registration verification
-- app import safety
+- import resolution and layering rules (checked statically; `tests/smoke.py` deliberately never imports `app`, because a real import runs the startup cleanup)
 - ensuring route names and auth rules remain consistent after refactors
 
 This is especially important because the app is intentionally designed as a single app object with many route modules.
+
+### 18.1 Automated checks on GitHub (dev and main)
+
+Two GitHub Actions workflows run on every push and pull request to `main` and `dev`:
+
+- [../.github/workflows/tests.yml](../.github/workflows/tests.yml) installs only `pyflakes` and runs `python tests/smoke.py` and `python tests/check.py -q --skip-packages`: the same static checks as on a developer machine, nothing is imported or started. `--skip-packages` hides "package not installed" warnings because the runner does not install `requirements.txt`.
+- [../.github/workflows/codeql.yml](../.github/workflows/codeql.yml) runs CodeQL for Python and JavaScript and keeps the raw SARIF files. It converts them to CSV with [../tests/codeql_sarif_parser.py](../tests/codeql_sarif_parser.py) and uploads the artifacts `sarif-artifact-<language>`, `codeql-csv-<language>` and the combined `codeql-findings-csv`. Vendored third-party files are excluded through [../.github/codeql/codeql-config.yml](../.github/codeql/codeql-config.yml); keep that list in step with `VENDORED` in the parser.
+
+Rules:
+
+- Run `python tests/smoke.py` and `python tests/check.py` locally before pushing; fix a red Tests run, do not bypass it.
+- The advanced CodeQL workflow cannot run while the repository's CodeQL "default setup" is enabled; disable the default setup first.
+- Parse downloaded results by hand with `python tests/codeql_sarif_parser.py <artifact.zip | .sarif file | folder>`; CSV files are written next to the script (add `tests/*.csv`, `tests/*.sarif` and `tests/*.zip` to `.gitignore`).
+- When a workflow, the parser's `VENDORED` list or the CodeQL config changes, update sections 18.1, 25.5, 25.8 and 27.2 together.
+
 
 ## 19. Key contributor conventions
 
@@ -502,7 +517,7 @@ Use these recipes as starting points. They name the usual owner files and the cr
 1. Choose the feature owner under [../routes](../routes): browsing and file operations in [../routes/files.py](../routes/files.py), uploads in [../routes/uploads.py](../routes/uploads.py), shares in [../routes/shares.py](../routes/shares.py), stats/search in [../routes/stats.py](../routes/stats.py), previews in [../routes/previews.py](../routes/previews.py), versions in [../routes/versions.py](../routes/versions.py), and so on.
 2. Import the existing shared `app` and required shared state from [../core.py](../core.py). Do not instantiate another Quart app and do not import `app` from [../app.py](../app.py).
 3. Register a plain `@app.route(...)` function. Use the bare endpoint name expected by `url_for()` and middleware. Do not move routes to a Blueprint: endpoint names are used by auth/CSRF policy and route checks.
-4. Decide access intentionally. Use `@login_required` for logged-in routes. For mutations, copy the neighboring pattern that checks `get_role(current_user()) == "readwrite"`; authentication alone does not imply write permission. Public share routes are intentionally exceptions; follow the nearby route and share-token checks rather than making them globally public.
+4. Decide access intentionally. Use `@login_required` for logged-in routes. For mutations, copy the neighboring pattern (`role = get_role(current_user())`, then `if role != "readwrite":` return the error response); authentication alone does not imply write permission. Public share routes are intentionally exceptions; follow the nearby route and share-token checks rather than making them globally public.
 5. Validate request data and storage paths before filesystem access. Existing file routes use `storage.is_safe_path()` / `storage.is_valid_path()`; do not build a path from user input and access it directly without the same safety boundary.
 6. Keep the async handler non-blocking. Disk walks, hashing, conversion, SQLite-heavy work, and blocking library calls should follow nearby wrappers using `asyncio.to_thread()` or a worker thread. Preserve the existing JSON/status response shape if a browser caller already consumes it.
 7. If adding an endpoint used by the UI, update its caller in [../static/js/index.js](../static/js/index.js) or the relevant page script and check any URL in [../templates](../templates). Update endpoint-name allow/exempt/public sets only when the endpoint's security policy actually requires it.
@@ -705,6 +720,7 @@ Tools are direct-entry utilities, not application services. Avoid importing them
 | File | What it executes/checks | What it does not prove |
 |---|---|---|
 | [../tests/check.py](../tests/check.py) | Parameterized static source checks for syntax, pyflakes, project imports, import-name resolution, helper layering; optional guarded subprocess imports and JSON config checks. | AST/import heuristics are not full runtime coverage; `--import` executes modules and may have side effects when forced. |
+| [../tests/codeql_sarif_parser.py](../tests/codeql_sarif_parser.py) | Converts CodeQL SARIF files (loose, zipped artifacts or folders) to per-language and combined CSV files; skips vendored files by default; optional `--fail-on` exit code. Standard library only. | Used by `codeql.yml` and by hand; keep `VENDORED` in step with `.github/codeql/codeql-config.yml`. |
 | [../tests/dir_tree.py](../tests/dir_tree.py) | Walks and prints a filtered directory tree; `collect_entries()` and `print_tree()` support its CLI. | It is a diagnostic utility, not a product behavior test. |
 | [../tests/smoke.py](../tests/smoke.py) | Read-only project safety checks: syntax, optional pyflakes, route/endpoints, hooks, import cycles/layering, route-module registration, tool launch paths, shell syntax, and route snapshot changes. | Does not import/start the app, issue HTTP requests, or test filesystem/runtime behavior. `--save` intentionally updates the route snapshot. |
 | [../tests/smoke_routes.json](../tests/smoke_routes.json) | Baseline route signature consumed by `smoke.py`. | Update only when route additions/removals are intended and reviewed. |
@@ -748,6 +764,12 @@ Template IDs, `data-*` properties, endpoint names and asset order are executable
 | [../constraints.txt](../constraints.txt) | Generated/platform package constraints, particularly Termux-managed packages; regenerate through the setup workflow rather than hand-editing without reason. |
 | [../server_config.json](../server_config.json) | Persisted runtime/server/protocol/feature settings loaded by `config.py`. |
 | [../storage_config.json](../storage_config.json) | Persisted storage, database and cache directory overrides read by `paths.py`. |
+| [../.github/workflows/tests.yml](../.github/workflows/tests.yml) | GitHub Actions: `tests/smoke.py` and `tests/check.py` on every push / pull request to `main` and `dev`. |
+| [../.github/workflows/codeql.yml](../.github/workflows/codeql.yml) | GitHub Actions: CodeQL for Python and JavaScript on `main` and `dev` plus a weekly run; stores SARIF and CSV artifacts. |
+| [../.github/codeql/codeql-config.yml](../.github/codeql/codeql-config.yml) | CodeQL configuration: `paths-ignore` for vendored third-party files (pdf.js, video.js, Font Awesome). |
+| [../README.md](../README.md) | Project overview, installation and usage; keep its command examples in sync with `manage.sh` and `tools/`. |
+| [../LICENSE](../LICENSE) | Project license. |
+| [../.gitignore](../.gitignore) | Files kept out of git (logs, caches, bytecode, machine-specific data); keep generated folders such as `__pycache__/` covered. |
 | [../static/robots.txt](../static/robots.txt) | Static crawler policy served by `routes/site_meta.py`. |
 | [../static/.well-known/security.txt](../static/.well-known/security.txt) | Static security contact/expiry/language/canonical metadata served by `routes/site_meta.py`. |
 
@@ -893,14 +915,14 @@ The rows below list each Python file's **direct** imports, grouped as standard l
 | [../app.py](../app.py) | `os`, `atexit*` | None | `core`, `middleware`, `routes.hls`, `routes.image_preview`, `routes.versions`, `routes.previews`, `routes.admin`, `routes.stats`, `routes.shares`, `routes.uploads`, `routes.files`, `routes.login`, `routes.site_meta`, `config`, `storage`, `protocol_manager*` |
 | [../auth.py](../auth.py) | None | `quart` | `database` |
 | [../config.py](../config.py) | `os`, `platform`, `subprocess`, `json`, `time`, `winreg*`, `shutil*` | None | `paths`, `version_engine*` |
-| [../core.py](../core.py) | `os`, `sys`, `shutil`, `json`, `asyncio`, `threading`, `time`, `logging`, `uuid`, `socket`, `zipfile`, `io`, `re`, `subprocess`, `hashlib`, `datetime`, `queue`, `dataclasses`, `typing`, `mimetypes` | `quart`, `werkzeug`, `zipstream`, `itsdangerous` | `paths`, `helpers.net_utils`, `config`, `database`, `auth`, `storage`, `version_history`, `file_monitor`, `search_index`, `realtime_stats`, `realtime_shares`, `logging_setup` |
+| [../core.py](../core.py) | `os`, `sys`, `shutil`, `json`, `asyncio`, `threading`, `time`, `logging`, `uuid`, `socket`, `zipfile`, `io`, `re`, `subprocess`, `hashlib`, `datetime`, `queue`, `dataclasses`, `typing`, `mimetypes`, `secrets`, `random*`, `hmac*`, `functools*` | `quart`, `werkzeug`, `zipstream`, `itsdangerous` | `paths`, `helpers.net_utils`, `config`, `database`, `auth`, `storage`, `version_history`, `file_monitor`, `search_index`, `realtime_stats`, `realtime_shares`, `logging_setup` |
 | [../database.py](../database.py) | `os`, `secrets`, `sqlite3`, `threading`, `uuid` | `bcrypt`, `cryptography.fernet`, `impacket.ntlm*` | `paths` |
 | [../dev_server.py](../dev_server.py) | `os`, `sys`, `signal`, `threading*` | None | `helpers.net_utils`, `app`, `protocol_manager`, `version_engine`, `config*` |
 | [../file_index.py](../file_index.py) | `os`, `hashlib`, `json`, `time`, `threading`, `tempfile` | None | `paths`, `config*` |
 | [../file_monitor.py](../file_monitor.py) | `os`, `sys`, `json`, `time`, `threading`, `hashlib`, `functools`, `collections`, `pathlib`, `dataclasses`, `typing`, `ctypes*`, `tempfile*` | `watchdog.observers`, `watchdog.events` | `config`, `file_index`, `search_index`, `paths` |
 | [../ftp_server.py](../ftp_server.py) | `logging`, `threading` | `pyftpdlib*`, `OpenSSL*` | `logging_setup`, `helpers.net_utils`, `config*`, `helpers.ssl_cert*`, `database*` |
 | [../logging_setup.py](../logging_setup.py) | `logging`, `os`, `sys`, `threading`, `datetime` | None | None |
-| [../middleware.py](../middleware.py) | `os`, `threading`, `time`, `logging`, `uuid`, `datetime` | `quart` | `core`, `config`, `auth`, `storage` |
+| [../middleware.py](../middleware.py) | `os`, `threading`, `time`, `logging`, `uuid`, `datetime`, `secrets` | `quart` | `core`, `config`, `auth`, `storage` |
 | [../paths.py](../paths.py) | `os`, `json` | None | None |
 | [../prod_server.py](../prod_server.py) | `os`, `sys`, `json`, `shutil`, `signal`, `asyncio`, `logging`, `threading*`, `traceback*` | `hypercorn.config*`, `hypercorn.asyncio*` | `logging_setup`, `helpers.net_utils`, `app`, `helpers.hypercorn_ssl_fix`, `protocol_manager`, `version_engine`, `config*`, `paths*`, `helpers.ssl_cert*` |
 | [../protocol_manager.py](../protocol_manager.py) | `os`, `socket`, `subprocess`, `sys`, `threading`, `time`, `importlib*` | None | `logging_setup`, `app`, `config*`, `sftp_server*`, `ftp_server*`, `smb_server*` |
@@ -944,6 +966,7 @@ The rows below list each Python file's **direct** imports, grouped as standard l
 | [../tools/sri_validator.py](../tools/sri_validator.py) | `argparse`, `base64`, `hashlib`, `os`, `re`, `sys` | None | None |
 | [../tools/version_manage.py](../tools/version_manage.py) | `argparse`, `os`, `sys`, `time` | None | `config`, `version_engine` |
 | [../tests/check.py](../tests/check.py) | `argparse`, `ast`, `fnmatch`, `importlib.util`, `json`, `os`, `re`, `subprocess`, `sys`, `pathlib`, `importlib*` | `pyflakes*` | Runtime-selected imports via subprocess* |
+| [../tests/codeql_sarif_parser.py](../tests/codeql_sarif_parser.py) | `argparse`, `collections`, `csv`, `fnmatch`, `json`, `re`, `sys`, `zipfile`, `pathlib`, `urllib.parse` | None | None |
 | [../tests/dir_tree.py](../tests/dir_tree.py) | `os`, `pathlib` | None | None |
 | [../tests/smoke.py](../tests/smoke.py) | `argparse`, `ast`, `json`, `os`, `re`, `shutil`, `subprocess`, `sys`, `pathlib` | `pyflakes*` | None |
 
