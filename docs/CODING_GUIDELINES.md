@@ -730,7 +730,7 @@ Tools are direct-entry utilities, not application services. Avoid importing them
 |---|---|---|
 | [../tests/check.py](../tests/check.py) | Parameterized static source checks for syntax, pyflakes, project imports, import-name resolution, helper layering; optional guarded subprocess imports and JSON config checks. | AST/import heuristics are not full runtime coverage; `--import` executes modules and may have side effects when forced. |
 | [../tests/codeql_sarif_parser.py](../tests/codeql_sarif_parser.py) | Converts CodeQL SARIF files (loose, zipped artifacts or folders) to per-language and combined CSV files; skips vendored files by default; optional `--fail-on` exit code. Standard library only. | Used by `codeql.yml` and by hand; keep `VENDORED` in step with `.github/codeql/codeql-config.yml`. |
-| [../tests/dir_tree.py](../tests/dir_tree.py) | Walks and prints a filtered directory tree; `collect_entries()` and `print_tree()` support its CLI. | It is a diagnostic utility, not a product behavior test. |
+| [../tests/dir_tree.py](../tests/dir_tree.py) | Walks a filtered directory tree (`collect_entries()`, `build_tree()`), prints it and saves it to `docs/directory_tree.txt`. | It is a diagnostic utility, not a product behavior test. It rewrites `docs/directory_tree.txt` (creating `docs/` if needed) and skips that file itself; regenerate and commit it after files are added, moved or removed. `EXCLUDE_DIR_WALK` matches folder names only. |
 | [../tests/smoke.py](../tests/smoke.py) | Read-only project safety checks: syntax, optional pyflakes, route/endpoints, hooks, import cycles/layering, route-module registration, tool launch paths, shell syntax, and route snapshot changes. | Does not import/start the app, issue HTTP requests, or test filesystem/runtime behavior. `--save` intentionally updates the route snapshot. |
 | [../tests/smoke_routes.json](../tests/smoke_routes.json) | Baseline route signature consumed by `smoke.py`. | Update only when route additions/removals are intended and reviewed. |
 
@@ -976,7 +976,7 @@ The rows below list each Python file's **direct** imports, grouped as standard l
 | [../tools/version_manage.py](../tools/version_manage.py) | `argparse`, `os`, `sys`, `time` | None | `config`, `version_engine` |
 | [../tests/check.py](../tests/check.py) | `argparse`, `ast`, `fnmatch`, `importlib.util`, `json`, `os`, `re`, `subprocess`, `sys`, `pathlib`, `importlib*` | `pyflakes*` | Runtime-selected imports via subprocess* |
 | [../tests/codeql_sarif_parser.py](../tests/codeql_sarif_parser.py) | `argparse`, `collections`, `csv`, `fnmatch`, `json`, `re`, `sys`, `zipfile`, `pathlib`, `urllib.parse` | None | None |
-| [../tests/dir_tree.py](../tests/dir_tree.py) | `os`, `pathlib` | None | None |
+| [../tests/dir_tree.py](../tests/dir_tree.py) | `pathlib` | None | None |
 | [../tests/smoke.py](../tests/smoke.py) | `argparse`, `ast`, `json`, `os`, `re`, `shutil`, `subprocess`, `sys`, `pathlib` | `pyflakes*` | None |
 
 ### 27.3 Inbound project imports
