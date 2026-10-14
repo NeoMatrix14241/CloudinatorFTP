@@ -328,6 +328,28 @@ function lockTableColumnWidths() {
 }
 
 /**
+ * Width (px) of the Actions column for the current role.
+ *
+ * Single source of truth: applyWidths() and _getColDefs() below used to each
+ * carry their own copy of this number, and the read-only value was too small.
+ * With table-layout:fixed the column is exactly this wide, and the <th> clips
+ * its own label (overflow:hidden), so the width must cover BOTH
+ *   - the icon buttons (28px each + 3px gaps + 6px cell padding per side), and
+ *   - the header "<i class=fa-cogs></i> Actions" (about 87px for icon + text
+ *     + 13px padding per side = 113px at desktop/tablet sizes, 87px on mobile;
+ *     measured in Chromium with the real index.html header markup).
+ * Read-write rows show 6 buttons (download, move, copy, rename, share,
+ * delete) = 183px of buttons, so 190px works and is left unchanged.
+ * Read-only rows show 1 button (download): the buttons need only ~46px, but
+ * the header needs about 113px in a simulated test, but a real-browser screenshot showed the final "s" touching the edge at 120px (real icon/font are wider), so 144px (about 25px slack) is used.
+ * Before this, read-only used 70px and the header read "Actio".
+ */
+function _actionsColWidth() {
+    const isReadWrite = (typeof USER_ROLE !== 'undefined' && USER_ROLE === 'readwrite');
+    return isReadWrite ? 190 : 144;
+}
+
+/**
  * Smart real-time column width adjuster.
  * Uses setProperty(...,'important') so inline styles beat any CSS !important rule.
  * Mobile (<600px):  cb | name | size | actions          (type + modified hidden)
@@ -359,13 +381,9 @@ function smartTableColumnizer() {
         const sizeW = isTablet ? 110 : 200;
         const typeW = isTablet ? 110 : 125;
         const modW = 140;
-        // Actions column must fit the icon buttons (28px each + 3px gaps)
-        // without shrinking below their combined footprint — a too-small
-        // actW here is what causes the last button (Delete) to render
-        // partially clipped. Read-write rows show 5 buttons (download,
-        // move, copy, rename, delete); read-only rows show 1 (download).
-        const isReadWrite = (typeof USER_ROLE !== 'undefined' && USER_ROLE === 'readwrite');
-        const actW = isReadWrite ? 190 : 70;
+        // Actions column must fit the icon buttons AND the "Actions" header
+        // label (the <th> clips its text). See _actionsColWidth().
+        const actW = _actionsColWidth();
 
         const showMod = !isTablet && !isMobile;
         const fixedTotal = cbW + sizeW + typeW + (showMod ? modW : 0) + actW;
@@ -524,8 +542,7 @@ function smartTableColumnizer() {
         const isMobile = W < 600;
         const isTablet = W >= 600 && W < 900;
         const cbW = 36, sizeW = isTablet ? 110 : 200, typeW = isTablet ? 110 : 125, modW = 140;
-        const isReadWrite = (typeof USER_ROLE !== 'undefined' && USER_ROLE === 'readwrite');
-        const actW = isReadWrite ? 190 : 70;
+        const actW = _actionsColWidth();
         const showMod = !isTablet && !isMobile;
         const fixedTotal = cbW + sizeW + typeW + (showMod ? modW : 0) + actW;
         const nameFloor = isMobile ? 250 : isTablet ? 100 : 160;
