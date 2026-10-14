@@ -22,4 +22,3 @@ pyppmd<2
 impacket<1
 pyOpenSSL<27
 pyflakes<5
-pandas<4

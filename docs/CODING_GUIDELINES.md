@@ -151,6 +151,15 @@ The app uses Quart session state and stores a server token in the DB. This ensur
 - server token rotation invalidates active sessions
 - login state is checked consistently by middleware and route handlers
 
+### 5.3 Logout and the Clear-Site-Data header
+
+[../routes/login.py](../routes/login.py) sends `Clear-Site-Data: "executionContexts"` only, on `GET /login` and on `/logout`, and only over HTTPS. The directives `"cache"`, `"cookies"`, `"storage"` and `"*"` were removed in 4.89: in the owner's measurements they made the browser do synchronous clearing work (a 3-15 s logout), while `"executionContexts"` takes 0.1-0.5 s. Do not add them back without measuring logout time again in Chrome and Edge.
+
+What replaced them: the cache policy is `Cache-Control: no-cache, no-store, must-revalidate` (set by the logout route and, for every authenticated response, by `after_request` in [../middleware.py](../middleware.py)); the session and cookies are removed by `session.clear()` and `delete_cookie()` in the logout route. Not cleared any more: `localStorage`, `sessionStorage` and IndexedDB of the site, so keep secrets out of them.
+
+After changing login or logout code, test by hand: log in, open a folder, log out, press Back (private data must not appear) and time `GET /logout` in the browser's network tab.
+
+
 ## 6. Database and persistence
 
 The main persistence layer is [../database.py](../database.py).

@@ -65,9 +65,11 @@ jobs:
                   build-mode: ${{ matrix.build-mode }}
                   # vendored third-party files (pdf.js, video.js, Font Awesome, ...) are skipped
                   config-file: ./.github/codeql/codeql-config.yml
-                  # For more alerts (security and code quality) uncomment one of these:
-                  # queries: security-extended
-                  # queries: security-and-quality
+                  # "security-extended" = the default security queries plus lower-precision ones
+                  # (more alerts, a few more false positives); the default setup in the web UI
+                  # offers the same choice. For code-quality alerts too use "security-and-quality";
+                  # to go back to the plain default suite delete the next line.
+                  queries: security-extended
 
             - name: Perform CodeQL Analysis
               uses: github/codeql-action/analyze@v4

@@ -2,8 +2,9 @@
 routes/login.py - login, logout, session check and the CSRF token endpoint: /login, /logout,
 /check_session, /csrf-token (Phase 10 of the split, CLAUDE.md 4.78).
 
-Moved verbatim from app.py. Gets shared objects via `from core import ...`; imports no other route
-module.
+Moved from app.py in Phase 10. Since 4.89 the Clear-Site-Data header on /login and /logout is
+"executionContexts" only (see CLAUDE.md, part 39). Gets shared objects via `from core import ...`;
+imports no other route module.
 """
 
 from core import (
@@ -125,13 +126,13 @@ async def login():
     #     against Clear-Site-Data:"cookies" on the same response can wipe
     #     the just-issued CSRF cookie before the form is even shown,
     #     breaking the subsequent login POST for every fresh visitor.
-    #   - "executionContexts": cheap, no cookie involved, no
-    #     collision — kept to satisfy security-scanner checks that want
-    #     more than zero directives present on this header.
-    # /logout below is the actual state-ending action and keeps the
-    # "cookies" — no cookie race there since logout
-    # explicitly deletes cookies via response.delete_cookie(), not a
-    # session-modification-triggered Set-Cookie.
+    #   - NOT "storage" / "*" either (4.89): any of cache / storage /
+    #     cookies / "*" made the browser do synchronous clearing work.
+    #   - "executionContexts": cheap, no cookie involved, no collision — kept
+    #     to satisfy security-scanner checks that want more than zero
+    #     directives present on this header.
+    # /logout below is the state-ending action; see the comment there for
+    # what replaced the old "cache", "cookies", "storage" header.
     if _request_is_secure():
         response.headers["Clear-Site-Data"] = '"executionContexts"'
     return response
@@ -162,11 +163,19 @@ async def logout():
             }
         )
 
-        # Add Clear-Site-Data header with executionContexts for compliance   
+        # Clear-Site-Data: "executionContexts" only (4.89). The old
+        # '"cache", "cookies", "storage"' made the browser do synchronous
+        # clearing work: a 3-15 s logout; "executionContexts" takes 0.1-0.5 s.
+        # What replaced it: cache policy = the Cache-Control no-store
+        # headers above (middleware sets the same on every authenticated
+        # response), session/cookies = session.clear() + delete_cookie()
+        # above. NOT cleared any more: localStorage / sessionStorage /
+        # IndexedDB. Browsers only honor this header on secure origins
+        # (HTTPS), so it is set only when the request came in over HTTPS.
         if _request_is_secure():
             response.headers["Clear-Site-Data"] = '"executionContexts"'
         return response
-    
+
     except Exception as e:
         logging.error(f"Logout error: {e}", exc_info=True)
         session.clear()  # Still try to clear session even if other operations fail
