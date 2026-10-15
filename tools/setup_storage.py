@@ -12,15 +12,16 @@ production: a compromised web directory then cannot expose your keys.
 
 import os
 import sys
-import json
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
 try:
     import importlib
-    import config
 
+    # Loaded by name (not `import config`) so this stays the only import of config
+    # alongside the `from config import ...` below; reload picks up a changed config.py.
+    config = importlib.import_module("config")
     importlib.reload(config)
     from config import (
         detect_platform,
@@ -41,12 +42,6 @@ try:
         reset_hls_cache_dir,
         get_all_paths,
     )
-
-    # DB_DIR and CACHE_DIR come from paths directly — not from config —
-    # so setup_storage.py works even on an older config.py that doesn't
-    # export them yet.
-    DB_DIR = get_db_dir()
-    CACHE_DIR = get_cache_dir()
 except ImportError as e:
     print(f"❌ Import error: {e}")
     print("Make sure you're running this script from the project directory.")

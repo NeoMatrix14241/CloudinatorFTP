@@ -34,7 +34,6 @@ Authentication is against the CloudinatorFTP database (same credentials).
 The home directory for all users is ROOT_DIR.  Users are chrooted to it.
 """
 
-import logging
 import threading
 import logging_setup
 
@@ -413,5 +412,6 @@ def stop():
         try:
             _server.close_all()
         except Exception:
+            # Server already stopped or a connection was abandoned; shutdown continues.
             pass
         _server = None

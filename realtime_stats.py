@@ -19,7 +19,6 @@ import json
 import time
 import threading
 from typing import Set
-from dataclasses import asdict
 
 from quart import Response, request
 
@@ -195,6 +194,7 @@ class StorageStatsEventManager:
         try:
             client_queue.put_nowait(update_data)
         except asyncio.QueueFull:
+            # Queue full = slow or stuck client; drop this update for them, they get the next one.
             pass
 
     def get_last_stats(self):

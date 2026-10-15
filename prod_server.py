@@ -401,10 +401,12 @@ async def _run():
                 try:
                     protocol_manager.force_kill_webdav()
                 except Exception:
+                    # Best effort during force-quit: the WebDAV process may already be gone.
                     pass
                 try:
                     version_engine.force_kill()
                 except Exception:
+                    # Best effort during force-quit: the Version Engine may already be stopped.
                     pass
                 os._exit(0)
 
@@ -445,6 +447,7 @@ async def _run():
             try:
                 await renew_task
             except asyncio.CancelledError:
+                # Expected: the renew task was just cancelled.
                 pass
 
         print("\n🛑 Stopping protocol servers…")

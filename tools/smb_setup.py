@@ -43,7 +43,6 @@ This script can also UNDO its Windows change (restore native file
 sharing), with the same confirm-then-restart shape in reverse.
 """
 
-import json
 import os
 import platform
 import subprocess

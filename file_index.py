@@ -296,8 +296,10 @@ class FileIndexManager:
                         if os.path.getmtime(p) < cutoff:
                             os.remove(p)
                     except OSError:
+                        # Temp file already gone or locked; a later cleanup removes it.
                         pass
         except OSError:
+            # Cache directory missing or unreadable; there is nothing to clean.
             pass
 
     def load(self) -> bool:
@@ -470,6 +472,7 @@ class FileIndexManager:
                     if tmp and os.path.exists(tmp):
                         os.remove(tmp)
                 except OSError:
+                    # Temp file already gone or locked; a later cleanup removes it.
                     pass
 
     # -----------------------------------------------------------------------
@@ -508,7 +511,6 @@ class FileIndexManager:
             }
 
             with self.lock:
-                start_seq = self._mut_seq
                 self._building = True
                 self._touched_seq = {}
                 old = dict(self._dirs)

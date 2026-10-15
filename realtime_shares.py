@@ -102,6 +102,7 @@ class ShareEventManager:
         try:
             client_queue.put_nowait(update_data)
         except asyncio.QueueFull:
+            # Queue full = slow or stuck client; drop this update for them, they get the next one.
             pass
 
     def get_client_count(self):

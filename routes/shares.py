@@ -399,6 +399,7 @@ def _human_size(num_bytes):
         if num_bytes < 1024 or unit == "TB":
             return f"{num_bytes:.1f} {unit}" if unit != "B" else f"{num_bytes} {unit}"
         num_bytes /= 1024
+    return f"{num_bytes:.1f} TB"  # not reached (the "TB" step always returns); keeps every path explicit
 
 
 def _dir_size(path, cap_entries=20000):
@@ -411,6 +412,7 @@ def _dir_size(path, cap_entries=20000):
             try:
                 total += os.path.getsize(os.path.join(root, f))
             except OSError:
+                # File vanished or is unreadable; it is left out of the size total.
                 pass
             count += 1
             if count > cap_entries:

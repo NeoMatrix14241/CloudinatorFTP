@@ -432,7 +432,7 @@ async def health_check():
 # and "search stuck 20 s but search_time 0.075 s".
 _LOOP_STALL_SECS = 2.0
 _loop_beat = {"t": 0.0, "tid": None}
-_loop_wd_started = False
+_loop_wd_state = {"started": False}
 
 
 async def _loop_heartbeat():
@@ -465,10 +465,9 @@ def _loop_watchdog_thread():
 
 @app.before_serving
 async def _start_loop_watchdog():
-    global _loop_wd_started
-    if _loop_wd_started:
+    if _loop_wd_state["started"]:
         return
-    _loop_wd_started = True
+    _loop_wd_state["started"] = True
     asyncio.get_running_loop().create_task(_loop_heartbeat())
     threading.Thread(
         target=_loop_watchdog_thread, daemon=True, name="loop-stall-watchdog"

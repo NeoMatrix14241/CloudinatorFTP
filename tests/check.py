@@ -482,6 +482,7 @@ def main():
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
+        # Best effort: not every stdout object supports reconfigure(); keep the default encoding.
         pass
 
     files, unknown = select(args.targets)
@@ -542,7 +543,6 @@ def main():
         if any(c[1] == "FAIL" for c in cs)
         else ("WARN" if any(c[1] == "WARN" for c in cs) else "PASS")
     )
-    problems = 0
     if args.json:
         out = {
             "modules": {

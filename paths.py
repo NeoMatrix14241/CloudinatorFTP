@@ -43,6 +43,7 @@ def _load() -> dict:
             with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
     except Exception:
+        # Unreadable or corrupt storage_config.json: fall back to the defaults.
         pass
     return {}
 

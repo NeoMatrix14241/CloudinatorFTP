@@ -52,6 +52,7 @@ def _local_ips() -> set:
         ips.add(s.getsockname()[0])
         s.close()
     except Exception:
+        # No route to the outside (offline): the other address sources still apply.
         pass
     # Hostname-resolved IPs
     try:
@@ -60,6 +61,7 @@ def _local_ips() -> set:
             if ":" not in addr:  # skip IPv6
                 ips.add(addr)
     except Exception:
+        # Hostname does not resolve: the other address sources still apply.
         pass
     return ips
 
@@ -94,6 +96,7 @@ def _generate(cert_path: str, key_path: str):
         try:
             san.append(x509.IPAddress(ipaddress.ip_address(ip_str)))
         except ValueError:
+            # Not a valid IP address string; skip it.
             pass
 
     now = datetime.datetime.now(datetime.UTC)
@@ -180,6 +183,7 @@ def regenerate(db_dir: str) -> tuple[str, str]:
         try:
             os.remove(p)
         except FileNotFoundError:
+            # Certificate file does not exist yet; nothing to remove.
             pass
     _generate(cert_path, key_path)
     print("⚠️  Re-import webdav.crt on every client machine that mapped a drive.")

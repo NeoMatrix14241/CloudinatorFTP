@@ -27,8 +27,6 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 os.chdir(_ROOT)
 
-_HERE = _ROOT
-
 
 def main():
     # paths.py is the single source of truth for where db/ actually lives —

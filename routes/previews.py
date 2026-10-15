@@ -96,6 +96,7 @@ def _office_preview_sync(path):
                     total_lines = sum(1 for _ in f)
                 truncated = total_lines > MAX_ROWS
             except Exception:
+                # The line count only feeds the 'truncated' hint; keep the default if re-reading fails.
                 pass
             return jsonify(
                 {
@@ -142,6 +143,7 @@ def _office_preview_sync(path):
                             ):
                                 is_title = True
                         except Exception:
+                            # Placeholder type not available on this shape; it is simply not treated as a title.
                             pass
                     shapes_data.append({"is_title": is_title, "paragraphs": paragraphs})
                 slides.append({"index": i + 1, "shapes": shapes_data})

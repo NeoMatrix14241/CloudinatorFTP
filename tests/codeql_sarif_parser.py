@@ -314,6 +314,7 @@ def main(argv=None):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
+        # Best effort: not every stdout object supports reconfigure(); keep the default encoding.
         pass
 
     patterns = VENDORED + args.exclude

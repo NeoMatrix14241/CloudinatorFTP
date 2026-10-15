@@ -58,7 +58,7 @@ import asyncio
 
 import logging_setup
 
-_PATCHED = False
+_state = {"patched": False}  # set once the TCPServer._close() patch is in
 
 # Substrings of an OSError's text that mark a known-harmless teardown blip
 # (logged at INFO). Any other OSError escaping wait_closed() is still
@@ -79,8 +79,7 @@ def apply() -> bool:
     if the patch was applied (or already had been), False if it couldn't
     be (logged as a warning, not fatal — server still runs, just with
     Hypercorn's original 30s-hang behavior)."""
-    global _PATCHED
-    if _PATCHED:
+    if _state["patched"]:
         return True
 
     # Was logging.getLogger(__name__) — a plain stdlib logger with no handler
@@ -154,7 +153,7 @@ def apply() -> bool:
                 await self.idle_task.stop()
 
         TCPServer._close = _patched_close
-        _PATCHED = True
+        _state["patched"] = True
         log.info(
             "hypercorn_ssl_fix: patched TCPServer._close() — "
             f"30s SSL-shutdown hang capped to {SHUTDOWN_TIMEOUT_SECONDS}s, "

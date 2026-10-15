@@ -139,4 +139,5 @@ def clear_pending_state(state_path: str):
     try:
         os.remove(state_path)
     except FileNotFoundError:
+        # State file already gone; there is nothing to clear.
         pass

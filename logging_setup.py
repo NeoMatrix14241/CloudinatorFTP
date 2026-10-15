@@ -158,6 +158,7 @@ class DailyDatedFileHandler(logging.Handler):
             self._stream.write(line + "\n")
             self._stream.flush()
         except Exception:
+            # Logging must never raise into the caller; a failed log write is dropped.
             pass
 
     def close(self) -> None:
