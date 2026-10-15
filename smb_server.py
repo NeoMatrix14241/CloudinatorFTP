@@ -27,7 +27,6 @@ one-time human-run setup that actually frees port 445 is smb_setup.py
 """
 
 import itertools
-import logging
 import os
 import platform
 import threading
@@ -53,7 +52,9 @@ log = logging_setup.get_logger("smb")
 
 _IS_WINDOWS = platform.system() == "Windows"
 
-_server = None
+_server_ref = {
+    "server": None
+}  # the running SMB server (set by start(), cleared by stop())
 _thread: threading.Thread | None = None
 _refresh_thread: threading.Thread | None = None
 _stop_event = threading.Event()
@@ -408,6 +409,7 @@ def _install_file_lifecycle_diagnostics(server):
                     flush=True,
                 )
         except Exception:
+            # Audit logging is best effort; it must never break the SMB operation.
             pass
         return close_orig_holder[0](*args, **kwargs)
 
@@ -526,6 +528,7 @@ def _install_audit_logging(server):
                     ip,
                 )
         except Exception:
+            # Audit logging is best effort; it must never break the SMB operation.
             pass
 
         return result
@@ -558,6 +561,7 @@ def _install_audit_logging(server):
             if fileID in connData.get("OpenedFiles", {}):
                 old_name = connData["OpenedFiles"][fileID]["FileName"]
         except Exception:
+            # Could not resolve the old file name; the rename is simply not audited.
             pass
 
         result = setinfo_orig_holder[0](*args, **kwargs)
@@ -580,6 +584,7 @@ def _install_audit_logging(server):
                         ip,
                     )
         except Exception:
+            # Audit logging is best effort; it must never break the SMB operation.
             pass
 
         return result
@@ -613,6 +618,7 @@ def _install_audit_logging(server):
                     os.path.isdir(info.get("FileName", "")),
                 )
         except Exception:
+            # Could not read the delete target; the delete is simply not audited.
             pass
 
         result = close_orig_holder[0](*args, **kwargs)
@@ -631,6 +637,7 @@ def _install_audit_logging(server):
                     ip,
                 )
         except Exception:
+            # Audit logging is best effort; it must never break the SMB operation.
             pass
 
         return result
@@ -934,6 +941,7 @@ def _quiet_handle_error(request, client_address):
             log.debug(f"SMB: {client_address} went idle or disconnected (normal)")
             return
     except ImportError:
+        # Optional impacket class not available in this version; nothing to filter.
         pass
 
     print("-" * 40, file=sys.stderr)
@@ -1048,7 +1056,7 @@ def start() -> bool:
     """Start the SMB server in a background daemon thread. Returns True
     on success, False if disabled, impacket isn't installed, or no port
     could be bound."""
-    global _server, _thread, _refresh_thread
+    global _thread, _refresh_thread
 
     try:
         from config import (
@@ -1126,7 +1134,7 @@ def start() -> bool:
         print(f"❌ SMB server build failed: {e}")
         return False
 
-    _server = server
+    _server_ref["server"] = server
     _stop_event.clear()
 
     _thread = threading.Thread(target=server.start, name="smb-server", daemon=True)
@@ -1164,13 +1172,13 @@ def stop():
     even if a connection was abandoned mid-session — confirmed directly;
     without this, that scenario hangs server_close() forever.
     """
-    global _server
     _stop_event.set()
-    if _server:
+    server = _server_ref["server"]
+    if server:
         try:
-            inner = _server.getServer()
+            inner = server.getServer()
             inner.shutdown()
             inner.server_close()
         except Exception as e:
             log.warning(f"SMB stop() cleanup error: {e}")
-        _server = None
+        _server_ref["server"] = None

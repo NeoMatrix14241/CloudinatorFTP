@@ -96,7 +96,6 @@ async def index(path):
 
     try:
         # Get current directory info
-        current_path = os.path.join(ROOT_DIR, path) if path else ROOT_DIR
         items = await asyncio.to_thread(storage.list_dir, path)
 
         response = await make_response(
@@ -383,6 +382,7 @@ async def dir_info(path):
                     }
                 print(f"📥 Stored live walk result for '{rel_path}' into index")
         except Exception:
+            # Writing the live-walk result into the index is best effort; the response is unaffected.
             pass
 
         return jsonify(info), 200

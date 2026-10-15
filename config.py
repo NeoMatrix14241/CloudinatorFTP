@@ -1,6 +1,5 @@
 import os
 import platform
-import subprocess
 import json
 import time
 
@@ -222,6 +221,7 @@ def get_windows_documents_path():
                 if os.path.exists(documents_path):
                     return documents_path
         except (ImportError, OSError, FileNotFoundError):
+            # No Shell Folders registry value (or not Windows); fall through to the other lookups.
             pass
 
         # Fallback methods
@@ -408,12 +408,10 @@ def print_platform_info():
         if platform_type == "windows":
             import shutil
 
-            total, used, free = shutil.disk_usage(ROOT_DIR)
+            free = shutil.disk_usage(ROOT_DIR).free
         else:
             stat = os.statvfs(ROOT_DIR)
             free = stat.f_bavail * stat.f_frsize
-            total = stat.f_blocks * stat.f_frsize
-            used = total - free
 
         print(f"💾 Available space: {format_bytes(free)}")
 
@@ -441,12 +439,9 @@ def set_custom_storage_path(custom_path, use_subfolder=True):
         # Expand user paths like ~/Documents
         expanded_path = os.path.expanduser(custom_path)
 
-        if use_subfolder:
-            # Always append CloudinatorFTP for preset paths
-            final_path = os.path.join(expanded_path, "CloudinatorFTP")
-        else:
-            # Use the exact custom path
-            final_path = expanded_path
+        # The path is used exactly as given. (`use_subfolder` is accepted for
+        # backward compatibility only: the preset paths already end in
+        # "CloudinatorFTP", and a subfolder was never actually appended.)
 
         # Create directory
         os.makedirs(expanded_path, exist_ok=True)
@@ -1371,7 +1366,7 @@ def configure_files_path():
         return
     elif choice == len(options) + 1:
         _configure_custom_files_path()
-    elif 1 <= choice <= len(options):
+    elif choice <= len(options):
         key, path = options[choice - 1]
         if not _confirm_path(path, "Files storage"):
             return

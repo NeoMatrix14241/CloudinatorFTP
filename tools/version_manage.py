@@ -52,7 +52,6 @@ sys.path.insert(0, _ROOT)
 
 import config
 import version_engine as ve
-from config import format_bytes
 
 
 def _get_engine() -> ve.Engine:
@@ -134,7 +133,7 @@ def do_list(file_path=None) -> int:
             print(
                 f"  {marker} version_id={r['version_id']:<6} "
                 f"{_fmt_time(r['created_at'])}   "
-                f"{format_bytes(r['size']):>10}   "
+                f"{config.format_bytes(r['size']):>10}   "
                 f"{r['storage_mode']:<8}   "
                 f"sha256={r['sha256'][:12] if r['sha256'] else '—'}…   "
                 f"status={r['status']}"
@@ -186,7 +185,7 @@ def do_restore(version_id: int, destination: str, overwrite: bool = False) -> in
     print(
         f"🕓 Version:          {version_id}  (snapshotted {_fmt_time(version['created_at'])})"
     )
-    print(f"📦 Size:             {format_bytes(version['size'])}")
+    print(f"📦 Size:             {config.format_bytes(version['size'])}")
     print(f"🔑 SHA-256:          {version['sha256']}")
     print(f"📁 Restoring to:     {destination}")
 
@@ -249,7 +248,7 @@ def do_delete(version_id: int, run_gc_now: bool = False) -> int:
     print(f"\n  File:        {version['file_path']}")
     print(f"  version_id:  {version_id}")
     print(f"  Snapshotted: {_fmt_time(version['created_at'])}")
-    print(f"  Size:        {format_bytes(version['size'])}")
+    print(f"  Size:        {config.format_bytes(version['size'])}")
     print(f"  SHA-256:     {version['sha256']}")
     print(
         "\n  This is NOT the same as deleting the live file — this deletes a point-in-time"

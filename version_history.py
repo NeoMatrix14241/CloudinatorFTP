@@ -323,6 +323,7 @@ def restore(resolved_file_path: str, version_id: int):
                     recovered_rel,
                 )
         except OSError:
+            # The recovered copy could not be written (path/permissions); fall through to the error handling below.
             pass
 
         try:

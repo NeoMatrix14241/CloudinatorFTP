@@ -3,7 +3,7 @@ import shutil
 import time
 import threading
 import stat
-from config import ROOT_DIR, CHUNK_SIZE
+from config import ROOT_DIR
 
 
 # Lazy import to avoid circular imports at module load time.
@@ -505,6 +505,7 @@ def cleanup_old_chunks(max_age_hours=24, protected_files=None):
                             should_cleanup = True
                             cleanup_reason = "stale upload by mtime (>1hr old)"
                 except (ValueError, OSError):
+                    # Unreadable or malformed .timestamp: fall back to the other age checks.
                     pass
 
             if should_cleanup:
@@ -548,6 +549,7 @@ def cleanup_old_chunks(max_age_hours=24, protected_files=None):
                 os.rmdir(chunks_dir)
                 print("🧹 Removed empty chunks directory")
         except OSError:
+            # Directory not empty or already removed; leave it for the next cleanup.
             pass
 
         if cleaned_count > 0:
@@ -692,6 +694,7 @@ def get_dir_info(path):
                 except (OSError, IOError):
                     continue
     except (OSError, IOError):
+        # Chunks directory unreadable; report the size gathered so far.
         pass
 
     return {"file_count": file_count, "dir_count": dir_count, "total_size": total_size}
@@ -704,7 +707,7 @@ def is_safe_path(path):
         resolved = os.path.realpath(os.path.join(ROOT_DIR, path))
         root_real = os.path.realpath(ROOT_DIR)
         return resolved.startswith(root_real)
-    except:
+    except Exception:
         return False
 
 
@@ -721,7 +724,7 @@ def is_valid_path(path):
     try:
         full_path = os.path.join(ROOT_DIR, path)
         return os.path.exists(full_path) and os.path.isdir(full_path)
-    except:
+    except Exception:
         return False
 
 
@@ -1036,6 +1039,7 @@ def get_chunk_info():
                 )
 
     except OSError:
+        # Chunks directory missing or unreadable; nothing to list.
         pass
 
     return {
@@ -1077,6 +1081,7 @@ def manual_chunks_cleanup():
                         with open(timestamp_file, "r") as f:
                             timestamp = float(f.read().strip())
                     except (ValueError, OSError):
+                        # Missing or malformed .timestamp: the timestamp stays at its default.
                         pass
 
                 # Count chunks and calculate size
@@ -1089,6 +1094,7 @@ def manual_chunks_cleanup():
                                 chunk_count += 1
                             dir_size += size
                         except OSError:
+                            # File vanished while measuring; skip it.
                             pass
 
                 total_size += dir_size
@@ -1158,7 +1164,6 @@ def emergency_cleanup_all():
     print("🚨 Running emergency cleanup...")
 
     try:
-        chunks_dir = os.path.join(ROOT_DIR, ".chunks")
         temp_files_removed = 0
 
         # Try to clean up any .tmp files in root directory
@@ -1185,5 +1190,14 @@ def emergency_cleanup_all():
         return False
 
 
-print(f"📦 Storage module loaded with Windows support - cleanup managed by app.py")
-print(f"🪟 Platform: {os.name} ({'Windows' if os.name == 'nt' else 'Unix-like'})")
+def _startup_log(message):
+    """One-time import banner (plain stdout, same text as before)."""
+    print(message)
+
+
+_startup_log(
+    "📦 Storage module loaded with Windows support - cleanup managed by app.py"
+)
+_startup_log(
+    f"🪟 Platform: {os.name} ({'Windows' if os.name == 'nt' else 'Unix-like'})"
+)

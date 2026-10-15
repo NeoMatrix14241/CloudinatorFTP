@@ -37,7 +37,6 @@ import os
 import socket
 import threading
 import time
-import logging
 import logging_setup
 
 # get_local_ip() lives in helpers/net_utils.py, not app.py (2026-09-25) — a
@@ -204,6 +203,7 @@ def _make_sftp_handle_class():
             try:
                 self.readfile.close()
             except Exception:
+                # Already closed.
                 pass
 
     return _SFTPHandle
@@ -696,10 +696,12 @@ def _handle_connection(conn, addr, host_key, sftp_interface_class, ssh_server_cl
             try:
                 transport.close()
             except Exception:
+                # Transport already closed or broken; the socket is closed next.
                 pass
         try:
             conn.close()
         except Exception:
+            # Socket already closed.
             pass
 
 
@@ -751,6 +753,7 @@ def _accept_loop(host_key, port: int, sftp_class, ssh_class, ready_event, bind_e
     try:
         sock.close()
     except Exception:
+        # Socket already closed.
         pass
 
 

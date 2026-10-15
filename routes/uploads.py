@@ -172,12 +172,8 @@ async def upload():
             if not uploaded_file or uploaded_file.filename == "":
                 return "No file selected", 400
 
-            # Use provided filename or fall back to uploaded filename
-            if not filename:
-                filename = uploaded_file.filename
-                if not filename:
-                    return "Invalid filename", 400
-            # Only check for slashes
+            # `filename` was already validated as non-empty above, so there is no
+            # fallback to uploaded_file.filename. Only check for slashes
             if "/" in filename or "\\" in filename:
                 return "Invalid filename", 400
 
@@ -218,7 +214,11 @@ async def upload():
                     print(f"❌ Failed to save whole file {filename}: {e}")
                     return f"Failed to save file: {str(e)}", 500
 
-    except ClientDisconnected as e:
+            # Not reached in practice (the last attempt always returns above); kept so
+            # every code path of this route returns a response explicitly.
+            return "Failed to save file", 500
+
+    except ClientDisconnected:
         print(
             f"👋 Client disconnected during upload of {filename or 'unknown file'} (ID: {file_id})"
         )
@@ -341,6 +341,7 @@ async def cancel_upload():
                                 if not os.listdir(parent):
                                     os.rmdir(parent)
                             except OSError:
+                                # The .chunks folder is busy or already gone; it is removed on a later cleanup.
                                 pass
                     except Exception as ex:
                         print(f"⚠️ Background cleanup error for {fid}: {ex}")
@@ -388,8 +389,6 @@ async def cancel_upload():
 @login_required
 async def admin_cleanup_chunks():
     """Admin endpoint to trigger comprehensive chunk cleanup"""
-    from storage import manual_chunks_cleanup, emergency_cleanup_all
-
     try:
         role = get_role(current_user())
         if role != "readwrite":
@@ -423,7 +422,7 @@ async def admin_cleanup_chunks():
         stats_after = chunk_tracker.get_stats()
 
         # Run enhanced manual cleanup
-        manual_success = manual_chunks_cleanup()
+        manual_success = storage.manual_chunks_cleanup()
 
         print(f"🧹 Comprehensive cleanup completed")
         print(
@@ -454,7 +453,7 @@ async def admin_cleanup_chunks():
         print(f"❌ Error in comprehensive cleanup: {e}")
         # Try emergency cleanup as fallback
         try:
-            emergency_cleanup_all()
+            storage.emergency_cleanup_all()
             return (
                 jsonify(
                     {
@@ -498,6 +497,7 @@ async def chunk_stats():
                     if os.path.isdir(os.path.join(chunks_dir, d))
                 ]
             except OSError:
+                # Chunks folder missing or unreadable; the filesystem chunk count simply stays empty.
                 pass
 
         stats["filesystem_chunks"] = len(filesystem_chunks)

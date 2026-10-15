@@ -1,1028 +1,1993 @@
+#!/usr/bin/env python3
 """
-webdav_server.py — WebDAV server for CloudinatorFTP
-----------------------------------------------------
-Exposes ROOT_DIR over HTTP/HTTPS WebDAV on WEBDAV_PORT/WEBDAV_HTTPS_PORT
-(default 8080/8443) using wsgidav, served via Hypercorn — same server
-library as the main app, standardized on for every server in this project
-now that the main app moved off Flask/Waitress to Quart/Hypercorn.
+version_engine.py — Universal File Versioning Engine for CloudinatorFTP
+=========================================================================
 
-HTTPS is the default and runs exclusively when it's enabled and the cert
-loads fine (WEBDAV_ENABLED=False, WEBDAV_HTTPS_ENABLED=True in config.py) —
-WebDAV auth is HTTP Basic, which sends credentials in a reversible (base64,
-not encrypted) form on every request, so the plaintext :8080 listener never
-runs alongside a working HTTPS one, even if WEBDAV_ENABLED=True. It's only
-used when HTTPS is disabled outright, or as an automatic fallback if HTTPS
-can't start (missing `cryptography`, cert-write failure, etc.) — same
-graceful-degradation pattern as the FTP→FTPS TLS support.
+This single file is BOTH:
 
-wsgidav's app is WSGI-only (no ASGI-native alternative exists), so
-asgiref.wsgi.WsgiToAsgi bridges it into something Hypercorn can serve.
-This is a dependency-consolidation move, not a performance one — the
-underlying wsgidav app is still synchronous, and WsgiToAsgi still runs it
-in a thread pool under the hood, same as waitress/cheroot did before.
-The concrete win: one server library everywhere instead of three
-(waitress + cheroot + Hypercorn). Verified directly: PROPFIND, GET, PUT,
-and auth enforcement (401/207/201) all behave identically to the old
-waitress+cheroot setup.
+  A. The parent-process integration API, imported by dev_server.py and
+     prod_server.py only:
 
-Deliberately HTTP/1.1-only (unlike the main app's HTTPS listener, which is
-h2-only) — see the alpn_protocols comment in _start_hypercorn(). WebDAV is
-mounted by OS-level clients (Windows WebClient/mrxdav.sys, davfs2, etc.)
-that are almost universally HTTP/1.1-only; offering h2 here causes
-mid-transfer connection resets ("SSL connection closed") on those clients,
-worst on downloads.
+         import version_engine
+         version_engine.start()        # idempotent
+         version_engine.stop()         # graceful
+         version_engine.force_kill()   # immediate, signal-handler-safe
+         version_engine.status()       # dict
 
-Native drive mapping:
-  Windows → This PC → Map Network Drive → http://HOST:8080/
-            (requires WebClient service to be running)
-  macOS   → Finder → Go → Connect to Server → http://HOST:8080
-            (appears as a removable volume on the desktop)
-  Linux   → sudo apt install davfs2
-            sudo mount -t davfs http://HOST:8080/ /mnt/cloudinator
-            /etc/fstab: http://HOST:8080/ /mnt/cloudinator davfs user,auto 0 0
+  B. The child-process worker entry point, run directly:
 
-Roles (same as the main app):
-  readwrite → full access: GET PUT DELETE MKCOL MOVE COPY LOCK PROPFIND …
-  readonly  → read access only: GET PROPFIND OPTIONS HEAD
-              write-method requests return 403 before reaching wsgidav
+         python version_engine.py --worker
 
-Audit logging (2026-09-24, IP trust chain fixed same day):
-  Every WebDAV login, failed login, and file operation is written as one
-  "WebDAV AUDIT: user=... action=... path=... ip=..." line through the
-  shared logging_setup logger — same shape as the FTP/SFTP/SMB AUDIT lines,
-  so all four protocols are greppable the same way. Before this, this file
-  had a logger (`log`) that nothing ever called and a plain stdlib one at
-  that, so WebDAV traffic left no user/action/IP trail at all. The client
-  IP is resolved by _client_ip() the same way app.py's get_client_ip()
-  resolves it for the main app: CF-Connecting-IP first (this listener,
-  port 8443, is tunneled through cloudflared — confirmed, not assumed),
-  then X-Forwarded-For, then REMOTE_ADDR (asgiref's fill-in from
-  Hypercorn's ASGI scope["client"], the raw TCP peer — correct for direct
-  LAN/Tailscale access, but would be cloudflared's own local address for
-  anything arriving through the tunnel, which is why it's no longer
-  trusted first).
+Process architecture (mirrors protocol_manager.py's WebDAV subprocess
+pattern EXACTLY — see _spawn_version_engine_process() below, which is a
+close copy of protocol_manager._spawn_webdav_process()):
 
-Authentication uses the shared _AuthCache to avoid repeated bcrypt
-calls on every WebDAV request (WebDAV clients often re-authenticate
-on every request, which is expensive with bcrypt).
+    dev_server.py / prod_server.py (parent / launcher)
+        └── version_engine.start()
+                └── subprocess.Popen([sys.executable, "version_engine.py", "--worker"])
+                        (separate OS process — its own DB connections,
+                         its own watcher/scanner/worker threads; never
+                         shares the Quart/Hypercorn event loop)
+
+Importing this module MUST NOT start anything — no process, thread,
+watcher, scanner, or job loop starts merely from `import version_engine`.
+Only an explicit call to start() (parent side) or running this file with
+--worker (child side) does that.
+
+protocol_manager.py has ZERO references to this module — it stays
+protocol-only (WebDAV/SFTP/FTP/SMB). The only callers of
+start()/stop()/force_kill() are dev_server.py and prod_server.py.
+
+Design decisions explicitly recorded (see CLAUDE.md for the full log):
+  - No watchdog/auto-respawn thread (unlike WebDAV's _webdav_watchdog()).
+    A crashed Version Engine is expected to be repaired by crash recovery
+    on the NEXT start(), not silently respawned — a bad respawn loop could
+    mask a real problem such as a corrupt DB or a full disk.
+  - The watcher is a lightweight polling loop (stat-based: mtime+size),
+    not an OS-level filesystem-event watcher (inotify/ReadDirectoryChangesW/
+    FSEvents), since this repo has no `watchdog`-package dependency today.
+    It still satisfies "watcher + scanner, not watcher alone": the watcher
+    polls on a SHORT interval (see _WATCH_POLL_INTERVAL) for fast reaction,
+    the scanner reconciles on the slower, configurable
+    config.VERSION_SCAN_INTERVAL and also discovers brand-new files. The
+    engine works correctly with the watcher disabled — the scanner alone
+    still eventually catches everything.
 """
 
-import base64
+import argparse
+import fnmatch
 import hashlib
-import logging
 import os
+import queue
 import re
-import asyncio
+import signal
+import sqlite3
+import subprocess
+import sys
+import tempfile
 import threading
 import time
-from urllib.parse import unquote, urlsplit
 
+import config
 import logging_setup
 
-# Import from net_utils, NOT app: `from app import ...` executes all of app.py's
-# top-level code inside this subprocess (file monitor + reconciliation walk,
-# search-index crawler, cleanup/assembly workers - all duplicated).
-from helpers.net_utils import get_local_ip
+_PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+_SCRIPT_PATH = os.path.join(_PROJECT_DIR, "version_engine.py")
 
-# Patch the same real, still-open Hypercorn bug (hypercorn#202) that
-# prod_server.py patches for the main app — see helpers/hypercorn_ssl_fix.py's
-# module docstring. WebDAV runs as its own separate OS process with its
-# own independent Hypercorn instance (see protocol_manager.py), so it
-# needs this call too; prod_server.py's own call does not cover it.
-from helpers import hypercorn_ssl_fix
+_ENGINE_VERSION = "1.0.0"
+_SCHEMA_VERSION = 1
 
-hypercorn_ssl_fix.apply()
+# How often the (optional) watcher polls tracked paths for changes. Not a
+# config.py setting — this is an internal implementation constant for the
+# stat-polling loop, distinct from config.VERSION_SCAN_INTERVAL (the full
+# reconciliation scanner's interval, which IS configurable).
+_WATCH_POLL_INTERVAL = 3  # seconds
 
-LOCAL_IP = get_local_ip()
+# =============================================================================
+# A. PARENT-PROCESS API  (imported by dev_server.py / prod_server.py ONLY)
+# =============================================================================
 
-# Was logging.getLogger(__name__) — in the WebDAV subprocess that resolves to
-# "__main__", a plain stdlib logger with no handler attached anywhere, and it
-# was never called in this file anyway (a dead logger — same situation
-# ftp_server.py and sftp_server.py were in before their own AUDIT patches).
-# Now a child of logging_setup's shared "cloudinatorftp" logger, so AUDIT
-# lines land in the same daily file as every other protocol's, tagged
-# [webdav_server] by logging_setup's per-line component tag.
-log = logging_setup.get_logger("webdav")
-
-# ── HTTP methods considered "writes" ──────────────────────────────────────
-_WRITE_METHODS = frozenset(
-    ["PUT", "DELETE", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK", "PROPPATCH", "PATCH"]
-)
-
-# ── Shared per-process auth cache ─────────────────────────────────────────
-# Avoids repeated bcrypt checks on every WebDAV request.
-# Maps username → {hash: sha256_of_password, role: str|None, exp: float}
-# role = str  → valid credentials, role is the role string
-# role = None → valid username but wrong password (cached failure)
+_version_engine_proc = None
+_version_engine_proc_lock = threading.Lock()
+_ve_pm_logger = None
 
 
-class _AuthCache:
-    """
-    Thread-safe cache for WebDAV credentials → role.
-    Stores sha256(password), NOT the raw password, so a cache dump is safe.
-    TTL is short (30 s) so password changes take effect quickly.
-    """
-
-    TTL = 30  # seconds
-
-    def __init__(self):
-        self._data: dict = {}
-        self._lock = threading.Lock()
-
-    def lookup(self, username: str, password: str):
-        """
-        Return:
-          str   — cached role (credentials valid)
-          None  — cached failure (wrong password)
-          False — cache miss (must do real auth)
-        """
-        pw_hash = hashlib.sha256(password.encode()).hexdigest()
-        with self._lock:
-            entry = self._data.get(username)
-            if entry and entry["hash"] == pw_hash and time.time() < entry["exp"]:
-                return entry["role"]
-        return False
-
-    def store(self, username: str, password: str, role):
-        """Store result. role=None means authentication failed."""
-        pw_hash = hashlib.sha256(password.encode()).hexdigest()
-        with self._lock:
-            self._data[username] = {
-                "hash": pw_hash,
-                "role": role,
-                "exp": time.time() + self.TTL,
-            }
-
-    def invalidate(self, username: str):
-        """Drop cached entry (call after password change)."""
-        with self._lock:
-            self._data.pop(username, None)
+def _pm_log():
+    global _ve_pm_logger
+    if _ve_pm_logger is None:
+        _ve_pm_logger = logging_setup.get_logger("version_engine.parent")
+    return _ve_pm_logger
 
 
-_auth_cache = _AuthCache()
-
-
-# ── Internal helpers ──────────────────────────────────────────────────────
-
-
-def _parse_basic_auth(environ):
-    """Extract (username, password) from HTTP Basic Auth header, or (None, None)."""
-    auth = environ.get("HTTP_AUTHORIZATION", "")
-    if not auth.lower().startswith("basic "):
-        return None, None
+def _pump_child_output(stream, tag: str) -> None:
+    """Relay the child's stdout/stderr lines into this (parent) process's
+    own log stream, exactly mirroring protocol_manager._pump_child_output
+    so Version Engine's output lands in the same daily log file rather
+    than vanishing or opening a second console."""
     try:
-        decoded = base64.b64decode(auth[6:]).decode("utf-8", errors="replace")
-        if ":" not in decoded:
-            return None, None
-        return decoded.split(":", 1)
+        for line in iter(stream.readline, ""):
+            if not line:
+                break
+            _pm_log().info(f"[version_engine:{tag}] {line.rstrip()}")
     except Exception:
-        return None, None
-
-
-def _resolve_role(username: str, password: str):
-    """
-    Authenticate username/password and return the role string, or None on failure.
-    Uses _auth_cache to avoid bcrypt on every request.
-    """
-    cached = _auth_cache.lookup(username, password)
-    if cached is not False:
-        return cached  # str or None
-
-    from database import db
-
-    if db.check_login(username, password):
-        role = db.get_role(username) or "readonly"
-        db.update_last_login(username)
-        _auth_cache.store(username, password, role)
-        return role
-    else:
-        _auth_cache.store(username, password, None)
-        return None
-
-
-# ── Audit logging ─────────────────────────────────────────────────────────
-# WebDAV is stateless HTTP Basic — there is no "session" to hang a login/logout
-# pair on the way FTP/SFTP/SMB have, and clients (Windows WebClient especially)
-# send several requests per second. So this is split by what each event
-# actually is:
-#   login / login_failed  → CloudinatorDC.basic_auth_user() below, which is
-#                           where credentials are really checked. Successful
-#                           logins are de-duplicated per (user, ip) for
-#                           _LOGIN_AUDIT_TTL seconds so one Explorer window
-#                           doesn't write a "login" line per request.
-#                           Failures are NOT de-duplicated — every bad
-#                           attempt is a line, same as FTP/SFTP.
-#   upload/delete/mkdir/  → _AuditMiddleware, which sees the final HTTP
-#   rename/copy/download    status, so only operations that actually
-#                           succeeded are logged (same success-path-only
-#                           convention as the other three protocols).
-#   permission_denied     → _AuditMiddleware, for the readonly-role 403.
-# PROPFIND / OPTIONS / HEAD / LOCK / UNLOCK / PROPPATCH are deliberately
-# NOT audited: they are browsing and lock-keepalive chatter that would bury
-# every real event (same reasoning as smb_server.py's audit hooks).
-
-
-def _client_ip(environ) -> str:
-    """
-    Client IP for audit lines. Mirrors app.py's get_client_ip() trust chain
-    (2026-09-23 sync note), adapted from Quart's request.headers to WSGI's
-    environ HTTP_* convention — CF-Connecting-IP is set by Cloudflare's edge
-    itself from the true connecting client and isn't spoofable by the client
-    since there's no direct inbound path to this box; X-Forwarded-For is the
-    fallback for a non-Cloudflare reverse proxy.
-
-    FIXED 2026-09-24 (originally shipped as REMOTE_ADDR-only, same day):
-    this listener (port 8443) is confirmed tunneled through cloudflared —
-    every WebDAV audit line was showing cloudflared's local loopback
-    address instead of the real client, for 100% of internet-facing
-    traffic, since HTTPS wins exclusively over the plaintext :8080
-    fallback whenever it's enabled and starts (see this file's own
-    start() logic) and 8080 itself is not tunneled. REMOTE_ADDR is still
-    the right answer for genuinely direct access (LAN/Tailscale, or a
-    future non-tunneled deployment) — CF-Connecting-IP is the real
-    connecting client, deliberately trusted over a possible middlebox.
-    """
-    environ = environ or {}
-    cf_ip = (environ.get("HTTP_CF_CONNECTING_IP") or "").strip()
-    if cf_ip:
-        return cf_ip
-    xff = environ.get("HTTP_X_FORWARDED_FOR")
-    if xff:
-        first = xff.split(",")[0].strip()
-        if first:
-            return first
-    return environ.get("REMOTE_ADDR") or "?"
-
-
-_LOGIN_AUDIT_TTL = 300  # seconds — one "login" line per (user, ip) per window
-_recent_logins: dict = {}
-_recent_logins_lock = threading.Lock()
-
-
-def _audit_login(username, role, environ) -> None:
-    """Best-effort: an audit-logging problem must never break authentication."""
-    try:
-        ip = _client_ip(environ)
-        if role is None:
-            log.warning("WebDAV AUDIT: user=%r action=login_failed ip=%s", username, ip)
-            return
-        key = (username, ip)
-        now = time.monotonic()
-        with _recent_logins_lock:
-            last = _recent_logins.get(key)
-            if last is not None and now - last < _LOGIN_AUDIT_TTL:
-                return
-            if len(_recent_logins) > 1024:  # keep the dict bounded
-                for k in [
-                    k for k, v in _recent_logins.items() if now - v >= _LOGIN_AUDIT_TTL
-                ]:
-                    _recent_logins.pop(k, None)
-            _recent_logins[key] = now
-        log.info(
-            "WebDAV AUDIT: user=%r action=login role=%r ip=%s tls=%s",
-            username,
-            role,
-            ip,
-            (environ or {}).get("wsgi.url_scheme") == "https",
-        )
-    except Exception:
+        # The engine's output pipe closed; the pump simply ends.
         pass
-
-
-# HTTP method → audit action name, and the status codes that count as success.
-_AUDIT_ACTIONS = {
-    "GET": "download",
-    "PUT": "upload",
-    "DELETE": "delete",
-    "MKCOL": "mkdir",
-    "MOVE": "rename",
-    "COPY": "copy",
-}
-_AUDIT_OK_CODES = {
-    "GET": {200, 206},
-    "PUT": {200, 201, 204},
-    "DELETE": {200, 204},
-    "MKCOL": {201},
-    "MOVE": {201, 204},
-    "COPY": {201, 204},
-}
-
-
-def _request_path(environ) -> str:
-    """PATH_INFO as a real str. asgiref hands WSGI the path as latin-1-decoded
-    UTF-8 bytes (the WSGI convention), so a non-ASCII filename would log as
-    mojibake without this round-trip."""
-    raw = environ.get("PATH_INFO", "")
-    try:
-        return raw.encode("latin-1").decode("utf-8")
-    except (UnicodeEncodeError, UnicodeDecodeError):
-        return raw
-
-
-def _destination_path(environ) -> str:
-    """Target path of a MOVE/COPY. The Destination header is a full,
-    percent-encoded URL (https://host:8443/dir/new.txt) — reduce it to the
-    same path form _request_path() returns."""
-    dest = environ.get("HTTP_DESTINATION", "")
-    return unquote(urlsplit(dest).path) if dest else "?"
-
-
-def _is_first_chunk(environ) -> bool:
-    """Windows' WebDAV client downloads large files as many 206 range
-    requests. Audit a GET once — when it's un-ranged, or ranged from byte 0 —
-    instead of once per range."""
-    rng = environ.get("HTTP_RANGE")
-    if not rng:
-        return True
-    m = re.match(r"\s*bytes\s*=\s*(\d+)\s*-", rng)
-    return bool(m) and int(m.group(1)) == 0
-
-
-class _AuditMiddleware:
-    """
-    WSGI middleware that writes one AUDIT line per successful file operation.
-
-    Wraps start_response so it can see the final status code that wsgidav (or
-    _RoleEnforcerMiddleware's 403) chose, then logs user + action + path + ip.
-    Sits OUTSIDE _RoleEnforcerMiddleware in _build_app() so it can see that
-    middleware's 403s too.
-
-    Downloads are logged when the response starts (status known, body not
-    yet streamed), not when the last byte is sent — unlike FTP's
-    on_file_sent, WSGI gives no completion hook, and a cancelled download
-    still records that the user asked for the file.
-    """
-
-    def __init__(self, app):
-        self._app = app
-
-    def __call__(self, environ, start_response):
-        method = environ.get("REQUEST_METHOD", "").upper()
-        if method not in _AUDIT_ACTIONS and method not in _WRITE_METHODS:
-            return self._app(environ, start_response)  # PROPFIND/OPTIONS/HEAD…
-
-        def audited_start_response(status, headers, exc_info=None):
-            try:
-                self._record(method, status, environ)
-            except Exception:
-                pass  # best-effort — never break the response over a log line
-            return start_response(status, headers, exc_info)
-
-        return self._app(environ, audited_start_response)
-
-    @staticmethod
-    def _record(method, status, environ) -> None:
-        code = int(status.split(" ", 1)[0])
-        username, _pw = _parse_basic_auth(environ)
-        ip = _client_ip(environ)
-
-        if code == 403 and method in _WRITE_METHODS:
-            log.warning(
-                "WebDAV AUDIT: user=%r action=permission_denied method=%s path=%r ip=%s",
-                username,
-                method,
-                _request_path(environ),
-                ip,
-            )
-            return
-
-        action = _AUDIT_ACTIONS.get(method)
-        if action is None or code not in _AUDIT_OK_CODES[method]:
-            return
-
-        path = _request_path(environ)
-        if method == "GET" and (path.endswith("/") or not _is_first_chunk(environ)):
-            return  # directory listing, or a follow-up range of one download
-
-        if method in ("MOVE", "COPY"):
-            log.info(
-                "WebDAV AUDIT: user=%r action=%s path=%r -> %r ip=%s",
-                username,
-                action,
-                path,
-                _destination_path(environ),
-                ip,
-            )
-        else:
-            log.info(
-                "WebDAV AUDIT: user=%r action=%s path=%r ip=%s",
-                username,
-                action,
-                path,
-                ip,
-            )
-
-
-# ── WSGI middleware — blocks write operations for readonly users ───────────
-
-
-class _RoleEnforcerMiddleware:
-    """
-    Wraps the WsgiDAV WSGI app to enforce read-only access.
-
-    For write-method requests where valid credentials are present:
-      • readwrite → pass through to wsgidav as normal
-      • readonly  → return 403 immediately (never reaches wsgidav)
-
-    Unauthenticated write requests are forwarded so wsgidav can 401
-    them and prompt the client for credentials.  On the client's retry
-    (with credentials) the role check runs again.
-    """
-
-    def __init__(self, app):
-        self._app = app
-
-    def __call__(self, environ, start_response):
-        if environ.get("REQUEST_METHOD", "").upper() in _WRITE_METHODS:
-            username, password = _parse_basic_auth(environ)
-            if username and password:
-                role = _resolve_role(username, password)
-                # role is None  → bad credentials, let wsgidav return 401
-                # role is str but not readwrite → block with 403
-                if role is not None and role != "readwrite":
-                    body = (
-                        b"403 Forbidden\n"
-                        b"Your account has read-only access.\n"
-                        b"Contact the server admin to request write access."
-                    )
-                    start_response(
-                        "403 Forbidden",
-                        [
-                            ("Content-Type", "text/plain; charset=utf-8"),
-                            ("Content-Length", str(len(body))),
-                            ("DAV", "1, 2"),
-                        ],
-                    )
-                    return [body]
-        return self._app(environ, start_response)
-
-
-# ── wsgidav domain controller ─────────────────────────────────────────────
-
-
-def _make_domain_controller_class():
-    """
-    Build and return the wsgidav domain controller CLASS (not an instance).
-    wsgidav 4.3.x does:
-        if not isinstance(dc, type): raise ValueError("Could not resolve...")
-        dc_instance = dc(wsgidav_app=app, config=config)
-    So we MUST return the class itself; wsgidav instantiates it.
-
-    wsgidav 4.x API change vs 3.x:
-      basic_auth_user must return the USERNAME STRING on success, not True.
-      is_share_anonymous(share, environ=None) — environ dropped in 4.3.x.
-    """
-    try:
-        from wsgidav.dc.base_dc import BaseDomainController
-
-        _base = BaseDomainController
-    except ImportError:
-        _base = object  # wsgidav 3.x or very old — no base class required
-
-    class CloudinatorDC(_base):
-        """Authenticates WebDAV against the CloudinatorFTP SQLite database."""
-
-        def __init__(self, wsgidav_app=None, config=None):
-            # wsgidav 4.x calls CloudinatorDC(wsgidav_app=..., config=...)
-            # wsgidav 3.x may call with no args — both signatures handled here
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            # Pipe already closed.
             pass
 
-        def get_domain_realm(self, path_info, environ):
-            return "CloudinatorFTP"
 
-        def require_authentication(self, realm, environ):
-            return True
-
-        def basic_auth_user(self, realm, user_name, password, environ):
-            # wsgidav 4.x REQUIRES returning the username string on success.
-            # Returning True (as in 3.x) causes wsgidav to reject the auth.
-            role = _resolve_role(user_name, password)
-            _audit_login(user_name, role, environ)  # login / login_failed + ip
-            return user_name if role is not None else False
-
-        def supports_http_digest_auth(self):
-            return False
-
-        def digest_auth_user(self, realm, user_name, environ):
-            return False
-
-        # environ omitted in wsgidav 4.3.x call site — default=None keeps
-        # us compatible with older 4.x builds that still passed it.
-        def is_share_anonymous(self, share, environ=None):
-            return False
-
-    return CloudinatorDC  # return the CLASS; wsgidav instantiates it
+_PID_DIR = os.path.join(_PROJECT_DIR, ".manage_pids")
+_VE_PID_FILE = os.path.join(_PID_DIR, "version_engine.pid")
 
 
-# ── Certificate download middleware ───────────────────────────────────────
-# Serves db/webdav.crt at GET /webdav.crt on both HTTP and HTTPS ports.
-# No auth required — the cert is the public key, safe to expose.
-# Clients download it with one PowerShell line and import it as Trusted Root.
-
-
-class _CertMiddleware:
-    """
-    Intercepts GET /webdav.crt and returns the TLS certificate file.
-    All other requests pass through to the wsgidav app.
-    cert_path is resolved once at startup; existence is checked per-request
-    so it works even if the cert is generated after this middleware is built.
-    """
-
-    def __init__(self, app, cert_path=None):
-        self._app = app
-        self._cert_path = cert_path
-
-    def __call__(self, environ, start_response):
-        if (
-            environ.get("REQUEST_METHOD", "GET") == "GET"
-            and environ.get("PATH_INFO", "").rstrip("/") == "/webdav.crt"
-        ):
-            path = self._cert_path
-            if path and os.path.exists(path):
-                with open(path, "rb") as f:
-                    data = f.read()
-                start_response(
-                    "200 OK",
-                    [
-                        ("Content-Type", "application/x-pem-file"),
-                        (
-                            "Content-Disposition",
-                            'attachment; filename="cloudinator.crt"',
-                        ),
-                        ("Content-Length", str(len(data))),
-                        ("Cache-Control", "no-store"),
-                    ],
-                )
-                return [data]
-            start_response("404 Not Found", [("Content-Type", "text/plain")])
-            return [b"Certificate not generated yet - start the server first."]
-        return self._app(environ, start_response)
-
-
-# ── Build the final WSGI app ──────────────────────────────────────────────
-
-
-def _build_app(root_dir: str):
+def _write_ve_pidfile(pid: int):
+    """Optional — mirrors protocol_manager._write_webdav_pidfile(). Not
+    required for correctness (start()/stop()/status() all work purely off
+    the in-process Popen handle); exists only so external tooling in the
+    same style as manage.sh can find the pid without talking to this
+    module directly."""
     try:
-        from wsgidav.wsgidav_app import WsgiDAVApp
-    except ImportError:
-        raise ImportError("wsgidav is not installed. Run: pip install wsgidav")
-
-    try:
-        from wsgidav.fs_dav_provider import FilesystemProvider
-    except ImportError:
-        from wsgidav.dav_provider import FilesystemProvider
-
-    try:
-        provider = FilesystemProvider(root_dir, readonly=False)
-    except TypeError:
-        provider = FilesystemProvider(root_dir)
-
-    config = {
-        "provider_mapping": {"/": provider},
-        "http_authenticator": {
-            "domain_controller": _make_domain_controller_class(),
-            "accept_basic": True,
-            "accept_digest": False,
-            "default_to_digest": False,
-            "trusted_auth_header": None,
-        },
-        "property_manager": True,
-        "lock_storage": True,
-        "verbose": 0,
-        "logging": {"enable_loggers": []},
-    }
-
-    dav_app = WsgiDAVApp(config)
-
-    # Resolve cert path once at startup (existence checked per-request)
-    cert_path = None
-    try:
-        from paths import get_db_dir
-
-        cert_path = os.path.join(get_db_dir(create=False), "webdav.crt")
+        os.makedirs(_PID_DIR, exist_ok=True)
+        with open(_VE_PID_FILE, "w") as f:
+            f.write(str(pid))
     except Exception:
+        # PID file is a convenience for manage.sh; failing to write it must not stop startup.
         pass
 
-    # Order matters: _AuditMiddleware wraps _RoleEnforcerMiddleware (not the
-    # other way round) so it sees the enforcer's own 403s, and sits inside
-    # _CertMiddleware so the unauthenticated /webdav.crt download isn't audited.
-    return _CertMiddleware(
-        _AuditMiddleware(_RoleEnforcerMiddleware(dav_app)), cert_path=cert_path
-    )
+
+def _clear_ve_pidfile():
+    try:
+        os.remove(_VE_PID_FILE)
+    except OSError:
+        # PID file already gone.
+        pass
 
 
-# ── Server lifecycle ──────────────────────────────────────────────────────
-# Both HTTP and HTTPS run from a single Hypercorn Config/process/thread —
-# `bind` is the TLS listener, `insecure_bind` is the plain-HTTP one, same
-# pattern as prod_server.py. Either can be an empty list to disable that
-# listener independently, matching the old WEBDAV_ENABLED/WEBDAV_HTTPS_ENABLED
-# split.
+def _spawn_version_engine_process():
+    """Launch version_engine.py --worker as an independent OS process.
 
-_webdav_thread: "threading.Thread | None" = None
-_webdav_loop: "asyncio.AbstractEventLoop | None" = None
-_webdav_shutdown_event: "asyncio.Event | None" = None
-
-
-def _build_hypercorn_logger(name: str) -> logging.Logger:
-    """Hypercorn's default error-log formatter (used whenever Config.errorlog
-    is left at its default "-") includes %(process)d, which crashes under
-    Python 3.14 — record.process comes back None in that code path, a
-    Python 3.14 logging-module behavior change, not a bug in this app.
-    Passing a pre-built Logger instead of the string "-" makes Hypercorn's
-    _create_logger() skip its own crashing formatter construction entirely
-    (it has an early return for an already-built logging.Logger target).
-
-    2026-09-24: now returns a child of logging_setup's shared
-    "cloudinatorftp" logger, same as prod_server.py's identical helper
-    already did. This copy had been left building its own plain
-    StreamHandler on sys.stderr — which by then is logging_setup's
-    _TeeStream — so every Hypercorn line reached the log file
-    double-timestamped and tagged [STDERR] (e.g. "[STDERR] [webdav_server]
-    2026-09-24 02:57:50 [INFO] Running on https://..."), instead of as a
-    normal [INFO]/[WARNING] logger line. `name` is kept for compatibility
-    with the existing call site but no longer names the logger.
+    This is a deliberate close copy of
+    protocol_manager._spawn_webdav_process() — same stdio handling, same
+    env vars, same Windows console-window fix, same reasoning. See that
+    function's docstring for the full rationale; not re-derived here.
+    Returns the Popen handle, or None if the launch failed.
     """
-    return logging_setup.get_logger("hypercorn")
+    kw = {}
+    if sys.platform == "win32":
+        kw["creationflags"] = subprocess.CREATE_NO_WINDOW
 
-
-# ── ASGI-level disconnect guard (fixes a real, verified silent-flood bug) ──
-
-
-# The exact text guarded_send() raises with, shared with the except clause in
-# __call__ below so the two can't drift apart — that clause must recognize
-# ONLY this guard's own deliberate error, never a real connection failure.
-_GUARD_MSG = (
-    "WebDAV client disconnected mid-response (_DisconnectAbortMiddleware guard)"
-)
-
-
-class _DisconnectAbortMiddleware:
-    """
-    ASGI-level middleware wrapping WsgiToAsgi(wsgi_app). Fixes a real,
-    silent, fast-flood bug — confirmed by reading the actual source of
-    CPython's asyncio.sslproto, asgiref 3.12.1, and Hypercorn 0.18.0, not
-    guessed:
-
-    1. Once a client abruptly resets a connection (e.g. cancelling a large
-       download), asyncio's own SSL transport (asyncio/sslproto.py's
-       _SSLProtocol._write_appdata) NEVER raises on further write() calls —
-       by design, per asyncio's documented Transport contract (write() is
-       "fire and forget", errors surface via connection_lost(), not
-       exceptions). Once past an internal grace threshold (5 writes), it
-       just logs "SSL connection is closed" and silently no-ops — for
-       EVERY remaining write, forever, with no way for calling code to
-       detect this via a normal try/except.
-    2. asgiref's WsgiToAsgiInstance.run_wsgi_app() streams a WSGI response
-       body via an *unguarded* loop — `for output in wsgi_application(...):
-       ... self.sync_send(...)` — with no try/except around sync_send() and
-       no check of the ASGI receive() channel for a disconnect signal
-       during that loop (verified directly against asgiref's actual
-       wsgi.py source).
-    3. wsgidav's FilesystemProvider just keeps yielding the next chunk of
-       whatever file is being served, with no idea the client is gone.
-
-    Combined: once a client cancels a large download, nothing in this
-    chain ever stops — it silently "succeeds" (per point 1) and logs once
-    per chunk, for every remaining chunk of the file, as fast as the rest
-    of the file can be read from disk. For a large file cancelled early,
-    that's thousands of log lines in a few seconds.
-
-    Fix: watch the ASGI `receive()` channel for `http.disconnect` — which
-    Hypercorn DOES deliver once its read-side loop detects the connection
-    is gone (confirmed in hypercorn/protocol/http_stream.py) — for the
-    full lifetime of the request, including during the response-streaming
-    phase when neither wsgidav nor asgiref ever call receive() again
-    themselves. Once disconnect is observed, the wrapped `send()` starts
-    raising instead of silently succeeding — which DOES propagate, since
-    asgiref's sync_send() call is unguarded (point 2 above) — breaking the
-    WSGI response loop on the very next chunk instead of continuing
-    through the rest of the file.
-
-    Careful to avoid a receive() race with the inner app: WsgiToAsgiInstance
-    reads the full request body via its own receive() loop before ever
-    calling the wrapped WSGI app. This middleware's own background watcher
-    does not start pulling from receive() itself until AFTER it has
-    observed (via wrapping the SAME receive() calls the inner app makes)
-    that the inner app's body-read loop has completed — so the two never
-    compete for the same message.
-    """
-
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        disconnected = False
-        body_fully_received = asyncio.Event()
-
-        async def watched_receive():
-            nonlocal disconnected
-            message = await receive()
-            if message.get("type") == "http.disconnect":
-                disconnected = True
-            elif message.get("type") == "http.request" and not message.get(
-                "more_body", False
-            ):
-                body_fully_received.set()
-            return message
-
-        async def watch_after_body():
-            nonlocal disconnected
-            await body_fully_received.wait()
-            try:
-                while not disconnected:
-                    message = await receive()
-                    if message.get("type") == "http.disconnect":
-                        disconnected = True
-            except Exception:
-                # Any failure here just means we stop watching — worst
-                # case we fall back to the pre-fix (slow) behavior for
-                # this one request, never worse.
-                pass
-
-        async def guarded_send(message):
-            if disconnected:
-                raise ConnectionResetError(_GUARD_MSG)
-            await send(message)
-
-        watcher = asyncio.ensure_future(watch_after_body())
-        try:
-            await self.app(scope, watched_receive, guarded_send)
-        except ConnectionResetError as exc:
-            # 2026-09-24: guarded_send() raising is this middleware doing its
-            # job — it's how a cancelled download's response loop gets broken
-            # (see the class docstring). That raise is meant to end the
-            # request, not to be reported as a server failure, but nothing
-            # caught it, so Hypercorn logged a full "Error in ASGI
-            # Framework" traceback every time. Most visibly when a client
-            # hung up right after receiving a complete response, a split
-            # second before asgiref's final empty body send — nothing was
-            # actually wrong, the client already had everything. Swallow
-            # ONLY this guard's own error (matched on its exact message);
-            # any other ConnectionResetError — a real one from the socket,
-            # from wsgidav, from anywhere else — is re-raised exactly as
-            # before. The response loop was already broken by the raise
-            # itself, so the flood protection is unaffected.
-            if str(exc) != _GUARD_MSG:
-                raise
-        finally:
-            disconnected = True  # lets the watcher's own loop condition exit
-            watcher.cancel()
-            try:
-                await watcher
-            except (asyncio.CancelledError, Exception):
-                pass
-
-
-# ── Connection-teardown errors (TLS close_notify) ──────────────────────────
-# An ssl.SSLError APPLICATION_DATA_AFTER_CLOSE_NOTIFY at connection teardown
-# used to escape Hypercorn's TCPServer._close() as an anonymous "Unhandled
-# exception in client_connected_cb" traceback (no client address — asyncio no
-# longer knows it by then). That is now handled where the rest of the
-# _close() fixes live: helpers/hypercorn_ssl_fix.py's patched _close(), applied at the
-# top of this file, reads the peer before teardown and logs one IP-tagged
-# line. Nothing needed here.
-
-
-def _start_hypercorn(wsgi_app, http_port, https_port, cert_path, key_path):
-    """Runs WebDAV (HTTP and/or HTTPS) via Hypercorn in a background thread.
-    Returns the Thread object."""
-    from asgiref.wsgi import WsgiToAsgi
-    from hypercorn.config import Config
-    from hypercorn.asyncio import serve
-
-    asgi_app = _DisconnectAbortMiddleware(WsgiToAsgi(wsgi_app))
-
-    cfg = Config()
-    cfg.bind = [f"0.0.0.0:{https_port}"] if https_port else []
-    cfg.insecure_bind = [f"0.0.0.0:{http_port}"] if http_port else []
-    cfg.errorlog = _build_hypercorn_logger(
-        "hypercorn.webdav"
-    )  # see _build_hypercorn_logger's docstring
-    if https_port:
-        cfg.certfile = cert_path
-        cfg.keyfile = key_path
-        # HTTP/1.1 only — deliberately NOT offering "h2" here.
-        # WebDAV is mounted by OS-level clients (Windows WebClient/mrxdav.sys,
-        # davfs2, Cyberduck, etc.), almost all of which are HTTP/1.1-only.
-        # If TLS negotiates h2 with one of these (their TLS layer can claim
-        # ALPN h2 support even though the WebDAV component can't actually
-        # speak HTTP/2 framing), the connection breaks below the HTTP layer —
-        # surfacing as "SSL connection closed" rather than a clean HTTP
-        # error, and repeating forever as the OS driver auto-retries the
-        # mount/download. Unlike prod_server.py's main app (browser-only,
-        # h2 is safe and desired there), WebDAV gains nothing from h2 and
-        # loses broad client compatibility, so it stays HTTP/1.1-only.
-        cfg.alpn_protocols = ["http/1.1"]
-    # keep_alive_max_requests intentionally left at Hypercorn's default
-    # (1000) — see prod_server.py's comment on this exact setting. 0 does
-    # NOT mean unlimited, it means "close after the very first request".
-
-    async def _run():
-        global _webdav_loop, _webdav_shutdown_event
-        _webdav_loop = asyncio.get_running_loop()
-        _webdav_shutdown_event = asyncio.Event()
-
-        async def _shutdown_trigger():
-            await _webdav_shutdown_event.wait()
-
-        await serve(asgi_app, cfg, shutdown_trigger=_shutdown_trigger)
-
-    thread = threading.Thread(
-        target=lambda: asyncio.run(_run()), name="webdav-hypercorn", daemon=True
-    )
-    thread.start()
-    return thread
-
-
-def start() -> bool:
-    """
-    Start WebDAV (HTTP and/or HTTPS) via Hypercorn in a background thread.
-    Returns True if at least one listener started successfully.
-    """
-    global _webdav_thread
+    env = dict(os.environ)
+    # Same daily log file as the parent, not a second one — see
+    # logging_setup.py's CLOUDINATOR_LOG_PREFIX mechanism.
+    env["CLOUDINATOR_LOG_PREFIX"] = logging_setup._LOG_PREFIX
+    # Unconditional (not just Windows) — see protocol_manager.py's
+    # _spawn_webdav_process for the emoji/cp1252 root-cause writeup this
+    # avoids; Version Engine's own logging prints similarly non-ASCII text.
+    env["PYTHONUTF8"] = "1"
 
     try:
-        from config import (
-            WEBDAV_ENABLED,
-            WEBDAV_PORT,
-            WEBDAV_HTTPS_ENABLED,
-            WEBDAV_HTTPS_PORT,
+        proc = subprocess.Popen(
+            [sys.executable, _SCRIPT_PATH, "--worker"],
+            cwd=_PROJECT_DIR,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            env=env,
+            **kw,
         )
-    except ImportError:
-        WEBDAV_ENABLED, WEBDAV_PORT = True, 8080
-        WEBDAV_HTTPS_ENABLED, WEBDAV_HTTPS_PORT = True, 8443
+    except Exception as e:
+        print(f"❌ Version Engine: failed to launch subprocess: {e}")
+        return None
 
-    if not WEBDAV_ENABLED and not WEBDAV_HTTPS_ENABLED:
+    threading.Thread(
+        target=_pump_child_output, args=(proc.stdout, "OUT"), daemon=True
+    ).start()
+    threading.Thread(
+        target=_pump_child_output, args=(proc.stderr, "ERR"), daemon=True
+    ).start()
+    _write_ve_pidfile(proc.pid)
+    return proc
+
+
+def start():
+    """Idempotent. Spawns the Version Engine child process if
+    VERSION_ENGINE_ENABLED and no live handle is already held. Calling
+    this repeatedly results in exactly one child process."""
+    global _version_engine_proc
+
+    if not getattr(config, "VERSION_ENGINE_ENABLED", True):
+        _pm_log().info(
+            "Version Engine disabled (VERSION_ENGINE_ENABLED=False) — not starting."
+        )
         return False
 
-    try:
-        from config import ROOT_DIR
-    except ImportError:
-        print("❌ WebDAV: cannot import ROOT_DIR from config.py")
-        return False
-
-    try:
-        app = _build_app(ROOT_DIR)
-    except ImportError as exc:
-        print(f"⚠️  WebDAV not started: {exc}")
-        return False
-    except Exception as exc:
-        print(f"❌ WebDAV app build failed: {exc}")
-        return False
-
-    try:
-        import asgiref  # noqa — verify available
-    except ImportError:
-        print("⚠️  WebDAV not started: 'asgiref' is not installed.")
-        print("   Install it: pip install asgiref")
-        return False
-
-    # HTTPS wins exclusively when it's enabled and actually starts — WEBDAV_ENABLED's
-    # plaintext :8080 is only ever used when HTTPS is off entirely, or as an automatic
-    # fallback if the cert couldn't be prepared. It is never run *alongside* a working
-    # HTTPS listener, even if WEBDAV_ENABLED=True in server_config.json.
-    https_port = WEBDAV_HTTPS_PORT if WEBDAV_HTTPS_ENABLED else None
-    http_port = None
-    http_is_fallback = False  # becomes True if we opened :8080 because HTTPS
-    # couldn't start, rather than because HTTPS was simply disabled
-
-    cert_path = key_path = None
-    if https_port:
-        try:
-            from paths import get_db_dir
-            from helpers import ssl_cert
-
-            db_dir = get_db_dir(create=True)
-            cert_path, key_path = ssl_cert.get_cert_paths(db_dir)
-        except Exception as exc:
-            print(f"❌ WebDAV HTTPS: could not prepare TLS cert: {exc}")
-            https_port = None
-            # HTTPS was requested but couldn't start — fall back to plaintext
-            # so WebDAV still comes up, regardless of what WEBDAV_ENABLED says.
-            # Credentials are Basic Auth (weakly obscured, not encrypted) over
-            # this listener, so make that loud rather than silent.
+    with _version_engine_proc_lock:
+        if _version_engine_proc is not None and _version_engine_proc.poll() is None:
+            # Already running — no-op, per §5.
+            return True
+        _version_engine_proc = _spawn_version_engine_process()
+        ok = _version_engine_proc is not None
+        if ok:
             print(
-                f"⚠️  Falling back to plaintext WebDAV on port {WEBDAV_PORT} — "
-                f"install 'cryptography' (pip install cryptography) to get "
-                f"HTTPS back and close this cleartext fallback."
+                f"🕓 Version Engine: started (pid {_version_engine_proc.pid}, isolated process)"
             )
-            http_port = WEBDAV_PORT
-            http_is_fallback = True
-        else:
-            if WEBDAV_ENABLED:
-                print(
-                    f"ℹ️  WebDAV: ignoring WEBDAV_ENABLED (plaintext :{WEBDAV_PORT}) — "
-                    f"HTTPS is enabled and started fine, so it's used exclusively."
-                )
-    else:
-        # HTTPS disabled outright in config — plaintext is the only option,
-        # so honor WEBDAV_ENABLED as-is.
-        http_port = WEBDAV_PORT if WEBDAV_ENABLED else None
-
-    try:
-        _webdav_thread = _start_hypercorn(
-            app, http_port, https_port, cert_path, key_path
-        )
-    except OSError as exc:
-        print(f"❌ WebDAV: cannot bind requested port(s): {exc}")
-        return False
-    except Exception as exc:
-        print(f"❌ WebDAV Hypercorn failed to start: {exc}")
-        return False
-
-    if http_port:
-        tag = " (fallback — HTTPS unavailable)" if http_is_fallback else ""
-        print(f"🌐 WebDAV HTTP:  http://{LOCAL_IP}:{http_port}/{tag}")
-        print(f"   ⚠️  plaintext Basic Auth — credentials are NOT encrypted here")
-    if https_port:
-        print(f"🔐 WebDAV HTTPS: https://{LOCAL_IP}:{https_port}/  (HTTP/1.1 only)")
-        print(
-            f"   Import {cert_path} as a trusted root, or download it from "
-            f"https://{LOCAL_IP}:{https_port}/webdav.crt (the cert isn't "
-            f"trusted yet, so that first fetch is trust-on-first-use)."
-        )
-
-    return True
+        return ok
 
 
 def stop():
-    """Shut down the WebDAV Hypercorn server (best-effort, graceful)."""
-    global _webdav_loop, _webdav_shutdown_event
-    if _webdav_loop is not None and _webdav_shutdown_event is not None:
+    """Graceful stop: SIGTERM/terminate(), wait up to
+    config.VERSION_SHUTDOWN_TIMEOUT, fall back to kill() on timeout.
+    Mirrors protocol_manager.stop_all()'s WebDAV-termination half exactly.
+    The actual graceful drain (finish in-flight jobs, close DB) happens
+    INSIDE the child in response to the signal — see _worker_main()'s
+    signal handler."""
+    global _version_engine_proc
+    with _version_engine_proc_lock:
+        proc = _version_engine_proc
+        _version_engine_proc = None
+    if proc is not None and proc.poll() is None:
+        timeout = getattr(config, "VERSION_SHUTDOWN_TIMEOUT", 30)
         try:
-            _webdav_loop.call_soon_threadsafe(_webdav_shutdown_event.set)
-        except Exception:
-            pass
-    _webdav_loop = None
-    _webdav_shutdown_event = None
+            proc.terminate()
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        except Exception as e:
+            _pm_log().debug(f"Stop error for version_engine subprocess: {e}")
+    _clear_ve_pidfile()
 
 
-# ── Standalone process entrypoint ───────────────────────────────────────────
-# WebDAV is launched as its own OS process by protocol_manager.py (see
-# _spawn_webdav_process there), NOT as a thread inside the main app's
-# process like SFTP/FTP/SMB still are. Reason: Hypercorn/asyncio has a known
-# failure mode where a large in-flight download that the client cancels
-# mid-transfer can leave the event loop stuck retrying a write to a dead SSL
-# transport in a tight, non-terminating loop ("SSL connection closed",
-# flooding the log, CPU pegged on that thread) — with no clean way to
-# recover except killing the whole process. Running WebDAV in its own
-# process means that failure mode now only costs a WebDAV restart (see
-# protocol_manager.restart_webdav()), not a full-server restart — the main
-# app keeps serving on :5000 throughout.
-
-
-def _run_standalone():
-    """
-    Entrypoint used when this module is launched as `python webdav_server.py`
-    (a subprocess of the main app, not imported). Starts WebDAV and then
-    blocks in the foreground so the process stays alive for the parent to
-    supervise, until it receives SIGTERM/SIGINT (normal shutdown, exit code
-    0 — see protocol_manager.stop_all()/restart_webdav()) or start() fails
-    (exit code 1, so the parent's watchdog knows to retry).
-
-    Exits 0 immediately, without starting anything, if both WEBDAV_ENABLED
-    and WEBDAV_HTTPS_ENABLED are off — this is treated as an intentional
-    "nothing to do" exit, distinct from a real failure, so the parent's
-    watchdog does NOT try to respawn it in that case.
-    """
-    import signal
-
+def force_kill():
+    """Fast, no-wait kill — safe to call from a signal handler right
+    before os._exit(). Mirrors protocol_manager.force_kill_webdav()
+    exactly: a subprocess (unlike SFTP/FTP/SMB's in-process threads)
+    does not die automatically when its parent exits via os._exit()."""
     try:
-        from config import WEBDAV_ENABLED, WEBDAV_HTTPS_ENABLED
-    except ImportError:
-        WEBDAV_ENABLED, WEBDAV_HTTPS_ENABLED = True, True
+        with _version_engine_proc_lock:
+            proc = _version_engine_proc
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+    except Exception:
+        # Process already gone or not killable; shutdown continues.
+        pass
 
-    if not WEBDAV_ENABLED and not WEBDAV_HTTPS_ENABLED:
-        print("ℹ️  WebDAV disabled in config.py — subprocess exiting cleanly.")
-        return  # exit code 0, watchdog will not respawn
 
-    if not start():
-        # start() already printed the specific reason (missing dependency,
-        # port bind failure, etc.) — exit non-zero so the parent knows this
-        # was a real failure, not an intentional no-op.
-        raise SystemExit(1)
+def status() -> dict:
+    """Return engine status. Process liveness comes from the held Popen
+    handle; job/watcher/scanner counters are read directly from the
+    child's own SQLite DB (safe: SQLite WAL mode supports concurrent
+    readers from a different process; this parent-side connection is a
+    fresh, independent one — see CLAUDE.md's database.py note for why it
+    can't and shouldn't share the child's in-process connection/locks)."""
+    with _version_engine_proc_lock:
+        proc = _version_engine_proc
+    enabled = getattr(config, "VERSION_ENGINE_ENABLED", True)
+    running = (proc is not None) and (proc.poll() is None)
+    pid = proc.pid if (proc is not None and running) else None
 
-    stop_requested = threading.Event()
+    result = {
+        "enabled": enabled,
+        "running": running,
+        "pid": pid,
+        "worker_count": getattr(config, "VERSION_WORKER_COUNT", 1),
+        "watcher_running": False,
+        "scanner_running": False,
+        "pending_jobs": 0,
+        "active_jobs": 0,
+        "failed_jobs": 0,
+        "last_scan": None,
+        "storage_path": getattr(config, "VERSION_STORAGE_DIR", None),
+        "database_path": os.path.join(
+            getattr(config, "DB_DIR", ""),
+            getattr(config, "VERSION_DB_FILENAME", "version_engine.sqlite3"),
+        ),
+    }
 
-    def _handle_signal(signum, frame):
-        print(f"\n🛑 WebDAV process received signal {signum}, shutting down...")
-        stop()
-        stop_requested.set()
+    db_path = result["database_path"]
+    if db_path and os.path.exists(db_path):
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+            try:
+                cur = conn.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status")
+                counts = dict(cur.fetchall())
+                result["pending_jobs"] = counts.get("pending", 0)
+                result["active_jobs"] = counts.get("processing", 0) + counts.get(
+                    "verifying", 0
+                )
+                result["failed_jobs"] = counts.get("failed", 0)
+                meta = dict(
+                    conn.execute("SELECT key, value FROM engine_metadata").fetchall()
+                )
+                result["watcher_running"] = meta.get("watcher_running") == "1"
+                result["scanner_running"] = meta.get("scanner_running") == "1"
+                result["last_scan"] = meta.get("last_scan")
+            finally:
+                conn.close()
+        except Exception:
+            pass  # DB not ready yet / mid-bootstrap — status stays at defaults
+
+    return result
+
+
+# =============================================================================
+# B. CHILD-PROCESS WORKER — SQLite schema, storage, engine logic
+# =============================================================================
+
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS engine_metadata (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS files (
+    file_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    path          TEXT NOT NULL,       -- display path, original case
+    norm_key      TEXT NOT NULL UNIQUE,-- normalized dedup key (see _normalize_path)
+    tracking_source TEXT NOT NULL,     -- 'file' | 'directory' | 'root'
+    created_at    REAL NOT NULL,
+    last_seen_at  REAL NOT NULL,
+    deleted       INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS versions (
+    version_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id       INTEGER NOT NULL REFERENCES files(file_id),
+    sha256        TEXT NOT NULL,
+    size          INTEGER NOT NULL,
+    storage_mode  TEXT NOT NULL,       -- 'full' | 'chunked'
+    status        TEXT NOT NULL,       -- pending|processing|verifying|completed|failed|deleted
+    created_at    REAL NOT NULL,
+    completed_at  REAL,
+    error         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_versions_file ON versions(file_id, status, created_at);
+
+CREATE TABLE IF NOT EXISTS objects (
+    sha256        TEXT PRIMARY KEY,
+    size          INTEGER NOT NULL,
+    created_at    REAL NOT NULL,
+    orphaned_since REAL
+);
+
+CREATE TABLE IF NOT EXISTS version_objects (
+    version_id    INTEGER NOT NULL REFERENCES versions(version_id),
+    chunk_index   INTEGER NOT NULL,
+    sha256        TEXT NOT NULL REFERENCES objects(sha256),
+    PRIMARY KEY (version_id, chunk_index)
+);
+CREATE INDEX IF NOT EXISTS idx_version_objects_sha ON version_objects(sha256);
+
+CREATE TABLE IF NOT EXISTS jobs (
+    job_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation     TEXT NOT NULL,       -- snapshot|restore|verify|scan|retention|gc
+    file_id       INTEGER,
+    version_id    INTEGER,
+    status        TEXT NOT NULL,       -- pending|processing|verifying|completed|failed
+    progress      REAL NOT NULL DEFAULT 0,
+    created_at    REAL NOT NULL,
+    started_at    REAL,
+    finished_at   REAL,
+    retry_count   INTEGER NOT NULL DEFAULT 0,
+    error         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+
+CREATE TABLE IF NOT EXISTS tracked_paths (
+    path          TEXT NOT NULL,
+    kind          TEXT NOT NULL,       -- 'file' | 'directory' | 'root'
+    added_at      REAL NOT NULL,
+    PRIMARY KEY (path, kind)
+);
+"""
+
+
+def _normalize_path(path_str: str) -> str:
+    """Robust equivalent-path normalization (spec §14). Trailing
+    separators are always stripped. Case-folding is applied ONLY on
+    Windows (NTFS is case-insensitive) — Linux/Termux filesystems are
+    case-sensitive, so folding case there would wrongly merge distinct
+    files. This is the dedup key; the display path keeps real case."""
+    p = os.path.abspath(os.path.expanduser(path_str))
+    p = p.rstrip(os.sep)
+    if os.altsep:
+        p = p.rstrip(os.altsep)
+    if sys.platform == "win32":
+        p = p.lower()
+    return p
+
+
+def sha256_stream(fileobj, chunk_size=1024 * 1024):
+    """Stream-hash a file object without loading it fully into memory."""
+    h = hashlib.sha256()
+    while True:
+        buf = fileobj.read(chunk_size)
+        if not buf:
+            break
+        h.update(buf)
+    return h.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# In-process write gate (2026-09-28, "database is locked" at startup)
+# ---------------------------------------------------------------------------
+# SQLite allows ONE writer at a time, and its busy handler is a sleep-and-poll
+# loop with no fairness: with 12 worker threads + watcher + scanner all
+# opening their own connection and committing ~8 tiny writes per file, a
+# thread can lose the race for the whole busy_timeout even though no single
+# holder is slow (the startup burst in the log: 8 workers failing in the same
+# second, ~10 s after start). This gate serialises write transactions INSIDE
+# this process with an ordinary lock (blocking, no polling), so SQLite's
+# lock only ever arbitrates against the OTHER process (the web process's
+# restore/retry). Reads never take the gate (WAL readers don't block).
+#
+# The gate is taken on the first write statement of a transaction and
+# released by commit()/rollback()/close(). If a write statement raises, the
+# transaction is rolled back and the gate released immediately so a failed
+# statement can never leave the gate (or the SQLite lock) held. Acquisition
+# has a timeout: if it ever expires we proceed WITHOUT the gate (falling back
+# to plain SQLite behaviour) rather than deadlocking every thread.
+_WRITE_GATE = threading.Lock()
+_GATE_ACQUIRE_TIMEOUT = 60
+_WRITE_SQL_RE = re.compile(r"^\s*(insert|update|delete|replace|begin)\b", re.IGNORECASE)
+
+
+class _GatedConnection(sqlite3.Connection):
+    _gate_held = False
+
+    def _gate_acquire(self):
+        if not self._gate_held and _WRITE_GATE.acquire(timeout=_GATE_ACQUIRE_TIMEOUT):
+            self._gate_held = True
+
+    def _gate_release(self):
+        if self._gate_held:
+            self._gate_held = False
+            _WRITE_GATE.release()
+
+    def execute(self, sql, *args, **kwargs):
+        is_write = bool(_WRITE_SQL_RE.match(sql))
+        if is_write:
+            self._gate_acquire()
+        try:
+            return super().execute(sql, *args, **kwargs)
+        except sqlite3.Error:
+            if is_write:
+                try:
+                    super().rollback()
+                except sqlite3.Error:
+                    # Rollback on a broken connection can fail; the original error is what matters.
+                    pass
+                self._gate_release()
+            raise
+
+    def commit(self):
+        try:
+            super().commit()
+        finally:
+            self._gate_release()
+
+    def rollback(self):
+        try:
+            super().rollback()
+        finally:
+            self._gate_release()
+
+    def close(self):
+        try:
+            super().close()
+        finally:
+            self._gate_release()
+
+
+def _is_lock_error(exc) -> bool:
+    """True for SQLite's transient 'database is locked' / 'busy' errors."""
+    return isinstance(exc, sqlite3.OperationalError) and any(
+        w in str(exc).lower() for w in ("locked", "busy")
+    )
+
+
+# How many times a worker-driven snapshot is retried (backoff 2,4,8,16,30 s)
+# when another writer is holding the DB lock, before it gives up and lets the
+# watcher pick the file up again. A user-triggered web retry is kept short
+# because an HTTP request is waiting on it.
+_BUSY_MAX_RETRIES = 5
+_BUSY_MAX_RETRIES_WEB = 2
+
+
+class VersionEngineError(Exception):
+    pass
+
+
+class Engine:
+    """The Version Engine's core logic. One instance lives inside the
+    worker process; not imported/instantiated by the parent process."""
+
+    def __init__(self):
+        self.log = logging_setup.get_logger("version_engine")
+        self.storage_dir = config.VERSION_STORAGE_DIR
+        self.objects_dir = os.path.join(self.storage_dir, "objects")
+        self.tmp_dir = os.path.join(self.storage_dir, "tmp")
+        self.db_path = os.path.join(config.DB_DIR, config.VERSION_DB_FILENAME)
+
+        self._shutdown_event = threading.Event()
+        self._stop_scheduling = threading.Event()
+        self._job_queue = queue.Queue()
+        self._workers = []
+        self._watcher_thread = None
+        self._scanner_thread = None
+        self._known_state = (
+            {}
+        )  # norm_key -> (mtime, size) — watcher/scanner fast-path cache
+        self._pending_norm_keys = set()  # debounce: don't double-enqueue
+        self._pending_lock = threading.Lock()
+
+        self._conn_local = threading.local()
+
+        self._watcher_running = False
+        self._scanner_running = False
+
+    # ------------------------------------------------------------------
+    # Storage bootstrap + DB
+    # ------------------------------------------------------------------
+
+    def _ensure_dirs(self):
+        os.makedirs(self.storage_dir, exist_ok=True)
+        os.makedirs(self.objects_dir, exist_ok=True)
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        os.makedirs(config.DB_DIR, exist_ok=True)
+
+    def _connect(self) -> sqlite3.Connection:
+        """One connection per thread (watcher/scanner/each worker) —
+        mirrors database.py's check_same_thread=False + WAL + foreign_keys
+        pattern, but this is an entirely separate DB file/connection: see
+        CLAUDE.md for why version_engine.py must never import database.py
+        or share its module-level lock objects (different process)."""
+        conn = getattr(self._conn_local, "conn", None)
+        if conn is not None:
+            return conn
+        conn = sqlite3.connect(
+            self.db_path, check_same_thread=False, factory=_GatedConnection
+        )
+        conn.row_factory = sqlite3.Row
+        # busy_timeout FIRST: the journal_mode pragma below can itself need
+        # a lock, and should wait rather than fail instantly.
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA journal_mode=WAL")
+        # WAL + NORMAL: no fsync on every commit (WAL is still fsync'd at
+        # checkpoints). Every snapshot does ~8 commits, so on Windows/HDD
+        # the default FULL made each write-lock window several times longer.
+        # Safe here: object files are fsync'd separately, and a power loss
+        # can only roll back the last few commits, which crash recovery
+        # already treats as 'interrupted' (never falsely 'completed').
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        self._conn_local.conn = conn
+        return conn
+
+    def _bootstrap_schema(self):
+        # threading.Lock is correct and sufficient here (not a
+        # cross-process lock) — schema init happens once, early, in the
+        # main worker thread before watcher/scanner/worker threads start,
+        # so there is no genuine race to guard against beyond SQLite's own
+        # WAL-snapshot-isolation trap documented in database.py's
+        # _connect(): CREATE TABLE must be committed before any other
+        # connection (even one opened later in this same process) can see
+        # it, so this is called from __main__ before any thread opens its
+        # own connection.
+        conn = self._connect()
+        conn.executescript(_SCHEMA_SQL)
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT value FROM engine_metadata WHERE key='schema_version'"
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO engine_metadata(key, value) VALUES ('schema_version', ?)",
+                (str(_SCHEMA_VERSION),),
+            )
+            conn.execute(
+                "INSERT INTO engine_metadata(key, value) VALUES ('engine_version', ?)",
+                (_ENGINE_VERSION,),
+            )
+            conn.commit()
+        # else: forward-compat — a future version bump would migrate here.
+
+    def _set_meta(self, key, value):
+        conn = self._connect()
+        conn.execute(
+            "INSERT INTO engine_metadata(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, str(value)),
+        )
+        conn.commit()
+
+    # ------------------------------------------------------------------
+    # Crash recovery (spec §14 "Crash recovery") — run once at startup,
+    # BEFORE watcher/scanner/workers start. Load-bearing on Termux, where
+    # the process can be suspended/killed with no graceful signal at all
+    # (spec §13) — this must fully repair state without ever having seen
+    # a clean stop() run first.
+    # ------------------------------------------------------------------
+
+    def _crash_recovery(self):
+        conn = self._connect()
+
+        # 1. Any job left in a non-terminal state from a previous run was
+        #    interrupted — mark it failed. Never silently "resume" a job;
+        #    the next scan naturally re-creates a fresh snapshot job for
+        #    any file whose hash still doesn't match its latest completed
+        #    version, so no real work is lost, only redone.
+        n = conn.execute(
+            "UPDATE jobs SET status='failed', finished_at=?, "
+            "error='interrupted (crash recovery)' "
+            "WHERE status IN ('pending','processing','verifying')",
+            (time.time(),),
+        ).rowcount
+        if n:
+            self.log.info(f"Crash recovery: marked {n} stale job(s) failed.")
+
+        # 2. Any version left non-terminal is, by definition, NOT safe to
+        #    treat as completed — a crash mid-hash/mid-chunk-write must
+        #    never leave a falsely-`completed` version (core invariant).
+        n = conn.execute(
+            "UPDATE versions SET status='failed', error='interrupted (crash recovery)' "
+            "WHERE status IN ('pending','processing','verifying')"
+        ).rowcount
+        if n:
+            self.log.info(f"Crash recovery: marked {n} stale version(s) failed.")
+        conn.commit()
+
+        # 3. Stale temp files: anything left in tmp_dir is, by construction,
+        #    an incomplete write (finished writes are renamed OUT of
+        #    tmp_dir atomically) — always safe to delete unconditionally.
+        cleaned = 0
+        try:
+            for name in os.listdir(self.tmp_dir):
+                try:
+                    os.remove(os.path.join(self.tmp_dir, name))
+                    cleaned += 1
+                except OSError:
+                    # Temp file already gone or locked; a later cleanup removes it.
+                    pass
+        except OSError:
+            # Temp directory missing or unreadable; nothing to clean.
+            pass
+        if cleaned:
+            self.log.info(f"Crash recovery: removed {cleaned} stale temp file(s).")
+
+        # 4. Validate completed-version metadata still has its objects on
+        #    disk (defends against a manually/externally deleted object).
+        rows = conn.execute(
+            "SELECT DISTINCT vo.sha256 AS sha256 FROM version_objects vo "
+            "JOIN versions v ON v.version_id = vo.version_id "
+            "WHERE v.status='completed'"
+        ).fetchall()
+        missing = 0
+        for row in rows:
+            if not os.path.exists(self._object_path(row["sha256"])):
+                missing += 1
+        if missing:
+            self.log.warning(
+                f"Crash recovery: {missing} referenced object(s) missing from storage — "
+                "affected versions will fail integrity checks on restore."
+            )
+
+    # ------------------------------------------------------------------
+    # Content-addressed object storage
+    # ------------------------------------------------------------------
+
+    def _object_path(self, sha256_hex: str) -> str:
+        return os.path.join(self.objects_dir, sha256_hex[:2], sha256_hex)
+
+    def _store_object_from_tmp(
+        self, tmp_path: str, sha256_hex: str, size: int, commit: bool = True
+    ):
+        """Atomically publish a fully-written temp file as the
+        content-addressed object for `sha256_hex`. Dedup: if the object
+        already exists on disk, the incoming tmp is just discarded — the
+        existing bytes are already known-good (verified when THEY were
+        written)."""
+        final_path = self._object_path(sha256_hex)
+        os.makedirs(os.path.dirname(final_path), exist_ok=True)
+        if os.path.exists(final_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                # Temp file already gone or locked; a later cleanup removes it.
+                pass
+        else:
+            os.replace(tmp_path, final_path)  # atomic on the same filesystem
+
+        conn = self._connect()
+        conn.execute(
+            "INSERT INTO objects(sha256, size, created_at, orphaned_since) "
+            "VALUES (?, ?, ?, NULL) "
+            "ON CONFLICT(sha256) DO UPDATE SET orphaned_since=NULL",
+            (sha256_hex, size, time.time()),
+        )
+        if commit:
+            conn.commit()
+
+    def _verify_object(self, sha256_hex: str) -> bool:
+        """Integrity check: hash-verify an object on read (spec:
+        'every object is hash-verified on read; reject missing/truncated/
+        corrupted/hash-mismatched objects')."""
+        path = self._object_path(sha256_hex)
+        if not os.path.exists(path):
+            return False
+        with open(path, "rb") as f:
+            actual = sha256_stream(f)
+        return actual == sha256_hex
+
+    # ------------------------------------------------------------------
+    # Tracking scope resolution (spec §14)
+    # ------------------------------------------------------------------
+
+    def _is_excluded_dir(self, dirpath: str) -> bool:
+        base = os.path.basename(dirpath)
+        for pat in config.VERSION_EXCLUDE_DIRECTORIES:
+            if base == pat or dirpath == os.path.abspath(os.path.expanduser(pat)):
+                return True
+        return False
+
+    def _is_excluded_file(self, filepath: str) -> bool:
+        base = os.path.basename(filepath)
+        for pat in config.VERSION_EXCLUDE_PATTERNS:
+            if fnmatch.fnmatch(base, pat):
+                return True
+        return False
+
+    def _walk_eligible(self, root: str):
+        """Recursively yield eligible file paths under `root`, honoring
+        excludes and the symlink policy. Guards against symlink cycles
+        with a visited-realpaths set when VERSION_FOLLOW_SYMLINKS is on."""
+        visited_dirs = set()
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            if os.path.islink(current):
+                if not config.VERSION_FOLLOW_SYMLINKS:
+                    continue
+                real = os.path.realpath(current)
+                if real in visited_dirs:
+                    continue  # cycle guard
+                visited_dirs.add(real)
+            try:
+                entries = list(os.scandir(current))
+            except OSError:
+                continue
+            for entry in entries:
+                try:
+                    if entry.is_dir(follow_symlinks=config.VERSION_FOLLOW_SYMLINKS):
+                        if self._is_excluded_dir(entry.path):
+                            continue
+                        stack.append(entry.path)
+                    elif entry.is_file(follow_symlinks=config.VERSION_FOLLOW_SYMLINKS):
+                        if self._is_excluded_file(entry.path):
+                            continue
+                        yield entry.path
+                except OSError:
+                    continue
+
+    def get_eligible_files(self):
+        """Return the set of normalized-eligible (display_path) tuples
+        currently in scope, per config's tracking lists. Dedup'd by
+        normalized key."""
+        seen = {}  # norm_key -> display_path
+
+        for f in config.VERSION_TRACK_FILES:
+            fp = os.path.abspath(os.path.expanduser(f))
+            if os.path.isfile(fp) and not self._is_excluded_file(fp):
+                seen[_normalize_path(fp)] = fp
+
+        for d in config.VERSION_TRACK_DIRECTORIES:
+            dp = os.path.abspath(os.path.expanduser(d))
+            if os.path.isdir(dp):
+                for fp in self._walk_eligible(dp):
+                    seen[_normalize_path(fp)] = fp
+
+        if config.VERSION_TRACK_ALL_FILES:
+            for r in config.VERSION_TRACK_ROOTS:
+                rp = os.path.abspath(os.path.expanduser(r))
+                if os.path.isdir(rp):
+                    for fp in self._walk_eligible(rp):
+                        seen[_normalize_path(fp)] = fp
+
+        return seen  # {norm_key: display_path}
+
+    def _sync_tracked_paths_table(self):
+        conn = self._connect()
+        conn.execute("DELETE FROM tracked_paths")
+        now = time.time()
+        for f in config.VERSION_TRACK_FILES:
+            conn.execute(
+                "INSERT OR IGNORE INTO tracked_paths(path, kind, added_at) VALUES (?, 'file', ?)",
+                (f, now),
+            )
+        for d in config.VERSION_TRACK_DIRECTORIES:
+            conn.execute(
+                "INSERT OR IGNORE INTO tracked_paths(path, kind, added_at) VALUES (?, 'directory', ?)",
+                (d, now),
+            )
+        for r in config.VERSION_TRACK_ROOTS:
+            conn.execute(
+                "INSERT OR IGNORE INTO tracked_paths(path, kind, added_at) VALUES (?, 'root', ?)",
+                (r, now),
+            )
+        conn.commit()
+
+    # ------------------------------------------------------------------
+    # files/ table helpers
+    # ------------------------------------------------------------------
+
+    def _get_or_create_file(self, display_path: str, source: str) -> int:
+        conn = self._connect()
+        norm_key = _normalize_path(display_path)
+        row = conn.execute(
+            "SELECT file_id FROM files WHERE norm_key=?", (norm_key,)
+        ).fetchone()
+        now = time.time()
+        if row:
+            conn.execute(
+                "UPDATE files SET last_seen_at=?, deleted=0 WHERE file_id=?",
+                (now, row["file_id"]),
+            )
+            conn.commit()
+            return row["file_id"]
+        cur = conn.execute(
+            "INSERT INTO files(path, norm_key, tracking_source, created_at, last_seen_at, deleted) "
+            "VALUES (?, ?, ?, ?, ?, 0)",
+            (display_path, norm_key, source, now, now),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+    def _latest_completed_sha(self, file_id: int):
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT sha256 FROM versions WHERE file_id=? AND status='completed' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (file_id,),
+        ).fetchone()
+        return row["sha256"] if row else None
+
+    # ------------------------------------------------------------------
+    # Snapshot (the core "create a version" operation)
+    # ------------------------------------------------------------------
+
+    def snapshot_file(self, display_path: str, source: str = "scan"):
+        """Universal, format-agnostic: every file is treated as an opaque
+        byte stream. Never branches on extension. SHA-256 is the sole
+        identity; if it matches the latest completed version, this is a
+        no-op (skip, no redundant version)."""
+        self._conn_local.last_snapshot_busy = False
+        job_id = self._retry_locked(self._create_job, "snapshot", None)
+        conn = self._connect()
+        try:
+            if not os.path.isfile(display_path):
+                self._finish_job(job_id, "failed", error="source file no longer exists")
+                return None
+            if os.path.islink(display_path) and not config.VERSION_FOLLOW_SYMLINKS:
+                self._finish_job(
+                    job_id, "failed", error="symlink (VERSION_FOLLOW_SYMLINKS=False)"
+                )
+                return None
+
+            file_id = self._retry_locked(self._get_or_create_file, display_path, source)
+
+            def _link_job():
+                conn.execute(
+                    "UPDATE jobs SET file_id=? WHERE job_id=?", (file_id, job_id)
+                )
+                conn.commit()
+
+            self._retry_locked(_link_job)
+
+            last_error = None
+            changed_attempts = 0
+            busy_attempts = 0
+            busy_gave_up = False
+            max_busy = (
+                _BUSY_MAX_RETRIES_WEB if source == "web-retry" else _BUSY_MAX_RETRIES
+            )
+            while True:
+                try:
+                    result = self._attempt_snapshot(file_id, display_path, job_id)
+                    if result is None:
+                        self._retry_locked(
+                            self._finish_job, job_id, "completed"
+                        )  # dedup skip - not an error
+                    else:
+                        self._retry_locked(
+                            self._finish_job, job_id, "completed", result
+                        )
+                        self._retry_locked(self._apply_retention, file_id)
+                    return result
+                except _SourceChangedDuringCapture as e:
+                    last_error = str(e)
+                    changed_attempts += 1
+                    if changed_attempts > config.VERSION_RETRY_COUNT:
+                        break
+                    self.log.info(
+                        f"Snapshot retry {changed_attempts}/{config.VERSION_RETRY_COUNT} for "
+                        f"{display_path}: source changed during capture"
+                    )
+                    time.sleep(config.VERSION_RETRY_DELAY)
+                except _DatabaseBusy as e:
+                    # Another writer held the DB lock past busy_timeout. This
+                    # is NOT a problem with the file, so don't record a
+                    # permanent failed version - back off and try again.
+                    last_error = f"database is locked ({e})"
+                    busy_attempts += 1
+                    if busy_attempts > max_busy:
+                        busy_gave_up = True
+                        break
+                    delay = min(30, 2**busy_attempts)
+                    self.log.warning(
+                        f"Snapshot of {display_path} hit a locked database; "
+                        f"retry {busy_attempts}/{max_busy} in {delay}s"
+                    )
+                    time.sleep(delay)
+                except Exception as e:
+                    last_error = str(e)
+                    # exc_info: a bare "database is locked" (or any other
+                    # message) is undiagnosable without knowing WHICH
+                    # statement raised it.
+                    self.log.error(
+                        f"Snapshot failed for {display_path}: {e}", exc_info=True
+                    )
+                    break
+
+            if busy_gave_up:
+                # Let the watcher re-discover this file on its next poll
+                # (_reconcile_once only enqueues when the cached (mtime,
+                # size) differs, so without this the capture would be lost
+                # until the file happened to change again).
+                self._known_state.pop(_normalize_path(display_path), None)
+                self.log.warning(
+                    f"Gave up on {display_path} after {max_busy} locked-database "
+                    "retries; it will be re-queued automatically."
+                )
+                # Tell an interactive caller (version_history.retry_snapshot)
+                # the truth: nothing was captured because the DB was busy.
+                # Not a failed version row - writing one would need the very
+                # lock we couldn't get.
+                self._conn_local.last_snapshot_busy = True
+            try:
+                self._finish_job(job_id, "failed", error=last_error or "unknown error")
+            except sqlite3.OperationalError as e:
+                if not _is_lock_error(e):
+                    raise
+                # Still locked: leave the job row 'processing' (crash recovery
+                # marks it failed at next start) rather than turning a handled
+                # give-up into an exception.
+                self.log.warning(f"Could not record failed job {job_id}: {e}")
+            return None
+        finally:
+            with self._pending_lock:
+                self._pending_norm_keys.discard(_normalize_path(display_path))
+
+    def _discard_version_row(self, version_id: int):
+        """Best-effort removal of a not-yet-completed version row (and any
+        partial links) after a locked-database failure, so a transient lock
+        doesn't leave a permanent 'failed' row or a row stuck 'pending'. If
+        even this can't get the lock, crash recovery fixes it at next start."""
+        conn = self._connect()
+        for attempt in range(3):
+            try:
+                conn.execute(
+                    "DELETE FROM version_objects WHERE version_id=?", (version_id,)
+                )
+                conn.execute(
+                    "DELETE FROM versions WHERE version_id=? AND status!='completed'",
+                    (version_id,),
+                )
+                conn.commit()
+                return
+            except sqlite3.OperationalError as e:
+                try:
+                    conn.rollback()
+                except sqlite3.Error:
+                    # Rollback on a broken connection can fail; the original error is re-raised or retried.
+                    pass
+                if not _is_lock_error(e) or attempt == 2:
+                    self.log.warning(f"Could not discard version row {version_id}: {e}")
+                    return
+                time.sleep(1.0)
+
+    def _retry_locked(self, fn, *args, delays=(2, 4, 8)):
+        """Run a small bookkeeping write, retrying with backoff if another
+        writer holds the DB lock past busy_timeout. The final failure is
+        re-raised for the caller (worker loop) to handle."""
+        for delay in delays:
+            try:
+                return fn(*args)
+            except sqlite3.OperationalError as e:
+                if not _is_lock_error(e):
+                    raise
+                try:
+                    self._connect().rollback()
+                except sqlite3.Error:
+                    # Rollback on a broken connection can fail; the original error is re-raised.
+                    pass
+                self.log.warning(
+                    f"{getattr(fn, '__name__', 'write')}: {e}; retry in {delay}s"
+                )
+                time.sleep(delay)
+        return fn(*args)
+
+    def last_snapshot_busy(self) -> bool:
+        """True if this thread's most recent snapshot_file() call gave up
+        because the database stayed locked (nothing was captured, and no
+        failed version row exists to say so)."""
+        return bool(getattr(self._conn_local, "last_snapshot_busy", False))
+
+    def _attempt_snapshot(self, file_id: int, display_path: str, job_id: int):
+        holder = {}
+        try:
+            return self._attempt_snapshot_body(file_id, display_path, job_id, holder)
+        except sqlite3.OperationalError as e:
+            if not _is_lock_error(e):
+                raise
+            if holder.get("version_id") is not None:
+                self._discard_version_row(holder["version_id"])
+            raise _DatabaseBusy(str(e)) from e
+
+    def _attempt_snapshot_body(
+        self, file_id: int, display_path: str, job_id: int, holder: dict
+    ):
+        conn = self._connect()
+        try:
+            stat_before = os.stat(display_path)
+        except OSError as e:
+            raise VersionEngineError(f"stat failed: {e}")
+
+        small = stat_before.st_size <= config.VERSION_SMALL_FILE_THRESHOLD
+        version_id = self._create_version_row(file_id, "full" if small else "chunked")
+        holder["version_id"] = version_id
+        self._set_job_version(job_id, version_id)
+
+        try:
+            if small:
+                sha, size = self._capture_full(display_path, version_id)
+            else:
+                sha, size = self._capture_chunked(display_path, version_id)
+        except sqlite3.OperationalError as e:
+            if _is_lock_error(e):
+                raise  # transient; _attempt_snapshot() discards the row and backs off
+            self._mark_version_failed(version_id, f"capture failed: {e}")
+            raise
+        except Exception as e:
+            # Preserve the REAL reason (e.g. "[Errno 13] Permission denied"
+            # for a file locked open by another program — QuickBooks .QBW
+            # files being the textbook case) instead of a generic string.
+            # A vague "capture error" with no detail was previously stored
+            # here, which made every capture failure equally undiagnosable
+            # from the versions table (and therefore from any UI reading
+            # it, including the Version History web UI) even though the
+            # real exception text was momentarily available right here.
+            self._mark_version_failed(version_id, f"capture failed: {e}")
+            raise
+
+        try:
+            stat_after = os.stat(display_path)
+        except OSError as e:
+            self._mark_version_failed(version_id, f"stat failed after capture: {e}")
+            raise VersionEngineError(str(e))
+
+        if (
+            stat_after.st_mtime != stat_before.st_mtime
+            or stat_after.st_size != stat_before.st_size
+        ):
+            self._mark_version_failed(version_id, "source changed during capture")
+            raise _SourceChangedDuringCapture(display_path)
+
+        # Whole-file identity check — dedup against the latest completed version.
+        latest = self._latest_completed_sha(file_id)
+        if latest == sha:
+            # Redundant — discard this version row, no new snapshot needed.
+            conn.execute(
+                "DELETE FROM version_objects WHERE version_id=?", (version_id,)
+            )
+            conn.execute("DELETE FROM versions WHERE version_id=?", (version_id,))
+            conn.commit()
+            self.log.debug(f"Snapshot skipped (unchanged): {display_path}")
+            return None
+
+        conn.execute(
+            "UPDATE versions SET sha256=?, size=?, status='completed', completed_at=? "
+            "WHERE version_id=?",
+            (sha, size, time.time(), version_id),
+        )
+        conn.commit()
+        self.log.info(f"Snapshot created: {display_path} ({sha[:12]}…, {size} bytes)")
+        return version_id
+
+    def _capture_full(self, display_path: str, version_id: int):
+        """Full-object mode: stream the whole file into one content-
+        addressed object (still streamed, never loaded fully into a
+        single bytes blob, even though it's under the small-file
+        threshold — keeps one code path's memory behavior consistent)."""
+        conn = self._connect()
+        conn.execute(
+            "UPDATE versions SET status='processing' WHERE version_id=?", (version_id,)
+        )
+        conn.commit()
+
+        fd, tmp_path = tempfile.mkstemp(dir=self.tmp_dir, prefix="obj_")
+        h = hashlib.sha256()
+        size = 0
+        try:
+            with os.fdopen(fd, "wb") as out, open(display_path, "rb") as src:
+                while True:
+                    buf = src.read(1024 * 1024)
+                    if not buf:
+                        break
+                    h.update(buf)
+                    out.write(buf)
+                    size += len(buf)
+                out.flush()
+                os.fsync(out.fileno())
+        except Exception:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                # Temp file already gone or locked; a later cleanup removes it.
+                pass
+            raise
+
+        conn.execute(
+            "UPDATE versions SET status='verifying' WHERE version_id=?", (version_id,)
+        )
+        conn.commit()
+
+        sha = h.hexdigest()
+        self._store_object_from_tmp(tmp_path, sha, size)
+        conn.execute(
+            "INSERT OR IGNORE INTO version_objects(version_id, chunk_index, sha256) VALUES (?, 0, ?)",
+            (version_id, sha),
+        )
+        conn.commit()
+        return sha, size
+
+    def _capture_chunked(self, display_path: str, version_id: int):
+        """Chunked mode (FixedSizeChunker): stream the file in
+        config.VERSION_CHUNK_SIZE pieces, hashing each chunk (for content-
+        addressed storage / cross-file dedup) AND the whole file (for
+        version identity) in a single pass — never buffers the full file.
+        Architected so a future ContentDefinedChunker can be swapped in:
+        only this method + _restore need to change, nothing in the public
+        snapshot/restore API does."""
+        conn = self._connect()
+        conn.execute(
+            "UPDATE versions SET status='processing' WHERE version_id=?", (version_id,)
+        )
+        conn.commit()
+
+        whole_h = hashlib.sha256()
+        total_size = 0
+        chunk_index = 0
+        chunk_size = config.VERSION_CHUNK_SIZE
+
+        with open(display_path, "rb") as src:
+            while True:
+                buf = src.read(chunk_size)
+                if not buf:
+                    break
+                whole_h.update(buf)
+                total_size += len(buf)
+
+                chunk_h = hashlib.sha256(buf)
+                chunk_sha = chunk_h.hexdigest()
+                fd, tmp_path = tempfile.mkstemp(dir=self.tmp_dir, prefix="chunk_")
+                try:
+                    with os.fdopen(fd, "wb") as out:
+                        out.write(buf)
+                        out.flush()
+                        os.fsync(out.fileno())
+                except Exception:
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        # Temp file already gone or locked; a later cleanup removes it.
+                        pass
+                    raise
+                # LOCK-HOLD FIX: the object row and its version_objects link
+                # are written and COMMITTED together, right here. Previously
+                # the version_objects INSERT was left uncommitted, so SQLite's
+                # write lock stayed held while the NEXT chunk was read,
+                # hashed and fsync'd (seconds per 8 MB on a slow disk) - i.e.
+                # nearly the entire capture. Any other writer (a second
+                # worker, the scanner, or the web process's restore/retry)
+                # then waited out busy_timeout and got "database is locked".
+                # Now the lock is held only for these two tiny statements.
+                self._store_object_from_tmp(tmp_path, chunk_sha, len(buf), commit=False)
+                conn.execute(
+                    "INSERT OR IGNORE INTO version_objects(version_id, chunk_index, sha256) VALUES (?, ?, ?)",
+                    (version_id, chunk_index, chunk_sha),
+                )
+                conn.commit()
+                chunk_index += 1
+
+        conn.execute(
+            "UPDATE versions SET status='verifying' WHERE version_id=?", (version_id,)
+        )
+        conn.commit()
+        return whole_h.hexdigest(), total_size
+
+    def _create_version_row(self, file_id: int, storage_mode: str) -> int:
+        conn = self._connect()
+        cur = conn.execute(
+            "INSERT INTO versions(file_id, sha256, size, storage_mode, status, created_at) "
+            "VALUES (?, '', 0, ?, 'pending', ?)",
+            (file_id, storage_mode, time.time()),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+    def _mark_version_failed(self, version_id: int, error: str):
+        conn = self._connect()
+        for attempt in range(3):
+            try:
+                conn.execute(
+                    "UPDATE versions SET status='failed', error=? WHERE version_id=?",
+                    (error, version_id),
+                )
+                conn.commit()
+                return
+            except sqlite3.OperationalError as e:
+                conn.rollback()
+                if "locked" not in str(e).lower() or attempt == 2:
+                    raise
+                time.sleep(1.0)
+
+    # ------------------------------------------------------------------
+    # Query / read-only data access — pure-data methods (dicts / lists of
+    # dicts / ints, no printing) shared by version_manage.py's CLI output
+    # formatting and, since 2026-09-26, version_history.py's web layer.
+    # Added when version_history.py (the web UI) was built — see
+    # version_manage.py's do_list()/do_delete(), which now call these
+    # instead of running their own copies of this SQL.
+    # ------------------------------------------------------------------
+
+    def list_tracked_files(self) -> list:
+        """Same summary query do_list() runs with no file_path argument —
+        one row per tracked file, with completed-version count and last
+        activity timestamp."""
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT f.file_id, f.path, f.deleted, "
+            "COUNT(CASE WHEN v.status='completed' THEN 1 END) AS n_completed, "
+            "MAX(v.created_at) AS last_activity "
+            "FROM files f LEFT JOIN versions v ON v.file_id = f.file_id "
+            "GROUP BY f.file_id ORDER BY last_activity DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_versions(self, file_path: str):
+        """Same query do_list(file_path) runs. Returns None if the file
+        isn't tracked at all (distinct from an empty list, which means
+        tracked but no versions yet), else a list of version dicts,
+        newest first."""
+        conn = self._connect()
+        norm_key = _normalize_path(file_path)
+        file_row = conn.execute(
+            "SELECT file_id, path, deleted FROM files WHERE norm_key=?", (norm_key,)
+        ).fetchone()
+        if file_row is None:
+            return None
+
+        rows = conn.execute(
+            "SELECT version_id, sha256, size, storage_mode, status, created_at, "
+            "completed_at, error FROM versions WHERE file_id=? ORDER BY created_at DESC",
+            (file_row["file_id"],),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_version(self, version_id: int):
+        """Single version's row plus its file's path/deleted flag, or
+        None if version_id doesn't exist."""
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT v.*, f.path AS file_path, f.deleted AS file_deleted "
+            "FROM versions v JOIN files f ON f.file_id = v.file_id "
+            "WHERE v.version_id=?",
+            (version_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def delete_version(self, version_id: int, reason: str = ""):
+        """Soft-delete: same UPDATE do_delete() ran inline. Returns
+        (success: bool, message: str). Does not run GC — call run_gc()
+        separately (do_delete()'s --run-gc-now flag does this; the web
+        layer can choose to do the same, or leave it to the next
+        scheduled scan)."""
+        conn = self._connect()
+        version = conn.execute(
+            "SELECT * FROM versions WHERE version_id=?", (version_id,)
+        ).fetchone()
+        if version is None:
+            return False, f"No such version_id: {version_id}"
+        if version["status"] == "deleted":
+            return False, f"version_id {version_id} is already deleted"
+
+        conn.execute(
+            "UPDATE versions SET status='deleted', error=? WHERE version_id=?",
+            (f"Deleted by user: {reason}" if reason else "Deleted by user", version_id),
+        )
+        conn.commit()
+        return True, f"version_id {version_id} marked deleted"
+
+    def clear_failed_versions(self, file_path: str) -> int:
+        """Permanently remove every status='failed' version row for one
+        file. Returns how many rows were removed (0 if the file isn't
+        tracked or has none).
+
+        Unlike delete_version() this is a HARD delete, not a soft one —
+        deliberately: a soft-deleted failed row would just turn into a
+        'deleted' row that still clutters the history. It's safe because a
+        failed capture never became a restorable version: nothing can be
+        restored from it, so no user content is lost. Any partial
+        version_objects rows a failed chunked capture left behind are
+        removed first (foreign_keys is ON), and the chunk objects they
+        pointed at become unreferenced, which the normal GC reclaims after
+        its grace period. jobs rows are left alone (audit history; jobs
+        has no foreign key to versions).
+
+        'completed' and 'deleted' rows are never touched."""
+        conn = self._connect()
+        file_row = conn.execute(
+            "SELECT file_id FROM files WHERE norm_key=?", (_normalize_path(file_path),)
+        ).fetchone()
+        if file_row is None:
+            return 0
+
+        ids = [
+            r["version_id"]
+            for r in conn.execute(
+                "SELECT version_id FROM versions WHERE file_id=? AND status='failed'",
+                (file_row["file_id"],),
+            ).fetchall()
+        ]
+        if not ids:
+            return 0
+
+        placeholders = ",".join("?" for _ in ids)  # structure only, values stay bound
+        try:
+            conn.execute(
+                f"DELETE FROM version_objects WHERE version_id IN ({placeholders})", ids
+            )
+            conn.execute(
+                f"DELETE FROM versions WHERE version_id IN ({placeholders}) "
+                "AND status='failed'",
+                ids,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return len(ids)
+
+    # ------------------------------------------------------------------
+    # Restore — the core correctness invariant:
+    #     original_sha256 == restored_sha256  AND  original_size == restored_size
+    # ------------------------------------------------------------------
+
+    def restore_version(
+        self, version_id: int, destination: str, overwrite: bool = None
+    ):
+        if overwrite is None:
+            overwrite = config.VERSION_ALLOW_RESTORE_OVERWRITE
+
+        conn = self._connect()
+        job_id = self._retry_locked(self._create_job, "restore", None, version_id)
+
+        version = conn.execute(
+            "SELECT * FROM versions WHERE version_id=?", (version_id,)
+        ).fetchone()
+        if version is None or version["status"] != "completed":
+            self._finish_job(
+                job_id, "failed", error="version not found or not completed"
+            )
+            raise VersionEngineError("version not found or not completed")
+
+        destination = os.path.abspath(os.path.expanduser(destination))
+        # Security: never restore into the version store itself, and
+        # never silently overwrite without explicit permission.
+        if os.path.commonpath([destination, self.storage_dir]) == self.storage_dir:
+            self._finish_job(
+                job_id, "failed", error="destination inside version storage — refused"
+            )
+            raise VersionEngineError(
+                "refusing to restore into the version storage directory"
+            )
+        if os.path.exists(destination) and not overwrite:
+            self._finish_job(
+                job_id, "failed", error="destination exists and overwrite not permitted"
+            )
+            raise VersionEngineError(
+                "destination exists; VERSION_ALLOW_RESTORE_OVERWRITE is False"
+            )
+
+        dest_dir = os.path.dirname(destination)
+        os.makedirs(dest_dir, exist_ok=True)
+        # UNIQUE temp name (2026-09-28): this used to be destination + ".tmp",
+        # so two overlapping restores of the same version (double-click)
+        # both opened/removed/renamed the SAME temp file -> WinError 32
+        # ("used by another process"). mkstemp in the destination dir keeps
+        # os.replace() a same-filesystem atomic rename.
+        _fd, tmp_dest = tempfile.mkstemp(
+            dir=dest_dir, prefix=".restore_", suffix=".tmp"
+        )
+        os.close(_fd)
+
+        objects = conn.execute(
+            "SELECT chunk_index, sha256 FROM version_objects WHERE version_id=? ORDER BY chunk_index",
+            (version_id,),
+        ).fetchall()
+
+        h = hashlib.sha256()
+        total = 0
+        try:
+            with open(tmp_dest, "wb") as out:
+                for row in objects:
+                    if not self._verify_object(row["sha256"]):
+                        raise VersionEngineError(
+                            f"object {row['sha256'][:12]}… missing or corrupted — restore aborted"
+                        )
+                    with open(self._object_path(row["sha256"]), "rb") as obj_f:
+                        while True:
+                            buf = obj_f.read(1024 * 1024)
+                            if not buf:
+                                break
+                            h.update(buf)
+                            out.write(buf)
+                            total += len(buf)
+                out.flush()
+                os.fsync(out.fileno())
+        except Exception as e:
+            try:
+                os.remove(tmp_dest)
+            except OSError:
+                # Temp file already gone or locked; a later cleanup removes it.
+                pass
+            self._finish_job(job_id, "failed", error=str(e))
+            raise
+
+        restored_sha = h.hexdigest()
+        if restored_sha != version["sha256"] or total != version["size"]:
+            try:
+                os.remove(tmp_dest)
+            except OSError:
+                # Temp file already gone or locked; a later cleanup removes it.
+                pass
+            err = (
+                f"restore verification FAILED: sha {restored_sha[:12]}… != "
+                f"{version['sha256'][:12]}… or size {total} != {version['size']}"
+            )
+            self._finish_job(job_id, "failed", error=err)
+            raise VersionEngineError(err)
+
+        # Atomic publish, only after full verification. Retried on
+        # PermissionError (WinError 5/32): the destination may be briefly held
+        # open by a download, antivirus or the indexer.
+        last_err = None
+        for delay in (0, 0.1, 0.25, 0.5, 1.0, 2.0):
+            if delay:
+                time.sleep(delay)
+            try:
+                os.replace(tmp_dest, destination)
+                last_err = None
+                break
+            except PermissionError as e:
+                last_err = e
+        if last_err is not None:
+            try:
+                os.remove(tmp_dest)
+            except OSError:
+                # Temp file already gone or locked; a later cleanup removes it.
+                pass
+            self._finish_job(job_id, "failed", error=str(last_err))
+            raise VersionEngineError(
+                f"could not publish restored file (in use by another process): {last_err}"
+            )
+        self._retry_locked(self._finish_job, job_id, "completed")
+        self.log.info(
+            f"Restore verified + completed: version {version_id} -> {destination} "
+            f"({restored_sha[:12]}…, {total} bytes)"
+        )
+        return destination
+
+    def iter_version_bytes(self, version_id: int, block_size: int = 1024 * 1024):
+        """Yield a completed version's bytes straight from the object store
+        - no temp file, no rebuild-then-read (the old download path rebuilt
+        the whole file, re-hashed it, then read it into memory before the
+        first byte went out). Every object is hashed as it streams and the
+        whole-file sha256/size are checked at the end; on ANY mismatch this
+        raises, which aborts the HTTP response (truncated/failed download)
+        instead of ever delivering silently corrupt bytes. Synchronous
+        generator - the web layer pulls it via asyncio.to_thread."""
+        conn = self._connect()
+        version = conn.execute(
+            "SELECT * FROM versions WHERE version_id=?", (version_id,)
+        ).fetchone()
+        if version is None or version["status"] != "completed":
+            raise VersionEngineError("version not found or not completed")
+        objects = conn.execute(
+            "SELECT chunk_index, sha256 FROM version_objects WHERE version_id=? ORDER BY chunk_index",
+            (version_id,),
+        ).fetchall()
+        whole = hashlib.sha256()
+        total = 0
+        for row in objects:
+            path = self._object_path(row["sha256"])
+            obj_h = hashlib.sha256()
+            try:
+                with open(path, "rb") as f:
+                    while True:
+                        buf = f.read(block_size)
+                        if not buf:
+                            break
+                        obj_h.update(buf)
+                        whole.update(buf)
+                        total += len(buf)
+                        yield buf
+            except OSError as e:
+                raise VersionEngineError(
+                    f"object {row['sha256'][:12]}... unreadable: {e}"
+                )
+            if obj_h.hexdigest() != row["sha256"]:
+                raise VersionEngineError(
+                    f"object {row['sha256'][:12]}... corrupted - download aborted"
+                )
+        if whole.hexdigest() != version["sha256"] or total != version["size"]:
+            raise VersionEngineError("download verification failed - aborted")
+
+    # ------------------------------------------------------------------
+    # Jobs
+    # ------------------------------------------------------------------
+
+    def _create_job(self, operation: str, file_id=None, version_id=None) -> int:
+        conn = self._connect()
+        cur = conn.execute(
+            "INSERT INTO jobs(operation, file_id, version_id, status, created_at, started_at) "
+            "VALUES (?, ?, ?, 'processing', ?, ?)",
+            (operation, file_id, version_id, time.time(), time.time()),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+    def _set_job_version(self, job_id: int, version_id: int):
+        conn = self._connect()
+        conn.execute(
+            "UPDATE jobs SET version_id=? WHERE job_id=?", (version_id, job_id)
+        )
+        conn.commit()
+
+    def _finish_job(self, job_id: int, status: str, version_id=None, error=None):
+        conn = self._connect()
+        if version_id is not None:
+            conn.execute(
+                "UPDATE jobs SET status=?, finished_at=?, version_id=?, error=? WHERE job_id=?",
+                (status, time.time(), version_id, error, job_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE jobs SET status=?, finished_at=?, error=? WHERE job_id=?",
+                (status, time.time(), error, job_id),
+            )
+        conn.commit()
+
+    # ------------------------------------------------------------------
+    # Retention & GC
+    # ------------------------------------------------------------------
+
+    def _apply_retention(self, file_id: int):
+        if not config.VERSION_RETENTION_ENABLED:
+            return
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT version_id FROM versions WHERE file_id=? AND status='completed' "
+            "ORDER BY created_at DESC",
+            (file_id,),
+        ).fetchall()
+        excess = rows[config.VERSION_MAX_VERSIONS :]
+        if not excess:
+            return
+        for row in excess:
+            conn.execute(
+                "UPDATE versions SET status='deleted' WHERE version_id=?",
+                (row["version_id"],),
+            )
+        conn.commit()
+        self.log.info(
+            f"Retention: soft-deleted {len(excess)} version(s) beyond "
+            f"VERSION_MAX_VERSIONS={config.VERSION_MAX_VERSIONS} for file_id={file_id}"
+        )
+
+    def run_gc(self):
+        """Orphan marking / deletion, done in SHORT write transactions.
+
+        All classification (which objects are live / newly orphaned / due for
+        deletion) is read-only and takes no lock. The writes are then applied
+        in small batches, each under BEGIN IMMEDIATE and committed after
+        _GC_BATCH_ROWS statements or _GC_BATCH_SECONDS, with a brief pause
+        between batches so waiting writers (the snapshot worker, the web
+        process) actually get the lock. Previously the whole sweep - including
+        an os.remove() per deleted object - ran in one transaction, holding
+        the write lock for as long as the sweep took."""
+        if not config.VERSION_GC_ENABLED:
+            return
+        t_start = time.time()
+        job_id = self._retry_locked(self._create_job, "gc")
+        conn = self._connect()
+        now = time.time()
+
+        live = {
+            row["sha256"]
+            for row in conn.execute(
+                "SELECT DISTINCT vo.sha256 FROM version_objects vo "
+                "JOIN versions v ON v.version_id = vo.version_id "
+                "WHERE v.status='completed'"
+            ).fetchall()
+        }
+        all_objects = conn.execute(
+            "SELECT sha256, orphaned_since FROM objects"
+        ).fetchall()
+
+        to_clear, to_mark, due = [], [], []
+        for row in all_objects:
+            sha = row["sha256"]
+            if sha in live:
+                if row["orphaned_since"] is not None:
+                    to_clear.append(sha)
+            elif row["orphaned_since"] is None:
+                to_mark.append(sha)
+            elif now - row["orphaned_since"] >= config.VERSION_GC_GRACE_PERIOD:
+                due.append(sha)
+
+        _GC_BATCH_ROWS = 500
+        _GC_BATCH_SECONDS = 0.25
+        _GC_PAUSE = 0.01
+
+        def _run_batches(items, per_item):
+            """per_item(sha) runs inside the batch's write transaction."""
+            n = 0
+            idx = 0
+            while idx < len(items):
+                conn.execute("BEGIN IMMEDIATE")
+                t0 = time.time()
+                try:
+                    count = 0
+                    while idx < len(items):
+                        n += per_item(items[idx])
+                        idx += 1
+                        count += 1
+                        if (
+                            count >= _GC_BATCH_ROWS
+                            or time.time() - t0 >= _GC_BATCH_SECONDS
+                        ):
+                            break
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                time.sleep(_GC_PAUSE)
+            return n
+
+        def _clear(sha):
+            conn.execute(
+                "UPDATE objects SET orphaned_since=NULL WHERE sha256=?", (sha,)
+            )
+            return 1
+
+        def _mark(sha):
+            conn.execute(
+                "UPDATE objects SET orphaned_since=? WHERE sha256=?", (now, sha)
+            )
+            return 1
+
+        def _delete(sha):
+            # Re-check liveness right before unlinking. We hold the write lock
+            # here (BEGIN IMMEDIATE), so no snapshot can commit a new
+            # reference between this check and the delete.
+            still_referenced = conn.execute(
+                "SELECT 1 FROM version_objects vo JOIN versions v "
+                "ON v.version_id = vo.version_id "
+                "WHERE vo.sha256=? AND v.status='completed' LIMIT 1",
+                (sha,),
+            ).fetchone()
+            if still_referenced is not None:
+                return 0
+            try:
+                os.remove(self._object_path(sha))
+            except OSError:
+                # Object file already removed; the DB row is what counts.
+                pass
+            # version_objects rows from non-completed (failed/deleted)
+            # versions still FK-reference this object; their bytes are gone
+            # now, so the links are meaningless bookkeeping. The versions row
+            # itself (audit trail) is untouched.
+            conn.execute("DELETE FROM version_objects WHERE sha256=?", (sha,))
+            conn.execute("DELETE FROM objects WHERE sha256=?", (sha,))
+            return 1
+
+        try:
+            cleared = _run_batches(to_clear, _clear)
+            newly_orphaned = _run_batches(to_mark, _mark)
+            deleted = _run_batches(due, _delete)
+        except Exception as e:
+            # Don't leave the gc job row stuck at 'processing'. Batches
+            # already committed are fine; the next scan continues the rest.
+            try:
+                self._finish_job(job_id, "failed", error=str(e))
+            except Exception:
+                # Recording the failure itself failed (DB unavailable); the scan retries next cycle.
+                pass
+            raise
+
+        self._finish_job(job_id, "completed")
+        self.log.info(
+            f"GC: {newly_orphaned} newly orphaned, {cleared} re-referenced, "
+            f"{deleted} object(s) deleted (grace period {config.VERSION_GC_GRACE_PERIOD}s) "
+            f"in {time.time() - t_start:.1f}s"
+        )
+
+    # ------------------------------------------------------------------
+    # Scan / reconcile — shared by watcher (fast poll) and scanner (slow,
+    # authoritative reconciliation + new-file discovery). See module
+    # docstring for why this is stat-polling rather than an OS-level
+    # filesystem-event watch.
+    # ------------------------------------------------------------------
+
+    def _enqueue_snapshot(self, display_path: str):
+        norm_key = _normalize_path(display_path)
+        with self._pending_lock:
+            if norm_key in self._pending_norm_keys:
+                return  # already queued — debounce duplicate events
+            self._pending_norm_keys.add(norm_key)
+        self._job_queue.put(display_path)
+
+    def _reconcile_once(self):
+        eligible = self.get_eligible_files()  # {norm_key: display_path}
+        for norm_key, display_path in eligible.items():
+            try:
+                st = os.stat(display_path)
+            except OSError:
+                continue
+            cached = self._known_state.get(norm_key)
+            current = (st.st_mtime, st.st_size)
+            if cached != current:
+                self._known_state[norm_key] = current
+                self._enqueue_snapshot(display_path)
+
+        # Mark files that dropped out of scope / were deleted from disk —
+        # NEVER deletes version history, only the "currently present" flag.
+        known_norm_keys = set(self._known_state.keys())
+        vanished = known_norm_keys - set(eligible.keys())
+        if vanished:
+            conn = self._connect()
+
+            def _mark_vanished():
+                for norm_key in vanished:
+                    conn.execute(
+                        "UPDATE files SET deleted=1 WHERE norm_key=?", (norm_key,)
+                    )
+                conn.commit()
+
+            self._retry_locked(_mark_vanished)
+            for norm_key in vanished:
+                self._known_state.pop(norm_key, None)
+
+    def _watcher_loop(self):
+        self._watcher_running = True
+        self._set_meta("watcher_running", "1")
+        self.log.info(f"Watcher started (poll interval {_WATCH_POLL_INTERVAL}s).")
+        while not self._shutdown_event.is_set():
+            if not self._stop_scheduling.is_set():
+                try:
+                    self._reconcile_once()
+                except Exception as e:
+                    if _is_lock_error(e):
+                        self.log.warning(f"Watcher pass hit a locked database: {e}")
+                    else:
+                        self.log.error(f"Watcher reconcile error: {e}", exc_info=True)
+            self._shutdown_event.wait(_WATCH_POLL_INTERVAL)
+        self._watcher_running = False
+        self._set_meta("watcher_running", "0")
+        self.log.info("Watcher stopped.")
+
+    def _scanner_loop(self):
+        self._scanner_running = True
+        self._set_meta("scanner_running", "1")
+        self.log.info(f"Scanner started (interval {config.VERSION_SCAN_INTERVAL}s).")
+        while not self._shutdown_event.is_set():
+            if not self._stop_scheduling.is_set():
+                try:
+                    self._reconcile_once()
+                    self._retry_locked(self.run_gc, delays=(2, 4, 8))
+                    self._retry_locked(
+                        self._set_meta,
+                        "last_scan",
+                        time.strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                except Exception as e:
+                    if _is_lock_error(e):
+                        self.log.warning(
+                            f"Scanner pass hit a locked database ({e}); "
+                            "will retry at the next interval."
+                        )
+                    else:
+                        self.log.error(f"Scanner error: {e}", exc_info=True)
+            self._shutdown_event.wait(config.VERSION_SCAN_INTERVAL)
+        self._scanner_running = False
+        self._set_meta("scanner_running", "0")
+        self.log.info("Scanner stopped.")
+
+    # ------------------------------------------------------------------
+    # Workers
+    # ------------------------------------------------------------------
+
+    def _worker_loop(self, worker_index: int):
+        self.log.debug(f"Worker {worker_index} started.")
+        while not self._shutdown_event.is_set():
+            try:
+                display_path = self._job_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            try:
+                self.snapshot_file(display_path, source="scan")
+            except Exception as e:
+                try:
+                    self._connect().rollback()  # never leave a txn/gate held
+                except sqlite3.Error:
+                    # Rollback on a broken connection can fail; the original error was already handled.
+                    pass
+                self.log.error(
+                    f"Worker {worker_index} snapshot error for {display_path}: {e}",
+                    exc_info=not _is_lock_error(e),
+                )
+                if _is_lock_error(e):
+                    # Even the bookkeeping writes couldn't get the lock. Forget
+                    # the cached (mtime, size) so the watcher re-queues this
+                    # file instead of losing the capture until it changes again.
+                    self._known_state.pop(_normalize_path(display_path), None)
+            finally:
+                self._job_queue.task_done()
+        self.log.debug(f"Worker {worker_index} stopped.")
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def start(self):
+        self._ensure_dirs()
+        self._bootstrap_schema()
+        self._crash_recovery()
+        self._sync_tracked_paths_table()
+
+        for i in range(max(1, config.VERSION_WORKER_COUNT)):
+            t = threading.Thread(
+                target=self._worker_loop, args=(i,), daemon=True, name=f"ve-worker-{i}"
+            )
+            t.start()
+            self._workers.append(t)
+
+        if config.VERSION_SCAN_ENABLED:
+            self._scanner_thread = threading.Thread(
+                target=self._scanner_loop, daemon=True, name="ve-scanner"
+            )
+            self._scanner_thread.start()
+
+        if config.VERSION_WATCH_ENABLED:
+            self._watcher_thread = threading.Thread(
+                target=self._watcher_loop, daemon=True, name="ve-watcher"
+            )
+            self._watcher_thread.start()
+
+        self.log.info(
+            f"Version Engine started. pid={os.getpid()} db={self.db_path} "
+            f"storage={self.storage_dir} workers={config.VERSION_WORKER_COUNT} "
+            f"watch={config.VERSION_WATCH_ENABLED} scan={config.VERSION_SCAN_ENABLED}"
+        )
+
+    def graceful_shutdown(self):
+        """§7: stop scheduling new jobs, stop watcher/scanner, let
+        in-flight work finish within VERSION_SHUTDOWN_TIMEOUT, then close
+        the DB. Never falsely marks interrupted work 'completed'."""
+        self.log.info("Graceful shutdown initiated.")
+        self._stop_scheduling.set()
+        self._shutdown_event.set()
+
+        deadline = time.time() + config.VERSION_SHUTDOWN_TIMEOUT
+        try:
+            while not self._job_queue.empty() and time.time() < deadline:
+                time.sleep(0.2)
+        except Exception:
+            # Draining the queue is best effort during shutdown.
+            pass
+
+        for t in self._workers:
+            t.join(timeout=max(0, deadline - time.time()))
+        if self._scanner_thread:
+            self._scanner_thread.join(timeout=1)
+        if self._watcher_thread:
+            self._watcher_thread.join(timeout=1)
+
+        try:
+            conn = self._connect()
+            conn.close()
+        except Exception:
+            # Connection already closed.
+            pass
+        self.log.info("Graceful shutdown complete.")
+
+
+class _DatabaseBusy(VersionEngineError):
+    """A DB write hit SQLite's write lock (another writer held it past
+    busy_timeout). Transient: the caller backs off and retries instead of
+    recording a permanent failed version."""
+
+
+class _SourceChangedDuringCapture(VersionEngineError):
+    pass
+
+
+# =============================================================================
+# Worker-mode entry point
+# =============================================================================
+
+
+def _worker_main():
+    log = logging_setup.get_logger("version_engine")
+
+    if not getattr(config, "VERSION_ENGINE_ENABLED", True):
+        log.info("VERSION_ENGINE_ENABLED is False — exiting cleanly.")
+        return 0
+
+    engine = Engine()
+    engine.start()
+
+    def _handle_signal(signum, _frame):
+        log.info(f"Received signal {signum} — starting graceful shutdown.")
+        engine.graceful_shutdown()
+        sys.exit(0)
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    # The actual Hypercorn server runs in _webdav_thread (a daemon thread
-    # started by start()) — just block the main thread here until told to
-    # stop, so the process (and its daemon thread) stays alive.
-    while not stop_requested.is_set():
-        stop_requested.wait(timeout=1)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        engine.graceful_shutdown()
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description="CloudinatorFTP Version Engine")
+    parser.add_argument(
+        "--worker", action="store_true", help="Run as the Version Engine worker process"
+    )
+    args = parser.parse_args()
+
+    if args.worker:
+        sys.exit(_worker_main())
+    else:
+        print(
+            "version_engine.py: use --worker to run the child process, or `import version_engine` "
+            "from dev_server.py / prod_server.py to use the parent API (start/stop/force_kill/status)."
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    _run_standalone()
+    main()

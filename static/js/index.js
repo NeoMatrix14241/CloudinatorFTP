@@ -397,8 +397,6 @@ function smartTableColumnizer() {
 
         const colDefs = [cbW, nameW, sizeW, typeW, showMod ? modW : 0, actW];
 
-        const padTop = isMobile ? '8px' : '11px';
-
         function _fixCheckbox(el) {
             if (!el) return;
             _set(el, 'width', '16px');
@@ -728,7 +726,6 @@ function performLocalSearch(searchTerm) {
     // Delegate filter to VT engine — works on data array, re-renders visible rows
     VT.applyFilter(searchTerm);
 
-    const count = document.getElementById('visibleCount');
     console.log(`🔍 Local VT filter for "${searchTerm}"`);
 }
 
@@ -1456,7 +1453,7 @@ function createSearchResultsHeaderDiv(data, exts) {
     headerDiv.id = 'searchResultsHeader';
 
     const extBadge = exts && exts.length
-        ? `<span class="search-ext-badge">*.${exts.join(' *.')}</span>`
+        ? `<span class="search-ext-badge">*.${escapeHtml(exts.join(' *.'))}</span>`
         : '';
 
     // Show exact total immediately if the index provided it;
@@ -1470,11 +1467,11 @@ function createSearchResultsHeaderDiv(data, exts) {
             <div class="search-header-main">
                 <i class="fas fa-search-plus"></i>
                 <span class="search-title">Deep Search Results</span>
-                <span class="search-count">${countLabel} items found</span>
+                <span class="search-count">${escapeHtml(countLabel)} items found</span>
                 ${extBadge}
             </div>
             <div class="search-header-meta">
-                <span class="search-time">Search time: ${data.search_time}s</span>
+                <span class="search-time">Search time: ${escapeHtml(data.search_time)}s</span>
                 <button data-fn="clearSearch" class="btn-close-search">
                     <i class="fas fa-times"></i> Close Results
                 </button>
@@ -2792,14 +2789,14 @@ function createFileTableRow(item, currentPath) {
             <div class="actions" style="display:flex;flex-wrap:nowrap;gap:3px;align-items:center;">
                 ${!item.is_dir ?
             `<button type="button" class="btn btn-outline btn-sm download-btn" 
-                             data-item-path="${itemPath}"
+                             data-item-path="${escapeHtml(itemPath)}"
                              data-label="Download"
                              data-fn="showDownloadOptionsModal" data-args="${dataArgs([itemPath, item.name])}"
                              title="Download">
                          <i class="fas fa-download"></i>
                      </button>` :
             `<button type="button" class="btn btn-outline btn-sm download-btn" 
-                             data-item-path="${itemPath}"
+                             data-item-path="${escapeHtml(itemPath)}"
                              data-label="Download ZIP"
                              data-fn="downloadFolderAsZip" data-args="${dataArgs([itemPath, item.name])}"
                              title="Download folder as ZIP">
@@ -2809,8 +2806,8 @@ function createFileTableRow(item, currentPath) {
                 
                 ${USER_ROLE === 'readwrite' ? `
                 <button type="button" class="btn btn-warning btn-sm move-btn" 
-                        data-item-name="${item.name}"
-                        data-item-path="${itemPath}"
+                        data-item-name="${safeName}"
+                        data-item-path="${escapeHtml(itemPath)}"
                         data-label="Move"
                         data-fn="showSingleMoveModal" data-args="${dataArgs([itemPath, item.name])}"
                         title="Move">
@@ -2818,8 +2815,8 @@ function createFileTableRow(item, currentPath) {
                 </button>
                 
                 <button type="button" class="btn btn-success btn-sm copy-btn" 
-                        data-item-name="${item.name}"
-                        data-item-path="${itemPath}"
+                        data-item-name="${safeName}"
+                        data-item-path="${escapeHtml(itemPath)}"
                         data-label="Copy"
                         data-fn="showSingleCopyModal" data-args="${dataArgs([itemPath, item.name])}"
                         title="Copy">
@@ -2827,8 +2824,8 @@ function createFileTableRow(item, currentPath) {
                 </button>
                 
                 <button type="button" class="btn btn-primary btn-sm rename-btn" 
-                        data-item-name="${item.name}"
-                        data-item-path="${itemPath}"
+                        data-item-name="${safeName}"
+                        data-item-path="${escapeHtml(itemPath)}"
                         data-label="Rename"
                         data-fn="showSingleRenameModal" data-args="${dataArgs([itemPath, item.name])}"
                         title="Rename">
@@ -2836,8 +2833,8 @@ function createFileTableRow(item, currentPath) {
                 </button>
 
                 <button type="button" class="btn btn-outline btn-sm share-btn" 
-                        data-item-name="${item.name}"
-                        data-item-path="${itemPath}"
+                        data-item-name="${safeName}"
+                        data-item-path="${escapeHtml(itemPath)}"
                         data-label="Share"
                         data-fn="showSingleShareModal" data-args="${dataArgs([itemPath, item.name, !!item.is_dir])}"
                         title="Share">
@@ -2845,8 +2842,8 @@ function createFileTableRow(item, currentPath) {
                 </button>
                 
                 <button type="button" class="btn btn-danger btn-sm delete-btn" 
-                        data-item-name="${item.name}"
-                        data-item-path="${itemPath}"
+                        data-item-name="${safeName}"
+                        data-item-path="${escapeHtml(itemPath)}"
                         data-label="Delete"
                         data-fn="showSingleDeleteModal" data-args="${dataArgs([itemPath, item.name])}"
                         title="Delete">
@@ -2895,14 +2892,6 @@ function _dirInfoSig(d) {
 // Omitting `rows` falls back to the old whole-document scan, kept for any
 // future non-VT caller.
 function loadDirInfoCells(rows) {
-    function formatSize(bytes) {
-        if (!bytes || bytes <= 0) return null;
-        if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
-        if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-        if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
-        return bytes + ' bytes';
-    }
-
     const cells = rows
         ? rows.flatMap(row => Array.from(row.querySelectorAll('.dir-info-cell')))
         : Array.from(document.querySelectorAll('.dir-info-cell'));
@@ -3147,7 +3136,6 @@ function updateStorageDisplay(stats) {
     const freeSpaceEl = document.getElementById('freeSpace');
     const usedSpaceEl = document.getElementById('usedSpace');
     const fileCountEl = document.getElementById('fileCount');
-    const dirCountEl = document.getElementById('dirCount');
 
     console.log('📊 Found elements:', {
         totalSpaceEl: !!totalSpaceEl,
@@ -3358,7 +3346,8 @@ function addFilesToQueue(files) {
  * the person would navigate to it — "" -> "/Root/", "Documents" -> "/Root/Documents".
  */
 function _formatDisplayPath(path) {
-    return path ? `/Root/${path}` : '/Root/';
+    // Result is only ever placed into HTML text / attribute values, so it is escaped here.
+    return escapeHtml(path ? `/Root/${path}` : '/Root/');
 }
 
 /**
@@ -4030,7 +4019,6 @@ function updateQueueDisplay() {
     const statsElement = document.getElementById('queueStats');
     const uploadBtn = document.getElementById('startUploadBtn');
     const countElement = document.getElementById('uploadCount');
-    const progressSummary = document.getElementById('uploadProgressSummary');
 
     if (!queueContainer) return;
 
@@ -4280,7 +4268,7 @@ function createQueueItemElement(item) {
                 <div class="file-info">
                     <i class="${getFileIcon(item.name)} queue-item-icon"></i>
                     <div class="file-info-details">
-                        <div class="file-info-name" title="${item.displayName || item.name}">
+                        <div class="file-info-name" title="${escapeHtml(item.displayName || item.name)}">
                             ${escapeHtml(item.displayName || item.name)}
                         </div>
                         <div class="file-info-dest" title="Uploading to: ${_formatDisplayPath(item.destinationPath)}">
@@ -4291,7 +4279,7 @@ function createQueueItemElement(item) {
                             <span><i class="fas fa-clock"></i> ${ageDisplay}</span>
                             ${item.status === 'uploading' ? `<span><i class="fas fa-percentage"></i> ${item.progress}%</span>` : ''}
                             ${item.status === 'assembling' ? `<span><i class="fas fa-cog"></i> Processing</span>` : ''}
-                            ${item.error ? `<span><i class="fas fa-exclamation"></i> ${item.error}</span>` : ''}
+                            ${item.error ? `<span><i class="fas fa-exclamation"></i> ${escapeHtml(item.error)}</span>` : ''}
                         </div>
                     </div>
                 </div>
@@ -4846,7 +4834,7 @@ async function _imgStartPreview(itemPath, filename) {
             clearInterval(poll);
             _setLabel('');
             if (spinner && _alive()) {
-                spinner.innerHTML = `<p class="viewer-error">Conversion failed: ${st.message || 'unknown error'}</p>`;
+                spinner.innerHTML = `<p class="viewer-error">Conversion failed: ${escapeHtml(st.message || 'unknown error')}</p>`;
             }
         }
     }, 1000);
@@ -5349,7 +5337,7 @@ function _renderOfficePreview(body, data) {
 
             if (titleShape) {
                 const titleText = titleShape.paragraphs.map(p => p.text).join(' ');
-                html += `<h2 class="pptx-slide-title">${titleText}</h2>`;
+                html += `<h2 class="pptx-slide-title">${escapeHtml(titleText)}</h2>`;
             }
 
             if (bodyShapes.length) {
@@ -5358,7 +5346,7 @@ function _renderOfficePreview(body, data) {
                     shape.paragraphs.forEach(p => {
                         const indentClass = p.level > 0 ? ` pptx-indent-${Math.min(p.level, 8)}` : '';
                         const bullet = p.level === 0 ? '• ' : '◦ ';
-                        html += `<p class="pptx-para${indentClass}">${bullet}${p.text}</p>`;
+                        html += `<p class="pptx-para${indentClass}">${bullet}${escapeHtml(p.text)}</p>`;
                     });
                 });
                 html += '</div>';
@@ -5515,7 +5503,11 @@ function transformInitialRows() {
                 const clone = nameCell.cloneNode(true);
                 const icons = clone.querySelectorAll('i'); icons.forEach(i => i.remove());
                 const rawText = clone.textContent.trim();
-                nameCell.innerHTML = `<i class="${iconClass} file-icon file-icon-default"></i> ${escapeHtml(rawText)}`;
+                // Built with DOM nodes (no innerHTML) so text taken from the DOM can never be re-parsed as HTML.
+                const nameIcon = document.createElement('i');
+                nameIcon.className = `${iconClass} file-icon file-icon-default`;
+                nameCell.textContent = '';
+                nameCell.append(nameIcon, document.createTextNode(` ${rawText}`));
                 const renamedIconEl = nameCell.querySelector('.file-icon-default');
                 if (renamedIconEl) renamedIconEl.style.color = getFileColor(filename);
             }
@@ -5524,7 +5516,10 @@ function transformInitialRows() {
             const typeCell = row.querySelector('td:nth-child(4) .file-type') || row.querySelector('td:nth-child(4)');
             if (typeCell) {
                 const typeText = isDir ? 'Folder' : getFileType(filename);
-                typeCell.innerHTML = `<i class="${isDir ? 'fas fa-folder' : getFileIcon(filename)}"></i> ${escapeHtml(typeText)}`;
+                const typeIcon = document.createElement('i');
+                typeIcon.className = isDir ? 'fas fa-folder' : getFileIcon(filename);
+                typeCell.textContent = '';
+                typeCell.append(typeIcon, document.createTextNode(` ${typeText}`));
             }
         } catch (err) {
             console.warn('transformInitialRows skipped a row due to error', err);
@@ -5536,6 +5531,23 @@ function transformInitialRows() {
 let notificationId = 0;
 let notificationCount = 0; // Track active notifications
 let notificationTimers = new Map(); // Track timers for consistent timing
+
+// Toast text is always inserted as text. The only markup allowed is ONE leading
+// Font Awesome icon (`<i class="fas fa-..."></i> text`), which is rebuilt from DOM
+// nodes. File names, server messages and exception text can therefore never be
+// parsed as HTML.
+function _setStatusContent(el, message) {
+    const text = String(message ?? '');
+    const m = /^<i class="([A-Za-z0-9 _-]+)"><\/i>\s*([\s\S]*)$/.exec(text);
+    el.textContent = '';
+    if (m) {
+        const icon = document.createElement('i');
+        icon.className = m[1];
+        el.append(icon, document.createTextNode(' ' + m[2]));
+    } else {
+        el.textContent = text;
+    }
+}
 
 function showUploadStatus(message, type = 'info') {
     // While uploading, only errors pass through — everything else is silent.
@@ -5549,7 +5561,7 @@ function showUploadStatus(message, type = 'info') {
     const notificationId_current = ++notificationId;
     const notification = document.createElement('div');
     notification.className = `upload-status show ${type}`;
-    notification.innerHTML = message;
+    _setStatusContent(notification, message);
     notification.id = `notification-${notificationId_current}`;
     notification.dataset.type = type; // Store type for batch operations
 
@@ -6036,7 +6048,7 @@ function _buildConflictDialog(opts) {
  * Returns one of: 'overwrite-all' | 'overwrite-one' | 'skip-all' | 'skip-one'
  */
 async function _promptOverwrite(filename, destPath) {
-    const safeName = filename.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const safeName = escapeHtml(filename);
     return _buildConflictDialog({
         icon: 'fa-file-alt',
         title: 'File Already Exists',
@@ -6092,7 +6104,7 @@ async function _promptOverwrite(filename, destPath) {
  * Returns one of: 'merge' | 'rename' | 'skip' | 'cancel'
  */
 async function _promptFolderConflict(folderName, destPath) {
-    const safeName = folderName.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const safeName = escapeHtml(folderName);
     return _buildConflictDialog({
         icon: 'fa-folder-open',
         title: 'Folder Already Exists',
@@ -6189,7 +6201,7 @@ async function _promptMoveOrCopyConflicts(paths, destination, action) {
     const listHtml = conflicts.map(c =>
         `<li style="padding:3px 0;display:flex;align-items:center;gap:7px">
             <i class="fas ${c.is_dir ? 'fa-folder conflict-icon-dir' : 'fa-file-alt conflict-icon-file'}"></i>
-            <span style="font-family:monospace;word-break:break-all">${c.name.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
+            <span style="font-family:monospace;word-break:break-all">${escapeHtml(c.name)}</span>
          </li>`
     ).join('');
 
@@ -6200,7 +6212,7 @@ async function _promptMoveOrCopyConflicts(paths, destination, action) {
         icon: action === 'move' ? 'fa-arrows-alt' : 'fa-copy',
         title: `${conflicts.length} Conflict${conflicts.length > 1 ? 's' : ''} at Destination`,
         body: `<div style="margin-bottom:10px;color:#566573">
-                   ${verbNoun} to <strong style="color:#2c3e50">${destDisplay.replace(/</g, '&lt;')}</strong> —
+                   ${verbNoun} to <strong style="color:#2c3e50">${escapeHtml(destDisplay)}</strong> —
                    the following item${conflicts.length > 1 ? 's' : ''} already exist there:
                </div>
                <ul style="margin:0 0 12px 0;padding:0 0 0 4px;list-style:none;
@@ -7531,7 +7543,7 @@ async function loadFolderContents(path) {
             folderList.innerHTML = `
                 <div style="padding: 15px; text-align: center; color: #e74c3c;">
                     <i class="fas fa-exclamation-triangle"></i><br>
-                    Error loading folders: ${error.message}
+                    Error loading folders: ${escapeHtml(error.message)}
                 </div>
             `;
         }
@@ -7622,8 +7634,6 @@ async function createNewFolderInBrowser() {
     if (!folderName || !folderName.trim()) return;
 
     try {
-        const newFolderPath = browserCurrentPath ? `${browserCurrentPath}/${folderName.trim()}` : folderName.trim();
-
         // Create the folder using the real mkdir endpoint.
         // NOTE: this used to POST to a nonexistent '/create_folder' endpoint
         // with a 'folder_name' field — always 404'd. The real route is
@@ -9628,7 +9638,6 @@ function toggleShareRowEdit(path) {
 async function saveShareRowSettings(path) {
     const row = document.querySelector(`.share-item-row[data-share-path="${CSS.escape(path)}"]`);
     if (!row) return;
-    const token = row.dataset.shareToken; // populated lazily below via share status if needed
     const modeEl = row.querySelector('.share-row-editor input[type="radio"]:checked');
     const passkeyInput = row.querySelector('.row-passkey-input');
     const generateCb = row.querySelector('.row-generate-passkey');
@@ -10280,7 +10289,7 @@ async function runSpeedTest() {
             `;
         }
     } catch (e) {
-        if (results) results.innerHTML = `<div style="color:red;">Speed test failed: ${e}</div>`;
+        if (results) results.innerHTML = `<div style="color:red;">Speed test failed: ${escapeHtml(e)}</div>`;
     }
 }
 
@@ -10770,51 +10779,6 @@ document.addEventListener('DOMContentLoaded', function () {
     setTimeout(() => {
         updateManualCleanupButton(); // Follow-up check to be sure
     }, 100);
-
-    // Check server connectivity first
-    async function checkConnectivity() {
-        try {
-            const response = await fetch('/api/health_check', {
-                method: 'GET',
-                headers: { 'Accept': 'application/json' }
-            });
-
-            if (response.ok) {
-                const health = await response.json();
-                console.log('Server connectivity OK:', health);
-                return true;
-            } else {
-                console.warn('Server connectivity issue, status:', response.status);
-                return false;
-            }
-        } catch (error) {
-            console.error('Server connectivity check failed:', error);
-            return false;
-        }
-    }
-
-    // Load storage statistics with connectivity check
-    async function initializeStorageStats() {
-        // Prevent duplicate calls during page load
-        if (window.storageStatsInitialized) {
-            console.log('📊 Storage stats already initialized, skipping...');
-            return;
-        }
-        window.storageStatsInitialized = true;
-
-        console.log('Initializing storage stats...');
-
-        // First check if server is reachable
-        const isConnected = await checkConnectivity();
-        if (!isConnected) {
-            console.error('Server not reachable, showing connectivity error');
-            showStorageError('Connection Failed');
-            return;
-        }
-
-        // Try to load storage stats
-        await loadStorageStats();
-    }
 
     // Check for existing assembly jobs immediately
     checkExistingAssemblies();
@@ -13724,7 +13688,6 @@ function _buildTrackSelectors(playerEl, audioMeta, subMeta, cacheKey) {
 
             const ours = _ourTrack();
             const showing = _allSubTracks().filter(t => t.mode === 'showing');
-            const hasAnyTrack = _allSubTracks().length > 0;
 
             // If captions are being enabled and we have a selected subtitle, show it
             if (showing.length > 0 && ours && showing[0] === ours && _activeIdx >= 0) {

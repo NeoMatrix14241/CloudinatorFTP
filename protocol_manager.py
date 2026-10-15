@@ -63,7 +63,10 @@ import sys
 import threading
 import time
 import logging_setup
-from app import get_local_ip
+
+# Imported from helpers.net_utils (not from app) so this module does not form an import
+# cycle with app.py, which imports protocol_manager from its __main__ block.
+from helpers.net_utils import get_local_ip as _net_get_local_ip
 
 # ---------------------------------------------------------------------------
 # This module's own logger. Previously `logging.getLogger(__name__).debug(...)`
@@ -75,10 +78,10 @@ from app import get_local_ip
 # ---------------------------------------------------------------------------
 _pm_logger = logging_setup.get_logger("protocol")
 
-LOCAL_IP = get_local_ip()
+LOCAL_IP = _net_get_local_ip()
 
 _lock = threading.Lock()
-_started = False
+_state = {"started": False}  # idempotency guard for start_all()
 
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -153,13 +156,16 @@ def _pump_child_output(stream, tag: str) -> None:
                 real_stream.write(f"[webdav:{tag}] {line.rstrip()}\n")
                 real_stream.flush()
             except Exception:
+                # Console mirroring is best effort; a closed stream must not stop the pump.
                 pass
     except Exception:
+        # The WebDAV output pipe closed; the pump simply ends.
         pass
     finally:
         try:
             stream.close()
         except Exception:
+            # Pipe already closed.
             pass
 
 
@@ -250,6 +256,7 @@ def _write_webdav_pidfile(pid: int):
         with open(_WEBDAV_PID_FILE, "w") as f:
             f.write(str(pid))
     except Exception:
+        # PID file is a convenience for manage.sh; failing to write it must not stop startup.
         pass
 
 
@@ -257,6 +264,7 @@ def _clear_webdav_pidfile():
     try:
         os.remove(_WEBDAV_PID_FILE)
     except OSError:
+        # PID file already gone.
         pass
 
 
@@ -469,6 +477,7 @@ def restart_webdav() -> bool:
             try:
                 proc.wait(timeout=5)
             except Exception:
+                # Process did not exit within 5 s after kill(); nothing more can be done here.
                 pass
     with _webdav_proc_lock:
         _webdav_proc = _spawn_webdav_process()
@@ -495,11 +504,10 @@ def start_all():
     their dependencies installed).  Safe to call more than once — only
     runs on the first call.
     """
-    global _started
     with _lock:
-        if _started:
+        if _state["started"]:
             return
-        _started = True
+        _state["started"] = True
 
     print()
     print("─" * 56)
@@ -624,6 +632,7 @@ def force_kill_webdav():
         if proc is not None and proc.poll() is None:
             proc.kill()
     except Exception:
+        # Process already gone or not killable; shutdown continues.
         pass
 
 
@@ -660,6 +669,7 @@ def stop_all():
             if hasattr(mod, "stop"):
                 mod.stop()
         except ImportError:
+            # Optional protocol module is not installed; skip it.
             pass
         except Exception as e:
             _pm_logger.debug(f"Stop error for {mod_name}: {e}")

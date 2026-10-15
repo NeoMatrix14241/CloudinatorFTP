@@ -338,6 +338,7 @@ def _timed_handler(fn):
                         f"({os.path.basename(getattr(event, 'src_path', ''))})"
                     )
             except Exception:
+                # Slow-handler logging is diagnostic only; it must never break the watchdog handler.
                 pass
 
     return wrapper
@@ -472,6 +473,7 @@ class InstantFileEventHandler(FileSystemEventHandler):
                     file_size = os.path.getsize(event.src_path)
                     self.monitor._total_size += file_size
                 except OSError:
+                    # File vanished or is unreadable; the next reconcile walk corrects the totals.
                     pass
 
                 # Update dir_info for immediate parent AND all ancestors
@@ -1025,8 +1027,10 @@ class FileSystemMonitor:
                             os.remove(p)
                             print(f"🧹 Removed stale temp file: {name}")
                     except OSError:
+                        # Temp file already gone or locked; it is picked up by the next cleanup.
                         pass
         except OSError:
+            # CACHE_DIR missing or unreadable; there is nothing to clean.
             pass
 
     def _load_cache(self) -> bool:
@@ -1201,7 +1205,9 @@ class FileSystemMonitor:
                 # content (and the file still on disk) = nothing to write: no
                 # temp file, no fsync, no replace, no antivirus/indexer trigger.
                 body = json.dumps(data)
-                digest = hashlib.md5(body.encode("utf-8")).hexdigest()
+                digest = hashlib.blake2b(
+                    body.encode("utf-8"), digest_size=16
+                ).hexdigest()  # change-detection digest only, kept in memory
                 if digest == self._last_saved_digest and os.path.exists(CACHE_FILE):
                     pass
                 else:
@@ -1242,6 +1248,7 @@ class FileSystemMonitor:
                     if tmp and os.path.exists(tmp):
                         os.remove(tmp)
                 except OSError:
+                    # Temp file already removed or locked; the unique temp name is never reused.
                     pass
 
         # Keep file_index.json in sync with storage_index.json
@@ -1263,9 +1270,9 @@ class FileSystemMonitor:
         WALK_PROGRESS_INTERVAL files so callers can push live SSE updates
         while the walk is still in progress.
         """
+        walk_start = time.time()
         if not silent:
             print(f"🚶 Starting full filesystem walk + index build: {self.root_path}")
-            walk_start = time.time()
 
         file_count = 0
         dir_count = 0
@@ -1712,6 +1719,7 @@ class FileSystemMonitor:
                 if k in old_dir_info and old_dir_info[k] != v
             )
         except Exception:
+            # Drift figures are log-only; a malformed old snapshot must not stop the reconcile.
             pass
         folder_drift = f_added + f_removed + f_changed
 

@@ -99,7 +99,8 @@ def _hls_cache_key(full_path: str) -> str:
         fingerprint = f"{st.st_size}:{st.st_mtime}"
     except OSError:
         fingerprint = f"{full_path}:0"
-    return hashlib.md5(fingerprint.encode()).hexdigest()
+    # blake2b (16-byte digest = same 32 hex chars as the old md5): cache-directory name only.
+    return hashlib.blake2b(fingerprint.encode(), digest_size=16).hexdigest()
 
 
 def _hls_output_dir(cache_key: str) -> str:
@@ -670,6 +671,7 @@ def _run_hls_transcode(file_path: str, cache_key: str):
                             cache_key, {"status": "processing", "progress": pct}
                         )
                     except (ValueError, ZeroDivisionError):
+                        # ffmpeg printed a non-numeric progress value (e.g. 'N/A'); keep the last percentage.
                         pass
             else:
                 print(f"[ffmpeg] {line}", flush=True)

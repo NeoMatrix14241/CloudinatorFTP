@@ -167,7 +167,7 @@ async def validate_session():
         "shared_download_item",
         "shared_zip_selected",
     ]:
-        return
+        return None
 
     # Check if user is logged in
     if not session.get("logged_in"):
@@ -212,6 +212,8 @@ async def validate_session():
     if not username or get_role(username) is None:
         session.clear()
         return _unauthenticated_response()
+
+    return None  # valid session: let the request continue
 
 
 # Add Jinja2 filter for timestamp formatting

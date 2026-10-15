@@ -13,7 +13,7 @@ import sqlite3
 import threading
 import uuid
 import bcrypt
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 # ------------------------------------------------------------------
 # NT hash — required for SMB/NTLM authentication.
@@ -72,6 +72,7 @@ def _load_or_create_key() -> bytes:
     key = Fernet.generate_key()
     with open(_KEY_PATH, "wb") as f:
         f.write(key)
+    _restrict_permissions(_KEY_PATH)
     print(f"🔑 Generated new encryption key: {_KEY_PATH}")
     print(
         "⚠️  Back up this key file separately — losing it means losing access to all accounts!"
@@ -86,7 +87,7 @@ _fernet_lock = threading.Lock()
 def _get_fernet() -> Fernet:
     global _fernet
     if _fernet is None:
-        # Double-checked locking — same race as _connect()'s _bootstrapped
+        # Double-checked locking — same race as _connect()'s _bootstrap_state flag
         # flag (see that comment for the full explanation). Concretely here:
         # _do_bootstrap() encrypts the seeded admin password with whichever
         # key _get_fernet() returns at that moment. If a second thread
@@ -118,17 +119,57 @@ def _decrypt(value: str) -> str:
 # ------------------------------------------------------------------
 
 
+def _restrict_permissions(path: str) -> None:
+    """Best effort 0o600 on a secret file (no effect on Windows; protects Linux/Android/Termux)."""
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass  # e.g. a filesystem without POSIX permissions; the file still works
+
+
+def _write_session_secret(secret: str) -> None:
+    """Store the session secret encrypted (Fernet) in a file created owner-only (0o600).
+
+    Written to a temp file first and swapped in with os.replace(), so a crash
+    never leaves a half-written secret behind.
+    """
+    tmp_path = f"{_SECRET_PATH}.{os.getpid()}.tmp"
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(_encrypt(secret))
+        os.replace(tmp_path, _SECRET_PATH)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+    _restrict_permissions(_SECRET_PATH)
+
+
 def get_session_secret() -> str:
-    """Load the Flask session secret from disk, generating one on first run."""
+    """Load the Flask session secret from disk, generating one on first run.
+
+    The file holds a Fernet token. A plain-text secret written by an older
+    version is still accepted and is re-saved encrypted, so existing login
+    sessions stay valid.
+    """
     if os.path.exists(_SECRET_PATH):
         with open(_SECRET_PATH, "r") as f:
-            return f.read().strip()
+            stored = f.read().strip()
+        if stored:
+            try:
+                return _decrypt(stored)
+            except InvalidToken:
+                # Older versions stored the 64-character hex secret in clear text.
+                if len(stored) == 64 and all(c in "0123456789abcdef" for c in stored):
+                    _write_session_secret(stored)
+                    return stored
+                print(
+                    f"⚠️  {_SECRET_PATH} could not be decrypted (encryption key changed?). "
+                    "Generating a new session secret; all active users will be logged out."
+                )
     os.makedirs(_DB_DIR, exist_ok=True)
-    import secrets
-
     secret = secrets.token_hex(32)
-    with open(_SECRET_PATH, "w") as f:
-        f.write(secret)
+    _write_session_secret(secret)
     print(f"🔑 Generated new session secret: {_SECRET_PATH}")
     print("⚠️  Back up this file — losing it logs out all active users immediately!")
     return secret
@@ -138,30 +179,29 @@ def get_session_secret() -> str:
 # SQLite connection + lazy bootstrap
 # ------------------------------------------------------------------
 
-_bootstrapped = False  # schema created on first _connect() call
+_bootstrap_state = {"done": False}  # schema created on first _connect() call
 _bootstrap_lock = threading.Lock()
 
 
 def _connect() -> sqlite3.Connection:
-    global _bootstrapped
     os.makedirs(_DB_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    if not _bootstrapped:
+    if not _bootstrap_state["done"]:
         # Double-checked locking: file_monitor, search_index, and the
         # cleanup schedulers all start their own threads and can each call
         # _connect() within moments of each other at startup. The naive
         # "set the flag, then bootstrap" version let a second thread see
-        # _bootstrapped=True and start querying tables the first thread
+        # _bootstrap_state["done"] and start querying tables the first thread
         # hadn't finished creating yet — surfaced as a bare
         # "sqlite3.OperationalError: no such table: users" with no
         # meaningful traceback pointing at the real cause. Every concurrent
         # caller now blocks on this lock until the one thread that actually
         # runs _do_bootstrap() is finished, instead of racing ahead.
         with _bootstrap_lock:
-            if not _bootstrapped:
+            if not _bootstrap_state["done"]:
                 _do_bootstrap(conn)
                 # Explicit commit is required here, not optional: _do_bootstrap()
                 # itself never commits (it relies on whatever caller's `with
@@ -177,7 +217,7 @@ def _connect() -> sqlite3.Connection:
                 # credentials" — verified directly: a raw connection opened
                 # moments later saw the seeded rows just fine.
                 conn.commit()
-                _bootstrapped = True
+                _bootstrap_state["done"] = True
     return conn
 
 

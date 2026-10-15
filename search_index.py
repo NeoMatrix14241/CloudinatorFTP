@@ -49,7 +49,7 @@ _DB_DIR = get_db_dir(create=False)
 SEARCH_INDEX_PATH = os.path.join(_DB_DIR, "search_index.db")
 
 _write_lock = threading.Lock()
-_bootstrapped = False
+_bootstrap_state = {"done": False}
 _use_fts: Optional[bool] = (
     None  # set at bootstrap; True = trigram FTS5, False = LIKE table
 )
@@ -77,15 +77,15 @@ def _like_contains(query_lower: str) -> str:
 
 
 def _connect() -> sqlite3.Connection:
-    global _bootstrapped, _use_fts
+    global _use_fts
     os.makedirs(_DB_DIR, exist_ok=True)
     conn = sqlite3.connect(SEARCH_INDEX_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")  # safe with WAL, faster than FULL
     conn.execute("PRAGMA cache_size=-8000")  # 8 MB page cache
-    if not _bootstrapped:
-        _bootstrapped = True
+    if not _bootstrap_state["done"]:
+        _bootstrap_state["done"] = True
         _use_fts = _do_bootstrap(conn)
     return conn
 
@@ -134,6 +134,7 @@ def _do_bootstrap(conn) -> bool:
         conn.execute("DROP TABLE IF EXISTS _fts_probe")
         use_fts = True
     except Exception:
+        # The FTS5 trigram tokenizer is not available in this SQLite build; the LIKE table is used instead.
         pass
 
     if use_fts:
@@ -410,51 +411,6 @@ class SearchIndexManager:
                 row = conn.execute(
                     f"SELECT COUNT(*) AS c FROM files_meta {where}", params
                 ).fetchone()
-            return row["c"] if row else 0
-        except Exception as e:
-            print(f"⚠️  Search index count error: {e}")
-            return -1
-        try:
-            query_lower = query.lower()
-            ext_list = [e.lstrip(".").lower() for e in (ext_filter or []) if e]
-            with _connect() as conn:
-                if _use_fts:
-                    clauses: list = []
-                    params: list = []
-                    if query_lower:
-                        safe = '"' + query_lower.replace('"', '""') + '"'
-                        clauses.append("files MATCH ?")
-                        params.append(safe)
-                        if ext_list:
-                            ext_likes = " OR ".join("name LIKE ?" for _ in ext_list)
-                            clauses.append(f"({ext_likes})")
-                            params.extend(f"%.{e}" for e in ext_list)
-                            clauses.append("is_dir = '0'")
-                    else:
-                        if ext_list:
-                            ext_likes = " OR ".join("name LIKE ?" for _ in ext_list)
-                            clauses.append(f"({ext_likes})")
-                            params.extend(f"%.{e}" for e in ext_list)
-                            clauses.append("is_dir = '0'")
-                    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-                    row = conn.execute(
-                        f"SELECT COUNT(*) AS c FROM files {where}", params
-                    ).fetchone()
-                else:
-                    clauses = []
-                    params = []
-                    if query_lower:
-                        clauses.append("name_lower LIKE ?")
-                        params.append(f"%{query_lower}%")
-                    if ext_list:
-                        ext_sql = " OR ".join("name_lower LIKE ?" for _ in ext_list)
-                        clauses.append(f"({ext_sql})")
-                        params.extend(f"%.{e}" for e in ext_list)
-                        clauses.append("is_dir = 0")
-                    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-                    row = conn.execute(
-                        f"SELECT COUNT(*) AS c FROM files {where}", params
-                    ).fetchone()
             return row["c"] if row else 0
         except Exception as e:
             print(f"⚠️  Search index count error: {e}")
@@ -1016,6 +972,7 @@ class SearchIndexManager:
                         total += len(chunk)
                         time.sleep(0.002)  # be gentle with the disk
             except OSError:
+                # File vanished or is unreadable while warming the disk cache; best effort only.
                 pass
         # Also touch the query paths themselves (indexes, FTS structures).
         try:
@@ -1028,6 +985,7 @@ class SearchIndexManager:
                         "SELECT rowid FROM files WHERE files MATCH '\"zzzqq\"' LIMIT 1"
                     ).fetchall()
         except Exception:
+            # Keep-warm queries are best effort; the index may be mid-rebuild.
             pass
         dt = time.time() - t0
         # Quiet unless it was the first pass or the cache had been evicted.

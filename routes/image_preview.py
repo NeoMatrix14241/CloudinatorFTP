@@ -160,7 +160,8 @@ def _img_cache_key(full_path: str) -> str:
         fingerprint = f"{st.st_size}:{st.st_mtime}"
     except OSError:
         fingerprint = full_path
-    return hashlib.md5(fingerprint.encode()).hexdigest()
+    # blake2b (16-byte digest = same 32 hex chars as the old md5): cache file name only.
+    return hashlib.blake2b(fingerprint.encode(), digest_size=16).hexdigest()
 
 
 def _img_cached_path(cache_key: str) -> str:
@@ -364,6 +365,7 @@ def _convert_to_webp(full_path: str, cache_key: str, lossy: bool) -> bool:
                 if os.path.exists(p):
                     os.remove(p)
             except OSError:
+                # Partial output file already gone or locked; a later cleanup removes it.
                 pass
         return False
 
@@ -395,7 +397,7 @@ async def image_preview(path):
       3. Small native format        → served directly, no conversion
 
     Cache: cache/img/<cache_key>.webp
-    Stale detection: cache_key = md5(file_size:mtime), so a changed file
+    Stale detection: cache_key = blake2b(file_size:mtime), so a changed file
     automatically gets a fresh key and is re-converted on next request.
 
     Termux dependencies:

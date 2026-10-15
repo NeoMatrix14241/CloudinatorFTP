@@ -55,10 +55,8 @@ Design decisions explicitly recorded (see CLAUDE.md for the full log):
 """
 
 import argparse
-import atexit
 import fnmatch
 import hashlib
-import json
 import os
 import queue
 import re
@@ -69,10 +67,8 @@ import sys
 import tempfile
 import threading
 import time
-import uuid
 
 import config
-import paths
 import logging_setup
 
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -86,16 +82,6 @@ _SCHEMA_VERSION = 1
 # stat-polling loop, distinct from config.VERSION_SCAN_INTERVAL (the full
 # reconciliation scanner's interval, which IS configurable).
 _WATCH_POLL_INTERVAL = 3  # seconds
-
-_VERSION_STATES = (
-    "pending",
-    "processing",
-    "verifying",
-    "completed",
-    "failed",
-    "deleted",
-)
-
 
 # =============================================================================
 # A. PARENT-PROCESS API  (imported by dev_server.py / prod_server.py ONLY)
@@ -124,11 +110,13 @@ def _pump_child_output(stream, tag: str) -> None:
                 break
             _pm_log().info(f"[version_engine:{tag}] {line.rstrip()}")
     except Exception:
+        # The engine's output pipe closed; the pump simply ends.
         pass
     finally:
         try:
             stream.close()
         except Exception:
+            # Pipe already closed.
             pass
 
 
@@ -147,6 +135,7 @@ def _write_ve_pidfile(pid: int):
         with open(_VE_PID_FILE, "w") as f:
             f.write(str(pid))
     except Exception:
+        # PID file is a convenience for manage.sh; failing to write it must not stop startup.
         pass
 
 
@@ -154,6 +143,7 @@ def _clear_ve_pidfile():
     try:
         os.remove(_VE_PID_FILE)
     except OSError:
+        # PID file already gone.
         pass
 
 
@@ -266,6 +256,7 @@ def force_kill():
         if proc is not None and proc.poll() is None:
             proc.kill()
     except Exception:
+        # Process already gone or not killable; shutdown continues.
         pass
 
 
@@ -471,6 +462,7 @@ class _GatedConnection(sqlite3.Connection):
                 try:
                     super().rollback()
                 except sqlite3.Error:
+                    # Rollback on a broken connection can fail; the original error is what matters.
                     pass
                 self._gate_release()
             raise
@@ -663,8 +655,10 @@ class Engine:
                     os.remove(os.path.join(self.tmp_dir, name))
                     cleaned += 1
                 except OSError:
+                    # Temp file already gone or locked; a later cleanup removes it.
                     pass
         except OSError:
+            # Temp directory missing or unreadable; nothing to clean.
             pass
         if cleaned:
             self.log.info(f"Crash recovery: removed {cleaned} stale temp file(s).")
@@ -707,6 +701,7 @@ class Engine:
             try:
                 os.remove(tmp_path)
             except OSError:
+                # Temp file already gone or locked; a later cleanup removes it.
                 pass
         else:
             os.replace(tmp_path, final_path)  # atomic on the same filesystem
@@ -1001,6 +996,7 @@ class Engine:
                 try:
                     conn.rollback()
                 except sqlite3.Error:
+                    # Rollback on a broken connection can fail; the original error is re-raised or retried.
                     pass
                 if not _is_lock_error(e) or attempt == 2:
                     self.log.warning(f"Could not discard version row {version_id}: {e}")
@@ -1020,6 +1016,7 @@ class Engine:
                 try:
                     self._connect().rollback()
                 except sqlite3.Error:
+                    # Rollback on a broken connection can fail; the original error is re-raised.
                     pass
                 self.log.warning(
                     f"{getattr(fn, '__name__', 'write')}: {e}; retry in {delay}s"
@@ -1143,6 +1140,7 @@ class Engine:
             try:
                 os.remove(tmp_path)
             except OSError:
+                # Temp file already gone or locked; a later cleanup removes it.
                 pass
             raise
 
@@ -1199,6 +1197,7 @@ class Engine:
                     try:
                         os.remove(tmp_path)
                     except OSError:
+                        # Temp file already gone or locked; a later cleanup removes it.
                         pass
                     raise
                 # LOCK-HOLD FIX: the object row and its version_objects link
@@ -1458,6 +1457,7 @@ class Engine:
             try:
                 os.remove(tmp_dest)
             except OSError:
+                # Temp file already gone or locked; a later cleanup removes it.
                 pass
             self._finish_job(job_id, "failed", error=str(e))
             raise
@@ -1467,6 +1467,7 @@ class Engine:
             try:
                 os.remove(tmp_dest)
             except OSError:
+                # Temp file already gone or locked; a later cleanup removes it.
                 pass
             err = (
                 f"restore verification FAILED: sha {restored_sha[:12]}… != "
@@ -1492,6 +1493,7 @@ class Engine:
             try:
                 os.remove(tmp_dest)
             except OSError:
+                # Temp file already gone or locked; a later cleanup removes it.
                 pass
             self._finish_job(job_id, "failed", error=str(last_err))
             raise VersionEngineError(
@@ -1708,6 +1710,7 @@ class Engine:
             try:
                 os.remove(self._object_path(sha))
             except OSError:
+                # Object file already removed; the DB row is what counts.
                 pass
             # version_objects rows from non-completed (failed/deleted)
             # versions still FK-reference this object; their bytes are gone
@@ -1727,6 +1730,7 @@ class Engine:
             try:
                 self._finish_job(job_id, "failed", error=str(e))
             except Exception:
+                # Recording the failure itself failed (DB unavailable); the scan retries next cycle.
                 pass
             raise
 
@@ -1845,6 +1849,7 @@ class Engine:
                 try:
                     self._connect().rollback()  # never leave a txn/gate held
                 except sqlite3.Error:
+                    # Rollback on a broken connection can fail; the original error was already handled.
                     pass
                 self.log.error(
                     f"Worker {worker_index} snapshot error for {display_path}: {e}",
@@ -1907,6 +1912,7 @@ class Engine:
             while not self._job_queue.empty() and time.time() < deadline:
                 time.sleep(0.2)
         except Exception:
+            # Draining the queue is best effort during shutdown.
             pass
 
         for t in self._workers:
@@ -1920,6 +1926,7 @@ class Engine:
             conn = self._connect()
             conn.close()
         except Exception:
+            # Connection already closed.
             pass
         self.log.info("Graceful shutdown complete.")
 

@@ -304,6 +304,65 @@ from realtime_shares import (
     trigger_active_shares_changed,
 )
 
+# Names this module imports or defines only so that routes/*, middleware.py and the
+# launcher scripts can do `from core import <name>` (core.py is the shared namespace of
+# the app.py split, CLAUDE.md 4.68-4.78). Listing them here documents that on purpose:
+# they are re-exports, not dead imports. (Nothing star-imports core.)
+__all__ = [
+    # quart / werkzeug
+    "flash",
+    "g",
+    "make_response",
+    "render_template",
+    "render_template_string",
+    "send_file",
+    "send_from_directory",
+    "secure_filename",
+    "ClientDisconnected",
+    # stdlib / third party
+    "shutil",
+    "logging",
+    "socket",
+    "zipfile",
+    "subprocess",
+    "hashlib",
+    "zipstream",
+    "datetime",
+    "BadSignature",
+    "SignatureExpired",
+    # config / auth / database
+    "ALLOWED_EXTENSIONS",
+    "CHUNK_SIZE",
+    "ENABLE_CHUNKED_UPLOADS",
+    "ENABLE_FFMPEG",
+    "ENABLE_LIBVIPS",
+    "HLS_FORCE_FORMATS",
+    "HLS_MIN_SIZE",
+    "HOST",
+    "IMG_CACHE_DIR",
+    "IMG_COMPRESS_MIN_SIZE",
+    "IMG_WEBP_QUALITY",
+    "PORT",
+    "db",
+    "check_login",
+    "current_user",
+    "get_role",
+    "login_user",
+    "logout_user",
+    # realtime / monitoring
+    "get_file_monitor",
+    "get_event_manager",
+    "storage_stats_sse",
+    "share_events_sse",
+    "trigger_active_shares_changed",
+    "trigger_share_event",
+    # module-level values consumed by other modules
+    "_share_unlock_signer",
+    "_SHARE_UNLOCK_MAX_AGE",
+    "_INLINE_STYLE_HASHES",
+    "_INLINE_STYLE_ELEMENT_HASHES",
+]
+
 # Assembly Queue System
 import queue
 from dataclasses import dataclass
@@ -741,6 +800,7 @@ def _request_is_secure() -> bool:
             if json.loads(cf_visitor).get("scheme") == "https":
                 return True
         except (ValueError, AttributeError):
+            # Malformed CF-Visitor header: treat as not-HTTPS and fall through.
             pass
 
     return False
@@ -781,6 +841,7 @@ def _request_via_trusted_tls() -> bool:
             if json.loads(cf_visitor).get("scheme") == "https":
                 return True
         except (ValueError, AttributeError):
+            # Malformed CF-Visitor header: treat as not-HTTPS and fall through.
             pass
 
     return False
@@ -904,8 +965,7 @@ csrf = CSRFProtect()
 # walks of the HDD. Now: one walk at a time; changes that arrive while it runs
 # queue exactly ONE follow-up walk (the running walk may have missed them).
 _reconcile_gate = threading.Lock()
-_reconcile_running = False
-_reconcile_rerun = False
+_reconcile_state = {"running": False, "rerun": False}
 
 
 def _trigger_reconcile(settle=False):
@@ -938,23 +998,21 @@ def _trigger_reconcile(settle=False):
     from file_monitor import get_file_monitor
     from realtime_stats import trigger_storage_update
 
-    global _reconcile_running, _reconcile_rerun
     with _reconcile_gate:
-        if _reconcile_running:
-            _reconcile_rerun = True  # one follow-up walk after the current one
+        if _reconcile_state["running"]:
+            _reconcile_state["rerun"] = True  # one follow-up walk after the current one
             print("🔄 Reconcile already running — follow-up queued")
             return
-        _reconcile_running = True
+        _reconcile_state["running"] = True
 
     def _run():
-        global _reconcile_running, _reconcile_rerun
         while True:
             _run_once()
             with _reconcile_gate:
-                if _reconcile_rerun:
-                    _reconcile_rerun = False
+                if _reconcile_state["rerun"]:
+                    _reconcile_state["rerun"] = False
                     continue
-                _reconcile_running = False
+                _reconcile_state["running"] = False
                 return
 
     def _run_once():
@@ -979,11 +1037,17 @@ def _trigger_reconcile(settle=False):
 
 storage.ensure_root()
 
+
+def _startup_log(message):
+    """Import-time startup messages (kept in one place; plain stdout like before)."""
+    print(message)
+
+
 # Initialize file system monitoring
 file_monitor = init_file_monitor()
 file_monitor.add_change_callback(trigger_storage_update)
 file_monitor.add_activity_callback(trigger_fs_activity)  # 4.64
-print(f"📡 File system monitoring started for: {ROOT_DIR}")
+_startup_log(f"📡 File system monitoring started for: {ROOT_DIR}")
 
 # Start search index crawler (daemon thread, non-blocking).
 # Only in the MAIN server process: the WebDAV / Version Engine subprocesses
@@ -995,13 +1059,13 @@ _AUX_PROC = os.path.basename(sys.argv[0]).lower() in (
     "version_engine.py",
 )
 if ENABLE_SEARCH_INDEX and _AUX_PROC:
-    print(
+    _startup_log(
         "ℹ️  Search index crawler skipped in this helper process (main server owns it)"
     )
 elif ENABLE_SEARCH_INDEX:
     search_index_manager.start_crawler()
 else:
-    print("ℹ️  Search index disabled — using os.walk fallback for all searches")
+    _startup_log("ℹ️  Search index disabled — using os.walk fallback for all searches")
 
 # Version History web UI — logic-only module (version_history.py), no
 # routes registered by importing it (see its own docstring). init() here
@@ -1014,7 +1078,7 @@ else:
 # subprocess already writes to (safe under WAL mode — see
 # version_engine.py's own status() docstring for the same pattern).
 version_history.init()
-print(
+_startup_log(
     f"🕓 Version History web UI ready (recovered-files dir: {version_history.RECOVERED_ROOT})"
 )
 

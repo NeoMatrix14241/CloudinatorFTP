@@ -15,25 +15,36 @@ from core import (
     get_local_ip,
     get_protected_files,
 )
-import middleware  # noqa: F401  (registers every hook; must come right after core)
-import routes.hls  # noqa: F401  (Phase 2: registers /hls_start, /hls_status, /hls_files)
-import routes.image_preview  # noqa: F401  (Phase 3: registers /image_preview, /image_preview_status, /image_info)
-import routes.versions  # noqa: F401  (Phase 4: registers /api/versions/* and /download/recovered/*)
-import routes.previews  # noqa: F401  (Phase 5: registers /office_preview and /archive_preview)
-import routes.admin  # noqa: F401  (Phase 6: registers /admin/clear_media_preview and /admin/rebuild_cache*)
-import routes.stats  # noqa: F401  (Phase 6: stats/SSE/health/search/speedtest + the before_serving loop watchdog)
-import routes.shares  # noqa: F401  (Phase 7: share links, /shared/*, /admin/shares*)
-import routes.uploads  # noqa: F401  (Phase 8: uploads, chunks, assembly status, admin chunk routes)
-import routes.files  # noqa: F401  (Phase 9: /, /<path>, /download, /view, bulk jobs, file operations)
-import routes.login  # noqa: F401  (Phase 10: /login, /logout, /check_session, /csrf-token)
-import routes.site_meta  # noqa: F401  (Phase 10: /robots.txt, /sitemap.xml, /.well-known/security.txt)
-from routes.uploads import (
-    detect_ready_assemblies,
-    start_assembly_worker,
-    start_enhanced_cleanup_scheduler,
-    start_expired_share_cleanup_scheduler,
-    start_orphan_cleanup_scheduler,
-)  # called by initialize_cleanup() below
+import middleware
+import routes.hls  # Phase 2: registers /hls_start, /hls_status, /hls_files
+import routes.image_preview  # Phase 3: registers /image_preview, /image_preview_status, /image_info
+import routes.versions  # Phase 4: registers /api/versions/* and /download/recovered/*
+import routes.previews  # Phase 5: registers /office_preview and /archive_preview
+import routes.admin  # Phase 6: registers /admin/clear_media_preview and /admin/rebuild_cache*
+import routes.stats  # Phase 6: stats/SSE/health/search/speedtest + the before_serving loop watchdog
+import routes.shares  # Phase 7: share links, /shared/*, /admin/shares*
+import routes.uploads  # Phase 8: uploads, chunks, assembly status, admin chunk routes
+import routes.files  # Phase 9: /, /<path>, /download, /view, bulk jobs, file operations
+import routes.login  # Phase 10: /login, /logout, /check_session, /csrf-token
+import routes.site_meta  # Phase 10: /robots.txt, /sitemap.xml, /.well-known/security.txt
+
+# The imports above exist only for their side effect (middleware registers the hooks, each
+# routes/* module registers its routes on core.app), and their ORDER is the registration
+# order. Referencing the modules here makes that explicit, so they are "used" imports.
+_SIDE_EFFECT_MODULES = (
+    middleware,
+    routes.hls,
+    routes.image_preview,
+    routes.versions,
+    routes.previews,
+    routes.admin,
+    routes.stats,
+    routes.shares,
+    routes.uploads,
+    routes.files,
+    routes.login,
+    routes.site_meta,
+)
 
 import os
 from config import (
@@ -52,12 +63,12 @@ def initialize_cleanup():
     print("🧹 Initializing cleanup systems...")
 
     # Start enhanced cleanup schedulers
-    start_enhanced_cleanup_scheduler()
-    start_orphan_cleanup_scheduler()
-    start_expired_share_cleanup_scheduler()
+    routes.uploads.start_enhanced_cleanup_scheduler()
+    routes.uploads.start_orphan_cleanup_scheduler()
+    routes.uploads.start_expired_share_cleanup_scheduler()
 
     # Start assembly worker
-    start_assembly_worker()
+    routes.uploads.start_assembly_worker()
 
     # Do an initial aggressive cleanup on startup
     try:
@@ -76,7 +87,7 @@ def initialize_cleanup():
 
     # Check for any existing chunks that are ready for assembly
     print("🔍 Checking for incomplete uploads ready for assembly...")
-    detect_ready_assemblies()
+    routes.uploads.detect_ready_assemblies()
 
 
 # Initialize cleanup when app starts
