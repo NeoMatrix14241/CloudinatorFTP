@@ -112,7 +112,7 @@ _WRITE_METHODS = frozenset(
 
 # ── Shared per-process auth cache ─────────────────────────────────────────
 # Avoids repeated bcrypt checks on every WebDAV request.
-# Maps username → {hash: hmac_of_password, role: str|None, exp: float}
+# Maps username → {hash: scrypt_of_password, role: str|None, exp: float}
 # role = str  → valid credentials, role is the role string
 # role = None → valid username but wrong password (cached failure)
 
@@ -120,11 +120,12 @@ _WRITE_METHODS = frozenset(
 class _AuthCache:
     """
     Thread-safe cache for WebDAV credentials → role.
-    Stores HMAC-SHA256(random per-process key, password), NOT the raw password,
-    so a cache dump is useless (the key only ever lives in this process's memory).
-    This is a short-lived in-memory lookup key, not password storage; real
-    passwords are checked with bcrypt in database.py. TTL is short (30 s) so
-    password changes take effect quickly.
+    Stores scrypt(password, random per-process salt), NOT the raw password, so a
+    cache dump is useless (the salt only ever lives in this process's memory).
+    scrypt (about 1 ms) is deliberately much cheaper than the bcrypt check in
+    database.py (~250 ms) but still a real password KDF, which is the point of
+    the cache: WebDAV re-sends Basic auth on every request. TTL is short (30 s)
+    so password changes take effect quickly.
     """
 
     TTL = 30  # seconds
@@ -135,7 +136,9 @@ class _AuthCache:
         self._key = os.urandom(32)
 
     def _digest(self, password: str) -> str:
-        return hmac.new(self._key, password.encode(), hashlib.sha256).hexdigest()
+        return hashlib.scrypt(
+            password.encode(), salt=self._key, n=2**10, r=8, p=1, dklen=32
+        ).hex()
 
     def lookup(self, username: str, password: str):
         """
