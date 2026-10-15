@@ -61,6 +61,7 @@ import storage
 def initialize_cleanup():
     """Initialize all cleanup processes"""
     print("🧹 Initializing cleanup systems...")
+    print(f"🧩 {len(_SIDE_EFFECT_MODULES)} middleware/route modules loaded")
 
     # Start enhanced cleanup schedulers
     routes.uploads.start_enhanced_cleanup_scheduler()

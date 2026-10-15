@@ -361,6 +361,13 @@ __all__ = [
     "_SHARE_UNLOCK_MAX_AGE",
     "_INLINE_STYLE_HASHES",
     "_INLINE_STYLE_ELEMENT_HASHES",
+    # shared singletons / settings defined here and imported by routes/* and middleware.py
+    "bulk_zip_progress",
+    "bulk_zip_cancelled",
+    "rate_limiter",
+    "request_logger",
+    "SLOW_REQUEST_THRESHOLD_SECONDS",
+    "csrf",
 ]
 
 # Assembly Queue System
