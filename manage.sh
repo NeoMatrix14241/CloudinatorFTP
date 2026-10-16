@@ -93,6 +93,24 @@ webdav_pid_file() {
 	echo "${PID_DIR}/webdav.pid"
 }
 
+# The Version Engine worker is ALSO its own OS process (version_engine.py
+# --worker, spawned by the server). version_engine.py writes its PID here.
+ve_pid_file() {
+	echo "${PID_DIR}/version_engine.pid"
+}
+
+# Graceful-stop request file. `stop` creates it; prod_server.py / dev_server.py
+# poll for it, delete it (= "acknowledged") and shut down exactly like the
+# first Ctrl+C does. Needed because Windows cannot deliver a catchable
+# signal to a detached, console-less process.
+stop_file_for() {
+	echo "${PID_DIR}/$1.stop"
+}
+
+# Seconds `stop` waits for that graceful shutdown before forcing it.
+# Override:  STOP_GRACE_SECS=90 ./manage.sh stop
+STOP_GRACE_SECS="${STOP_GRACE_SECS:-45}"
+
 script_for() {
 	case "$1" in
 	prod) echo "prod_server.py" ;;
@@ -395,6 +413,10 @@ cmd_start() {
 	# _kill_webdav_child's own comment for the full story). Safe to call
 	# unconditionally — a no-op when nothing's actually orphaned.
 	_kill_webdav_child
+	# Same for an orphaned Version Engine worker: starting a second one would
+	# put two engines on one database (duplicate scans, "database is locked").
+	_kill_version_engine_child
+	rm -f "$(stop_file_for "$type")"
 
 	local script pid_file log
 	script=$(script_for "$type")
@@ -478,7 +500,7 @@ _kill_webdav_child() {
 		pid=$(read_pid "$pf")
 		if [[ -n "$pid" ]]; then
 			if is_windows; then
-				taskkill //F //PID "$pid" &>/dev/null || true
+				taskkill //F //T //PID "$pid" &>/dev/null || true
 			else
 				kill "$pid" 2>/dev/null || true
 				local i=0
@@ -577,46 +599,160 @@ _pid_is_python() {
 	fi
 }
 
+# ── Process-tree helpers ──────────────────────────────────────────────────────
+# True while PID is a live python process.
+_pid_alive() {
+	local pid="$1"
+	[[ -n "$pid" ]] || return 1
+	if is_windows; then
+		tasklist //FI "PID eq ${pid}" //NH 2>/dev/null | grep -qi "python"
+	else
+		kill -0 "$pid" 2>/dev/null
+	fi
+}
+
+# Hard-kill PID AND everything it started. Plain `taskkill //F //PID` (what
+# `stop` used before) and a plain `kill` only hit that one process, so the
+# Version Engine and WebDAV children survived as orphans.
+#   Windows : taskkill //F //T  (kill tree)
+#   POSIX   : the launcher used setsid, so the server is its own process-group
+#             leader (PGID == PID) and the children share that group:
+#             `kill -9 -- -PID` takes the whole group.
+_kill_tree() {
+	local pid="$1"
+	[[ -n "$pid" ]] || return 0
+	if is_windows; then
+		taskkill //F //T //PID "$pid" &>/dev/null || true
+	else
+		kill -9 -- "-${pid}" 2>/dev/null || true
+		kill -9 "$pid" 2>/dev/null || true
+	fi
+	return 0
+}
+
+# Wait up to $2 seconds for PID $1 to exit. Optional $3 = stop-request file:
+# a current server deletes it within ~0.5 s of seeing it; if it is still
+# there after 6 s the running server predates this feature (it never reads
+# the file), so give up waiting at once instead of idling for the full grace.
+# Returns 0 = exited, 1 = still running.
+_wait_for_exit() {
+	local pid="$1" max="$2" stopfile="${3:-}"
+	local ticks=0 max_ticks=$((max * 2))
+	while _pid_alive "$pid" && ((ticks < max_ticks)); do
+		sleep 0.5
+		ticks=$((ticks + 1))
+		if [[ -n "$stopfile" && -e "$stopfile" ]] && ((ticks >= 12)); then
+			warn "Server ignored the stop request (started before this manage.sh version?)."
+			break
+		fi
+	done
+	if _pid_alive "$pid"; then
+		return 1
+	fi
+	return 0
+}
+
+# PIDs of any Version Engine worker (python ... version_engine.py --worker),
+# one per line. There is no port to sweep (unlike WebDAV), so the command
+# line is the only reliable fingerprint. Never fails.
+_ve_worker_pids() {
+	local out=""
+	if is_windows; then
+		# wmic is gone from current Windows; Get-CimInstance is the replacement.
+		# Name filter: this powershell's own command line contains the pattern.
+		out=$(powershell.exe -NoProfile -NonInteractive -Command \
+			"Get-CimInstance Win32_Process | Where-Object { \$_.Name -like 'python*' -and \$_.CommandLine -like '*version_engine.py*--worker*' } | ForEach-Object { \$_.ProcessId }" \
+			2>/dev/null | tr -d '\r') || true
+	elif command -v pgrep &>/dev/null; then
+		out=$(pgrep -f -- 'version_engine\.py.* --worker' 2>/dev/null) || true
+	else
+		out=$(ps -eo pid,args 2>/dev/null | grep -E 'version_engine\.py.* --worker' | grep -v grep | awk '{print $1}') || true
+	fi
+	out="${out//[^0-9$'\n']/}"
+	printf '%s\n' "$out" | grep -v '^$' | grep -vx "$$" || true
+}
+
+# Kill the Version Engine worker: pid file first (tree kill), then every
+# process whose command line says it is a worker. Safe no-op when none run.
+_kill_version_engine_child() {
+	local pf pid p
+	pf=$(ve_pid_file)
+	if [[ -f "$pf" ]]; then
+		pid=$(read_pid "$pf")
+		if [[ -n "$pid" ]] && _pid_is_python "$pid"; then
+			_kill_tree "$pid"
+		fi
+		rm -f "$pf"
+	fi
+	for p in $(_ve_worker_pids); do
+		if _pid_is_python "$p"; then
+			_kill_tree "$p"
+		fi
+	done
+	return 0
+}
+
 # ── cmd_stop ──────────────────────────────────────────────────────────────────
+# Mirrors prod_server.py's two Ctrl+C stages:
+#   1. graceful  - ask the server to shut down (stop file, plus SIGTERM for the
+#                  production server on POSIX) and wait up to STOP_GRACE_SECS.
+#                  The server then stops WebDAV, SFTP/FTP/SMB and the Version
+#                  Engine itself (its `finally:` block).
+#   2. forced    - if it is still alive, kill the whole process tree.
+# Either way the leftovers sweep afterwards makes sure no WebDAV process or
+# Version Engine worker is left behind (pid file + port / command-line sweeps).
 cmd_stop() {
 	local type
 	type=$(active_server)
 
 	if [[ -z "$type" ]]; then
-		warn "No server is currently running."
+		# The tracked server is gone, but its children can outlive it.
+		local stray
+		stray="$(_ve_worker_pids)"
+		if [[ -n "$stray" || -f "$(ve_pid_file)" || -f "$(webdav_pid_file)" ]]; then
+			warn "No server is running, but leftover helper processes or PID files were found."
+			info "Cleaning up WebDAV / Version Engine leftovers…"
+			_kill_webdav_child
+			_kill_version_engine_child
+			success "Leftovers cleaned up."
+		else
+			warn "No server is currently running."
+		fi
 		return 0
 	fi
 
-	local pid_file pid script
+	local pid_file pid script stopfile
 	pid_file=$(pid_file_for "$type")
 	pid=$(read_pid "$pid_file")
 	script=$(script_for "$type")
+	stopfile=$(stop_file_for "$type")
 
 	info "Stopping ${BOLD}${script}${NC} (PID ${pid})…"
 
-	if is_windows; then
-		# taskkill with the real Windows PID — immediate and reliable
-		taskkill //F //PID "$pid" &>/dev/null ||
-			kill -9 "$pid" 2>/dev/null ||
-			true
-		sleep 0.3
-	else
+	mkdir -p "$PID_DIR"
+	: >"$stopfile"
+	# POSIX production server: SIGTERM is handled as a graceful stop. (Not for
+	# dev_server: Quart's own SIGTERM handling would skip its cleanup.) An older
+	# server that predates this feature simply dies from it; the sweeps below
+	# then clean up its children.
+	if [[ "$type" == "prod" ]] && ! is_windows; then
 		kill "$pid" 2>/dev/null || true
-		local i=0
-		while kill -0 "$pid" 2>/dev/null && ((i < 10)); do
-			sleep 0.5
-			i=$((i + 1))
-		done
-		if kill -0 "$pid" 2>/dev/null; then
-			warn "Process did not exit gracefully — sending SIGKILL…"
-			kill -9 "$pid" 2>/dev/null || true
-		fi
 	fi
 
-	rm -f "$pid_file"
+	info "Waiting up to ${STOP_GRACE_SECS}s for a graceful shutdown (WebDAV, SFTP/FTP/SMB, Version Engine)…"
+	if _wait_for_exit "$pid" "$STOP_GRACE_SECS" "$stopfile"; then
+		success "Server shut down gracefully."
+	else
+		warn "Server did not exit gracefully — forcing the whole process tree down (like a second Ctrl+C)…"
+		_kill_tree "$pid"
+		sleep 0.3
+	fi
 
-	# Clean up the orphaned WebDAV child — see _kill_webdav_child above.
+	rm -f "$stopfile" "$pid_file"
+
+	# Whatever the shutdown path was, make sure nothing is left behind.
 	_kill_webdav_child
+	_kill_version_engine_child
 
 	success "${script} stopped."
 }
@@ -1426,7 +1562,13 @@ ${BOLD}USAGE${NC}
 ${BOLD}SERVER COMMANDS${NC}  (mutually exclusive — only one server at a time)
   start  server         Start production server (hypercorn) in the background
   start  dev_server     Start dev server (quart) in the background
-  stop                  Gracefully stop the running server
+  stop                  Stop the running server: asks it to shut down gracefully
+                          first (like the first Ctrl+C: stops WebDAV, SFTP/FTP/SMB
+                          and the Version Engine), waits up to STOP_GRACE_SECS
+                          (default 45), then kills the whole process tree (like a
+                          second Ctrl+C) and sweeps any leftover WebDAV / Version
+                          Engine process. Also cleans up leftovers when no server
+                          is running.
   restart               Restart the currently active server
   restart-webdav        Restart ONLY WebDAV (recovers a wedged/stuck WebDAV
                           listener without touching the main server — see
@@ -1585,6 +1727,9 @@ ${BOLD}CTRL-C${NC}
 ${BOLD}ENVIRONMENT${NC}
   PYTHON   Python interpreter to use (default: python, else python3, from PATH)
            e.g.  PYTHON=python3.11 ./manage.sh start server
+  STOP_GRACE_SECS
+           Seconds 'stop' waits for the graceful shutdown before forcing it
+           (default 45)   e.g.  STOP_GRACE_SECS=90 ./manage.sh stop
 
 EOF
 }

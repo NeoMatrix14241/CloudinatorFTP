@@ -1,4 +1,3 @@
-
 from pathlib import Path
 
 EXCLUDED_DIRS = {
@@ -9,6 +8,7 @@ EXCLUDED_DIRS = {
     "env",
     ".pytest_cache",
     ".manage_pids",
+    "logs",
 }
 
 # Show the directory, skip its contents, and optionally explain why.

@@ -368,6 +368,8 @@ The project can expose file access through alternate protocols in addition to th
 
 Some services are started as background threads in-process; WebDAV is separated into its own process for resilience and recovery, as described in the module comments and the architecture notes. This is a deliberate choice to avoid a wedged WebDAV loop taking down the entire app. The Version Engine ([../version_engine.py](../version_engine.py)) is also a separate OS process, started by the launcher (`version_engine.start()` in [../dev_server.py](../dev_server.py) / [../prod_server.py](../prod_server.py)) independently of `protocol_manager.py`.
 
+**Shutdown contract (4.99).** Every separate OS process the server spawns must die with it, however the server ends: (1) graceful: `./manage.sh stop` creates `.manage_pids/prod.stop` / `dev.stop` (prod also gets SIGTERM on POSIX), the launcher shuts down like the first Ctrl+C and its `finally:` block calls `protocol_manager.stop_all()` and `version_engine.stop()`; (2) forced: after `STOP_GRACE_SECS` (default 45) `manage.sh` kills the whole process tree (`taskkill //F //T`, or `kill -9 -- -PGID`); (3) sweeps: pid files plus the WebDAV port sweep and a `version_engine.py --worker` command-line sweep; (4) orphan guard: the children watch `CLOUDINATOR_PARENT_PID` via [../helpers/parent_watch.py](../helpers/parent_watch.py) and exit if the parent vanishes. A new child process must be added to all four.
+
 ## 14. Front-end structure
 
 The frontend is served directly from [../templates](../templates) and [../static](../static).
@@ -429,6 +431,7 @@ Examples include:
 The helper folder contains utility modules with leaf-style responsibilities:
 
 - [../helpers/net_utils.py](../helpers/net_utils.py)
+- [../helpers/parent_watch.py](../helpers/parent_watch.py)
 - [../helpers/lanman_guard.py](../helpers/lanman_guard.py)
 - [../helpers/hypercorn_ssl_fix.py](../helpers/hypercorn_ssl_fix.py)
 - [../helpers/ssl_cert.py](../helpers/ssl_cert.py)
@@ -463,16 +466,23 @@ The project’s internal notes in [../docs/CLAUDE.md](../docs/CLAUDE.md) describ
 
 This is especially important because the app is intentionally designed as a single app object with many route modules.
 
+Since 5.00 there is also a behavioral **pytest** suite next to the static checks (Phase 1 of the test plan: `tests/conftest.py`, `tests/unit/`, `tests/application/`, run through `python tests/qa.py`). It is deliberately built around two rules:
+
+- **Never import the application in the pytest process.** `paths.py` and `config.py` read their JSON next to the code and `core.py` starts the file monitor, search crawler and cleanup threads at import. The suite therefore copies the source tree into a temporary folder, writes fresh `storage_config.json` / `server_config.json` that point inside it (all protocols, search, ffmpeg, libvips and the Version Engine off, ephemeral port), checks that every data path resolves inside that folder, and starts `dev_server.py` there as a subprocess (stopped through the same `.manage_pids/dev.stop` file `manage.sh` uses). Tests talk to it over HTTP. In-process imports from the real tree are limited to side-effect-free leaf modules (today only `paths`); an autouse guard in `tests/conftest.py` fails any test that imports another root module.
+- **Test files in subfolders are not exempt from `smoke.py`.** The `tests/` exemption in checks 4, 5 and 6b covers only files directly in `tests/`. A file in `tests/unit/` or `tests/application/` that contains `import app`, a quoted `url_for('x')` / `request.endpoint == 'x'` for an unknown endpoint, or a hook/route decorator fails the smoke test. Use literal URLs in tests.
+
+Test-only packages live in `requirements-dev.txt` (never in `requirements.txt` / `constraints.txt`, which `setup_pymodules.sh` rewrites): `python -m pip install -r requirements-dev.txt`.
+
 ### 18.1 Automated checks on GitHub (dev and main)
 
 Two GitHub Actions workflows run on every push and pull request to `main` and `dev`:
 
-- [../.github/workflows/tests.yml](../.github/workflows/tests.yml) installs only `pyflakes` and runs `python tests/smoke.py` and `python tests/check.py -q --skip-packages`: the same static checks as on a developer machine, nothing is imported or started. `--skip-packages` hides "package not installed" warnings because the runner does not install `requirements.txt`.
+- [../.github/workflows/tests.yml](../.github/workflows/tests.yml) installs only `pyflakes` and runs `python tests/smoke.py` and `python tests/check.py -q --skip-packages`: the same static checks as on a developer machine, nothing is imported or started. `--skip-packages` hides "package not installed" warnings because the runner does not install `requirements.txt`. A second job, `behavioral tests` (informational for now: `continue-on-error: true`; it needs `smoke + check` first), installs `requirements.txt` and `requirements-dev.txt` and runs `python tests/qa.py ci` (static checks, SRI, `node --check`, pytest; JUnit XML is uploaded as the `test-results` artifact). Keep the `smoke + check` job name unchanged: branch protection may require it.
 - [../.github/workflows/codeql.yml](../.github/workflows/codeql.yml) runs CodeQL for Python and JavaScript and keeps the raw SARIF files. It converts them to CSV with [../tests/codeql_sarif_parser.py](../tests/codeql_sarif_parser.py) and uploads the artifacts `sarif-artifact-<language>`, `codeql-csv-<language>` and the combined `codeql-findings-csv`. Vendored third-party files are excluded through [../.github/codeql/codeql-config.yml](../.github/codeql/codeql-config.yml); keep that list in step with `VENDORED` in the parser.
 
 Rules:
 
-- Run `python tests/smoke.py` and `python tests/check.py` locally before pushing; fix a red Tests run, do not bypass it.
+- Run `python tests/smoke.py` and `python tests/check.py` locally before pushing; fix a red Tests run, do not bypass it. For a change that has tests, also run `python tests/qa.py quick` (or one layer: `python tests/qa.py layer unit`).
 - The advanced CodeQL workflow cannot run while the repository's CodeQL "default setup" is enabled; disable the default setup first.
 - Parse downloaded results by hand with `python tests/codeql_sarif_parser.py <artifact.zip | .sarif file | folder>`; CSV files are written next to the script (add `tests/*.csv`, `tests/*.sarif` and `tests/*.zip` to `.gitignore`).
 - When a workflow, the parser's `VENDORED` list or the CodeQL config changes, update sections 18.1, 25.5, 25.8 and 27.2 together.
@@ -620,6 +630,9 @@ Run checks from the project root. These static checks do not import or start the
 | Template/static asset hashes | `./manage.sh validate-sri`; repair with `./manage.sh validate-sri --fix` |
 | `manage.sh` | `bash -n manage.sh`; `python tests/smoke.py` |
 | File monitor/index behavior | Run the narrow temporary-tree test for the changed behavior, then `python tests/smoke.py` |
+| Anything with pytest coverage (`paths.py`, test harness, server boot) | `python tests/qa.py quick`; one layer: `python tests/qa.py layer unit` / `layer application` (needs `requirements-dev.txt`) |
+| `setup_pymodules.sh` | `bash -n setup_pymodules.sh`; `python tests/qa.py layer unit` (covers `append_req_line()`) |
+| New or changed test, `tests/conftest.py` or `tests/qa.py` | `python tests/check.py tests`; `python tests/smoke.py`; `python tests/qa.py layer unit`; never import `app` / `core` / `config` in a test (see 18) |
 
 `tests/smoke.py` is read-only and checks the whole project's syntax, import/layering constraints, route registration, endpoint references, hooks, and manage.sh references. `tests/check.py` selects a smaller group/module and supports `--config`; its `--import` option really imports modules and is refused for app modules with startup side effects unless forced. Do not use `--force` on a live server.
 
@@ -707,6 +720,7 @@ The helpers package is intentionally made of leaf utilities; the static checks r
 | [../helpers/hypercorn_ssl_fix.py](../helpers/hypercorn_ssl_fix.py) | One-time patch to bound/handle Hypercorn TLS shutdown. | Called by production and WebDAV processes; revalidate against Hypercorn internals on dependency upgrades. |
 | [../helpers/lanman_guard.py](../helpers/lanman_guard.py) | Windows LanmanServer/elevation/port checks and pending-setup state access. | Used by SMB setup/server and DB reset paths; preserve platform guards and state format. |
 | [../helpers/net_utils.py](../helpers/net_utils.py) | Local IP discovery with fallback. | Imported by launchers/protocol servers; must stay side-effect-light and not import the app. |
+| [../helpers/parent_watch.py](../helpers/parent_watch.py) | Orphan guard for child processes: polls the PID in `CLOUDINATOR_PARENT_PID` and shuts the child down when the parent is gone. | Used by `webdav_server.py` and `version_engine.py --worker`; stdlib only, no `__file__` tricks; the parent must set the env var in every spawn (`protocol_manager._spawn_webdav_process`, `version_engine._spawn_version_engine_process`). |
 | [../helpers/ssl_cert.py](../helpers/ssl_cert.py) | Shared certificate/key creation, IP SAN discovery, path resolution, regeneration and CLI instructions. | Used by production/WebDAV/FTPS; regeneration replaces trust material and needs operator notification. |
 
 ### 25.4 Operator tools
@@ -730,9 +744,13 @@ Tools are direct-entry utilities, not application services. Avoid importing them
 |---|---|---|
 | [../tests/check.py](../tests/check.py) | Parameterized static source checks for syntax, pyflakes, project imports, import-name resolution, helper layering; optional guarded subprocess imports and JSON config checks. | AST/import heuristics are not full runtime coverage; `--import` executes modules and may have side effects when forced. |
 | [../tests/codeql_sarif_parser.py](../tests/codeql_sarif_parser.py) | Converts CodeQL SARIF files (loose, zipped artifacts or folders) to per-language and combined CSV files; skips vendored files by default; optional `--fail-on` exit code. Standard library only. | Used by `codeql.yml` and by hand; keep `VENDORED` in step with `.github/codeql/codeql-config.yml`. |
+| [../tests/conftest.py](../tests/conftest.py) | Shared pytest fixtures: `build_scratch()` copies the source tree into a temp folder and writes scratch `storage_config.json` / `server_config.json`; `paths_outside()` asks the copy's own `paths.py` where it would keep data and lists anything outside the scratch folder; `scratch_server` starts `dev_server.py` there on an ephemeral port and stops it through `.manage_pids/dev.stop`; autouse guard against in-process imports of application modules. | It never runs the application in-process and does not start protocol servers or the Version Engine. |
 | [../tests/dir_tree.py](../tests/dir_tree.py) | Walks a filtered directory tree (`collect_entries()`, `build_tree()`), prints it and saves it to `docs/directory_tree.txt`. | It is a diagnostic utility, not a product behavior test. It rewrites `docs/directory_tree.txt` (creating `docs/` if needed) and skips that file itself; regenerate and commit it after files are added, moved or removed. `EXCLUDE_DIR_WALK` matches folder names only. |
+| [../tests/qa.py](../tests/qa.py) | The one QA runner for developers, `manage.sh` (planned) and GitHub: `static` (smoke, check, SRI, `node --check`), `tests` (pytest on every existing layer folder), `quick`, `layer <name>`, `ci` (JUnit XML to `./artifacts`); prints PASS/FAIL/SKIP per step, exit 1 on any failure (including a `layout` FAIL when a `test_*.py` file sits directly in `tests/` instead of a layer folder), never passes `--force`; `python tests/qa.py --version` prints which copy you run; the "pip install" hint appears only when pytest cannot be imported. | A SKIP (missing tool or folder) is not a pass of that check. |
 | [../tests/smoke.py](../tests/smoke.py) | Read-only project safety checks: syntax, optional pyflakes, route/endpoints, hooks, import cycles/layering, route-module registration, tool launch paths, shell syntax, and route snapshot changes. | Does not import/start the app, issue HTTP requests, or test filesystem/runtime behavior. `--save` intentionally updates the route snapshot. |
 | [../tests/smoke_routes.json](../tests/smoke_routes.json) | Baseline route signature consumed by `smoke.py`. | Update only when route additions/removals are intended and reviewed. |
+| [../tests/unit/](../tests/unit/) | `test_paths.py` (every `paths.py` getter, setter, reset, merge-safe save, corrupt config), `test_scratch_copy.py` (the harness isolates everything and the guard catches outside paths), `test_qa_runner.py` (plan selection, exit codes, skip handling, the stray-file `layout` check), `test_setup_pymodules.py` (the `append_req_line()` function of `setup_pymodules.sh`, run in bash). | Not application behavior beyond `paths.py`. |
+| [../tests/application/](../tests/application/) | `test_boot.py`: starts the real app from the scratch copy and checks `/login`, `/robots.txt`, anonymous `/`, that data folders were created only in the scratch tree and that the real `storage_config.json` / `server_config.json` are untouched. | Boots only; no login, upload, share or file-operation behavior yet. |
 
 ### 25.6 Frontend source and stylesheets
 
@@ -766,14 +784,16 @@ Template IDs, `data-*` properties, endpoint names and asset order are executable
 
 | File | Purpose |
 |---|---|
-| [../manage.sh](../manage.sh) | Operator CLI/menu for server start/stop/restart/status/logs and wrapped utilities; also handles PID/log management, WebDAV restart, security.txt and SRI operations. |
-| [../setup_pymodules.sh](../setup_pymodules.sh) | Generates `requirements.txt`/`constraints.txt`, resolves package constraints, handles Termux system packages and offers installation. |
+| [../manage.sh](../manage.sh) | Operator CLI/menu for server start/stop/restart/status/logs and wrapped utilities; also handles PID/log management, WebDAV restart, security.txt and SRI operations. `stop` is two-stage (graceful stop file / SIGTERM, then process-tree kill) and always sweeps WebDAV and Version Engine leftovers. |
+| [../setup_pymodules.sh](../setup_pymodules.sh) | Generates `requirements.txt`/`constraints.txt`, resolves package constraints, handles Termux system packages and offers installation. New package lines are appended through `append_req_line()` (adds a missing final newline first; keeps CRLF files CRLF, detected with `head`/`case`, never `grep`, because Git Bash `grep` hides CR); `tests/unit/test_setup_pymodules.py` covers it. |
 | [../termux_setup.sh](../termux_setup.sh) | Installs Termux native/Python prerequisites with retry logic and requests shared-storage permission. |
 | [../requirements.txt](../requirements.txt) | Declares Python dependency ranges used by setup. Update alongside imports and compatibility-sensitive protocol libraries. |
 | [../constraints.txt](../constraints.txt) | Generated/platform package constraints, particularly Termux-managed packages; regenerate through the setup workflow rather than hand-editing without reason. |
 | [../server_config.json](../server_config.json) | Persisted runtime/server/protocol/feature settings loaded by `config.py`. |
 | [../storage_config.json](../storage_config.json) | Persisted storage, database and cache directory overrides read by `paths.py`. |
-| [../.github/workflows/tests.yml](../.github/workflows/tests.yml) | GitHub Actions: `tests/smoke.py` and `tests/check.py` on every push / pull request to `main` and `dev`. |
+| [../.github/workflows/tests.yml](../.github/workflows/tests.yml) | GitHub Actions on every push / pull request to `main` and `dev`: job `smoke + check` (`tests/smoke.py`, `tests/check.py`) and job `behavioral tests` (`python tests/qa.py ci`, informational for now). |
+| [../pyproject.toml](../pyproject.toml) | Tool configuration only (no `[project]` / `[build-system]`): `[tool.pytest.ini_options]` with `pythonpath = ["."]`, `--import-mode=importlib` (tests/ has no `__init__.py`), `timeout = 120`, markers. Do not keep a `pytest.ini` next to it: pytest would use that instead. |
+| [../requirements-dev.txt](../requirements-dev.txt) | Test-only packages (`pytest`, `pytest-timeout`); not managed by `setup_pymodules.sh`. Deliberately NOT merged into `requirements.txt` / `setup_pymodules.sh`: that is the production dependency list, and the script rewrites constraints to `<next_major` and drops version floors. |
 | [../.github/workflows/codeql.yml](../.github/workflows/codeql.yml) | GitHub Actions: CodeQL for Python and JavaScript on `main` and `dev` plus a weekly run; stores SARIF and CSV artifacts. |
 | [../.github/codeql/codeql-config.yml](../.github/codeql/codeql-config.yml) | CodeQL configuration: `paths-ignore` for vendored third-party files (pdf.js, video.js, Font Awesome). |
 | [../README.md](../README.md) | Project overview, installation and usage; keep its command examples in sync with `manage.sh` and `tools/`. |
@@ -965,6 +985,7 @@ The rows below list each Python file's **direct** imports, grouped as standard l
 | [../helpers/hypercorn_ssl_fix.py](../helpers/hypercorn_ssl_fix.py) | `asyncio` | `hypercorn.asyncio.tcp_server*` | `logging_setup` |
 | [../helpers/lanman_guard.py](../helpers/lanman_guard.py) | `ctypes`, `json`, `os`, `platform`, `subprocess`, `datetime`, `socket*` | None | None |
 | [../helpers/net_utils.py](../helpers/net_utils.py) | `socket` | None | None |
+| [../helpers/parent_watch.py](../helpers/parent_watch.py) | `os`, `sys`, `threading`, `time`, `ctypes*` | None | None |
 | [../helpers/ssl_cert.py](../helpers/ssl_cert.py) | `datetime`, `ipaddress`, `os`, `socket`, `sys*` | `cryptography*` | `paths*`, `config*` |
 | [../tools/kick_sessions.py](../tools/kick_sessions.py) | `os`, `secrets`, `sys` | None | `database` |
 | [../tools/manage_users.py](../tools/manage_users.py) | `os`, `sys`, `getpass*`, `datetime*` | None | `paths`, `database` |
@@ -978,6 +999,9 @@ The rows below list each Python file's **direct** imports, grouped as standard l
 | [../tests/codeql_sarif_parser.py](../tests/codeql_sarif_parser.py) | `argparse`, `collections`, `csv`, `fnmatch`, `json`, `re`, `sys`, `zipfile`, `pathlib`, `urllib.parse` | None | None |
 | [../tests/dir_tree.py](../tests/dir_tree.py) | `pathlib` | None | None |
 | [../tests/smoke.py](../tests/smoke.py) | `argparse`, `ast`, `json`, `os`, `re`, `shutil`, `subprocess`, `sys`, `pathlib` | `pyflakes*` | None |
+| [../tests/conftest.py](../tests/conftest.py) | `hashlib`, `json`, `os`, `shutil`, `socket`, `subprocess`, `sys`, `time`, `types`, `urllib.*`, `pathlib` | `pytest` | None (loads project code only in the scratch subprocess) |
+| [../tests/qa.py](../tests/qa.py) | `argparse`, `shutil`, `subprocess`, `sys`, `time`, `pathlib` | None | None |
+| [../tests/unit/test_paths.py](../tests/unit/test_paths.py) | `json`, `os` | `pytest` | `paths` (the only module tests import in-process) |
 
 ### 27.3 Inbound project imports
 
@@ -1094,7 +1118,7 @@ Template-loaded local scripts/styles carry SRI hashes. `tools/sri_validator.py` 
 | `file_monitor.py` / `file_index.py` | `storage_index.json` and `file_index.json` under configured cache paths. | Routes/storage and browser stats/listing; do not confuse these caches with the deep-search DB. |
 | `search_index.py` | `search_index.db` under configured DB path. | Core crawler, file monitor updates, `/api/search` route. |
 | `version_engine.py` / `version_history.py` | Version DB/object storage and `.recovered/` under configured roots. | Launchers, version routes, version CLI and config tracking rules. |
-| `manage.sh` | Launches server scripts and Python tools; delegates package setup and SRI checks. | Keep commands, menu dispatch, script paths and this file map aligned after moving/renaming a tool. |
+| `manage.sh` | Launches server scripts and Python tools; delegates package setup and SRI checks. | Keep commands, menu dispatch, script paths and this file map aligned after moving/renaming a tool. Any new child process the server spawns needs (a) its PID file / command-line fingerprint in the `stop` sweeps and (b) the parent-PID env var for the orphan guard. |
 
 ## 29. What “all references” means here
 

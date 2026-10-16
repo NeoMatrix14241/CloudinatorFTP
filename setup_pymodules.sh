@@ -137,6 +137,25 @@ regex_escape() {
 	printf '%s' "$1" | sed -E 's/[][(){}.*^$+?|\\]/\\&/g'
 }
 
+# Appends one line to a requirements file. If the file does not end with a newline (hand-edited,
+# or written by an editor that omits the last one) a newline is added FIRST. A plain
+# `echo "$line" >>file` glued the new package onto the last line ("pyOpenSSL<27pyflakes<5")
+# whenever a package was missing from requirements.txt. A file that already uses CRLF (git on
+# Windows) keeps CRLF for the new line. CRLF is detected from the first line with head/case, NOT
+# with grep: grep in Git Bash on Windows hides the CR characters. tests/unit/test_setup_pymodules.py
+# covers this function.
+append_req_line() {
+	local file="$1" line="$2" eol=$'\n' first
+	if [ -s "$file" ]; then
+		first="$(head -n 1 "$file")"
+		case "$first" in *$'\r') eol=$'\r\n' ;; esac
+		if [ -n "$(tail -c1 "$file")" ]; then
+			printf '%s' "$eol" >>"$file"
+		fi
+	fi
+	printf '%s%s' "$line" "$eol" >>"$file"
+}
+
 # `pkg` is Termux's own wrapper -- it doesn't exist on Windows/regular Linux
 # (and FreeBSD's unrelated `pkg` would false-positive a plain `command -v`
 # check, hence checking Termux's own env vars instead).
@@ -284,7 +303,7 @@ for pkg in "${packages[@]}"; do
 	if grep -qE "^${pkg_regex}([>=<~!]|$)" "$REQ"; then
 		sed -i -E "s/^${pkg_regex}([>=<~!].*)?\$/${pkg}${constraint}/" "$REQ"
 	else
-		echo "${pkg}${constraint}" >>"$REQ"
+		append_req_line "$REQ" "${pkg}${constraint}"
 	fi
 done
 

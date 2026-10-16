@@ -70,6 +70,7 @@ import time
 
 import config
 import logging_setup
+from helpers import parent_watch
 
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 _SCRIPT_PATH = os.path.join(_PROJECT_DIR, "version_engine.py")
@@ -168,6 +169,10 @@ def _spawn_version_engine_process():
     # _spawn_webdav_process for the emoji/cp1252 root-cause writeup this
     # avoids; Version Engine's own logging prints similarly non-ASCII text.
     env["PYTHONUTF8"] = "1"
+    # Orphan guard: the worker watches this PID (helpers/parent_watch.py)
+    # and shuts itself down if this process dies without calling stop() -
+    # taskkill /F, SIGKILL, a crash or os._exit() all skip stop().
+    env["CLOUDINATOR_PARENT_PID"] = str(os.getpid())
 
     try:
         proc = subprocess.Popen(
@@ -1963,6 +1968,19 @@ def _worker_main():
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
+
+    # Orphan guard: if the server process that spawned this worker dies
+    # without stopping it (hard kill, crash), drain and exit instead of
+    # scanning forever. No-op when started by hand (no parent PID in env).
+    def _parent_gone():
+        log.warning("Parent server process is gone - shutting the engine down.")
+        engine.graceful_shutdown()
+
+    parent_watch.start(
+        _parent_gone,
+        label="version_engine",
+        grace=float(getattr(config, "VERSION_SHUTDOWN_TIMEOUT", 30)) + 5,
+    )
 
     try:
         while True:

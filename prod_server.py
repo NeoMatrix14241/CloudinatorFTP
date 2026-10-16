@@ -223,6 +223,64 @@ if _BG:
     if hasattr(signal, "SIGBREAK"):
         signal.signal(signal.SIGBREAK, signal.SIG_IGN)
 
+# ---------------------------------------------------------------------------
+# Graceful-stop request from manage.sh (2026-10-16)
+#   manage.sh stop creates .manage_pids/prod.stop; _run() polls for it and
+#   triggers the SAME shutdown as the first Ctrl+C (serve() returns, the
+#   finally: block stops WebDAV/SFTP/FTP/SMB and the Version Engine).
+#   Windows has no way to deliver a catchable signal to a detached,
+#   console-less process (taskkill without /F cannot reach it), so a file
+#   is the one mechanism that works on every platform. On POSIX a plain
+#   SIGTERM is handled too (see _run()). A stale file from a crashed run is
+#   removed here so it cannot shut the new server down immediately.
+# ---------------------------------------------------------------------------
+_STOP_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".manage_pids", "prod.stop"
+)
+
+
+def _clear_stop_file() -> None:
+    try:
+        os.remove(_STOP_FILE)
+    except OSError:
+        # No stop file present (the normal case).
+        pass
+
+
+_clear_stop_file()
+
+
+def _exit_if_threads_linger(grace: float = 3.0) -> None:
+    """Called after asyncio.run() has returned and the event loop (with its
+    executor threads) is gone. A non-daemon thread still alive here would
+    keep the interpreter from exiting, which is the "server did not stop"
+    symptom: log which ones and exit anyway after a short grace period."""
+    import threading
+    import time
+
+    deadline = time.time() + grace
+
+    def _lingering():
+        return [
+            t
+            for t in threading.enumerate()
+            if t is not threading.main_thread() and t.is_alive() and not t.daemon
+        ]
+
+    for t in _lingering():
+        t.join(timeout=max(0.1, deadline - time.time()))
+    left = _lingering()
+    if left:
+        print(
+            "⚡ Non-daemon thread(s) still alive after shutdown: "
+            + ", ".join(t.name for t in left)
+            + " — exiting anyway.",
+            flush=True,
+        )
+        logging.shutdown()
+        os._exit(0)
+
+
 # ensure_dirs() is called inside app.py before anything else loads.
 from app import app
 
@@ -329,7 +387,7 @@ async def _run():
     print(f"🌐 Server running on https://{LOCAL_IP}:{PORT}")
     if _BG:
         print("🔒 Background service mode (managed by manage.sh)")
-        print("   • Ctrl+C disabled — use './manage.sh stop' to stop")
+        print("   • Ctrl+C disabled — use './manage.sh stop' (graceful, then forced)")
     print("🔧 Configuration:")
     print("   • HTTP/1.1 + HTTP/2 + HTTP/3 (QUIC)  |  Upload size limit: NONE")
     print(
@@ -370,6 +428,33 @@ async def _run():
 
     # ── Graceful shutdown wiring ─────────────────────────────────────────────
     shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def _request_shutdown(reason: str) -> None:
+        if not shutdown_event.is_set():
+            print(f"\n🛑 {reason} — shutting down…", flush=True)
+            shutdown_event.set()
+
+    # POSIX: a plain `kill <pid>` (SIGTERM) is a graceful stop as well.
+    # Windows' asyncio loop has no add_signal_handler, and TerminateProcess
+    # cannot be caught at all - the stop file below covers that case.
+    try:
+        loop.add_signal_handler(
+            signal.SIGTERM, lambda: _request_shutdown("SIGTERM received")
+        )
+    except (NotImplementedError, AttributeError, ValueError, RuntimeError):
+        # Windows / non-main thread: no SIGTERM handler available.
+        pass
+
+    async def _stop_file_watcher():
+        while not shutdown_event.is_set():
+            if os.path.exists(_STOP_FILE):
+                _clear_stop_file()  # manage.sh sees the file vanish = acknowledged
+                _request_shutdown("Stop requested by manage.sh")
+                return
+            await asyncio.sleep(0.5)
+
+    stop_task = asyncio.create_task(_stop_file_watcher())
 
     if not _BG:
         _stop_count = 0
@@ -410,7 +495,6 @@ async def _run():
                     pass
                 os._exit(0)
 
-        loop = asyncio.get_running_loop()
         try:
             loop.add_signal_handler(signal.SIGINT, _sigint_handler)
         except NotImplementedError:
@@ -439,9 +523,10 @@ async def _run():
         await serve(
             app,
             hyper_cfg,
-            shutdown_trigger=_shutdown_trigger if not _BG else None,
+            shutdown_trigger=_shutdown_trigger,
         )
     finally:
+        stop_task.cancel()
         if renew_task:
             renew_task.cancel()
             try:
@@ -471,6 +556,7 @@ async def _run():
 if __name__ == "__main__":
     try:
         asyncio.run(_run())
+        _exit_if_threads_linger()
     except KeyboardInterrupt:
         # Only reachable in _BG mode (SIGINT is SIG_IGN'd there anyway) or
         # if the signal fires before add_signal_handler runs — asyncio.run's

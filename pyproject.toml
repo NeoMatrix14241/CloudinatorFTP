@@ -1,0 +1,23 @@
+# Tool configuration only (no [project] / [build-system]: CloudinatorFTP is not an installable package).
+# pytest reads [tool.pytest.ini_options] (works with pytest 7, 8 and 9). Do NOT also keep a
+# pytest.ini / tox.ini / setup.cfg with a [pytest] section: pytest would use that one instead.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+# The repository root on sys.path: only side-effect-free leaf modules (today: paths) may be
+# imported in-process from the real tree, see tests/conftest.py.
+pythonpath = ["."]
+# tests/ has no __init__.py, so importlib mode keeps same-named test files in different layers apart.
+addopts = "-ra --import-mode=importlib"
+# pytest-timeout (requirements-dev.txt): a hung test is killed after this many seconds.
+timeout = 120
+markers = [
+    "application: black-box tests against a scratch server started as a subprocess",
+    "integration: tests multiple real application components",
+    "protocol: starts FTP, SFTP or WebDAV against an isolated service",
+    "property: property-based or generated-input tests",
+    "reliability: concurrency, fault-injection and recovery tests",
+    "performance: scale and performance tests",
+    "browser: needs Playwright and Chromium",
+]

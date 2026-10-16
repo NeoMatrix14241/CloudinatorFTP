@@ -1037,6 +1037,13 @@ def _run_standalone():
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
+    # Orphan guard: if the main server process dies without stopping this
+    # one (taskkill /F, SIGKILL, crash, os._exit), stop WebDAV and exit
+    # instead of lingering on the port. No-op when started by hand.
+    from helpers import parent_watch
+
+    parent_watch.start(stop, label="webdav", grace=10)
+
     # The actual Hypercorn server runs in the thread kept in _webdav_state["thread"] (a daemon thread
     # started by start()) — just block the main thread here until told to
     # stop, so the process (and its daemon thread) stays alive.
