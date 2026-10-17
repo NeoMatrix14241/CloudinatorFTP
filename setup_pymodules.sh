@@ -141,19 +141,21 @@ regex_escape() {
 # or written by an editor that omits the last one) a newline is added FIRST. A plain
 # `echo "$line" >>file` glued the new package onto the last line ("pyOpenSSL<27pyflakes<5")
 # whenever a package was missing from requirements.txt. A file that already uses CRLF (git on
-# Windows) keeps CRLF for the new line. CRLF is detected from the first line with head/case, NOT
-# with grep: grep in Git Bash on Windows hides the CR characters. tests/unit/test_setup_pymodules.py
-# covers this function.
+# Windows) keeps CRLF for the new line.
+# Under Git Bash on Windows grep, `head` and $(...) can all hide the CR characters, so CRLF is
+# detected from a HEX DUMP of the first bytes (od prints plain ASCII) and the line ending is
+# written with printf escapes, never through a shell variable that holds a CR.
+# tests/unit/test_setup_pymodules.py covers this function.
 append_req_line() {
-	local file="$1" line="$2" eol=$'\n' first
+	local file="$1" line="$2" crlf=0 hex
 	if [ -s "$file" ]; then
-		first="$(head -n 1 "$file")"
-		case "$first" in *$'\r') eol=$'\r\n' ;; esac
+		hex=" $(od -An -v -tx1 -N 4096 "$file" | tr -d '\n')"
+		case "$hex" in *" 0d 0a"*) crlf=1 ;; esac
 		if [ -n "$(tail -c1 "$file")" ]; then
-			printf '%s' "$eol" >>"$file"
+			if [ "$crlf" -eq 1 ]; then printf '\r\n' >>"$file"; else printf '\n' >>"$file"; fi
 		fi
 	fi
-	printf '%s%s' "$line" "$eol" >>"$file"
+	if [ "$crlf" -eq 1 ]; then printf '%s\r\n' "$line" >>"$file"; else printf '%s\n' "$line" >>"$file"; fi
 }
 
 # `pkg` is Termux's own wrapper -- it doesn't exist on Windows/regular Linux

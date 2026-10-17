@@ -92,6 +92,16 @@ def test_two_appends_stay_on_separate_lines(bash_append, tmp_path):
     assert out.splitlines() == [b"a<1", b"pyflakes<5", b"b<2"]
 
 
+def test_function_does_not_read_or_hold_a_cr_in_the_shell():
+    # Under Git Bash on Windows grep, head and $(...) can hide CR characters (seen on the owner's
+    # machine in 5.01 and 5.04), so the function must not detect CRLF through them or keep a CR
+    # in a shell variable: it uses an od hex dump and printf escapes instead.
+    func = _function_text()
+    for bad in ("grep", "head", "$'\\r'", "$'\\r\\n'"):
+        assert bad not in func, bad
+    assert "od -An" in func
+
+
 def test_script_appends_only_through_the_function():
     text = SCRIPT.read_text(encoding="utf-8")
     assert 'append_req_line "$REQ"' in text
