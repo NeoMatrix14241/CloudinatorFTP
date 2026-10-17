@@ -16,14 +16,14 @@
     <meta http-equiv="Expires" content="0">
 
     <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}"
-        integrity="sha384-5xIjiXmIqBXreuPUUtpnwCKFRm0p7kMWRihzZymGZltbTKgyd/X8uGJBfpfdBsvw" />
+        integrity="sha384-qrALq7+6jBOZIQsNnT6xGkMDru64qD6uTlDra39xrt2SoXl4pO3FX6Roz/RpR/BS" />
     <link href="{{ url_for('static', filename='css/index.css') }}" rel="stylesheet"
-        integrity="sha384-oMe36CmzCPTOFpSsJsDXEvgrm8Q2xXqA1/dhedIhdnUwDZ7tPv50twPDjsTc6QRd" />
+        integrity="sha384-P4rHy6eQZpXfVpbJQWTw88yvyLg1TrQDijFQYtf23nFsUIhoA+P/1RmvxPXVzgYE" />
     <!-- @videojs/html web-component player — served locally, no CDN required -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/video.css') }}"
-        integrity="sha384-+/JVmfKbUsq+XkvsCq1qRmAfIRby5qbGmMtnMZ9P/LPgwaT5v72mWgoPaJ7b6W8H" />
+        integrity="sha384-CiGakk/cx+3sR1VHuG1dV8FsP3G43jlP9O9nfAg5kFDgIMp98HcZ9O2mabkQjm5n" />
     <script type="module" src="{{ url_for('static', filename='js/video.js') }}"
-        integrity="sha384-FJ/fyqeaOgG0O2BqU6yZsL34bSa3h5g+gXTFhbLAkyQAnNjPhAQ7vcM7/9V4Y+Jx"></script>
+        integrity="sha384-t+CUKM+ijSz2Mkn1zdCMOvgq5/jOE8KSc45HvY2BtyBBuIDljK+C3gkVeLuOzFo0"></script>
     <!-- PDF.js — local, official viewer UI. Merged inline (no iframe) so the
          CSP directive frame-src 'none' is never triggered. viewer.css and
          viewer.mjs are only meaningful once #pdfjsViewerRoot is shown; they're
@@ -32,13 +32,13 @@
     <link rel="resource" type="application/l10n" href="{{ url_for('static', filename='js/locale/locale.json') }}"
         integrity="sha384-jDas7Io0At+AF+HBzyVXUl9kbrp+pKIBUFCZVWzrwlur5bFQZ4/mY8kvolZMDoXL" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/viewer.css') }}"
-        integrity="sha384-0YnXPchE9ShwVSq4Vh8PX6jBreQob/nV9ysIHttXBUx/nBW8WZfhNNRWQ78o6a65" />
+        integrity="sha384-IBK+TiouARHiJA9DiNhno1BRnLMatvmFNt86c/Pl9pFZB9YSC348F/pKtIDURu15" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/pdfjs-viewer-overlay.css') }}"
-        integrity="sha384-5+R4kxSC6/vgjIYwAuOCHLkwqRNVnUjADsQYtt9pIXbCmeY5SXU7Y8kkTnaem6qp" />
+        integrity="sha384-9NZSy+DEtGtt2nIZD1ah3twoS38XHlODv3tELjz1g7vQ3ByZFNsPA3p6XCBBISKS" />
     <script type="module" src="{{ url_for('static', filename='js/pdfjs-worker-init.mjs') }}"
-        integrity="sha384-cT63iCaJ7imUoJ7NbUFSnSvmlSSmgBK8UqFLB6GDpbhCZCkuiC8xMzQczQQrK8pL"></script>
+        integrity="sha384-1b5Usu9Pv8ZQon4Xi6d9TA2O5aAPFGTp4CY9p/Zt4T9cfdTTeBpW9TbsE/mNYHTy"></script>
     <script src="{{ url_for('static', filename='js/viewer.mjs') }}" type="module"
-        integrity="sha384-ay8+pHzr1XHNe3wLy2c5SlHpeIBOUETPUDF0V6mowyIUTExcEbOOCjDaTNYynrS9"></script>
+        integrity="sha384-2T13ucA7lv1FsCTEZmWI6IBbONXPR1IAN6saW21qRiNvOsQaUCPlUbTRDQybiboN"></script>
     <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp"
         integrity="sha384-mTiIzUOmh2SfP6u6yyTJHcQnVqctGnma9JMZGwuIrFkKfjVtO7Ok8CMTjA8szFUp">
 </head>
@@ -1993,12 +1993,12 @@
 
     <!-- External JavaScript files -->
     <script src="{{ url_for('static', filename='js/index.js') }}"
-        integrity="sha384-Q+O3buF+pjkmG9BjE2DGeCgumTs/X2TAiKz5QHeobuwidaX9rrArN9nfQyG/PmPK"></script>
+        integrity="sha384-2/A8HSSfCFYfR+xEoJ0Aay/dY61uIBC+f3veI81mGOK4NCb0IHuRMLN8sckirCZ1"></script>
     <audio id="bgMusic" autoplay loop preload="auto">
         <source src="{{ url_for('static', filename='audio/bg_mus.opus') }}" type="audio/ogg">
     </audio>
     <script src="{{ url_for('static', filename='js/bg_audio.js') }}"
-        integrity="sha384-fnKFD46RxXXr8Wv2S8hVHI/auoEbJUAJ7ZSarLpvgN1DYKgX3stzxTsCpsOBM6GS" defer></script>
+        integrity="sha384-hm1jtKk9iRd32XFDgQLBrsh0torUKWUnGtTfdwWrLrk2VUnH56WbkhuaL90f1g7i" defer></script>
 </body>
 
 </html>
