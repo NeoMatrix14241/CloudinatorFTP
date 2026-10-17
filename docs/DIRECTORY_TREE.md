@@ -19,8 +19,7 @@ CloudinatorFTP
 │   ├── SETUP_TUNNEL_ADVANCED.md
 │   ├── SMB_PROTOCOL_DEPLOYMENT.md
 │   ├── USER_GUIDE.md
-│   ├── VS-Code-Extensions.txt
-│   ├── VS-Code-Settings.json
+│   ├── VSCODE_SETUP.md
 │   └── WINDOWS_DEPLOYMENT.md
 ├── helpers
 │   ├── __init__.py

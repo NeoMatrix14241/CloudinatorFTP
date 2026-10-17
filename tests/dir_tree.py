@@ -41,7 +41,7 @@ FILE_COMMENTS = {
 }
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-OUTPUT_FILE = SCRIPT_DIR.parent / "docs" / "directory_tree.txt"
+OUTPUT_FILE = SCRIPT_DIR.parent / "docs" / "DIRECTORY_TREE.md"
 
 
 def collect_entries(base_path: Path):
@@ -108,7 +108,7 @@ if __name__ == "__main__":
     # Print to terminal.
     print(tree_text, end="")
 
-    # Save to docs/directory_tree.txt, creating docs if necessary.
+    # Save to docs/DIRECTORY_TREE.md, creating docs if necessary.
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_FILE.write_text(tree_text, encoding="utf-8")
 
