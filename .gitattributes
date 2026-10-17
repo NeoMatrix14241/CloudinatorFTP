@@ -1,1 +1,33 @@
-*.sh text eol=lf
+# Normalize text files to LF in the repository so CI and all platforms compute identical bytes.
+# General rule: treat files as text where reasonable and store LF in the repo.
+* text=auto eol=lf
+
+# Explicit text file types used by this project (force LF)
+*.py    text eol=lf
+*.sh    text eol=lf
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.ftl   text eol=lf
+
+# Mark common web/binary files as binary to avoid accidental normalization
+*.webp  binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.wasm  binary
+*.pfb   binary
+*.bcmap binary
+
+# Optional: keep manifest/lock files as text with LF
+package-lock.json text eol=lf
+yarn.lock       text eol=lf
+GITATTR
