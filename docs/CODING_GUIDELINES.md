@@ -403,7 +403,7 @@ The project is security-conscious about browser policy. The inline style hash an
 
 ### 15.2 SRI validation
 
-The project includes a validator for static asset integrity checks. See [../tools/sri_validator.py](../tools/sri_validator.py) and the manage.sh entry for validate-sri.
+The project includes a validator for static asset integrity checks. See [../tools/sri_validator.py](../tools/sri_validator.py) and the manage.sh entry for validate-sri. An SRI hash is computed over the raw bytes of the file, so the repository is LF everywhere (see 19.1); `python tests/qa.py ci` runs the check on GitHub, and a stale hash fails that run. After editing anything under `static/` or `templates/` run `./manage.sh validate-sri --fix` and commit the templates together with the asset.
 
 ### 15.3 Security.txt and robots
 
@@ -499,6 +499,16 @@ When editing this project, keep these conventions in mind:
 5. Prefer filesystem-safe operations and make sure cache/index reconciliation is consistent with the live filesystem.
 6. Distinguish between app runtime modules and helper leaf modules.
 7. Preserve the project’s design of one shared app object and one central config source.
+8. All files are LF (see 19.1). Python is Black-formatted and shell scripts are shfmt-formatted; check with `black --check <file>` and `shfmt -d <file>` before handing a file over.
+9. Commit messages describe the change; avoid generic ones such as "Renormalize with LF line endings".
+
+### 19.1 Line endings, formatters and editor setup
+
+- **LF everywhere.** `.gitattributes` has `* text=auto eol=lf`, `eol=lf` for `*.py *.sh *.js *.mjs *.css *.html *.json *.md *.txt *.ftl`, and `binary` for images, fonts, `*.wasm`, `*.pfb`, `*.bcmap`. It exists because SRI hashes are byte hashes: a CRLF working tree on Windows and an LF checkout on the GitHub runner produced different hashes and the `behavioral tests` job failed with 22 stale hashes (CLAUDE.md part 56).
+- **Fixing a stray CRLF file:** `sed -i 's/\r$//' <file>`, then `git add --renormalize .`; if it was a template asset, `./manage.sh validate-sri --fix` afterwards.
+- **Editor (VS Code, owner):** user setting `"files.eol": "\n"`; default terminal Git Bash; `[python]` formatter `ms-python.black-formatter`, `[shellscript]` formatter `mkhl.shfmt`; Alt+Shift+F formats only the file types an installed extension supports. Extensions: Better Jinja, Black Formatter, HTML CSS Support, Pylance, Python, Python Debugger, Python Environments, Python Indent, shfmt, YAML.
+- **Formatter rules for contributors (including Claude):** Black with its defaults (88 columns, no `[tool.black]` section) and shfmt with its defaults (tab indentation). The existing project files are clean under both.
+- **Shell scripts under Git Bash:** never rely on `grep`, `head`, `sed` or `$(...)` to see a `\r`; use an `od` hex dump or bash `printf` escapes (see `append_req_line()` in `setup_pymodules.sh`).
 
 ## 20. Typical development flow
 
@@ -632,6 +642,7 @@ Run checks from the project root. These static checks do not import or start the
 | File monitor/index behavior | Run the narrow temporary-tree test for the changed behavior, then `python tests/smoke.py` |
 | Anything with pytest coverage (`paths.py`, test harness, server boot) | `python tests/qa.py quick`; one layer: `python tests/qa.py layer unit` / `layer application` (needs `requirements-dev.txt`) |
 | `setup_pymodules.sh` | `bash -n setup_pymodules.sh`; `python tests/qa.py layer unit` (covers `append_req_line()`) |
+| `manage.sh` | `bash -n manage.sh`; `shfmt -d manage.sh`; `python tests/smoke.py` (10a/10b); `python tests/qa.py layer unit` (menu-numbering tests); update the guide and `LAST_ENTRY` if the menu changed |
 | New or changed test, `tests/conftest.py` or `tests/qa.py` | `python tests/check.py tests`; `python tests/smoke.py`; `python tests/qa.py layer unit`; never import `app` / `core` / `config` in a test (see 18) |
 
 `tests/smoke.py` is read-only and checks the whole project's syntax, import/layering constraints, route registration, endpoint references, hooks, and manage.sh references. `tests/check.py` selects a smaller group/module and supports `--config`; its `--import` option really imports modules and is refused for app modules with startup side effects unless forced. Do not use `--force` on a live server.
@@ -745,11 +756,11 @@ Tools are direct-entry utilities, not application services. Avoid importing them
 | [../tests/check.py](../tests/check.py) | Parameterized static source checks for syntax, pyflakes, project imports, import-name resolution, helper layering; optional guarded subprocess imports and JSON config checks. | AST/import heuristics are not full runtime coverage; `--import` executes modules and may have side effects when forced. |
 | [../tests/codeql_sarif_parser.py](../tests/codeql_sarif_parser.py) | Converts CodeQL SARIF files (loose, zipped artifacts or folders) to per-language and combined CSV files; skips vendored files by default; optional `--fail-on` exit code. Standard library only. | Used by `codeql.yml` and by hand; keep `VENDORED` in step with `.github/codeql/codeql-config.yml`. |
 | [../tests/conftest.py](../tests/conftest.py) | Shared pytest fixtures: `build_scratch()` copies the source tree into a temp folder and writes scratch `storage_config.json` / `server_config.json`; `paths_outside()` asks the copy's own `paths.py` where it would keep data and lists anything outside the scratch folder; `scratch_server` starts `dev_server.py` there on an ephemeral port and stops it through `.manage_pids/dev.stop`; autouse guard against in-process imports of application modules. | It never runs the application in-process and does not start protocol servers or the Version Engine. |
-| [../tests/dir_tree.py](../tests/dir_tree.py) | Walks a filtered directory tree (`collect_entries()`, `build_tree()`), prints it and saves it to `docs/directory_tree.txt`. | It is a diagnostic utility, not a product behavior test. It rewrites `docs/directory_tree.txt` (creating `docs/` if needed) and skips that file itself; regenerate and commit it after files are added, moved or removed. `EXCLUDE_DIR_WALK` matches folder names only. |
+| [../tests/dir_tree.py](../tests/dir_tree.py) | Walks a filtered directory tree (`collect_entries()`, `build_tree()`), prints it and saves it to `docs/DIRECTORY_TREE.md`. | It is a diagnostic utility, not a product behavior test. It rewrites `docs/directory_tree.txt` (creating `docs/` if needed) and skips that file itself; regenerate and commit it after files are added, moved or removed. `EXCLUDE_DIR_WALK` matches folder names only. |
 | [../tests/qa.py](../tests/qa.py) | The one QA runner for developers, `manage.sh` (planned) and GitHub: `static` (smoke, check, SRI, `node --check`), `tests` (pytest on every existing layer folder), `quick`, `layer <name>`, `ci` (JUnit XML to `./artifacts`); prints PASS/FAIL/SKIP per step, exit 1 on any failure (including a `layout` FAIL when a `test_*.py` file sits directly in `tests/` instead of a layer folder), never passes `--force`; `python tests/qa.py --version` prints which copy you run; the "pip install" hint appears only when pytest cannot be imported. | A SKIP (missing tool or folder) is not a pass of that check. |
 | [../tests/smoke.py](../tests/smoke.py) | Read-only project safety checks: syntax, optional pyflakes, route/endpoints, hooks, import cycles/layering, route-module registration, tool launch paths, shell syntax, and route snapshot changes. | Does not import/start the app, issue HTTP requests, or test filesystem/runtime behavior. `--save` intentionally updates the route snapshot. |
 | [../tests/smoke_routes.json](../tests/smoke_routes.json) | Baseline route signature consumed by `smoke.py`. | Update only when route additions/removals are intended and reviewed. |
-| [../tests/unit/](../tests/unit/) | `test_paths.py` (every `paths.py` getter, setter, reset, merge-safe save, corrupt config), `test_scratch_copy.py` (the harness isolates everything and the guard catches outside paths), `test_qa_runner.py` (plan selection, exit codes, skip handling, the stray-file `layout` check), `test_setup_pymodules.py` (the `append_req_line()` function of `setup_pymodules.sh`, run in bash). | Not application behavior beyond `paths.py`. |
+| [../tests/unit/](../tests/unit/) | `test_paths.py` (every `paths.py` getter, setter, reset, merge-safe save, corrupt config), `test_scratch_copy.py` (the harness isolates everything and the guard catches outside paths), `test_qa_runner.py` (plan selection, exit codes, skip handling, the stray-file `layout` check), `test_setup_pymodules.py` (the `append_req_line()` function of `setup_pymodules.sh`, run in bash), `test_manage_qa.py` (the Quality Assurance section of `manage.sh`: menu numbers 1-25 agree between listing, dispatch and help; the `qa` modes; exit codes). | Not application behavior beyond `paths.py`. |
 | [../tests/application/](../tests/application/) | `test_boot.py`: starts the real app from the scratch copy and checks `/login`, `/robots.txt`, anonymous `/`, that data folders were created only in the scratch tree and that the real `storage_config.json` / `server_config.json` are untouched. | Boots only; no login, upload, share or file-operation behavior yet. |
 
 ### 25.6 Frontend source and stylesheets
@@ -784,8 +795,9 @@ Template IDs, `data-*` properties, endpoint names and asset order are executable
 
 | File | Purpose |
 |---|---|
-| [../manage.sh](../manage.sh) | Operator CLI/menu for server start/stop/restart/status/logs and wrapped utilities; also handles PID/log management, WebDAV restart, security.txt and SRI operations. `stop` is two-stage (graceful stop file / SIGTERM, then process-tree kill) and always sweeps WebDAV and Version Engine leftovers. |
+| [../manage.sh](../manage.sh) | Operator CLI/menu for server start/stop/restart/status/logs and wrapped utilities; also handles PID/log management, WebDAV restart, security.txt and SRI operations, and the Quality Assurance section (menu 21-25 and the `qa` command, which only call `tests/qa.py`; the menu numbering is enforced by `tests/unit/test_manage_qa.py`). `stop` is two-stage (graceful stop file / SIGTERM, then process-tree kill) and always sweeps WebDAV and Version Engine leftovers. |
 | [../setup_pymodules.sh](../setup_pymodules.sh) | Generates `requirements.txt`/`constraints.txt`, resolves package constraints, handles Termux system packages and offers installation. New package lines are appended through `append_req_line()` (adds a missing final newline first; keeps CRLF files CRLF, detected from an `od` hex dump and written with `printf` escapes; never `grep` / `head` / `$(...)` for a CR, because they hide it in Git Bash); `tests/unit/test_setup_pymodules.py` covers it. |
+| [../.gitattributes](../.gitattributes) | Line-ending policy: LF for every text type, `binary` for images/fonts/wasm. Do not remove entries: SRI hashes depend on it. |
 | [../termux_setup.sh](../termux_setup.sh) | Installs Termux native/Python prerequisites with retry logic and requests shared-storage permission. |
 | [../requirements.txt](../requirements.txt) | Declares Python dependency ranges used by setup. Update alongside imports and compatibility-sensitive protocol libraries. |
 | [../constraints.txt](../constraints.txt) | Generated/platform package constraints, particularly Termux-managed packages; regenerate through the setup workflow rather than hand-editing without reason. |

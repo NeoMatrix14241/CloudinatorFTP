@@ -1,10 +1,10 @@
 # 🖥️ manage.sh — Server Management Script Guide
 
-**Last Updated**: 2026-10-02
+**Last Updated**: 2026-10-17
 **Works on**: Windows (Git Bash), Linux, and Android (Termux)
 **Checked against**: `manage.sh` itself (commands, menu numbers, and behaviour below are read from the script, not from memory)
 
-`manage.sh` runs the Cloudinator server in the **background** so your terminal stays free, and gives you one entry point for the maintenance utilities (users, config, SMB, share links, version engine, SRI hash checking, and so on).
+`manage.sh` runs the Cloudinator server in the **background** so your terminal stays free, and gives you one entry point for the maintenance utilities (users, config, SMB, share links, version engine, SRI hash checking, the automated quality checks, and so on).
 
 ## 📋 Table of Contents
 
@@ -13,13 +13,14 @@
 3. [Server Commands](#server-commands)
 4. [Log Commands](#log-commands)
 5. [Utility Commands](#utility-commands)
-6. [security.txt Command](#securitytxt-command)
-7. [Interactive Menu](#interactive-menu)
-8. [Files and Folders It Uses](#files-and-folders-it-uses)
-9. [How Background Mode and Ctrl-C Work](#how-background-mode-and-ctrl-c-work)
-10. [WebDAV Is a Separate Process](#webdav-is-a-separate-process)
-11. [Environment Variable: PYTHON](#environment-variable-python)
-12. [Troubleshooting](#troubleshooting)
+6. [Quality Assurance Commands](#quality-assurance-commands)
+7. [security.txt Command](#securitytxt-command)
+8. [Interactive Menu](#interactive-menu)
+9. [Files and Folders It Uses](#files-and-folders-it-uses)
+10. [How Background Mode and Ctrl-C Work](#how-background-mode-and-ctrl-c-work)
+11. [WebDAV Is a Separate Process](#webdav-is-a-separate-process)
+12. [Environment Variable: PYTHON](#environment-variable-python)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -122,7 +123,6 @@ Utilities run in the **foreground** and are safe to use while the server is up. 
 | `kick-sessions` | `kick_sessions.py` | Force logout of every active session (server must be running) |
 | `config` | `config.py` | Interactive configuration (see `CONFIG_PY_REFERENCE.md`) |
 | `manage-users` | `manage_users.py` | Manage user credentials |
-| `debug-pw` | `debug_passwords.py` | Debug passwords |
 | `reset-db` | `reset_db.py` | Reset the database |
 | `setup-storage` | `setup_storage.py` | Configure storage |
 | `update-modules [-y]` | `setup_pymodules.sh` | Update Python packages (alias: `setup-modules`) |
@@ -195,6 +195,34 @@ It runs `setup_pymodules.sh`, which rewrites `requirements.txt` and `constraints
 
 ---
 
+## Quality Assurance Commands
+
+The `qa` commands run the project's automated checks. Every one of them is a single call to `tests/qa.py`, the same runner the GitHub **Tests** workflow uses, so a green run here means the same commands passed that GitHub runs. They run in the **foreground** and are safe while a server is up: the tests copy the project into a temporary folder and start their own server there on a free port, so they never touch your real `db/`, `cache/`, `versions/` or storage folders.
+
+| Command | What it runs |
+|---|---|
+| `qa` or `qa quick` | `smoke.py`, `check.py`, the SRI check, `node --check` on the first-party JavaScript (skipped if Node.js is not installed) and every pytest layer |
+| `qa static` | Only the static checks above (no pytest) |
+| `qa tests` | Only pytest, on every `tests/<layer>` folder that exists |
+| `qa layer <name>` | One layer: `unit`, `integration`, `application`, `protocols`, `property`, `reliability`, `performance` or `frontend` |
+| `qa ci` | Same as `quick`, and writes JUnit XML into `./artifacts` (what GitHub runs) |
+| `qa --version` | Prints which copy of `tests/qa.py` you have |
+
+Extra arguments go straight to `qa.py`: `--skip-packages` (do not warn about packages that are not installed), `--out DIR` (write JUnit XML into `DIR`) and `--fail-fast` (stop at the first failing step).
+
+```bash
+./manage.sh qa                    # everything
+./manage.sh qa layer unit         # one layer
+./manage.sh qa quick || exit 1    # usable from a script or git hook: exit code 1 means a step failed
+```
+
+- **One-time setup:** the test packages are not in `requirements.txt`. Run `python -m pip install -r requirements-dev.txt` once.
+- **SKIP is not PASS:** a step that cannot run (Node.js missing, a layer folder that does not exist yet) is reported as `SKIP` with the reason and does not fail the run. A `FAIL` does.
+- **Misplaced test files:** a `test_*.py` file directly inside `tests/` runs in no layer, so `qa` reports it as a `FAIL` and tells you to move it into `tests/unit/` or `tests/application/`.
+- **Exit codes:** `0` all steps passed or were skipped, `1` at least one step failed, `2` unknown mode or layer, `130` Ctrl-C.
+
+---
+
 ## security.txt Command
 
 Edits `static/.well-known/security.txt` (RFC 9116).
@@ -226,19 +254,33 @@ Only the flags you pass are changed. Existing fields and any extra custom fields
 
 Shows whether a server is running, then a numbered list. Every number is the same as a shell command.
 
-| # | Command | # | Command |
-|---|---|---|---|
-| 1 | `start server` | 11 | `setup-smb` |
-| 2 | `start dev_server` | 12 | `kick-sessions` |
-| 3 | `stop` | 13 | `manage-users` |
-| 4 | `restart` | 14 | `debug-pw` |
-| 5 | `status` | 15 | `reset-db` |
-| 6 | `logs` (asks which server and whether to follow) | 16 | `setup-storage` |
-| 7 | `clean-logs` | 17 | `update-modules` |
-| 8 | `restart-webdav` | 18 | `revoke-shares` |
-| 9 | `version-manage` | 19 | `security-txt` |
-| 10 | `config` | 20 | `termux-setup` (shown dimmed when not on Termux) |
-| | | 21 | `validate-sri` (checks, then asks y/N before fixing) |
+| # | Command | Group |
+|---|---|---|
+| 1 | `start server` | Servers |
+| 2 | `start dev_server` | Servers |
+| 3 | `stop` | Servers |
+| 4 | `restart` | Servers |
+| 5 | `status` | Servers |
+| 6 | `logs` (asks which server and whether to follow) | Servers |
+| 7 | `clean-logs` | Servers |
+| 8 | `restart-webdav` | Servers |
+| 9 | `version-manage` | Utilities |
+| 10 | `config` | Utilities |
+| 11 | `setup-smb` | Utilities |
+| 12 | `kick-sessions` | Utilities |
+| 13 | `manage-users` | Utilities |
+| 14 | `reset-db` | Utilities |
+| 15 | `setup-storage` | Utilities |
+| 16 | `update-modules` | Utilities |
+| 17 | `revoke-shares` | Utilities |
+| 18 | `security-txt` | Utilities |
+| 19 | `termux-setup` (shown dimmed when not on Termux) | Utilities |
+| 20 | `validate-sri` (checks, then asks y/N before fixing) | Utilities |
+| 21 | `qa quick` | Quality Assurance |
+| 22 | `qa static` | Quality Assurance |
+| 23 | `qa tests` | Quality Assurance |
+| 24 | `qa layer` (asks which layer, default unit) | Quality Assurance |
+| 25 | `qa ci` | Quality Assurance |
 
 Type `q` to quit. After each action it waits for Enter before redrawing.
 
@@ -255,6 +297,9 @@ Type `q` to quit. After each action it waits for Enter before redrawing.
 | `logs/prod_server_YYYY-MM-DD.log`, `logs/dev_server_YYYY-MM-DD.log` | One log per day per server type, written by the app's own logger. It rolls to a new file at midnight without a restart |
 | `static/.well-known/security.txt` | Edited by `security-txt` |
 | `templates/*.html`, `static/` | Read by `validate-sri`; the templates are rewritten only when you add `--fix` |
+| `tests/qa.py` | The runner every `qa` command calls |
+| `artifacts/` | JUnit XML written by `qa ci` (not committed; add it to `.gitignore`) |
+| a temporary folder (system temp) | The scratch copy of the project the tests run in; removed by pytest afterwards |
 
 Because background mode discards raw console output (see [Startup messages](#startup-messages-are-not-shown-in-background-mode)), the log files are where diagnostics live.
 
@@ -310,6 +355,10 @@ This applies to the servers and every utility.
 | `WebDAV did not come back within 10s` | The respawn failed. Read the server log for the actual error |
 | `Script not found` | A utility file is missing from the project folder |
 | A page loads but a script or stylesheet does nothing; console shows an integrity error | A stale SRI hash. Run `./manage.sh validate-sri --fix`, then reload (hard refresh) |
+| `qa exited with code 1` | At least one step failed. Read the `FAIL` lines in the summary at the end, then the output of that step above it |
+| `pytest is not installed` (from `qa`) | Run `python -m pip install -r requirements-dev.txt` |
+| `qa` says `SKIP: node is not installed` | Not an error. Install Node.js if you want the JavaScript syntax check |
+| `qa` reports a `layout` FAIL | A `test_*.py` file sits directly in `tests/`. Move it into `tests/unit/` or `tests/application/` |
 | `sri_validator exited with code 1` | `validate-sri` found a stale, missing or unresolvable hash. Read the report above it, then run with `--fix` |
 | `Permission denied` running `./manage.sh` | Run `chmod +x manage.sh`, or use `bash manage.sh <command>` |
 | `termux-setup` says Android-only | You are not on Termux. Follow the message for your platform |

@@ -1352,6 +1352,38 @@ _menu_validate_sri() {
 	fi
 }
 
+# ── cmd_qa ────────────────────────────────────────────────────────────────────
+# Quality Assurance: every `qa` command is ONE call to tests/qa.py, the same runner the
+# GitHub "Tests" workflow uses, so "green here" and "green on GitHub" mean the same commands
+# ran. Safe while a server is running: the pytest layers copy the project into a temp folder
+# and start their own server there on a free port; they never touch the real db/, cache/,
+# versions/ or storage folders and never import the real app. A failing step makes qa.py exit
+# 1, which run_utility reports and returns, so `./manage.sh qa quick || exit 1` works in a
+# hook or script. Modes: quick | static | tests | layer <name> | ci (+ --version / --help);
+# extra flags (--skip-packages, --out DIR, --fail-fast) go straight to qa.py.
+cmd_qa() {
+	local mode="${1:-quick}"
+	if (($# > 0)); then shift; fi
+	case "$mode" in
+	quick | static | tests | ci | layer | --version | --help | -h)
+		run_utility "tests/qa.py" "$mode" "$@"
+		;;
+	*)
+		error "Unknown qa mode: ${mode}  (use: quick | static | tests | layer <name> | ci)"
+		return 2
+		;;
+	esac
+}
+
+# Menu flavour of `qa layer` (menu #24): asks which layer, default unit. An unknown name is
+# reported by qa.py itself (exit code 2 with the list of valid layers).
+_menu_qa_layer() {
+	local layer=""
+	_ask layer "  Layer: unit / integration / application / protocols / property / reliability / performance / frontend [unit]: " || return 130
+	layer="${layer:-unit}"
+	cmd_qa layer "$layer"
+}
+
 # ── cmd_dashboard ─────────────────────────────────────────────────────────────
 cmd_dashboard() {
 	header "Cloudinator — Server Manager"
@@ -1403,6 +1435,7 @@ cmd_dashboard() {
 	echo ""
 	echo -e "  ${DIM}Run  ./manage.sh help  for all commands${NC}"
 	echo -e "  ${DIM}Run  ./manage.sh menu  for interactive mode${NC}"
+	echo -e "  ${DIM}Run  ./manage.sh qa quick  to run every automated check${NC}"
 	echo ""
 }
 
@@ -1492,7 +1525,7 @@ cmd_menu() {
 		echo "  16) setup_pymodules.sh  — Setup and Update Python packages"
 		echo "  17) revoke_sharing.py   — Share link management (links, passkeys, approvals)"
 		echo "  18) security.txt        — Update static/.well-known/security.txt"
-		# Always listed so the menu numbers match `./manage.sh help` (20 entries).
+		# Always listed so the menu numbers match `./manage.sh help` (25 entries).
 		# Off Termux, cmd_termux_setup just explains that it is Android-only.
 		if is_termux; then
 			echo "  19) termux_setup.sh     — Termux initial setup (Android only)"
@@ -1500,6 +1533,13 @@ cmd_menu() {
 			echo -e "  ${DIM}19) termux_setup.sh     — Termux initial setup (Android only — n/a on this system)${NC}"
 		fi
 		echo "  20) sri_validator.py    — Check SRI hashes in templates (offers to fix)"
+		echo ""
+		echo -e "  ${BOLD}Quality Assurance${NC}  ${DIM}(runs tests/qa.py; safe while a server runs)${NC}"
+		echo "  21) qa quick            — smoke + check + SRI + JS syntax + all automated tests"
+		echo "  22) qa static           — smoke + check + SRI + JS syntax only (no pytest)"
+		echo "  23) qa tests            — pytest on every layer folder (unit, application, ...)"
+		echo "  24) qa layer            — run ONE layer (asks which)"
+		echo "  25) qa ci               — quick + JUnit XML in ./artifacts (what GitHub runs)"
 		echo ""
 		echo "   q) Quit"
 		echo ""
@@ -1534,6 +1574,11 @@ cmd_menu() {
 		18) _menu_run cmd_security_txt ;;
 		19) _menu_run cmd_termux_setup ;;
 		20) _menu_run _menu_validate_sri ;;
+		21) _menu_run cmd_qa quick ;;
+		22) _menu_run cmd_qa static ;;
+		23) _menu_run cmd_qa tests ;;
+		24) _menu_run _menu_qa_layer ;;
+		25) _menu_run cmd_qa ci ;;
 		q | Q)
 			echo ""
 			success "Goodbye!"
@@ -1636,6 +1681,19 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
                           under static/, then reload each page once.
   termux-setup          bash termux_setup.sh  (Android/Termux only)
 
+${BOLD}QUALITY ASSURANCE COMMANDS${NC}  (foreground; safe to run while a server is up — the tests use a scratch copy)
+  Every qa command is one call to python tests/qa.py, the runner GitHub uses too. Extra
+  arguments go straight to it (--skip-packages, --out DIR, --fail-fast). Exit code 1 if any
+  step failed. Needs the test packages once: python -m pip install -r requirements-dev.txt
+  qa [quick]            smoke.py + check.py + SRI check + node --check on first-party JS
+                          (skipped if node is not installed) + every pytest layer folder
+  qa static             only the static checks (no pytest)
+  qa tests              only pytest, on every tests/<layer> folder that exists
+  qa layer <name>       one layer: unit | integration | application | protocols | property |
+                          reliability | performance | frontend
+  qa ci                 quick, with JUnit XML written to ./artifacts (what GitHub runs)
+  qa --version          which copy of tests/qa.py you have
+
 ${BOLD}OTHER${NC}
   dashboard             Status overview + quick commands (default with no args)
   menu                  Interactive menu
@@ -1649,7 +1707,9 @@ ${BOLD}MENU ↔ COMMAND MAP${NC}  (in ./manage.sh menu type the number; from the
   13  manage-users          14  reset-db             15  setup-storage
   16  update-modules        17  revoke-shares        18  security-txt
   19  termux-setup (Android/Termux only; shown dimmed elsewhere)
-  20  validate-sri         q  quit
+  20  validate-sri
+  21  qa quick             22  qa static             23  qa tests
+  24  qa layer (asks)      25  qa ci                 q  quit
 
 ${BOLD}EXAMPLES${NC}
   Servers
@@ -1701,6 +1761,15 @@ ${BOLD}EXAMPLES${NC}
     ./manage.sh security-txt show                # print the current security.txt
     ./manage.sh security-txt --contact you@example.com --expires 2030-09-03 --preferred-lang en,fil --canonical https://yourdomain.com/.well-known/security.txt
     ./manage.sh security-txt --expires-in-days 365     # only change Expires (1 year from now, UTC)
+  Quality Assurance
+    ./manage.sh qa                               # same as: qa quick
+    ./manage.sh qa quick                         # smoke + check + SRI + JS syntax + every pytest layer
+    ./manage.sh qa static                        # only the static checks (no pytest)
+    ./manage.sh qa tests                         # only pytest, every layer folder that exists
+    ./manage.sh qa layer unit                    # one layer (unit | integration | application | ...)
+    ./manage.sh qa ci                            # quick + JUnit XML in ./artifacts (what GitHub runs)
+    ./manage.sh qa quick --fail-fast             # stop at the first failing step
+    ./manage.sh qa --version                     # which tests/qa.py you have
   Other
     ./manage.sh menu                             # interactive mode
     ./manage.sh help                             # this text
@@ -1759,6 +1828,7 @@ main() {
 	security-txt) cmd_security_txt "$@" ;;
 	termux-setup) cmd_termux_setup ;;
 	validate-sri) cmd_validate_sri "$@" ;;
+	qa) cmd_qa "$@" ;;
 	menu) cmd_menu ;;
 	dashboard) cmd_dashboard ;;
 	help | --help | -h) cmd_help ;;
