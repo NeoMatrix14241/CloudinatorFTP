@@ -6,6 +6,7 @@ CloudinatorFTP
 │       ├── codeql.yml
 │       └── tests.yml
 ├── artifacts
+│   └── pytest.xml
 ├── docs
 │   ├── ANDROID_DEPLOYMENT.md
 │   ├── CLAUDE.md
@@ -19,6 +20,7 @@ CloudinatorFTP
 │   ├── SMB_PROTOCOL_DEPLOYMENT.md
 │   ├── USER_GUIDE.md
 │   ├── VS-Code-Extensions.txt
+│   ├── VS-Code-Settings.json
 │   └── WINDOWS_DEPLOYMENT.md
 ├── helpers
 │   ├── __init__.py
@@ -93,15 +95,20 @@ CloudinatorFTP
 │   ├── login.html
 │   └── shared.html
 ├── tests
+│   ├── application
+│   │   └── test_boot.py
+│   ├── unit
+│   │   ├── test_paths.py
+│   │   ├── test_qa_runner.py
+│   │   ├── test_scratch_copy.py
+│   │   └── test_setup_pymodules.py
 │   ├── check.py
 │   ├── codeql_sarif_parser.py
 │   ├── conftest.py
 │   ├── dir_tree.py
 │   ├── qa.py
 │   ├── smoke.py
-│   ├── smoke_routes.json
-│   ├── test_boot.py
-│   └── test_setup_pymodules.py
+│   └── smoke_routes.json
 ├── tools
 │   ├── kick_sessions.py
 │   ├── manage_users.py
