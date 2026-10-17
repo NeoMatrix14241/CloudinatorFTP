@@ -1,0 +1,10 @@
+Better Jinja - Samuel Colvin
+Black Formatter - Microsoft
+HTML CSS Support - ecmel
+Pylance - Microsoft
+Python - Microsoft
+Python Debugger - Microsoft
+Python Environments - Microsoft
+Python Indent - Kevin Rose
+shfmt - Martin Kühl
+YAML - Red Hat

@@ -1,0 +1,22 @@
+/* Loaded via <link> into the <video-skin> shadow root by
+   _injectMobileSpeedHide() in index.js. Moved out of an inline
+   `document.createElement('style')` injection so it satisfies
+   style-src-elem 'self' with no CSP hash to maintain. */
+
+@media (max-width: 600px) {
+
+    .media-button--playback-rate,
+    media-playback-rate-button {
+        display: none !important;
+    }
+}
+
+::cue {
+    background: transparent !important;
+    background-color: transparent !important;
+    text-shadow:
+        -1px -1px 0 #000, 1px -1px 0 #000,
+        -1px 1px 0 #000, 1px 1px 0 #000,
+        0 2px 8px rgba(0, 0, 0, 0.9);
+    color: #fff;
+}

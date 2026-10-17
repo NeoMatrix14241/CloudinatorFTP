@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Login - Cloudinator FTP</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}"
+        integrity="sha384-5xIjiXmIqBXreuPUUtpnwCKFRm0p7kMWRihzZymGZltbTKgyd/X8uGJBfpfdBsvw" />
+    <link href="{{ url_for('static', filename='css/login.css') }}" rel="stylesheet"
+        integrity="sha384-ylrQmDXNE8umgV0ssRQ7E4AvEbNETyW6QuUwKu2JPM7lh9U/LcVqO5XEePAeF30x" />
+    <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp"
+        integrity="sha384-mTiIzUOmh2SfP6u6yyTJHcQnVqctGnma9JMZGwuIrFkKfjVtO7Ok8CMTjA8szFUp" />
+</head>
+
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <h2><i class="fas fa-cloud-upload-alt"></i> The Cloudinator</h2>
+            <p class="subtitle">Not secure but it just works!</p>
+        </div>
+
+        <form method="post" id="loginForm">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <div class="input-wrapper">
+                    <i class="fas fa-user"></i>
+                    <input type="text" name="username" id="username" class="form-control"
+                        placeholder="Enter your username" required>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password</label>
+                <div class="input-wrapper">
+                    <i class="fas fa-lock"></i>
+                    <input type="password" name="password" id="password" class="form-control"
+                        placeholder="Enter your password" required>
+                </div>
+            </div>
+
+            <button type="submit" class="btn-login" id="loginBtn">
+                Sign In
+            </button>
+        </form>
+
+        {% with messages = get_flashed_messages() %}
+        {% if messages %}
+        <div class="flash-messages">
+            {% for msg in messages %}
+            <div class="flash-message" id="flashMsg">
+                <i class="fas fa-exclamation-triangle"></i>
+                <span id="flashText">{{ msg }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        <div class="footer-text">
+            <i class="fas fa-shield-alt"></i> Powered by The Automation Master
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/login.js') }}"
+        integrity="sha384-anAwuewjrQBgVjPwpRQICWlgF73fE/2rvlDoPVZRqc4+dQ28PhpPOIxI8IaCp26w"></script>
+    <audio id="bgMusic" autoplay loop preload="auto">
+        <source src="{{ url_for('static', filename='audio/bg_mus.opus') }}" type="audio/ogg">
+    </audio>
+    <script src="{{ url_for('static', filename='js/bg_audio.js') }}"
+        integrity="sha384-fnKFD46RxXXr8Wv2S8hVHI/auoEbJUAJ7ZSarLpvgN1DYKgX3stzxTsCpsOBM6GS" defer></script>
+</body>
+
+</html>

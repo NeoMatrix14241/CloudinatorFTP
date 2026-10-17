@@ -1,0 +1,6848 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    position: relative;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    min-height: 100vh;
+    color: #333;
+}
+
+body::before {
+    content: "";
+    /* Was position:absolute stretched via top/left/right/bottom:0 to match
+       <body>'s own (content-driven) height. On pages where the file table
+       grows tall - lots of items, or rows appended after the initial paint
+       by the virtual-scroll loader - that meant this layer's box only got
+       resized on the next full layout pass. Combined with dozens of other
+       backdrop-filter panels on this page (header, breadcrumb, buttons,
+       search box, the table card itself), the compositor would sometimes
+       never re-rasterize this large layer to the new, taller size: the
+       background then just stopped partway down the page and the plain
+       page canvas showed through beneath it (reported as "background color
+       doesn't work" further down the page).
+
+       Switched back to position:absolute, but height is no longer left to
+       implicit layout - index.js measures document.documentElement.scrollHeight
+       explicitly (ResizeObserver + MutationObserver, see the "Background
+       glow" block near the end of that file) and writes it into --doc-height
+       on every real content-size change. That's what the earlier fixed-size
+       approach was trying to avoid depending on: this way the resize is
+       driven by an explicit measurement instead of hoping the browser
+       notices and reflows this layer on its own. Height is intentionally
+       NOT 100% (that would depend on <body>'s own box, which is the same
+       implicit-layout dependency being avoided) or 100vh (that's exactly
+       the one-viewport limit this is trying to escape, needed so the
+       cursor-glow layer below covers the whole document instead of cutting
+       off after the first screen in full-page screenshots). */
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--doc-height, 100vh);
+    z-index: -1;
+    background-color: #1e3c72;
+}
+
+/* Cursor-follow glow + scroll lightening, layered on top of body::before.
+   Driven by --mx/--my/--scroll-light custom properties, updated every
+   frame from index.js (see the "Background glow" block near the end of
+   that file). Values are lerped in JS rather than relying on CSS
+   transitions on the custom properties themselves, so this degrades
+   gracefully in browsers without @property support. */
+body::after {
+    content: "";
+    /* Matches body::before - absolute + explicit --doc-height, not fixed,
+       so this layer spans the whole document rather than stopping after
+       one viewport (which is what made the glow vanish beyond the first
+       screen in full-page/scroll-stitched screenshots - those tools only
+       ever get pixels of a fixed layer for the single frame it was
+       captured in). --mx/--my are therefore document-relative pointer
+       coordinates now (clientX/clientY + scrollX/scrollY), not plain
+       viewport-relative ones - index.js adds the scroll offset itself and
+       recomputes it on scroll so the glow stays under the cursor's actual
+       document position instead of drifting with the page. */
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--doc-height, 100vh);
+    z-index: -1;
+    pointer-events: none;
+    background:
+        radial-gradient(100vw circle at var(--mx, 50%) var(--my, 50%),
+            rgba(72, 20, 150, 0.50) 0%,
+            rgba(155, 35, 220, 0.24) 35%,
+            rgba(245, 100, 255, 0) 70%),
+        linear-gradient(to bottom,
+            rgba(255, 255, 255, 0) 0%,
+            rgba(255, 255, 255, var(--scroll-light, 0)) 100%);
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+    body::after {
+        background:
+            radial-gradient(200vw circle at var(--mx, 50%) var(--my, 50%),
+                rgba(72, 20, 150, 0.50) 0%,
+                rgba(155, 35, 220, 0.24) 35%,
+                rgba(245, 100, 255, 0) 70%),
+            linear-gradient(to bottom,
+                rgba(255, 255, 255, 0) 0%,
+                rgba(255, 255, 255, var(--scroll-light, 0)) 100%);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body::after {
+        display: none;
+    }
+}
+
+/* Force every "glass" panel onto its own GPU compositing layer on mobile.
+   Desktop GPUs have enough headroom to keep every backdrop-filter panel on
+   this page (header, breadcrumb, file table, upload section, storage
+   stats, notifications, modals) properly blurred/translucent at once.
+   Mobile GPUs often don't, and when a browser runs low on compositing
+   budget it sheds backdrop-filter layers by painting them as a flat,
+   unblurred fill instead - which is what makes these panels look solid
+   instead of see-through and hides the cursor-glow behind them. Explicit
+   promotion removes the guesswork so mobile actually keeps the effect
+   instead of silently dropping it. */
+@media (max-width: 768px),
+(pointer: coarse) {
+
+    .header,
+    .breadcrumb,
+    .file-table,
+    .upload-section,
+    .storage-stats,
+    .upload-status[id^="notification-"],
+    .modal,
+    .modal-content {
+        transform: translateZ(0);
+        -webkit-transform: translateZ(0);
+    }
+}
+
+.header {
+    background: rgba(255, 255, 255, 0.1);
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 12px 20px;
+    /* Reduced from 20px 30px */
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.header-left h1 {
+    color: white;
+    font-size: 20px;
+    /* Reduced from 24px */
+    font-weight: 300;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    /* Reduced from 10px */
+}
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    /* Reduced from 20px */
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.user-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    /* Reduced from 8px */
+    background: rgba(255, 255, 255, 0.1);
+    padding: 6px 12px;
+    /* Reduced from 8px 15px */
+    border-radius: 16px;
+    /* Reduced from 20px */
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.role-badge {
+    padding: 3px 8px;
+    /* Reduced from 4px 10px */
+    border-radius: 10px;
+    /* Reduced from 12px */
+    font-size: 11px;
+    /* Reduced from 12px */
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.role-readwrite {
+    background: #27ae60;
+    color: white;
+}
+
+.role-readonly {
+    background: #f39c12;
+    color: white;
+}
+
+.logout-btn {
+    color: rgba(255, 255, 255, 0.8);
+    text-decoration: none;
+    padding: 6px 12px;
+    /* Reduced from 8px 15px */
+    border-radius: 6px;
+    /* Reduced from 8px */
+    transition: all 0.3s ease;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    font-size: 13px;
+    /* Added smaller font size */
+}
+
+.logout-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+}
+
+/* Main container */
+.container {
+    max-width: 75%;
+    margin: 0 auto;
+    padding: 30px;
+}
+
+/* Breadcrumb */
+.breadcrumb {
+    background: rgba(255, 255, 255, 0.1);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    padding: 15px 20px;
+    border-radius: 12px;
+    margin-bottom: 25px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.breadcrumb h3 {
+    color: white;
+    font-size: 18px;
+    font-weight: 400;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+/* Controls section - Updated desktop spacing */
+.controls {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 25px;
+    flex-wrap: wrap;
+}
+
+.create-folder-form {
+    display: flex;
+    gap: 10px;
+    background: rgba(255, 255, 255, 0.1);
+    padding: 15px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.create-folder-form input[type="text"] {
+    padding: 10px 15px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    font-size: 14px;
+    min-width: 200px;
+}
+
+.create-folder-form input[type="text"]:focus {
+    outline: none;
+    border-color: #3498db;
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.create-folder-form input[type="text"]::placeholder {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+/* Manual cleanup button styling */
+.manual-cleanup-btn {
+    margin-left: 10px;
+}
+
+/* Hide manual cleanup button by default to prevent flash on page load */
+#manualCleanupBtn {
+    display: none !important;
+}
+
+/* ── Admin action buttons (Cleanup Chunk / Rebuild Cache / Clear Media
+   Preview) — grouped in their own row so they wrap together as one unit
+   instead of each button wrapping independently against the create-folder
+   form. This is what keeps the tablet width (~769–1024px) from splitting
+   the buttons across misaligned rows, and keeps mobile from stretching
+   each button to a full-width bar. ─────────────────────────────────────── */
+.admin-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.admin-actions .manual-cleanup-btn {
+    margin-left: 0;
+}
+
+/* On full-sized desktop, size the admin action buttons (Cleanup Chunk /
+   Rebuild Cache / Clear Media Preview) to match the Create Folder button
+   (.btn base size) instead of the smaller .btn-sm sizing used elsewhere. */
+@media (min-width: 1025px) {
+    .admin-actions .btn-sm {
+        padding: 10px 20px;
+        font-size: 14px;
+        border-radius: 8px;
+        min-width: auto;
+        width: auto;
+        height: auto;
+    }
+
+    .admin-actions .btn-sm i {
+        font-size: 14px;
+    }
+}
+
+/* Bulk Actions */
+.bulk-actions {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 15px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    display: none;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 25px;
+}
+
+.bulk-actions.show {
+    display: flex;
+}
+
+.bulk-info {
+    color: white;
+    font-weight: 500;
+}
+
+.bulk-buttons {
+    display: flex;
+    gap: 10px;
+}
+
+.btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
+}
+
+.btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #3498db, #2980b9);
+    color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(52, 152, 219, 0.3);
+}
+
+/* Download button specific styling */
+#bulkDownloadBtn {
+    background: linear-gradient(135deg, #2ecc71, #27ae60);
+    position: relative;
+    overflow: hidden;
+}
+
+#bulkDownloadBtn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(46, 204, 113, 0.4);
+    background: linear-gradient(135deg, #27ae60, #2ecc71);
+}
+
+#bulkDownloadBtn::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+    transition: left 0.5s ease;
+}
+
+#bulkDownloadBtn:hover::before {
+    left: 100%;
+}
+
+/* ZIP download state styling */
+#bulkDownloadBtn.zip-mode {
+    background: linear-gradient(135deg, #9b59b6, #8e44ad);
+}
+
+#bulkDownloadBtn.zip-mode:hover:not(:disabled) {
+    background: linear-gradient(135deg, #8e44ad, #9b59b6);
+    box-shadow: 0 8px 25px rgba(155, 89, 182, 0.4);
+}
+
+.btn-success {
+    background: linear-gradient(135deg, #27ae60, #229954);
+    color: white;
+}
+
+.btn-success:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(39, 174, 96, 0.3);
+}
+
+.btn-danger {
+    background: linear-gradient(135deg, #e74c3c, #c0392b);
+    color: white;
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+.btn-danger:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 5px 15px rgba(231, 76, 60, 0.3);
+}
+
+.btn-warning {
+    background: linear-gradient(135deg, #f39c12, #e67e22);
+    color: white;
+}
+
+.btn-warning:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(243, 156, 18, 0.3);
+}
+
+/* File table */
+.file-table {
+    background: rgba(255, 255, 255, 0.1);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    /* Same glass style as .breadcrumb / .bulk-actions so it blends into the
+       gradient instead of sitting on top of it as a flat, opaque block. */
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    margin: 25px 0;
+}
+
+/* Scrollable wrapper inside .file-table */
+.table-scroll-wrapper {
+    max-height: calc(100vh - 150px);
+    min-height: 150px;
+    overflow-y: auto;
+    overflow-x: auto;
+}
+
+/* Sticky header inside scroll wrapper */
+.table-scroll-wrapper .table thead {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+}
+
+/* Custom scrollbar styling for table */
+.table-scroll-wrapper::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.table-scroll-wrapper::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
+}
+
+.table-scroll-wrapper::-webkit-scrollbar-thumb {
+    background: rgba(52, 152, 219, 0.5);
+    border-radius: 4px;
+}
+
+.table-scroll-wrapper::-webkit-scrollbar-thumb:hover {
+    background: rgba(52, 152, 219, 0.8);
+}
+
+/* Virtual scroll sentinel + loading indicator */
+#vtSentinel {
+    height: 1px;
+    width: 100%;
+}
+
+.vt-loading-row td {
+    text-align: center;
+    padding: 12px;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 13px;
+}
+
+/* Deep-search "Loading more results…" row (index.js _dsMakeLoadingRow). These
+   used to be inline style="" attributes on the markup; classes keep them
+   CSP-safe (style-src-attr). */
+.ds-loading-row .ds-loading-icon {
+    margin-right: 6px;
+    opacity: 0.6;
+    font-size: 12px;
+}
+
+.ds-loading-row .ds-sentinel-label {
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+/* ── Sticky parent-directory row ─────────────────────────────────────
+   Sits just below the sticky thead. `top` is written by JS via
+   --table-thead-h on .table-scroll-wrapper after measuring the thead.
+──────────────────────────────────────────────────────────────────── */
+#filesTable tbody tr.parent-dir-sticky {
+    position: sticky;
+    top: var(--table-thead-h, 57px);
+    z-index: 15;
+    background: rgba(22, 48, 95, 0.97) !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    border-bottom: 1px solid rgba(52, 152, 219, 0.3) !important;
+}
+
+#filesTable tbody tr.parent-dir-sticky:hover {
+    background: rgba(32, 65, 118, 0.97) !important;
+    cursor: pointer;
+}
+
+#filesTable tbody tr.parent-dir-sticky .folder-link {
+    color: #5dade2 !important;
+    font-weight: 600;
+}
+
+#filesTable tbody tr.parent-dir-sticky .file-icon {
+    color: #5dade2 !important;
+}
+
+.table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.table thead {
+    background: linear-gradient(135deg, #34495e, #2c3e50);
+    color: white;
+}
+
+.table th {
+    padding: 18px 13px;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    line-height: 1.2;
+}
+
+.table tbody tr {
+    border-bottom: 1px solid rgba(48, 84, 140, 0.55);
+    transition: background-color 0.3s ease;
+}
+
+.table tbody tr:hover {
+    background: rgba(52, 152, 219, 0.05);
+}
+
+.table tbody tr.selected {
+    background: rgba(52, 152, 219, 0.1);
+    border-left: 4px solid #3498db;
+}
+
+.table td {
+    padding: 6px 8px;
+    vertical-align: middle;
+    color: white;
+    overflow: hidden;
+    line-height: 1.2;
+}
+
+.file-checkbox {
+    width: 16px;
+    height: 16px;
+    margin-right: 8px;
+    cursor: pointer;
+}
+
+.file-icon {
+    font-size: 16px;
+    margin-right: 8px;
+    width: 18px;
+    text-align: center;
+}
+
+.folder-icon,
+.file-icon.folder-icon,
+.fa-folder,
+i.fa-folder,
+i.folder-icon,
+.file-name .folder-icon,
+.file-name .fa-folder {
+    color: #f39c12 !important;
+}
+
+.file-icon-default,
+.fa-file,
+i.fa-file {
+    color: white !important;
+}
+
+.file-name {
+    display: flex;
+    align-items: center;
+    font-weight: 500;
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.file-name a,
+.file-name span {
+    color: white;
+    text-decoration: none;
+    transition: color 0.3s ease;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.4;
+    max-width: 100%;
+    display: block;
+}
+
+.file-name a:hover {
+    color: #87CEEB;
+}
+
+.file-type {
+    color: white;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+/* Desktop-specific table styling for better file name handling */
+@media (min-width: 769px) {
+
+    /* Column widths deferred to smartTableColumnizer() — only set text behaviour here */
+    .table th:nth-child(2),
+    .table td:nth-child(2),
+    .table td.name-cell {
+        overflow: hidden !important;
+        white-space: normal !important;
+        word-break: break-word !important;
+        overflow-wrap: anywhere !important;
+    }
+
+    /* Size column for desktop */
+    .table th:nth-child(3),
+    .table td:nth-child(3),
+    .table td.size-cell {
+        white-space: nowrap;
+        line-height: 1.3;
+    }
+
+    /* Keep sortable headers inline */
+    .table th:nth-child(3).sortable {
+        white-space: nowrap;
+    }
+
+    /* Date column */
+    .table td.date-cell {
+        white-space: nowrap;
+    }
+
+    .table tbody tr {
+        overflow: hidden;
+    }
+
+    .file-name {
+        overflow: hidden;
+    }
+}
+
+/* Mobile-specific styling for file names */
+@media (max-width: 768px) {
+
+    /* Enable horizontal scrolling for better name display */
+    .file-table {
+        overflow: hidden !important;
+    }
+
+    .table-scroll-wrapper {
+        overflow-x: auto !important;
+        overflow-y: auto !important;
+        max-height: calc(100vh - 100px) !important;
+        min-height: 100px !important;
+    }
+
+    /* Name column width is controlled by JS smartTableColumnizer() */
+    .file-table .table th:nth-child(2),
+    .file-table .table td:nth-child(2) {
+        overflow: hidden !important;
+        box-sizing: border-box !important;
+    }
+
+    /* file-name container */
+    .file-table .table .file-name {
+        display: flex !important;
+        align-items: flex-start !important;
+        gap: 8px !important;
+        overflow: hidden !important;
+        white-space: normal !important;
+    }
+
+    /* Name link/span — word-wrap to cell width */
+    .file-table .table td:nth-child(2) .file-name a,
+    .file-table .table td:nth-child(2) .file-name span,
+    .file-table .table .file-name a,
+    .file-table .table .file-name span {
+        display: block !important;
+        white-space: normal !important;
+        word-break: break-word !important;
+        overflow-wrap: anywhere !important;
+        overflow: hidden !important;
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+}
+
+.actions {
+    display: flex;
+    flex-direction: row;
+    gap: 3px;
+    align-items: center;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+}
+
+.btn-sm {
+    padding: 5px 10px;
+    font-size: 11px;
+    border-radius: 4px;
+    min-width: auto;
+    text-align: center;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+/* Individual action button styling — icon-only, square */
+.actions .btn-sm {
+    padding: 4px 6px;
+    margin: 0;
+    font-size: 11px;
+    line-height: 1;
+    min-width: 24px;
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.actions .btn-sm i {
+    font-size: 11px;
+    margin: 0;
+}
+
+.btn-outline {
+    background: transparent;
+    border: 1px solid #3498db;
+    color: #3498db;
+}
+
+.btn-outline:hover {
+    background: #3498db;
+    color: white;
+}
+
+.btn-danger {
+    background: #e74c3c;
+    color: white;
+    border: 1px solid #e74c3c;
+}
+
+.btn-danger:hover {
+    background: #c0392b;
+    border-color: #c0392b;
+}
+
+/* Enhanced Upload Section - Perfect spacing match */
+.upload-section {
+    background: rgba(255, 255, 255, 0.1);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border-radius: 15px;
+    padding: 25px;
+    margin-bottom: 25px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    position: relative;
+}
+
+.upload-section h3 {
+    color: white;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.upload-form {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.upload-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.upload-mode-btn {
+    padding: 8px 16px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.8);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.upload-mode-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    border-color: rgba(255, 255, 255, 0.5);
+}
+
+.upload-mode-btn.active {
+    background: #3498db;
+    color: white;
+    border-color: #3498db;
+    box-shadow: 0 0 10px rgba(52, 152, 219, 0.3);
+}
+
+.upload-mode-hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 12px;
+    margin-left: auto;
+}
+
+.upload-mode-hint i {
+    opacity: 0.8;
+}
+
+.upload-instructions {
+    margin-top: 4px;
+    color: rgba(255, 255, 255, 0.6);
+    font-style: italic;
+}
+
+.file-input-wrapper {
+    position: relative;
+    display: inline-block;
+}
+
+.file-input {
+    position: absolute;
+    opacity: 0;
+    width: 100%;
+    height: 100%;
+    cursor: pointer;
+}
+
+.file-input-display {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 15px 20px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 2px dashed rgba(255, 255, 255, 0.4);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    color: white;
+}
+
+.file-input-display:hover {
+    border-color: rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.15);
+}
+
+/* Enhanced Upload Queue */
+.upload-queue {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    padding: 20px;
+    margin-top: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    display: none;
+}
+
+.upload-queue.show {
+    display: block;
+    animation: slideInUp 0.4s ease-out;
+}
+
+.queue-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    color: white;
+    font-weight: 600;
+}
+
+.queue-stats {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.upload-progress-summary {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+    display: none;
+}
+
+.upload-progress-summary.show {
+    display: block;
+}
+
+.progress-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 15px;
+    color: white;
+    font-size: 14px;
+}
+
+.stat-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.stat-value {
+    font-weight: 600;
+    color: #3498db;
+}
+
+.overall-progress {
+    margin-top: 15px;
+}
+
+.overall-progress-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: white;
+    font-size: 14px;
+    margin-bottom: 8px;
+}
+
+.overall-progress-bar {
+    height: 8px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.overall-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #27ae60, #2ecc71);
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+.queue-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+/* Parallel Upload Controls */
+.parallel-upload-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.9);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    padding: 4px 8px;
+}
+
+.parallel-upload-controls label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0;
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.parallel-upload-controls input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+}
+
+.parallel-upload-controls select {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 3px;
+    padding: 2px 4px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.parallel-upload-controls select option {
+    background: #2c3e50;
+    color: #fff;
+}
+
+.file-queue {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.queue-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 15px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    transition: all 0.3s ease;
+    color: white;
+}
+
+.queue-item:last-child {
+    border-bottom: none;
+}
+
+.queue-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.queue-item.uploading {
+    background: rgba(52, 152, 219, 0.1);
+    border-left: 4px solid #3498db;
+}
+
+.queue-item.completed {
+    background: rgba(39, 174, 96, 0.1);
+    border-left: 4px solid #27ae60;
+    opacity: 0.7;
+}
+
+.queue-item.error {
+    background: rgba(231, 76, 60, 0.1);
+    border-left: 4px solid #e74c3c;
+}
+
+.queue-item.cancelled {
+    background: rgba(255, 152, 0, 0.1);
+    border-left: 4px solid #ff9800;
+    opacity: 0.7;
+}
+
+.file-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-grow: 1;
+    min-width: 0;
+}
+
+.file-info-details {
+    min-width: 0;
+    flex-grow: 1;
+}
+
+.file-info-name {
+    font-weight: 500;
+    font-size: 14px;
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-info-dest {
+    font-size: 11.5px;
+    color: rgba(255, 255, 255, 0.55);
+    margin-bottom: 3px;
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    min-width: 0;
+    max-width: 100%;
+}
+
+.file-info-dest i {
+    font-size: 10px;
+    opacity: 0.9;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+/* Wraps across lines instead of truncating with an ellipsis, so the whole
+   path stays visible for very deep folder structures. */
+.file-info-dest-text {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.file-info-meta {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.7);
+    display: flex;
+    gap: 15px;
+}
+
+.file-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 120px;
+    justify-content: flex-end;
+}
+
+.status-text {
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.status-pending {
+    color: #f39c12;
+}
+
+.status-uploading {
+    color: #3498db;
+}
+
+.status-completed {
+    color: #27ae60;
+}
+
+.status-error {
+    color: #e74c3c;
+}
+
+.status-cancelled {
+    color: #ff9800;
+}
+
+.remove-btn {
+    background: rgba(231, 76, 60, 0.2);
+    border: 1px solid rgba(231, 76, 60, 0.4);
+    color: #e74c3c;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-size: 12px;
+}
+
+.remove-btn:hover {
+    background: rgba(231, 76, 60, 0.3);
+    transform: scale(1.1);
+}
+
+.cancel-btn {
+    background: rgba(255, 152, 0, 0.2) !important;
+    border: 1px solid rgba(255, 152, 0, 0.4) !important;
+    color: #ff9800 !important;
+}
+
+.cancel-btn:hover {
+    background: rgba(255, 152, 0, 0.3) !important;
+    border: 1px solid rgba(255, 152, 0, 0.6) !important;
+}
+
+.progress-bar-small {
+    width: 80px;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.progress-fill-small {
+    height: 100%;
+    background: linear-gradient(90deg, #3498db, #2980b9);
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+/* Upload status */
+.upload-status {
+    margin-top: 15px;
+    padding: 12px;
+    border-radius: 8px;
+    font-weight: 500;
+    text-align: center;
+    display: none;
+    transition: all 0.3s ease;
+    transform: translateX(100%);
+}
+
+.upload-status.show {
+    display: block;
+    transform: translateX(0);
+}
+
+/* Stacked notification styles */
+.upload-status[id^="notification-"] {
+    display: block;
+    position: fixed;
+    right: 20px;
+    z-index: 10000;
+    margin: 0;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1.4;
+    width: auto;
+    min-width: 300px;
+    max-width: 500px;
+    transition: all 0.3s ease-out;
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+/* Mobile responsive stacked notifications */
+@media (max-width: 768px) {
+    .upload-status[id^="notification-"] {
+        right: 10px;
+        left: 10px;
+        max-width: none;
+        min-width: auto;
+        width: auto;
+    }
+}
+
+.upload-status.success {
+    background: rgba(39, 174, 96, 0.2);
+    border: 1px solid rgba(39, 174, 96, 0.4);
+    color: #27ae60;
+}
+
+.upload-status.error {
+    background: rgba(231, 76, 60, 0.2);
+    border: 1px solid rgba(231, 76, 60, 0.4);
+    color: #e74c3c;
+}
+
+.upload-status.info {
+    background: rgba(52, 152, 219, 0.2);
+    border: 1px solid rgba(52, 152, 219, 0.4);
+    color: #3498db;
+}
+
+/* Progress bar */
+.progress-bar {
+    width: 100%;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 10px;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #3498db, #2980b9);
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+/* Modal Styles */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    /* Was rgba(0,0,0,0.5). At 50% black under a 97%-opaque .modal-content
+       on top of it (see below), the two stacked near-opaque layers left
+       only ~1.5% of the cursor-glow color visible through the blur -
+       imperceptible, which is why move/copy/rename/share/etc. all read
+       as flat opaque panels with no glow, same root cause as the preview
+       modal fix above it. Lowered so the glow the blur is already
+       computing actually reads through. */
+    background-color: rgba(0, 0, 0, 0.35);
+    -webkit-backdrop-filter: blur(5px);
+    backdrop-filter: blur(5px);
+    /* Mobile Safari/Chrome only promote an element to its own GPU
+       compositing layer for backdrop-filter when given a clear signal to
+       do so. Without it, on a page already running several other
+       backdrop-filter panels (header, breadcrumb, table, upload section,
+       storage stats), mobile browsers frequently skip the blur/see-through
+       entirely and just paint the flat background-color - the modal
+       backdrop then reads as a plain opaque-ish layer and the cursor-glow
+       behind it never shows through. translateZ(0) forces the dedicated
+       layer explicitly instead of leaving it to mobile-unreliable
+       heuristics. */
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+}
+
+.modal.show {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Ensure centering with additional properties */
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+}
+
+.modal-content {
+    /* Was 0.97 alpha - see comment on .modal above for why that made the
+       glow invisible across every modal on the page, not just the preview
+       one. Lowered to match. */
+    background: linear-gradient(145deg, rgba(30, 60, 114, 0.55) 0%, rgba(42, 82, 152, 0.55) 100%);
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 15px;
+    padding: 30px;
+    width: 90%;
+    max-width: 500px;
+    /* Cap height and use flex so the body can scroll instead of overflowing */
+    max-height: calc(100dvh - 40px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    position: relative;
+    margin: auto;
+    color: #fff;
+    /* Same GPU-layer promotion as .modal - see comment there. Without this,
+       this panel is one of the most likely to render fully flat with zero
+       blur on mobile, since a browser under compositing pressure sheds the
+       most expensive backdrop-filter layers first, and a 20px blur radius
+       is the most expensive one on this page. */
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+}
+
+/* ── Modal spotlight ──────────────────────────────────────────────────────
+   The body-level cursor-glow (body::after) sits behind the whole page, so
+   it only ever reads through a modal as a faint tint via backdrop-filter -
+   fine for ambient lighting, but it can never look like it's actually
+   sitting on the panel's own surface. This is that same glow, painted a
+   second time directly onto .modal-content's own background layer so it
+   reads as one continuous light source rather than two different ones -
+   same radial-gradient size/stops as body::after above (90vw / mobile
+   180vw, identical color stops), same easing speed (CURSOR_EASE = 0.08,
+   see the "Modal spotlight" block in index.js that drives --hx/--hy here -
+   panel-local px, not document-space, but eased identically to --mx/--my).
+
+   Ordering: this ::before is position:absolute with z-index:auto, which
+   paints ABOVE non-positioned in-flow content by default in CSS's stacking
+   order - i.e. above .modal-header/.modal-body/.modal-footer unless they're
+   explicitly lifted above it. That's why those three get position:relative
+   + z-index:1 below: it sandwiches this spotlight between the panel's
+   background and its actual content instead of covering the content. */
+.modal-content::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    background: radial-gradient(90vw circle at var(--hx, 50%) var(--hy, 50%),
+            rgba(72, 20, 150, 0.50) 0%,
+            rgba(155, 35, 220, 0.24) 35%,
+            rgba(245, 100, 255, 0) 70%);
+    opacity: 0;
+    transition: opacity 0.25s ease;
+}
+
+.modal-content.spotlight-active::before {
+    opacity: 1;
+}
+
+/* Mobile: match body::after's mobile radius so the two stay identical */
+@media (max-width: 768px) {
+    .modal-content::before {
+        background: radial-gradient(180vw circle at var(--hx, 50%) var(--hy, 50%),
+                rgba(72, 20, 150, 0.50) 0%,
+                rgba(155, 35, 220, 0.24) 35%,
+                rgba(245, 100, 255, 0) 70%);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .modal-content::before {
+        display: none;
+    }
+}
+
+.modal-header,
+.modal-body,
+.modal-footer {
+    position: relative;
+    z-index: 1;
+}
+
+/* Move/Copy modal needs extra width on desktop for the folder browser */
+#moveModal .modal-content {
+    max-width: 600px;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-shrink: 0;
+}
+
+.modal-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: white;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal-close:hover {
+    color: #e74c3c;
+}
+
+.modal-body {
+    flex: 1;
+    min-height: 0;
+    /* required for flex child to shrink below content size */
+    overflow-y: auto;
+    margin-bottom: 0;
+    padding-bottom: 16px;
+    scrollbar-width: thin;
+}
+
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.form-control {
+    width: 100%;
+    padding: 10px 15px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 8px;
+    font-size: 14px;
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+}
+
+.form-control::placeholder {
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: rgba(255, 255, 255, 0.6);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.18);
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-shrink: 0;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    margin-top: 4px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Share links — per-item share modal + admin "revoke all" confirmation */
+/* ------------------------------------------------------------------ */
+
+.share-bulk-controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.share-item-row {
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.share-item-row:last-child {
+    margin-bottom: 0;
+}
+
+.share-item-row-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.share-item-name {
+    color: #fff;
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.share-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 13px;
+    flex-shrink: 0;
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.share-toggle input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.share-link-row {
+    display: none;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.share-modal-hint {
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 12px;
+    margin-top: 10px;
+    display: block;
+}
+
+.revoke-all-count-text {
+    color: #fff;
+}
+
+.revoke-all-subtext {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.revoke-all-error {
+    color: #e74c3c;
+    font-size: 13px;
+    display: none;
+}
+
+.share-link-input {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    font-family: 'Courier New', monospace;
+    padding: 7px 10px;
+}
+
+.share-status-loading {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.55);
+    margin-top: 6px;
+}
+
+.confirm-code-display {
+    font-family: 'Courier New', monospace;
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: 6px;
+    text-align: center;
+    color: #fff;
+    background: rgba(231, 76, 60, 0.15);
+    border: 1px solid rgba(231, 76, 60, 0.4);
+    border-radius: 8px;
+    padding: 14px 10px;
+    margin: 14px 0;
+    -webkit-user-select: all;
+    user-select: all;
+}
+
+#revokeAllSharesInput {
+    font-family: 'Courier New', monospace;
+    letter-spacing: 2px;
+}
+
+.btn-xs {
+    padding: 4px 9px;
+    font-size: 11px;
+    border-radius: 6px;
+}
+
+.manual-cleanup-btn {
+    position: relative;
+}
+
+.notif-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    margin-left: 6px;
+    border-radius: 10px;
+    background: #e74c3c;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    vertical-align: middle;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.15);
+}
+
+/* Native datetime-local picker: browsers render the calendar/clock icon and
+   the popup itself using the OS light theme by default, regardless of the
+   input's own background — color-scheme tells the browser to draw its own
+   chrome (icon + popup) in dark mode instead, matching the rest of the UI. */
+input[type="datetime-local"].form-control {
+    color-scheme: dark;
+}
+
+input[type="datetime-local"].form-control::-webkit-calendar-picker-indicator {
+    filter: invert(0.85);
+    cursor: pointer;
+}
+
+/* ------------------------------------------------------------------ */
+/* Share security panel (mode / passkey / expiry) — new-share settings */
+/* ------------------------------------------------------------------ */
+
+.share-security-panel {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 18px 20px;
+    margin-bottom: 18px;
+}
+
+.share-security-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.share-security-row:last-child {
+    margin-bottom: 0;
+}
+
+.share-security-row>label:first-child {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 14px;
+    font-weight: 500;
+    flex-shrink: 0;
+}
+
+.share-security-row .form-control {
+    width: auto;
+    flex: 1;
+    min-width: 160px;
+    padding: 9px 12px;
+    font-size: 14px;
+}
+
+/* Dropdowns (e.g. the "Expires" select) inherit the translucent dark
+   background + white text from .form-control, but browsers render the
+   native option-list popup with their own OS chrome by default — ignoring
+   the parent's background and leaving white text on a white popup, which
+   is unreadable. color-scheme tells the browser to draw the popup itself
+   in dark mode, and the explicit option colors are a fallback for browsers
+   that don't honor color-scheme on <option>. */
+select.form-control {
+    color-scheme: dark;
+}
+
+select.form-control option {
+    background: #2c3e50;
+    color: #fff;
+}
+
+.security-mode-options {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+
+.security-mode-options label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.85);
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.security-mode-options input[type="radio"] {
+    cursor: pointer;
+}
+
+.share-security-sub {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.12);
+}
+
+.share-security-sub .form-control {
+    width: 100%;
+}
+
+/* ------------------------------------------------------------------ */
+/* Per-item share row: summary badges, passkey reveal, inline editor  */
+/* ------------------------------------------------------------------ */
+
+.share-security-summary {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.share-summary-badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.mode-badge,
+.expiry-badge,
+.downloads-badge,
+.created-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 20px;
+    white-space: nowrap;
+}
+
+.mode-badge.mode-public {
+    background: rgba(52, 152, 219, 0.18);
+    color: #6cb6e8;
+}
+
+.mode-badge.mode-passkey {
+    background: rgba(241, 196, 15, 0.18);
+    color: #f1c40f;
+}
+
+.mode-badge.mode-approval {
+    background: rgba(155, 89, 182, 0.2);
+    color: #c896e0;
+}
+
+.expiry-badge,
+.downloads-badge,
+.created-badge {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.65);
+}
+
+.share-passkey-reveal {
+    margin-top: 10px;
+    padding: 9px 11px;
+    border-radius: 8px;
+    background: rgba(241, 196, 15, 0.12);
+    border: 1px solid rgba(241, 196, 15, 0.35);
+    font-size: 13px;
+    color: #f1c40f;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.share-passkey-reveal code {
+    background: rgba(0, 0, 0, 0.25);
+    padding: 2px 7px;
+    border-radius: 5px;
+    color: #fff;
+    font-family: 'Courier New', monospace;
+}
+
+.passkey-reveal-note {
+    color: rgba(241, 196, 15, 0.7);
+    font-size: 11px;
+    margin-left: auto;
+}
+
+.share-row-editor {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.row-passkey-sub {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.row-generate-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.6);
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.row-editor-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Manage Shared panel (admin): tabs + active shares + pending requests */
+/* ------------------------------------------------------------------ */
+
+.modal-content-lg {
+    max-width: 640px;
+}
+
+.manage-shared-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.manage-shared-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: rgba(255, 255, 255, 0.6);
+    padding: 9px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.manage-shared-tab:hover {
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.manage-shared-tab.active {
+    color: #fff;
+    border-bottom-color: #3498db;
+}
+
+.tab-count {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 10px;
+    padding: 1px 7px;
+    font-size: 11px;
+    min-width: 16px;
+    text-align: center;
+}
+
+.manage-shared-panel {
+    min-height: 120px;
+}
+
+.manage-shared-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 420px;
+    overflow-y: auto;
+}
+
+.manage-shared-empty {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 13px;
+    text-align: center;
+    padding: 24px 0;
+}
+
+.manage-share-row,
+.manage-request-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    flex-wrap: wrap;
+}
+
+.manage-share-main {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+    flex: 1;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.manage-share-info {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+}
+
+.manage-share-info strong {
+    color: #fff;
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 320px;
+}
+
+.manage-share-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.manage-share-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.request-actions {
+    flex-wrap: wrap;
+}
+
+.request-note {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.55);
+    font-style: italic;
+    max-width: 320px;
+}
+
+.max-downloads-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.max-downloads-input {
+    width: 60px !important;
+    padding: 5px 8px !important;
+    font-size: 12px !important;
+}
+
+/* Folder Browser Styles */
+.folder-browser {
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    /* Responsive height: never less than 160px, targets 35vh, caps at 340px */
+    max-height: clamp(160px, 35vh, 340px);
+}
+
+.current-destination {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin-bottom: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    display: flex;
+    align-items: center;
+    color: #fff !important;
+}
+
+.browser-actions {
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.08);
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.browser-actions .btn {
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+.folder-list {
+    padding: 8px;
+    flex: 1;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+
+.folder-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    cursor: pointer;
+    border-radius: 6px;
+    margin-bottom: 2px;
+    transition: all 0.2s ease;
+    color: rgba(255, 255, 255, 0.9) !important;
+}
+
+.folder-item:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+    transform: translateX(2px);
+}
+
+.folder-item:active {
+    transform: translateX(0px);
+    background-color: rgba(255, 255, 255, 0.18);
+}
+
+.folder-item i.fa-folder {
+    color: #f39c12;
+    margin-right: 10px;
+    font-size: 14px;
+    min-width: 16px;
+}
+
+.folder-item i.fa-chevron-right {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 12px;
+    margin-left: auto;
+}
+
+.browser-loading {
+    padding: 20px;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.browser-loading i {
+    margin-right: 8px;
+}
+
+.folder-item span,
+.folder-item .folder-name {
+    color: rgba(255, 255, 255, 0.9) !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+}
+
+.current-destination span {
+    color: rgba(255, 255, 255, 0.9) !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: inline;
+    /* must stay inline so it sits next to the folder icon */
+}
+
+.current-destination {
+    color: #fff !important;
+}
+
+.empty-state {
+    padding: 20px;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.empty-state i {
+    font-size: 24px;
+    margin-bottom: 8px;
+    display: block;
+    opacity: 0.7;
+}
+
+/* Empty state */
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.empty-state i {
+    font-size: 48px;
+    margin-bottom: 20px;
+    opacity: 0.5;
+}
+
+.empty-state h3 {
+    font-size: 20px;
+    margin-bottom: 10px;
+    font-weight: 300;
+}
+
+.empty-state p {
+    font-size: 14px;
+}
+
+/* Storage Stats */
+.storage-stats {
+    background: rgba(255, 255, 255, 0.1);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 25px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+}
+
+.storage-stats h4 {
+    margin-bottom: 15px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+}
+
+.stat-card {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    padding: 15px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.stat-card .stat-label {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.7);
+    margin-bottom: 5px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.stat-card .stat-value {
+    font-size: 18px;
+    font-weight: 600;
+    color: white;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.disk-usage-bar {
+    margin-top: 15px;
+}
+
+.disk-usage-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 14px;
+    margin-bottom: 8px;
+}
+
+.disk-usage-progress {
+    height: 8px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.disk-usage-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #27ae60, #f39c12, #e74c3c);
+    transition: width 0.3s ease;
+}
+
+/* Fix for folder highlighting issue - 2023-10-23 */
+.file-name {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+}
+
+.file-name a,
+.file-name span,
+.file-name .folder-link {
+    display: inline !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    max-width: calc(100% - 30px) !important;
+    line-height: normal !important;
+}
+
+.file-icon {
+    flex: 0 0 auto !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 20px !important;
+}
+
+/* Icon colors - Permanent retention */
+.file-icon.folder-icon,
+.fa-folder,
+i.folder-icon,
+i.fa-folder,
+.file-name .fa-folder,
+.file-name .folder-icon,
+td .fa-folder,
+[data-folder-path] .fa-folder,
+.folder-link .fa-folder {
+    color: #f39c12 !important;
+}
+
+.file-icon-default,
+.fa-file,
+i.fa-file,
+.file-name .fa-file,
+td .fa-file {
+    color: white !important;
+}
+
+/* Ensure consistent text color and no wrapping */
+.table td .file-name a,
+.table td .file-name span {
+    color: white !important;
+    text-decoration: none !important;
+    white-space: nowrap !important;
+}
+
+/* Remove any existing multi-line clamp properties */
+.file-name a,
+.file-name span {
+    -webkit-line-clamp: unset !important;
+    line-clamp: unset !important;
+    -webkit-box-orient: unset !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+}
+
+/* Ensure mobile compatibility */
+@media (max-width: 768px) {
+    .file-name {
+        max-width: 100% !important;
+    }
+
+    .file-name a,
+    .file-name span,
+    .file-name .folder-link {
+        max-width: calc(100% - 25px) !important;
+    }
+}
+
+/* Enhanced Mobile Responsive Design - Fixed Consistent Spacing */
+@media (max-width: 768px) {
+
+    /* Show mobile scroll hint */
+    .mobile-scroll-hint {
+        display: block !important;
+    }
+
+    .container {
+        padding: 15px;
+        max-width: 100%;
+    }
+
+    /* Ensure file table maintains theme background on mobile */
+    .file-table {
+        background: rgba(255, 255, 255, 0.1) !important;
+        /* Force theme-matched light blue background */
+        border-radius: 12px;
+        overflow: hidden !important;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    /* Ensure table rows maintain theme styling on mobile */
+    .table tbody tr {
+        border-bottom: 1px solid rgba(48, 84, 140, 0.55) !important;
+        /* Light blue border to complement theme */
+        background: transparent !important;
+        /* Allow parent background to show through */
+    }
+
+    .table tbody tr:hover {
+        background: rgba(52, 152, 219, 0.05) !important;
+    }
+
+    .table tbody tr.selected {
+        background: rgba(52, 152, 219, 0.1) !important;
+        border-left: 4px solid #3498db;
+    }
+
+    .header {
+        padding: 8px 12px;
+        /* Much more compact */
+        flex-direction: row;
+        /* Keep horizontal layout */
+        gap: 8px;
+        text-align: left;
+        margin-bottom: 12px;
+        /* Reduced from 18px */
+    }
+
+    .header-left h1 {
+        font-size: 16px;
+        /* Reduced from 20px */
+        gap: 6px;
+    }
+
+    .user-info {
+        flex-direction: row;
+        /* Keep horizontal */
+        gap: 8px;
+        /* Reduced from 10px */
+        font-size: 13px;
+    }
+
+    .user-badge {
+        flex-direction: row;
+        /* Keep horizontal */
+        text-align: left;
+        padding: 4px 8px;
+        /* Much smaller padding */
+        font-size: 12px;
+    }
+
+    .role-badge {
+        padding: 2px 6px;
+        /* Even smaller */
+        font-size: 10px;
+    }
+
+    .logout-btn {
+        padding: 4px 8px;
+        /* Smaller logout button */
+        font-size: 11px;
+    }
+
+    .breadcrumb {
+        padding: 12px 15px;
+        margin-bottom: 18px;
+    }
+
+    .breadcrumb h3 {
+        font-size: 16px;
+        flex-direction: row;
+        gap: 5px;
+        text-align: center;
+        justify-content: center;
+    }
+
+    .storage-stats {
+        padding: 15px;
+        margin-bottom: 18px;
+    }
+
+    .stats-grid {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .stat-card {
+        padding: 12px;
+    }
+
+    .stat-card .stat-value {
+        font-size: 16px;
+    }
+
+    .controls {
+        flex-direction: column;
+        gap: 10px;
+        margin-bottom: 18px;
+    }
+
+    .create-folder-form {
+        flex-direction: column;
+        padding: 12px;
+    }
+
+    /* Admin buttons stay in one horizontal row on their own line, instead
+       of each stretching to a full-width bar (which .controls'
+       flex-direction: column above would otherwise cause via stretch). */
+    .admin-actions {
+        width: 100%;
+    }
+
+    .create-folder-form input[type="text"] {
+        min-width: auto;
+        width: 100%;
+        margin-bottom: 10px;
+    }
+
+    /* Reduce manual cleanup button margin in mobile */
+    .manual-cleanup-btn {
+        margin-left: 5px;
+    }
+
+    /* Enhanced file table for mobile - SIMPLIFIED APPROACH */
+    .file-table {
+        margin: 18px 0;
+        border-radius: 12px !important;
+        overflow-x: auto;
+        width: 100%;
+        background: rgba(255, 255, 255, 0.1) !important;
+    }
+
+    .table {
+        width: 100%;
+        table-layout: fixed;
+        border-collapse: collapse;
+        font-size: 13px;
+    }
+
+    /* Ensure table rows have theme background on mobile */
+    .table tbody tr {
+        background: transparent !important;
+        border-bottom: 1px solid rgba(48, 84, 140, 0.55) !important;
+    }
+
+    /* Ensure file icons are white on mobile */
+    .file-icon-default {
+        color: white !important;
+    }
+
+    /* Keep all columns visible but make them smaller on mobile */
+    .table th,
+    .table td {
+        padding: 10px 8px;
+        vertical-align: middle;
+        color: white !important;
+    }
+
+    /* Keep header styling consistent with desktop - solid color instead of gradient */
+    .table th {
+        background: #34495e !important;
+        color: white !important;
+    }
+
+    /* Only table body cells get the blue theme background */
+    .table td {
+        background: transparent !important;
+    }
+
+    /* Override specific file name and folder colors on mobile */
+    .folder-item .folder-name,
+    .current-destination span,
+    .current-destination,
+    .file-name,
+    .file-name a,
+    .file-name span,
+    .table td a,
+    .table td span {
+        color: white !important;
+    }
+
+    /* Mobile checkboxes — touch-friendly, not shrunken */
+    input[type="checkbox"].file-checkbox,
+    input[type="checkbox"].item-checkbox,
+    input[type="checkbox"]#selectAll,
+    .file-checkbox,
+    .item-checkbox,
+    #selectAll {
+        width: 20px !important;
+        height: 20px !important;
+        min-width: 20px !important;
+        min-height: 20px !important;
+        margin: 0 auto !important;
+        cursor: pointer !important;
+        transform: none !important;
+        flex-shrink: 0 !important;
+        accent-color: #3498db;
+    }
+
+    /* Allow name column to expand naturally for full file names */
+    .table th:nth-child(2),
+    .table td:nth-child(2) {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 150px;
+        max-width: 300px;
+        padding: 12px 8px;
+    }
+
+    /* Specific column widths for mobile */
+    .table th:nth-child(1),
+    /* Checkbox */
+    .table td:nth-child(1) {
+        width: 42px !important;
+        min-width: 42px !important;
+        text-align: center;
+        vertical-align: middle;
+        padding: 10px 4px;
+        white-space: nowrap;
+    }
+
+    .table th:nth-child(3),
+    /* Size */
+    .table td:nth-child(3) {
+        width: 120px;
+        font-size: 12px;
+        white-space: normal;
+        line-height: 1.3;
+    }
+
+    .table th:nth-child(4),
+    /* Type */
+    .table td:nth-child(4) {
+        width: 80px;
+        font-size: 12px;
+        white-space: nowrap;
+    }
+
+    .table th:nth-child(5),
+    /* Modified */
+    .table td:nth-child(5) {
+        width: 100px;
+        font-size: 11px;
+        white-space: nowrap;
+    }
+
+    .table th:nth-child(6),
+    /* Actions */
+    .table td:nth-child(6) {
+        width: 300px;
+        /* Increased from 220px to ensure all 5 buttons fit */
+        text-align: center;
+        white-space: nowrap;
+    }
+
+    /* Make buttons smaller for mobile */
+    .btn-sm {
+        font-size: 8px !important;
+        /* Slightly larger for readability */
+        padding: 2px 3px !important;
+        /* Compact padding */
+        margin: 0 1px;
+        /* Reduced margin */
+        min-width: 28px;
+        /* Smaller minimum width for mobile */
+        flex-shrink: 0 !important;
+        /* Prevent buttons from shrinking */
+        white-space: nowrap !important;
+        /* Prevent text wrapping */
+    }
+
+    /* File name improvements */
+    .file-name {
+        display: flex !important;
+        align-items: center !important;
+        gap: 8px !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        max-width: 100% !important;
+    }
+
+    .file-name a.folder-link,
+    .file-name a,
+    .file-name span {
+        display: inline-block !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        color: white !important;
+        text-decoration: none !important;
+        transition: color 0.3s ease !important;
+    }
+
+    .file-name .file-icon {
+        flex-shrink: 0 !important;
+    }
+
+    /* Actions container */
+    .actions {
+        display: flex !important;
+        gap: 1px;
+        /* Tight spacing for mobile */
+        justify-content: center;
+        align-items: center;
+        flex-wrap: nowrap !important;
+        /* Force single row */
+        flex-direction: row !important;
+        /* Force horizontal */
+        width: 100%;
+        overflow: visible !important;
+    }
+
+    /* Adjust padding for mobile */
+    .table th,
+    .table td {
+        padding: 12px 8px;
+        font-size: 12px;
+        line-height: 1.4;
+    }
+
+    /* File name styling for mobile - allow full names */
+    .file-name {
+        display: flex;
+        align-items: flex-start;
+        /* Align to top when wrapping */
+        gap: 6px;
+        max-width: 100%;
+    }
+
+    .file-name a {
+        font-size: 13px;
+        line-height: 1.3;
+        text-decoration: none;
+        color: #2c3e50;
+        word-break: break-word;
+        /* Break long file names */
+        white-space: normal;
+        /* Allow wrapping */
+        max-width: 100%;
+    }
+
+    .file-name a:hover {
+        color: #3498db;
+    }
+
+    /* Icon sizing for mobile */
+    .file-icon {
+        font-size: 14px;
+        width: 16px;
+        flex-shrink: 0;
+    }
+
+    /* Checkbox styling for mobile - consistent touch-friendly size */
+    .file-checkbox,
+    #selectAll {
+        width: 20px !important;
+        height: 20px !important;
+        min-width: 20px !important;
+        min-height: 20px !important;
+        margin: 0 auto !important;
+        cursor: pointer !important;
+        display: block !important;
+        transform: none !important;
+        accent-color: #3498db;
+        flex-shrink: 0 !important;
+    }
+
+    /* Add horizontal scroll indicator */
+    .file-table::-webkit-scrollbar {
+        height: 8px;
+    }
+
+    .file-table::-webkit-scrollbar-track {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+    }
+
+    .file-table::-webkit-scrollbar-thumb {
+        background: rgba(52, 152, 219, 0.5);
+        border-radius: 4px;
+    }
+
+    /* Modified date styling */
+    .table td:nth-child(5) {
+        font-size: 10px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    /* Compact empty table for mobile - target the actual HTML structure */
+    .table td[colspan] {
+        padding: 10px 20px !important;
+        /* Much smaller padding */
+    }
+
+    .table td[colspan]>div {
+        min-height: 40px !important;
+        /* Much smaller min-height */
+    }
+
+    .table td[colspan] i {
+        font-size: 20px !important;
+        /* Smaller icon */
+        margin-bottom: 5px !important;
+    }
+
+    .table td[colspan] div[style*="font-size: 18px"] {
+        font-size: 12px !important;
+        /* Smaller title */
+        margin-bottom: 4px !important;
+    }
+
+    .table td[colspan] div[style*="font-size: 14px"] {
+        font-size: 10px !important;
+        /* Smaller description */
+    }
+
+    /* Force the table itself to be smaller */
+    .file-table .table {
+        min-height: 60px !important;
+    }
+
+    .file-table {
+        min-height: 60px !important;
+    }
+
+    .table tbody tr:last-child td:first-child {
+        border-bottom-left-radius: 12px;
+    }
+
+    .table tbody tr:last-child td:last-child {
+        border-bottom-right-radius: 12px;
+    }
+
+    .table th,
+    .table td {
+        padding: 8px 6px !important;
+        /* Increased padding for less cramped look */
+        white-space: nowrap;
+        vertical-align: middle;
+    }
+
+    /* Override white-space for size column to keep content together */
+    .table th:nth-child(3),
+    .table td:nth-child(3) {
+        white-space: nowrap !important;
+        /* Keep files/folders together */
+        font-size: 11px !important;
+    }
+
+    /* Make only first column sticky for better UX */
+    .table th:first-child,
+    .table td:first-child {
+        position: sticky;
+        left: 0;
+        background: rgba(255, 255, 255, 0.98);
+        z-index: 2;
+        box-shadow: 2px 0 4px rgba(0, 0, 0, 0.1);
+        width: 15% !important;
+        /* Fixed width for checkbox column */
+    }
+
+    /* All column widths are managed by smartTableColumnizer() in JS — no overrides here */
+
+    /* Name - balanced size */
+    .file-table .table th:nth-child(3),
+    .file-table .table td:nth-child(3) {
+        white-space: nowrap !important;
+    }
+
+    /* Size - compact */
+    .file-table .table th:nth-child(4),
+    .file-table .table td:nth-child(4) {
+        white-space: nowrap !important;
+    }
+
+    /* Type - smaller */
+    .file-table .table th:nth-child(5),
+    .file-table .table td:nth-child(5) {
+        white-space: nowrap !important;
+    }
+
+    .table thead th:first-child {
+        background: linear-gradient(135deg, #34495e, #2c3e50);
+        color: white;
+    }
+
+    .table tbody tr {
+        background: rgba(255, 255, 255, 0.95);
+    }
+
+    /* File name column adjustments - keep single line with ellipsis */
+    .file-name {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        max-width: 100%;
+        overflow: hidden;
+    }
+
+    .file-name a,
+    .file-name span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex: 1;
+        line-height: 1.3;
+    }
+
+    /* Size column */
+    .table th:nth-child(3),
+    .table td:nth-child(3) {
+        min-width: 120px;
+        /* Increased for proper mobile display */
+        text-align: left;
+        /* Left align for better mobile readability */
+        font-size: 11px;
+        /* Smaller font to fit content */
+        white-space: nowrap;
+        /* Keep files/folders on same line */
+    }
+
+    /* Type column */
+    .table th:nth-child(4),
+    .table td:nth-child(4) {
+        min-width: 38px;
+        /* 30% smaller: 55px -> 38px */
+    }
+
+    /* Modified column */
+    .table th:nth-child(5),
+    .table td:nth-child(5) {
+        min-width: 49px;
+        /* 30% smaller: 70px -> 49px */
+    }
+
+    /* Actions column */
+    .table th:last-child,
+    .table td:last-child {
+        min-width: 200px;
+        /* Increased to accommodate text buttons */
+        white-space: nowrap;
+    }
+
+    .actions {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 190px;
+        justify-content: flex-start;
+        flex-wrap: nowrap;
+    }
+
+    .actions .btn-sm {
+        padding: 3px 6px;
+        font-size: 9px;
+        min-width: auto;
+        height: 22px;
+        border-radius: 3px;
+        text-align: left;
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+    }
+
+    .actions .btn-sm i {
+        font-size: 8px;
+        margin-right: 4px;
+        width: 12px;
+        text-align: center;
+    }
+
+    .file-info-meta {
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    /* Mobile upload section */
+    .upload-section {
+        padding: 15px;
+        margin: 0 0 18px 0;
+    }
+
+    .upload-section h3 {
+        font-size: 18px;
+    }
+
+    /* Mobile upload controls */
+    .upload-controls {
+        flex-direction: column;
+        gap: 8px;
+        margin-bottom: 15px;
+    }
+
+    .upload-mode-btn {
+        padding: 10px 12px;
+        font-size: 14px;
+        width: 100%;
+        justify-content: center;
+    }
+
+    .upload-mode-hint {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+        margin-left: 0;
+        text-align: left;
+        font-size: 11px;
+    }
+
+    .upload-instructions {
+        margin-top: 2px;
+        font-size: 10px;
+        line-height: 1.3;
+    }
+
+    .file-input-display {
+        padding: 20px 15px;
+        text-align: center;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .file-input-display i {
+        font-size: 24px;
+    }
+
+    .queue-actions {
+        flex-direction: column;
+        width: 100%;
+        gap: 8px;
+    }
+
+    .queue-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+    }
+
+    .queue-stats {
+        text-align: center;
+    }
+
+    .upload-progress-summary {
+        padding: 12px;
+    }
+
+    .progress-stats {
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+
+    .file-queue {
+        max-height: 250px;
+    }
+
+    .queue-item {
+        padding: 10px;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+    }
+
+    .file-info {
+        order: 1;
+    }
+
+    .file-status {
+        order: 2;
+        justify-content: space-between;
+        min-width: auto;
+    }
+
+    .bulk-actions {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 12px;
+    }
+
+    .bulk-buttons {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+    }
+
+    /* Modal adjustments for mobile - sizing only. Background/blur
+       intentionally NOT overridden here so mobile renders the exact same
+       color theme as desktop (see base .modal / .modal-content rules) -
+       any apparent mismatch is a rendering issue (backdrop-filter not
+       actually taking effect on-device), not a different intended color,
+       so diverging the values here would just mask that instead of
+       fixing it. */
+    .modal-content {
+        width: 95%;
+        max-height: calc(100dvh - 24px);
+        padding: 18px;
+        border-radius: 12px;
+    }
+
+    .modal {
+        /* intentionally inherits desktop's blur(5px) / rgba(0,0,0,0.5) */
+        border: 0px;
+    }
+
+    .modal-header {
+        flex-direction: row;
+        /* keep title + × on the same line */
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 14px;
+    }
+
+    .modal-footer {
+        flex-direction: column;
+        gap: 8px;
+        padding-top: 12px;
+    }
+
+    .modal-footer .btn {
+        width: 100%;
+    }
+
+    #moveModal .modal-content {
+        max-width: 98%;
+    }
+}
+
+/* Large mobile devices (iPhone 14 Pro Max, etc.) */
+@media (max-width: 900px) and (orientation: portrait) {
+
+    /* Touch-friendly checkboxes for large mobile devices */
+    input[type="checkbox"].file-checkbox,
+    input[type="checkbox"].item-checkbox,
+    input[type="checkbox"]#selectAll,
+    .file-checkbox,
+    .item-checkbox,
+    #selectAll {
+        width: 20px !important;
+        height: 20px !important;
+        min-width: 20px !important;
+        margin: 0 auto !important;
+        cursor: pointer !important;
+        transform: none !important;
+        accent-color: #3498db;
+    }
+}
+
+/* Tablet specific adjustments */
+@media (min-width: 769px) and (max-width: 1024px) {
+
+    /* Uniform spacing for tablets */
+    .header {
+        margin-bottom: 18px;
+    }
+
+    .breadcrumb {
+        margin-bottom: 18px;
+    }
+
+    .storage-stats {
+        margin-bottom: 18px;
+    }
+
+    .controls {
+        margin-bottom: 18px;
+    }
+
+    .upload-section {
+        margin-bottom: 18px;
+    }
+
+    .file-table {
+        margin: 18px 0;
+        /* Changed from margin-bottom to full margin */
+        overflow-x: auto;
+    }
+
+    /* The actual scrollable element is the inner #tableScrollWrapper, not
+       .file-table itself. Make sure it always scrolls horizontally here —
+       otherwise the Actions column (last child) can end up clipped by
+       .file-table's overflow:hidden instead of reachable via scroll. */
+    .table-scroll-wrapper {
+        overflow-x: auto !important;
+        overflow-y: auto !important;
+    }
+
+    /* Let the table grow to fit its content (checkbox + name + size + type
+       + modified + actions) rather than being squeezed into 100% width,
+       so the extra width is scrollable instead of the last column shrinking
+       and clipping its buttons. */
+    .table {
+        width: max-content;
+        min-width: 100%;
+    }
+
+    /* Tablet-specific actions column */
+    .table th:last-child,
+    .table td:last-child {
+        min-width: 350px;
+        /* Increased from 280px for better button spacing */
+    }
+
+    .actions {
+        gap: 4px;
+        flex-wrap: nowrap;
+    }
+
+    .actions .btn-sm {
+        padding: 3px 6px;
+        font-size: 10px;
+    }
+
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .table {
+        min-width: 490px;
+        /* 30% smaller: 700px -> 490px */
+    }
+
+    .progress-stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* Medium mobile screens (between very small and tablet) */
+@media (min-width: 481px) and (max-width: 768px) {
+
+    /* Ensure theme background colors are maintained on medium mobile screens */
+    .file-table {
+        background: rgba(255, 255, 255, 0.1) !important;
+    }
+
+    .table tbody tr {
+        background: transparent !important;
+        border-bottom: 1px solid rgba(48, 84, 140, 0.55) !important;
+    }
+
+    /* Ensure white text color for table cells on medium mobile */
+    .table td {
+        color: white !important;
+        background: transparent !important;
+    }
+
+    .table th {
+        background: #34495e !important;
+        color: white !important;
+    }
+
+    /* Ensure white text for file icons */
+    .file-icon-default {
+        color: white !important;
+    }
+
+    /* Override specific file name and folder colors on medium mobile */
+    .folder-item .folder-name,
+    .current-destination span,
+    .current-destination,
+    .file-name,
+    .file-name a,
+    .file-name span,
+    .table td a,
+    .table td span {
+        color: white !important;
+    }
+
+    /* Touch-friendly checkboxes for medium mobile */
+    input[type="checkbox"].file-checkbox,
+    input[type="checkbox"].item-checkbox,
+    input[type="checkbox"]#selectAll,
+    .file-checkbox,
+    .item-checkbox,
+    #selectAll {
+        width: 20px !important;
+        height: 20px !important;
+        min-width: 20px !important;
+        margin: 0 auto !important;
+        cursor: pointer !important;
+        transform: none !important;
+        accent-color: #3498db;
+    }
+
+    .table th:nth-child(6),
+    /* Actions */
+    .table td:nth-child(6) {
+        width: 320px;
+        /* Increased from 250px for more space */
+    }
+
+    .btn-sm {
+        font-size: 8px !important;
+        /* Slightly larger than very small screens */
+        padding: 2px 4px !important;
+        min-width: 30px;
+    }
+
+    .actions {
+        gap: 2px;
+    }
+}
+
+/* Very small screens (phones in portrait) */
+@media (max-width: 480px) {
+
+    /* Fix: search-wrapper's inline min-width:250px (index.html) and this
+       input's min-width:200px force the whole document wider than the
+       viewport below ~250px, which overflows <body> horizontally. That
+       decouples the fixed body::before gradient from the (now wider,
+       scrollable) page content - see conversation. Clamp both here. */
+    .search-wrapper {
+        min-width: 0 !important;
+        max-width: 100% !important;
+    }
+
+    .create-folder-form input[type="text"] {
+        min-width: 0;
+    }
+
+    /* Ensure theme background colors are maintained on very small screens */
+    .file-table {
+        background: rgba(255, 255, 255, 0.1) !important;
+    }
+
+    .table tbody tr {
+        background: transparent !important;
+        border-bottom: 1px solid rgba(48, 84, 140, 0.55) !important;
+    }
+
+    /* Ensure white text color for table cells on very small screens */
+    .table td {
+        color: white !important;
+        background: transparent !important;
+    }
+
+    .table th {
+        background: #34495e !important;
+        color: white !important;
+    }
+
+    /* Ensure white text for file icons */
+    .file-icon-default {
+        color: white !important;
+    }
+
+    /* Override specific file name and folder colors on very small screens */
+    .folder-item .folder-name,
+    .current-destination span,
+    .current-destination,
+    .file-name,
+    .file-name a,
+    .file-name span,
+    .table td a,
+    .table td span {
+        color: white !important;
+    }
+
+    /* Touch-friendly checkboxes for very small screens */
+    input[type="checkbox"].file-checkbox,
+    input[type="checkbox"].item-checkbox,
+    input[type="checkbox"]#selectAll,
+    .file-checkbox,
+    .item-checkbox,
+    #selectAll {
+        width: 18px !important;
+        height: 18px !important;
+        min-width: 18px !important;
+        margin: 0 auto !important;
+        cursor: pointer !important;
+        transform: none !important;
+        accent-color: #3498db;
+    }
+
+    .container {
+        padding: 5px;
+    }
+
+    .header {
+        padding: 6px 8px;
+        /* Ultra-compact padding */
+    }
+
+    .header-left h1 {
+        font-size: 14px;
+        /* Much smaller title */
+    }
+
+    .user-badge {
+        padding: 3px 6px;
+        /* Minimal padding */
+        font-size: 11px;
+    }
+
+    .user-info {
+        gap: 6px;
+        /* Smaller gaps */
+    }
+
+    .role-badge {
+        padding: 1px 4px;
+        /* Tiny role badge */
+        font-size: 9px;
+    }
+
+    .logout-btn {
+        padding: 3px 6px;
+        /* Tiny logout button */
+        font-size: 10px;
+    }
+
+    .breadcrumb {
+        padding: 10px;
+    }
+
+    .storage-stats {
+        padding: 12px;
+    }
+
+    .stat-card {
+        padding: 10px;
+    }
+
+    .file-table {
+        margin: 12px 0;
+        /* Changed from negative margins to positive */
+        overflow-x: auto;
+        border-radius: 10px !important;
+        background: rgba(255, 255, 255, 0.1) !important;
+        /* Ensure theme background on very small screens */
+    }
+
+    .table {
+        min-width: 300px;
+        /* Even smaller for iPhone SE: 315px -> 300px */
+        font-size: 7px;
+        /* Smaller font: 8px -> 7px */
+        border-radius: 10px !important;
+    }
+
+    /* Ensure table rows maintain theme styling on very small screens */
+    .table tbody tr {
+        border-bottom: 1px solid rgba(48, 84, 140, 0.55) !important;
+        background: transparent !important;
+    }
+
+    .table tbody tr:hover {
+        background: rgba(52, 152, 219, 0.05) !important;
+    }
+
+    .table tbody tr.selected {
+        background: rgba(52, 152, 219, 0.1) !important;
+        border-left: 4px solid #3498db;
+    }
+
+    .table th,
+    .table td {
+        padding: 3px 2px;
+        /* More compact for iPhone SE: 4px 3px -> 3px 2px */
+    }
+
+    /* Adjust sticky columns for very small screens like iPhone SE */
+    .table th:first-child,
+    .table td:first-child {
+        min-width: 14px;
+        /* Much smaller checkbox column to match 10px checkboxes */
+    }
+
+    .file-name {
+        min-width: 50px;
+        /* Smaller file name: 56px -> 50px */
+        max-width: 70px;
+        /* Smaller max width: 77px -> 70px */
+    }
+
+    .table th:nth-child(3),
+    .table td:nth-child(3) {
+        min-width: 30px;
+        /* Smaller size column: 35px -> 30px */
+    }
+
+    .table th:nth-child(4),
+    .table td:nth-child(4) {
+        min-width: 28px;
+        /* Smaller type column: 32px -> 28px */
+    }
+
+    .table th:nth-child(5),
+    .table td:nth-child(5) {
+        min-width: 36px;
+        /* Smaller date column: 42px -> 36px */
+    }
+
+    .table th:last-child,
+    .table td:last-child {
+        min-width: 160px;
+        /* Smaller actions column: 180px -> 160px */
+    }
+
+    .btn-sm {
+        padding: 1px 1px;
+        /* Even tighter padding for iPhone SE */
+        font-size: 5px;
+        /* Smaller font size */
+        min-width: 18px;
+        /* Smaller minimum width: 20px -> 18px */
+    }
+
+    /* Hide button text on very small screens, show icons only */
+    .actions .btn-sm {
+        font-size: 0;
+        /* Hide text */
+    }
+
+    .actions .btn-sm i {
+        font-size: 7px;
+        /* Slightly smaller icons for iPhone SE: 8px -> 7px */
+    }
+
+    .actions {
+        gap: 1px;
+        /* Keep tight spacing */
+        flex-wrap: nowrap;
+        /* Ensure no wrapping */
+    }
+
+    .upload-section {
+        padding: 12px;
+        margin: 8px 0;
+        max-width: 100%;
+        box-sizing: border-box;
+        overflow-x: hidden;
+    }
+
+    .upload-section h3 {
+        font-size: 16px;
+        margin-bottom: 12px;
+    }
+
+    /* Very small screen upload controls */
+    .upload-controls {
+        flex-direction: column;
+        gap: 6px;
+        margin-bottom: 12px;
+    }
+
+    .upload-mode-btn {
+        padding: 8px 10px;
+        font-size: 13px;
+        width: 100%;
+        justify-content: center;
+        border-radius: 6px;
+    }
+
+    .upload-mode-hint {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 4px;
+        margin-left: 0;
+        text-align: left;
+        font-size: 10px;
+        line-height: 1.2;
+        flex-wrap: wrap;
+    }
+
+    .upload-instructions {
+        margin-top: 1px;
+        font-size: 9px;
+        line-height: 1.2;
+        color: rgba(255, 255, 255, 0.7);
+    }
+
+    .file-input-display {
+        padding: 15px 10px;
+        font-size: 12px;
+        line-height: 1.3;
+    }
+
+    .file-input-display i {
+        font-size: 18px;
+        margin-bottom: 8px;
+    }
+
+    .file-input-display strong {
+        font-size: 13px;
+    }
+
+    .file-input-display div div {
+        font-size: 10px;
+        margin-top: 4px;
+    }
+
+    /* Mobile parallel upload controls */
+    .parallel-upload-controls {
+        flex-direction: row;
+        justify-content: center;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px;
+        font-size: 11px;
+        width: 100%;
+        margin-bottom: 8px;
+        flex-wrap: wrap;
+    }
+
+    .parallel-upload-controls label {
+        gap: 4px;
+        font-size: 11px;
+        align-items: center;
+        white-space: nowrap;
+    }
+
+    .parallel-upload-controls select {
+        padding: 2px 4px;
+        font-size: 11px;
+        min-width: 40px;
+        height: auto;
+    }
+
+    .parallel-upload-controls input[type="checkbox"] {
+        transform: scale(1.1);
+    }
+
+    .queue-actions {
+        flex-direction: column;
+        gap: 6px;
+        align-items: stretch;
+    }
+
+    .modal-content {
+        width: 98%;
+        max-height: calc(100dvh - 16px);
+        padding: 14px;
+        border-radius: 10px;
+    }
+
+    /* Mobile folder browser — give it a smaller but still usable height */
+    .folder-browser {
+        max-height: clamp(140px, 28vh, 240px);
+    }
+
+    .browser-actions {
+        padding: 6px 8px;
+        gap: 6px;
+    }
+
+    .browser-actions .btn {
+        font-size: 10px;
+        padding: 3px 6px;
+        flex: 1;
+        text-align: center;
+    }
+
+    .folder-list {
+        padding: 6px;
+        max-height: 200px;
+    }
+
+    .folder-item {
+        padding: 10px 8px;
+        font-size: 13px;
+    }
+
+    .folder-item i.fa-folder {
+        font-size: 13px;
+        margin-right: 8px;
+    }
+
+    .current-destination {
+        padding: 6px 8px;
+        font-size: 12px;
+    }
+
+    .current-destination span {
+        font-size: 12px;
+    }
+}
+
+/* Landscape phone orientation */
+@media (max-width: 768px) and (orientation: landscape) {
+    .header {
+        flex-direction: row;
+        padding: 6px 12px;
+        /* More compact for landscape */
+    }
+
+    .user-info {
+        flex-direction: row;
+        gap: 8px;
+        /* Smaller gap for landscape */
+    }
+
+    .header-left h1 {
+        font-size: 15px;
+        /* Smaller for landscape */
+    }
+
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .file-queue {
+        max-height: 200px;
+    }
+
+    /* Landscape: modals are wide but very short — shrink folder browser */
+    .modal-content {
+        max-height: calc(100dvh - 16px);
+        padding: 12px 18px;
+    }
+
+    .folder-browser {
+        max-height: clamp(100px, 22vh, 200px);
+    }
+}
+
+/* High DPI displays */
+@media (-webkit-min-device-pixel-ratio: 2),
+(min-resolution: 192dpi) {
+
+    .file-icon,
+    .btn i {
+        font-size: 1.1em;
+    }
+}
+
+/* Touch-friendly enhancements */
+@media (pointer: coarse) {
+
+    .btn,
+    .file-checkbox,
+    .remove-btn {
+        min-height: 44px;
+        min-width: 44px;
+    }
+
+    .file-checkbox {
+        width: 20px;
+        height: 20px;
+    }
+
+    /* table rows size to content — no min-height override needed */
+
+    .queue-item {
+        min-height: 60px;
+    }
+}
+
+/* Animations */
+.fade-in {
+    animation: fadeIn 0.6s ease-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.slide-in {
+    animation: slideInUp 0.4s ease-out;
+}
+
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.05);
+    }
+}
+
+.pulse {
+    animation: pulse 2s infinite;
+}
+
+/* Scrollbar styling for queue */
+.file-queue::-webkit-scrollbar {
+    width: 6px;
+}
+
+.file-queue::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+}
+
+.file-queue::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 3px;
+}
+
+.file-queue::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.5);
+}
+
+/* Extra small mobile devices (portrait phones) */
+@media (max-width: 480px) {
+    .container {
+        padding: 10px;
+    }
+
+    /* Make table even more compact on small screens */
+    .table {
+        font-size: 12px;
+        min-width: 450px;
+        /* Slightly smaller minimum width */
+    }
+
+    .table th,
+    .table td {
+        padding: 8px 6px;
+    }
+
+    /* Make buttons smaller */
+    .btn-sm {
+        font-size: 10px !important;
+        padding: 3px 6px !important;
+    }
+
+    /* Compact file names */
+    .file-name a {
+        font-size: 12px;
+    }
+
+    /* Smaller icons */
+    .file-icon {
+        font-size: 12px;
+        width: 14px;
+    }
+}
+
+/* Confirmation Modal Styles */
+.confirmation-content {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 20px 0;
+}
+
+.confirmation-icon {
+    flex-shrink: 0;
+}
+
+.confirmation-icon i {
+    font-size: 48px;
+    color: #f39c12;
+}
+
+.confirmation-message {
+    flex: 1;
+}
+
+.confirmation-message p {
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.5;
+    color: #333;
+}
+
+#confirmationConfirmBtn.btn-warning {
+    background: #f39c12;
+    border-color: #f39c12;
+}
+
+#confirmationConfirmBtn.btn-danger {
+    background: #e74c3c;
+    border-color: #e74c3c;
+}
+
+/* Assembly Status Styles */
+.queue-item.assembling {
+    border-left-color: #f39c12;
+}
+
+.status-assembling {
+    color: #f39c12;
+}
+
+.queue-item.assembling .progress-bar-small .progress-fill-small {
+    background: linear-gradient(90deg, #f39c12, #e67e22);
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.7;
+    }
+}
+
+/* Search and sorting styles */
+.table-controls {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    padding: 15px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.search-wrapper input:focus {
+    outline: none;
+    border-color: #3498db;
+    background: rgba(255, 255, 255, 0.15);
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.2);
+}
+
+.search-wrapper input::placeholder {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+/* Sortable column headers */
+.sortable:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #3498db;
+    transition: all 0.2s ease;
+}
+
+.sortable.sort-asc .sort-icon:before {
+    content: "\f0de";
+    /* fa-sort-up */
+    color: #3498db;
+    opacity: 1;
+}
+
+.sortable.sort-desc .sort-icon:before {
+    content: "\f0dd";
+    /* fa-sort-down */
+    color: #3498db;
+    opacity: 1;
+}
+
+.sortable:hover .sort-icon {
+    opacity: 0.8;
+}
+
+/* Hidden rows for search */
+.hidden-by-search {
+    display: none !important;
+}
+
+/* Search highlight */
+.search-highlight {
+    background: #f39c12;
+    color: #2c3e50;
+    /* No horizontal padding and no bold: both change the glyph advance, so a
+       match in the middle of a word ("Soft[are] Services") rendered with a
+       visible gap on each side. Keep the highlight exactly the width of the
+       matched characters. */
+    padding: 0;
+    margin: 0;
+    border-radius: 2px;
+    font-weight: inherit;
+    display: inline;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+}
+
+/* The file table has many `.file-name span {display:block; width:100%}` rules
+   (desktop wrap + mobile layout). They also matched the highlight span, so a
+   folder like "QB Data 2024" showed a full-width yellow bar with the rest of
+   the name pushed to the next line. The #filesTable id makes this win over
+   all of them; do not remove the id or these !importants. */
+#filesTable td .file-name span.search-highlight,
+#filesTable td .file-name a span.search-highlight {
+    display: inline !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: inherit !important;
+    line-height: inherit !important;
+    font-weight: inherit !important;
+    color: #2c3e50 !important;
+}
+
+/* Deep search results styling */
+.search-results-header {
+    background: linear-gradient(135deg, #2e7d32 0%, #388e3c 100%) !important;
+    border: none !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    /* Ensure always visible */
+    display: table-row !important;
+    visibility: visible !important;
+    height: auto !important;
+}
+
+.search-header-cell {
+    padding: 0 !important;
+    border: none !important;
+    /* Ensure the cell is always visible */
+    display: table-cell !important;
+    visibility: visible !important;
+    width: 100% !important;
+}
+
+/* New div-based search header (mobile-friendly) */
+.search-results-header-div {
+    background: linear-gradient(135deg, #2e7d32 0%, #388e3c 100%);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    width: 100%;
+    display: block !important;
+    visibility: visible !important;
+}
+
+.search-header-content {
+    padding: 15px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.search-header-main {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: white;
+    font-weight: 600;
+}
+
+.search-header-main i {
+    font-size: 18px;
+    color: #81c784;
+}
+
+.search-title {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.search-count {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.search-truncated {
+    background: rgba(255, 193, 7, 0.2);
+    color: #ffc107;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.search-ext-badge {
+    background: rgba(99, 179, 237, 0.2);
+    color: #63b3ed;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: monospace;
+    letter-spacing: 0.02em;
+}
+
+.search-header-meta {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 13px;
+}
+
+.btn-close-search {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-size: 12px;
+}
+
+.btn-close-search:hover {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.search-result-row {
+    background: rgba(48, 84, 140, 0.55) !important;
+    border-left: 4px solid #4caf50 !important;
+    transition: all 0.2s ease;
+    color: white !important;
+}
+
+.search-result-row:hover {
+    background: rgba(52, 152, 219, 0.05) !important;
+    transform: translateX(2px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.search-result-row td {
+    background: transparent !important;
+    color: white !important;
+    border-bottom: 1px solid rgba(76, 175, 80, 0.2) !important;
+}
+
+.search-result-name {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 8px 0;
+    color: white !important;
+}
+
+.search-result-icon {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(76, 175, 80, 0.2);
+    border-radius: 6px;
+    color: #81c784 !important;
+    font-size: 14px;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.search-result-details {
+    flex: 1;
+    min-width: 0;
+}
+
+.search-result-title {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 4px;
+    color: white !important;
+}
+
+.search-folder-link {
+    color: #87CEEB !important;
+    text-decoration: none;
+    transition: color 0.2s ease;
+    font-weight: 600;
+}
+
+.search-folder-link:hover {
+    color: #B0E0E6 !important;
+    text-decoration: underline;
+}
+
+.search-result-path {
+    font-size: 12px;
+    color: white;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-style: italic;
+}
+
+.search-result-path i {
+    font-size: 11px;
+    color: #95a5a6;
+}
+
+.search-result-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+}
+
+.search-result-actions .btn {
+    padding: 5px 10px;
+    font-size: 11px;
+    border-radius: 4px;
+    min-width: auto;
+    text-align: center;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    border: 1px solid;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.search-result-actions .btn-sm {
+    padding: 4px 8px;
+    margin: 1px;
+    font-size: 10px;
+}
+
+.search-result-actions .btn-sm i {
+    font-size: 10px;
+    margin-right: 3px;
+}
+
+.search-result-actions .btn-primary {
+    background: linear-gradient(135deg, #3498db, #2980b9);
+    color: white;
+    border-color: #3498db;
+}
+
+.search-result-actions .btn-primary:hover {
+    background: linear-gradient(135deg, #2980b9, #3498db);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(52, 152, 219, 0.3);
+}
+
+.search-result-actions .btn-success {
+    background: linear-gradient(135deg, #27ae60, #229954);
+    color: white;
+    border-color: #27ae60;
+}
+
+.search-result-actions .btn-success:hover {
+    background: linear-gradient(135deg, #229954, #27ae60);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(39, 174, 96, 0.3);
+}
+
+.search-result-actions .btn-outline {
+    background: transparent;
+    color: #3498db;
+    border-color: #3498db;
+}
+
+.search-result-actions .btn-outline:hover {
+    background: #3498db;
+    color: white;
+    transform: translateY(-1px);
+}
+
+.search-name-cell {
+    min-width: 250px;
+    max-width: 400px;
+}
+
+.search-size-cell,
+.search-type-cell,
+.search-date-cell {
+    font-size: 13px;
+    color: #5a6c7d;
+}
+
+.folder-size-text {
+    color: white;
+    font-size: 13px;
+    font-style: italic;
+}
+
+.search-actions-cell {
+    min-width: 320px;
+    text-align: left;
+    white-space: nowrap;
+}
+
+/* Responsive adjustments for search results */
+@media (max-width: 768px) {
+
+    /* Force search header to display on mobile */
+    .search-results-header {
+        display: table-row !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        height: auto !important;
+        min-height: 60px !important;
+    }
+
+    .search-header-cell {
+        display: table-cell !important;
+        visibility: visible !important;
+        width: 100% !important;
+        padding: 0 !important;
+    }
+
+    .search-header-content {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 12px 15px;
+        /* Force visibility */
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+
+    .search-header-main {
+        flex-wrap: wrap;
+        gap: 8px;
+        width: 100%;
+        /* Force visibility */
+        display: flex !important;
+        visibility: visible !important;
+    }
+
+    .search-title {
+        font-size: 14px;
+        /* Force visibility */
+        display: inline !important;
+        visibility: visible !important;
+    }
+
+    .search-count {
+        font-size: 12px;
+        padding: 4px 8px;
+    }
+
+    .search-truncated {
+        font-size: 11px;
+        width: 100%;
+        margin-top: 4px;
+        display: block;
+    }
+
+    .search-header-meta {
+        width: 100%;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .search-time {
+        font-size: 12px;
+    }
+
+    .btn-close-search {
+        font-size: 12px;
+        padding: 6px 12px;
+        min-width: auto;
+    }
+
+    .btn-close-search i {
+        margin-right: 4px;
+    }
+
+    .search-result-name {
+        gap: 8px;
+    }
+
+    .search-result-icon {
+        width: 20px;
+        height: 20px;
+        font-size: 12px;
+    }
+
+    .search-result-title {
+        font-size: 13px;
+    }
+
+    .search-result-path {
+        font-size: 11px;
+    }
+
+    /* Mobile search result actions - maintain desktop style */
+    .search-result-actions {
+        flex-direction: row;
+        gap: 4px;
+        justify-content: flex-start;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    .search-result-actions .btn {
+        padding: 4px 8px;
+        font-size: 10px;
+        margin: 1px;
+        min-width: auto;
+        flex-shrink: 0;
+    }
+
+    .search-result-actions .btn i {
+        font-size: 9px;
+        margin-right: 2px;
+    }
+
+    .search-actions-cell {
+        min-width: 220px;
+        text-align: left;
+    }
+}
+
+/* Improve visibility of search results on smaller screens */
+@media (max-width: 480px) {
+    .search-header-content {
+        padding: 10px 12px;
+    }
+
+    .search-header-main {
+        font-size: 13px;
+    }
+
+    .search-header-main i {
+        font-size: 16px;
+    }
+
+    .search-title {
+        font-size: 13px;
+        font-weight: 700;
+    }
+
+    .search-count {
+        font-size: 11px;
+        padding: 3px 6px;
+    }
+
+    .btn-close-search {
+        font-size: 11px;
+        padding: 4px 8px;
+    }
+
+    /* Ensure search results table is visible on mobile */
+    .search-results-header {
+        display: table-row !important;
+        /* Override mobile table compression */
+        min-height: 50px !important;
+        height: auto !important;
+    }
+
+    .search-header-cell {
+        display: table-cell !important;
+        width: 100% !important;
+        /* Override mobile table font size for search header */
+        font-size: 12px !important;
+        padding: 0 !important;
+        min-width: 100% !important;
+    }
+
+    /* Override the tiny mobile table styles specifically for search header */
+    .search-results-header .search-header-cell {
+        font-size: 12px !important;
+        padding: 10px !important;
+        min-width: 100% !important;
+        width: 100% !important;
+    }
+
+    .search-results-header .search-header-content {
+        font-size: 12px !important;
+        padding: 10px !important;
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 8px !important;
+        min-height: 40px !important;
+    }
+
+    .search-results-header .search-title {
+        font-size: 12px !important;
+        font-weight: bold !important;
+        display: inline-block !important;
+        visibility: visible !important;
+    }
+
+    /* Make search results more readable on very small screens */
+    .search-result-row td {
+        padding: 8px 4px !important;
+        font-size: 12px !important;
+    }
+
+    /* Ensure search result rows maintain proper background */
+    .search-result-row {
+        background: rgba(255, 255, 255, 0.95) !important;
+        color: #2c3e50 !important;
+    }
+
+    .search-result-row td {
+        background: transparent !important;
+        color: #2c3e50 !important;
+    }
+
+    /* Mobile search actions styling - keep desktop look but smaller */
+    .search-result-actions {
+        flex-direction: row;
+        gap: 3px;
+        justify-content: flex-start;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    .search-result-actions .btn {
+        padding: 3px 6px;
+        font-size: 9px;
+        min-width: auto;
+        margin: 1px;
+        flex-shrink: 0;
+    }
+
+    .search-result-actions .btn i {
+        font-size: 8px;
+        margin-right: 2px;
+    }
+
+    .search-actions-cell {
+        min-width: 180px;
+        text-align: left;
+    }
+}
+
+/* Empty folder styling */
+.empty-folder-row {
+    background: rgba(255, 255, 255, 0.02) !important;
+}
+
+.empty-folder-row:hover {
+    background: rgba(255, 255, 255, 0.02) !important;
+}
+
+.empty-folder-cell {
+    text-align: center;
+    padding: 40px 20px;
+    color: white;
+}
+
+.empty-folder-content {
+    opacity: 0.6;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.empty-folder-icon {
+    font-size: 48px;
+    margin-bottom: 15px;
+}
+
+.empty-folder-title {
+    font-size: 16px;
+    font-weight: 500;
+    margin-bottom: 5px;
+}
+
+.empty-folder-subtitle {
+    font-size: 13px;
+}
+
+/* Search row: input + explicit Search button (search no longer auto-runs) */
+.search-row {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    flex: 1;
+    max-width: 60vw;
+    min-width: 250px;
+}
+
+/* Wrapper layout lives here, NOT in an inline style="": the CSP only allows
+   inline style attributes whose SHA-256 is listed in app.py, so a changed
+   inline style is silently dropped (box stayed ~204px, clear X mispositioned). */
+.search-wrapper {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+}
+
+.search-submit-btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 0 18px;
+    border-radius: 8px;
+}
+
+@media (max-width: 480px) {
+    .search-row {
+        min-width: 0;
+        max-width: 100%;
+    }
+}
+
+/* Search input styling */
+#tableSearch {
+    width: 100% !important;
+    padding: 12px 15px !important;
+    background: rgba(255, 255, 255, 0.1) !important;
+    border: 2px solid rgba(255, 255, 255, 0.2) !important;
+    border-radius: 8px !important;
+    color: white !important;
+    font-size: 14px !important;
+    transition: all 0.3s ease !important;
+}
+
+#tableSearch::placeholder {
+    color: rgba(255, 255, 255, 0.6) !important;
+}
+
+#tableSearch:focus {
+    outline: none !important;
+    border-color: #3498db !important;
+    background: rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Sort direction indicators */
+.sort-icon {
+    transition: all 0.2s ease;
+    display: inline-block;
+    white-space: nowrap;
+}
+
+.sortable {
+    -webkit-user-select: none;
+    user-select: none;
+    position: relative;
+    white-space: nowrap;
+}
+
+/* ===== Layout fixes: allow file names to wrap and ensure actions/buttons are visible ===== */
+/* These overrides focus on desktop/tablet where we previously forced single-line ellipses. */
+@media (min-width: 769px) {
+
+    /* Let the name column expand and wrap instead of truncating. This keeps the table layout
+       but allows long filenames to occupy multiple lines and keeps action buttons visible. */
+    .table th:nth-child(2),
+    .table td:nth-child(2) {
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        max-width: none !important;
+    }
+
+    .file-name,
+    .file-name a,
+    .file-name span,
+    .table td .file-name a,
+    .table td .file-name span {
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+        word-break: break-word !important;
+        overflow: visible !important;
+        max-height: none !important;
+    }
+
+    /* Remove artificial row height limits so wrapped names can push row height naturally. */
+    .table tbody tr {
+        max-height: none !important;
+    }
+
+    .file-name {
+        max-height: none !important;
+    }
+
+    /* Make the actions container wrap so buttons remain visible instead of being clipped. */
+    .table th:last-child,
+    .table td:last-child {
+        /* keep a reasonable minimum so actions have space, but allow wrapping */
+        min-width: 220px !important;
+        width: auto !important;
+    }
+
+    .actions {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        gap: 8px !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+    }
+
+    /* Keep individual buttons from shrinking too small but allow them to wrap onto next line. */
+    .actions .btn-sm {
+        white-space: nowrap !important;
+        flex-shrink: 0 !important;
+    }
+
+    /* If the table would still be too narrow, allow horizontal scrolling on the file-table container. */
+    .file-table {
+        overflow-x: auto !important;
+    }
+}
+
+/* End layout fixes block */
+
+/* Strong mobile override: ensure Name column wraps and Actions can wrap on narrow screens */
+@media (max-width: 768px) {
+
+    /* Name-column text wrapping — width is controlled by JS smartTableColumnizer */
+    .file-table .table th:nth-child(2),
+    .file-table .table td:nth-child(2),
+    .table th:nth-child(2),
+    .table td:nth-child(2) {
+        white-space: normal !important;
+        overflow: hidden !important;
+        word-break: break-word !important;
+        overflow-wrap: anywhere !important;
+        box-sizing: border-box !important;
+        /* width/min-width/max-width intentionally omitted — set by JS */
+    }
+
+    /* Make file-name elements allow wrapping and occupy full width */
+    .file-name,
+    .file-table .file-name {
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: flex-start !important;
+        gap: 8px !important;
+        white-space: normal !important;
+        max-width: 100% !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+        min-width: 0 !important;
+    }
+
+    .file-name a,
+    .file-name span,
+    .file-table .file-name a,
+    .file-table .file-name span {
+        display: block !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+        white-space: normal !important;
+        word-break: break-word !important;
+        overflow-wrap: anywhere !important;
+        overflow: hidden !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+    }
+
+    /* Ensure table cells hide horizontal overflow */
+    .table td {
+        overflow-x: hidden !important;
+        word-break: break-word !important;
+    }
+
+    /* Actions scrollable row */
+    .actions {
+        display: flex !important;
+        flex-wrap: nowrap !important;
+        gap: 6px !important;
+        justify-content: flex-start !important;
+        align-items: center !important;
+        overflow-x: auto !important;
+        padding-bottom: 4px !important;
+    }
+
+    .actions .btn-sm {
+        white-space: nowrap !important;
+        flex: 0 0 auto !important;
+        min-width: 34px !important;
+        padding: 4px 8px !important;
+    }
+
+    .actions::-webkit-scrollbar {
+        height: 6px;
+    }
+
+    .actions::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.12);
+        border-radius: 3px;
+    }
+
+    /* Adjacent columns — widths set by JS, just ensure no forced overrides */
+    .file-table .table th:nth-child(2),
+    .file-table .table td:nth-child(2) {
+        width: auto !important;
+        min-width: 0 !important;
+        max-width: none !important;
+    }
+}
+
+/* --- Final override: ensure Name column uses wrapping and wider width on mobile --- */
+/* Very specific selectors + !important to override earlier rules if necessary */
+/* (removed empty selector) */
+
+.file-table .table td:nth-child(2) .file-name a,
+.file-table .table td:nth-child(2) .file-name span,
+.table td:nth-child(2) .file-name a,
+.table td:nth-child(2) .file-name span {
+    display: block !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    max-width: 100% !important;
+}
+
+/* Column widths on mobile are controlled exclusively by smartTableColumnizer() in JS.
+   Do not add width/min-width/max-width overrides here — they will fight the JS. */
+@media (max-width: 768px) {
+    .table td {
+        overflow-x: hidden !important;
+    }
+}
+
+/* Desktop fallback: ensure wrapping applied there too */
+@media (min-width: 769px) {
+
+    .file-table .table td:nth-child(2) .file-name a,
+    .file-table .table td:nth-child(2) .file-name span {
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+        word-break: break-word !important;
+    }
+}
+
+/* ── File Viewer / Preview ───────────────────────────────────────────────── */
+
+/* Eye button inline with file name */
+.btn-eye-view {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(52, 152, 219, 0.15);
+    border: 1px solid rgba(52, 152, 219, 0.4);
+    color: #5dade2;
+    border-radius: 4px;
+    width: 22px;
+    height: 22px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+    margin-left: 6px;
+    vertical-align: middle;
+    line-height: 1;
+    padding: 0;
+}
+
+.btn-eye-view:hover {
+    background: rgba(52, 152, 219, 0.35);
+    border-color: rgba(52, 152, 219, 0.7);
+    color: #fff;
+    transform: scale(1.1);
+}
+
+/* Override: viewer modal wider + taller than default */
+#fileViewerModal .file-viewer-modal-content {
+    max-width: 900px;
+    width: 94vw;
+    height: calc(100dvh - 40px);
+    max-height: calc(100dvh - 40px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    -webkit-border-radius: 0 !important;
+    border-radius: 0 !important;
+    padding: 0;
+}
+
+#fileViewerModal .modal-header {
+    padding: 10px 16px;
+    margin-bottom: 0;
+    flex-shrink: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Viewer body fills the available space */
+.file-viewer-body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 0 0 12px 12px;
+    padding: 0;
+}
+
+/* Image viewer */
+.file-viewer-body.viewer-image {
+    /* Was 0.5, stacked on top of .modal-content's own 0.55-alpha layer
+       (z-index:1 over the spotlight's z-index:0 ::before), so the two
+       combined left only ~22% transmission - close enough to invisible
+       that the spotlight effectively didn't read through the letterboxed
+       area around the image. Matched to the 0.35 alpha .modal's own
+       backdrop already settled on for the same reason (see comment there),
+       which keeps enough black tint for image contrast while actually
+       letting the glow show. */
+    background: rgba(0, 0, 0, 0.35);
+}
+
+/* #img-conv-wrap and #hls-player-area both get a solid `background:#111`
+   from an inline style="" (see index.js: the innerHTML template around
+   img-conv-wrap, and the .style.cssText assignment for the transcoding
+   placeholder). This page's CSP locks style-src-attr to a hash allowlist
+   computed from the exact original inline-style strings - editing that
+   string's color value directly (tried first) changes its hash and makes
+   the browser reject the ENTIRE attribute, not just recolor it, which
+   silently broke the wrapper's display:flex/width/height too and collapsed
+   the image viewer to a blank area. Overriding from this external
+   stylesheet (same-origin, unaffected by style-src-attr) avoids touching
+   the inline attribute at all: the inline #111 still satisfies CSP and
+   applies normally, and this !important rule only recolors it afterward.
+   #hls-player-area is safe to make translucent unconditionally - once an
+   actual <video-player> mounts inside it, that element's own opaque
+   background (see .hls-player-outer video-player below) fully covers it
+   during real playback; this only shows during the "Preparing stream…"
+   placeholder state. */
+#img-conv-wrap {
+    background: rgba(17, 17, 17, 0.55) !important;
+}
+
+#hls-player-area {
+    background: rgba(17, 17, 17, 0.55) !important;
+}
+
+.viewer-img {
+    max-width: 100%;
+    max-height: 70vh;
+    object-fit: contain;
+    border-radius: 4px;
+    display: block;
+    /* Prevent GPU compositing layer from downsampling on HiDPI/Retina screens.
+       image-rendering hints alone weren't reliable, which is why the modal
+       used to disable backdrop-filter globally instead (see comment on
+       #fileViewerModal .file-viewer-modal-content). Promoting the image to
+       its OWN compositing layer, separate from the modal's blur layer,
+       fixes the actual downsampling cause directly so the modal can keep
+       its backdrop-filter (and the cursor-glow it lets show through). */
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: high-quality;
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+}
+
+/* ── Image preview loading state ─────────────────────────────────────────── */
+.img-conv-wrap {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 200px;
+}
+
+.img-conv-spinner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+}
+
+.img-conv-ring {
+    width: 36px;
+    height: 36px;
+    border: 3px solid rgba(255, 255, 255, 0.15);
+    border-top-color: #3498db;
+    border-radius: 50%;
+    animation: img-conv-spin 0.8s linear infinite;
+}
+
+@keyframes img-conv-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.img-conv-label {
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 13px;
+    font-weight: 500;
+    text-align: center;
+}
+
+#img-conv-result {
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+#img-conv-result[style*="display: block"],
+#img-conv-result[style*="display:block"] {
+    opacity: 1;
+}
+
+/* Video viewer */
+.file-viewer-body.viewer-video {
+    /* Was solid #0d1e3d - a plain hex color has no alpha channel at all,
+       so it painted fully opaque over the spotlight's z-index:0 ::before
+       on .modal-content underneath, blocking it completely regardless of
+       cursor position. Same rgb value, translucent, matching the alpha
+       convention the rest of the fixed panels use (see .modal-content
+       comment). */
+    background: rgba(13, 30, 61, 0.55);
+    border-radius: 0;
+    overflow: hidden;
+}
+
+.viewer-video-el {
+    max-width: 100%;
+    max-height: 70vh;
+    width: 100%;
+    display: block;
+}
+
+/* Audio viewer */
+.file-viewer-body.viewer-audio {
+    flex-direction: column;
+    padding: 30px;
+    background: rgba(255, 255, 255, 0.05);
+    min-height: 180px;
+}
+
+.viewer-audio-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+}
+
+.viewer-audio-icon {
+    font-size: 48px;
+    color: #f39c12;
+    opacity: 0.8;
+}
+
+.viewer-audio-name {
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 15px;
+    text-align: center;
+    word-break: break-all;
+}
+
+.viewer-audio-el {
+    width: 100%;
+    max-width: 480px;
+}
+
+/* PDF iframe */
+.file-viewer-body.viewer-pdf {
+    position: relative;
+    padding: 0;
+    background: #525659;
+    align-items: stretch;
+    overflow: hidden;
+}
+
+/* Text / code viewer */
+.file-viewer-body.viewer-text {
+    align-items: flex-start;
+    justify-content: flex-start;
+    overflow: auto;
+    padding: 0;
+}
+
+.viewer-pre {
+    margin: 0;
+    padding: 16px 20px;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    line-height: 1.55;
+    color: #e8f0fe;
+    white-space: pre-wrap;
+    word-break: break-all;
+    width: 100%;
+    min-height: 100%;
+    box-sizing: border-box;
+}
+
+.viewer-text-loading {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 14px;
+}
+
+.viewer-error {
+    color: #e74c3c;
+    font-size: 14px;
+    padding: 16px;
+}
+
+/* Mobile: smaller iframe height */
+@media (max-width: 768px) {
+    .viewer-iframe {
+        height: 55vh;
+    }
+
+    .viewer-img {
+        max-height: 55vh;
+    }
+
+    .viewer-video-el {
+        max-height: 50vh;
+    }
+}
+
+/* ── Office Document Viewer ─────────────────────────────────────────────── */
+
+.file-viewer-body.viewer-office {
+    align-items: flex-start;
+    justify-content: flex-start;
+    overflow: hidden;
+    padding: 0 0 14px 0;
+    flex-direction: column;
+}
+
+.viewer-office-loading {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 14px;
+    margin: auto;
+}
+
+/* ── DOCX ─────────────────────────────────────────────────────────────────── */
+
+.office-docx-body {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 32px 44px;
+    background: #fff;
+    color: #1a1a2e;
+    font-size: 14px;
+    line-height: 1.75;
+    box-sizing: border-box;
+    /* inner scroll, not body scroll */
+}
+
+.office-docx-body h1,
+.office-docx-body h2,
+.office-docx-body h3,
+.office-docx-body h4 {
+    margin: 1.1em 0 0.45em;
+    font-weight: 700;
+    color: #1a3a6b;
+}
+
+.office-docx-body h1 {
+    font-size: 22px;
+}
+
+.office-docx-body h2 {
+    font-size: 18px;
+}
+
+.office-docx-body h3 {
+    font-size: 15px;
+}
+
+.office-docx-body p {
+    margin-bottom: 0.7em;
+}
+
+.office-docx-body ul,
+.office-docx-body ol {
+    margin: 0.5em 0 0.5em 1.5em;
+}
+
+.office-docx-body table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1em 0;
+    font-size: 13px;
+}
+
+.office-docx-body td,
+.office-docx-body th {
+    border: 1px solid #ccc;
+    padding: 6px 10px;
+}
+
+.office-docx-body th {
+    background: #f0f4fa;
+    font-weight: 600;
+}
+
+.office-docx-body strong,
+.office-docx-body b {
+    font-weight: 700;
+}
+
+.office-docx-body em,
+.office-docx-body i {
+    font-style: italic;
+}
+
+/* ── XLSX ─────────────────────────────────────────────────────────────────── */
+
+.office-xlsx-viewer {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+}
+
+.office-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 8px 12px 0;
+    background: rgba(0, 0, 0, 0.25);
+    flex-wrap: wrap;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    flex-shrink: 0;
+}
+
+.office-tab {
+    padding: 5px 16px;
+    border-radius: 5px 5px 0 0;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-bottom: none;
+    background: rgba(255, 255, 255, 0.07);
+    color: rgba(255, 255, 255, 0.6);
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    transition: all 0.15s;
+}
+
+.office-tab:hover {
+    background: rgba(255, 255, 255, 0.14);
+    color: white;
+}
+
+.office-tab.active {
+    background: rgba(255, 255, 255, 0.18);
+    color: white;
+    font-weight: 600;
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.office-sheets {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    position: relative;
+}
+
+.office-sheet-panel {
+    display: none;
+    flex-direction: column;
+    height: 100%;
+}
+
+.office-sheet-panel.active {
+    display: flex;
+}
+
+.office-table-wrap {
+    flex: 1;
+    overflow: auto;
+    min-height: 0;
+    max-height: none;
+    width: 0;
+    min-width: 100%;
+}
+
+.office-table {
+    border-collapse: collapse;
+    font-size: 12px;
+    white-space: nowrap;
+    color: #e8f0fe;
+    width: max-content;
+    min-width: 100%;
+}
+
+.office-table thead th {
+    background: rgba(42, 82, 152, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    padding: 7px 14px;
+    text-align: left;
+    font-weight: 600;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    color: #fff;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.office-table tbody tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.office-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.09);
+}
+
+.office-table td {
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    padding: 5px 14px;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.office-truncation-notice {
+    padding: 6px 14px;
+    background: rgba(243, 156, 18, 0.12);
+    color: rgba(255, 255, 255, 0.65);
+    font-size: 12px;
+    text-align: center;
+    border-top: 1px solid rgba(243, 156, 18, 0.25);
+    flex-shrink: 0;
+}
+
+/* ── PPTX ─────────────────────────────────────────────────────────────────── */
+
+.office-pptx-viewer {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+}
+
+.pptx-slide-panel {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 20px;
+    min-height: 0;
+}
+
+.pptx-slide {
+    background: #ffffff;
+    border-radius: 8px;
+    padding: 40px 48px;
+    min-height: 300px;
+    color: #1a1a2e;
+    max-width: 720px;
+    margin: 0 auto;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
+.pptx-slide-title {
+    font-size: 22px;
+    font-weight: 700;
+    color: #1a3a6b;
+    margin: 0 0 20px;
+    padding-bottom: 14px;
+    border-bottom: 2px solid #2a5298;
+    line-height: 1.3;
+}
+
+.pptx-body {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.pptx-para {
+    font-size: 14px;
+    line-height: 1.65;
+    color: #2c3e50;
+    margin: 0;
+}
+
+.pptx-indent-1 {
+    padding-left: 22px;
+}
+
+.pptx-indent-2 {
+    padding-left: 44px;
+}
+
+.pptx-indent-3 {
+    padding-left: 66px;
+}
+
+.pptx-indent-4 {
+    padding-left: 88px;
+}
+
+.pptx-indent-5 {
+    padding-left: 110px;
+}
+
+.pptx-indent-6 {
+    padding-left: 132px;
+}
+
+.pptx-indent-7 {
+    padding-left: 154px;
+}
+
+.pptx-indent-8 {
+    padding-left: 176px;
+}
+
+.conflict-icon-dir {
+    color: #f39c12;
+    font-size: 0.9em;
+    flex-shrink: 0;
+}
+
+.conflict-icon-file {
+    color: #3498db;
+    font-size: 0.9em;
+    flex-shrink: 0;
+}
+
+.pptx-empty {
+    text-align: center;
+    color: #aaa;
+    font-size: 14px;
+    margin: 40px 0;
+    line-height: 2;
+}
+
+.pptx-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 10px 16px;
+    background: rgba(0, 0, 0, 0.22);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    flex-shrink: 0;
+}
+
+.pptx-counter {
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 13px;
+    min-width: 70px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+.pptx-controls .btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+    pointer-events: none;
+}
+
+/* Mobile tweaks */
+@media (max-width: 768px) {
+    .office-docx-body {
+        padding: 18px 20px;
+    }
+
+    .pptx-slide {
+        padding: 24px 20px;
+    }
+
+    .pptx-slide-title {
+        font-size: 17px;
+    }
+}
+
+/* ── Archive viewer: modal body ─────────────────────────────────────────────── */
+
+.file-viewer-body.viewer-archive {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+    /* Was solid #1a1a2e - same opaque-hex issue as .viewer-video above:
+       no alpha channel meant it fully blocked the spotlight's ::before
+       layer underneath. Same rgb value, translucent, matching the rest of
+       the fixed panels. */
+    background: rgba(26, 26, 46, 0.55);
+}
+
+.viewer-archive-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    height: 100%;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 15px;
+}
+
+/* ── Archive header bar ──────────────────────────────────────────────────────── */
+
+.archive-header {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    padding: 10px 14px;
+    background: rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
+}
+
+.archive-type-badge {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+}
+
+.archive-type-badge-zip {
+    background: #e67e22;
+}
+
+.archive-type-badge-rar {
+    background: #8e44ad;
+}
+
+.archive-type-badge-7z {
+    background: #2980b9;
+}
+
+.archive-type-badge-tar {
+    background: #27ae60;
+}
+
+.archive-type-badge-default {
+    background: #555;
+}
+
+.archive-stat {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.65);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.archive-stat-lock {
+    color: #f39c12;
+}
+
+.archive-stat-warn {
+    color: #e74c3c;
+}
+
+/* ── File tree ───────────────────────────────────────────────────────────────── */
+
+.archive-tree {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 6px 0 12px;
+}
+
+.archive-tree::-webkit-scrollbar {
+    width: 6px;
+}
+
+.archive-tree::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.archive-tree::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+}
+
+/* ── Tree rows ───────────────────────────────────────────────────────────────── */
+
+.archive-entry {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-top: 3px;
+    padding-bottom: 3px;
+    padding-right: 12px;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.82);
+    transition: background 0.12s;
+    -webkit-user-select: none;
+    user-select: none;
+    min-height: 28px;
+}
+
+.archive-entry:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.archive-entry-open {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+/* Toggle arrow column (fixed width so names stay aligned) */
+.archive-entry-toggle {
+    flex-shrink: 0;
+    width: 14px;
+    text-align: center;
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.35);
+}
+
+/* Chevron icon */
+.archive-chevron {
+    transition: transform 0.15s;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.archive-chevron.fa-chevron-down {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.archive-chevron-empty {
+    color: rgba(255, 255, 255, 0.18) !important;
+}
+
+/* File / folder icon */
+.archive-entry-icon {
+    flex-shrink: 0;
+    width: 15px;
+    text-align: center;
+    font-size: 13px;
+}
+
+.archive-icon-dir {
+    color: #f0c040;
+}
+
+.archive-icon-file {
+    color: rgba(255, 255, 255, 0.45);
+}
+
+/* Entry name */
+.archive-entry-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, 'Cascadia Code', 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+}
+
+.archive-entry-dir .archive-entry-name {
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.92);
+}
+
+/* Meta section (date, size, ratio) */
+.archive-entry-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    margin-left: auto;
+}
+
+.archive-entry-date {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.3);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.archive-entry-size {
+    font-size: 11.5px;
+    color: rgba(255, 255, 255, 0.45);
+    font-variant-numeric: tabular-nums;
+    min-width: 52px;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.archive-entry-ratio {
+    font-size: 10.5px;
+    color: #2ecc71;
+    background: rgba(46, 204, 113, 0.12);
+    padding: 1px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
+}
+
+/* Nested children container */
+.archive-children {
+    transition: max-height 0.3s ease;
+}
+
+/* ── Password prompt ─────────────────────────────────────────────────────────── */
+
+.archive-password-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 24px;
+    gap: 12px;
+    flex: 1;
+    text-align: center;
+}
+
+.archive-password-icon {
+    font-size: 42px;
+    color: #f0c040;
+    opacity: 0.85;
+    margin-bottom: 4px;
+}
+
+.archive-password-title {
+    font-size: 17px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.archive-password-subtitle {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.45);
+    max-width: 340px;
+}
+
+.archive-password-error {
+    font-size: 13px;
+    color: #e74c3c;
+    background: rgba(231, 76, 60, 0.12);
+    border: 1px solid rgba(231, 76, 60, 0.3);
+    border-radius: 6px;
+    padding: 7px 14px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.archive-password-form {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+    width: 100%;
+    max-width: 380px;
+}
+
+.archive-password-input-wrap {
+    position: relative;
+    flex: 1;
+}
+
+.archive-password-input-icon {
+    position: absolute;
+    left: 11px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 13px;
+    pointer-events: none;
+}
+
+.archive-password-input {
+    width: 100%;
+    padding: 8px 12px 8px 32px;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 7px;
+    color: #fff;
+    font-size: 14px;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+}
+
+.archive-password-input:focus {
+    border-color: rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.archive-password-input::placeholder {
+    color: rgba(255, 255, 255, 0.3);
+}
+
+.archive-password-btn {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+/* Shake animation for empty password submit */
+@keyframes archive-shake {
+
+    0%,
+    100% {
+        transform: translateX(0);
+    }
+
+    20% {
+        transform: translateX(-6px);
+    }
+
+    40% {
+        transform: translateX(6px);
+    }
+
+    60% {
+        transform: translateX(-4px);
+    }
+
+    80% {
+        transform: translateX(4px);
+    }
+}
+
+.archive-input-shake {
+    animation: archive-shake 0.4s ease;
+    border-color: #e74c3c !important;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────────── */
+
+@media (max-width: 600px) {
+    .archive-entry-date {
+        display: none;
+    }
+
+    .archive-entry-ratio {
+        display: none;
+    }
+
+    .archive-header {
+        gap: 8px 10px;
+    }
+}
+
+/* ── @videojs/html web-component adaptive player ────────────────────────────── */
+
+/* Video viewer — site-themed dark navy instead of pure black */
+.file-viewer-body.viewer-video {
+    /* Was solid #0d1e3d again here - this rule appears later in the
+       cascade than the .viewer-video fix earlier in the file and has the
+       same specificity, so it was silently winning and re-opaquing the
+       panel, blocking the spotlight a second time. Same rgb value,
+       translucent, matching the earlier fix. */
+    background: rgba(13, 30, 61, 0.55);
+    padding: 5px;
+    align-items: stretch;
+    justify-content: stretch;
+    overflow: hidden;
+}
+
+/* Outer wrapper — fills the modal body */
+.hls-player-outer {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    overflow: hidden;
+    box-sizing: border-box;
+}
+
+/* Status / loading bar shown while transcoding */
+.hls-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 20px;
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 14px;
+    background: rgba(13, 30, 61, 0.88);
+    /* site-themed navy instead of black */
+    border: 1px solid rgba(52, 152, 219, 0.25);
+    border-radius: 8px;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10;
+    white-space: nowrap;
+}
+
+/* Animated spinner */
+.hls-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: hls-spin 0.8s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes hls-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Fallback notice banner */
+.hls-fallback-notice {
+    width: 100%;
+    padding: 8px 14px;
+    background: rgba(52, 152, 219, 0.2);
+    border-bottom: 1px solid rgba(52, 152, 219, 0.35);
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 12px;
+    text-align: center;
+}
+
+/* <video-player> web-component fills the player area */
+.hls-player-outer video-player,
+.vjs-cloudinator-player {
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: #0d1e3d;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+/* video element — let Video.js control its own styling */
+.hls-player-outer video-player video,
+.hls-player-outer video[slot="media"] {
+    display: block;
+}
+
+/* Accent Cloudinator's blue onto the web-component skin */
+.hls-player-outer video-skin {
+    --media-primary-color: #3498db;
+    --media-secondary-color: rgba(52, 152, 219, 0.35);
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+/* Player area flex fill */
+.hls-player-area {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Mobile tweak */
+@media (max-width: 768px) {
+
+    .hls-player-outer video-player,
+    .vjs-cloudinator-player {
+        max-height: none;
+    }
+
+    .hls-status-bar {
+        font-size: 12px;
+        padding: 10px 14px;
+    }
+
+    .hls-btn {
+        font-size: 12px;
+        padding: 5px 10px;
+    }
+
+    .hls-quality-btn {
+        font-size: 11px;
+        padding: 2px 7px;
+    }
+}
+
+/* ── Play Raw / Stream HLS button row ───────────────────────────────────────── */
+.hls-btn-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: rgba(13, 30, 61, 0.92);
+    /* site-themed navy instead of black */
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+
+.hls-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.85);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.hls-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.45);
+    color: #fff;
+}
+
+.hls-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+    pointer-events: none;
+}
+
+.hls-btn.hls-btn-active {
+    background: rgba(52, 152, 219, 0.35);
+    border-color: rgba(52, 152, 219, 0.8);
+    color: #fff;
+}
+
+/* ── Quality selector row ────────────────────────────────────────────────────── */
+.hls-quality-row {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    background: rgba(22, 48, 95, 0.75);
+    /* site-themed navy instead of black */
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+
+.hls-quality-btn {
+    padding: 2px 9px;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: transparent;
+    color: rgba(255, 255, 255, 0.65);
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.hls-quality-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.5);
+}
+
+.hls-quality-btn.hls-quality-active {
+    background: rgba(52, 152, 219, 0.3);
+    color: #fff;
+    border-color: rgba(52, 152, 219, 0.75);
+}
+
+/* ── Audio / Subtitle track selector rows ────────────────────────────────────── */
+.hls-track-row {
+    display: none;
+    /* shown by JS once tracks are available */
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    background: rgba(22, 48, 95, 0.75);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.hls-track-row select {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: rgba(255, 255, 255, 0.85);
+    border-radius: 6px;
+    padding: 4px 26px 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,0.45)'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+    min-width: 110px;
+}
+
+.hls-track-row select:hover,
+.hls-track-row select:focus {
+    background-color: rgba(255, 255, 255, 0.14);
+    border-color: rgba(52, 152, 219, 0.75);
+    color: #fff;
+}
+
+/* Dropdown options inherit from OS but we can nudge the dark background */
+.hls-track-row select option {
+    background: #0d1e3d;
+    color: #fff;
+}
+
+/* ── Progress bar ─────────────────────────────────────────────────────────────── */
+.hls-progress-wrap {
+    width: 100%;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.1);
+    flex-shrink: 0;
+}
+
+.hls-progress-bar {
+    height: 100%;
+    background: #3498db;
+    transition: width 0.4s ease;
+}
+
+/* ── Status message ──────────────────────────────────────────────────────────── */
+.hls-status-msg {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.55);
+    padding: 3px 10px;
+    flex-shrink: 0;
+    min-height: 18px;
+}
+
+/* ── End @videojs/html styles ──────────────────────────────────────────────── */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   AUTHORITATIVE TABLE ROW / ACTION BUTTON OVERRIDES
+   These are last in the file so they win over every earlier rule.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Single-line compact rows — no wrapping, no min-height */
+.file-table .table tbody tr,
+#filesTable tbody tr {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+}
+
+/* ── VT (virtual table) spacer rows ──────────────────────────────────────
+   #vtTopSpacer / #vtBottomSpacer stand in for every row that is not
+   mounted, so their combined height is what gives #tableScrollWrapper its
+   real scrollable length.
+
+   The rule directly above pins EVERY tbody <tr> to height:auto !important,
+   and !important beats every non-important way of setting a row height
+   (inline style, CSSOM style, an inserted rule) — so a height on the
+   spacer <tr> can never take effect. That is why the spacers stayed ~13-21px
+   tall and the list scrolled/rubber-banded as if it were only the ~35
+   mounted rows long. The height is therefore carried by the spacer's <td>,
+   which nothing above touches; index.js writes it as a CSSOM property with
+   priority 'important' (CSSOM writes are not governed by CSP style-src-attr).
+
+   The zeroing below used to be an inline style="padding:0;border:0;
+   line-height:0;" attribute in index.js markup; CSP style-src-attr blocked it
+   (its hash was never in app.py's allow-list), which left default cell
+   padding on every spacer. Do not put it back as an attribute. */
+#filesTable tbody tr.vt-spacer-row {
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    pointer-events: none;
+}
+
+#filesTable tbody tr.vt-spacer-row>td.vt-spacer-cell {
+    padding: 0 !important;
+    margin: 0 !important;
+    border: 0 !important;
+    line-height: 0 !important;
+    font-size: 0 !important;
+    overflow: hidden !important;
+    height: 0;
+    /* real value is set from index.js */
+}
+
+/* VT rows are estimated until first laid out (wrapped filenames make heights
+   non-uniform). Native scroll anchoring keeps the on-screen rows still when
+   estimates are corrected above the viewport, without cancelling wheel/touch
+   smooth-scroll the way JS scrollTop writes did. Explicit so nobody "fixes"
+   it to `none` — that reintroduces the rubber band. */
+#tableScrollWrapper {
+    overflow-anchor: auto;
+}
+
+/* Action container: always one horizontal line */
+.file-table .actions,
+#filesTable .actions,
+.actions-cell .actions {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: 3px !important;
+    min-width: 0 !important;
+    overflow: visible !important;
+    padding: 0 !important;
+}
+
+/* Icon-only square buttons — fixed 28×28, never grow/shrink */
+.file-table .actions .btn-sm,
+#filesTable .actions .btn-sm,
+.actions-cell .actions .btn-sm {
+    width: 28px !important;
+    height: 28px !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
+    min-height: 28px !important;
+    /* cancels pointer:coarse { .btn { min-height:44px } } */
+    max-height: 28px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    font-size: 0 !important;
+    /* hide any leftover text */
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    flex-shrink: 0 !important;
+    flex-grow: 0 !important;
+    border-radius: 4px !important;
+    line-height: 1 !important;
+}
+
+/* Icon inside button — visible, centred */
+.file-table .actions .btn-sm i,
+#filesTable .actions .btn-sm i,
+.actions-cell .actions .btn-sm i {
+    font-size: 12px !important;
+    margin: 0 !important;
+    width: auto !important;
+    display: block !important;
+}
+
+
+/* ── Action button tooltip — JS-driven, position:fixed so nothing clips it ── */
+#btn-action-tooltip {
+    position: fixed;
+    background: rgba(15, 25, 50, 0.96);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 9px;
+    border-radius: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    pointer-events: none;
+    z-index: 999999;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+    line-height: 1.4;
+}
+
+#btn-action-tooltip.visible {
+    opacity: 1;
+}
+
+
+/* ── Video modal: prevent controls clipping on small screens ────────────────
+   Galaxy S8+ and similar narrow viewports (≤414px wide or ≤740px tall)
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* Allow the video player controls to overflow the clip boundary */
+.hls-player-outer {
+    overflow: hidden;
+}
+
+/* Controls sit outside the video area — exempt from clip */
+.hls-btn-row,
+.hls-quality-row,
+.hls-track-row,
+.hls-status-bar {
+    position: relative;
+    z-index: 5;
+}
+
+/* On small screens: use full dvh, shrink modal header padding */
+@media (max-height: 740px),
+(max-width: 414px) {
+    #fileViewerModal .file-viewer-modal-content {
+        height: calc(100dvh - 12px);
+        max-height: calc(100dvh - 12px);
+        width: 98vw;
+    }
+
+    #fileViewerModal .modal-header {
+        padding: 8px 12px;
+        margin-bottom: 6px;
+    }
+
+    .hls-btn-row {
+        padding: 4px 6px;
+        gap: 4px;
+        flex-wrap: wrap;
+    }
+
+    /* Make our skip buttons smaller on mobile so they don't crowd the row */
+    .hls-btn-skip {
+        font-size: 11px !important;
+        padding: 3px 7px !important;
+    }
+
+    .hls-quality-row {
+        padding: 2px 8px;
+    }
+
+    .hls-track-row {
+        padding: 2px 8px;
+        gap: 6px;
+    }
+
+    .hls-track-row select {
+        font-size: 11px;
+        padding: 2px 18px 2px 6px;
+    }
+
+    /* Force Video.js control bar to not overflow — targets web component parts */
+    .hls-player-area video-player,
+    .hls-player-area .vjs-cloudinator-player {
+        --media-control-bar-display: flex;
+        --media-control-overflow: hidden;
+    }
+
+    /* Hide playback speed on mobile — arrow keys + our buttons replace it */
+    .hls-player-area media-playback-rate-button,
+    .hls-player-area .vjs-playback-rate,
+    .hls-player-area [part~="playback-rate"] {
+        display: none !important;
+    }
+}
+
+
+/* ── File viewer modal: match Video.js v10 rounded corners ──────────────────
+   Video.js v10 uses ~0.3em border-radius on its player. We match the modal
+   to that so everything looks intentional and consistent.
+   ─────────────────────────────────────────────────────────────────────────── */
+#fileViewerModal .file-viewer-modal-content,
+#fileViewerModal .modal-content {
+    border-radius: 12px !important;
+    /* This used to also force backdrop-filter: none here, to work around
+       parent-layer downsampling of child images on HiDPI screens. That
+       killed the glassy cursor-glow/transparency effect this modal should
+       have same as every other one on the page (see .modal / .modal-content
+       base rules above, which now carry the correctly-lowered opacity that
+       makes the glow actually visible - this modal just inherits that).
+       The HiDPI fix now lives on .viewer-img instead: it's promoted to its
+       own compositing layer, isolated from the modal's blur layer, so IT
+       doesn't inherit the parent's downsampled raster - without needing to
+       sacrifice backdrop-filter on the modal itself. */
+}
+
+#fileViewerModal .file-viewer-body {
+    border-radius: 0 0 12px 12px !important;
+}
+
+
+/* ── Match Video.js internal element backgrounds to site theme ──────────── */
+.hls-player-outer video-skin,
+.hls-player-outer media-controller,
+.hls-player-outer media-container,
+.hls-player-outer video-player,
+.hls-player-outer video-player::part(container),
+.hls-player-outer video-player::part(media),
+.hls-player-outer video,
+.hls-player-outer video[slot="media"] {
+    background: #0d1e3d !important;
+    background-color: #0d1e3d !important;
+}
+
+
+/* ── Skip ±10s buttons ───────────────────────────────────────────────────── */
+.hls-btn-skip {
+    background: rgba(52, 152, 219, 0.15);
+    border-color: rgba(52, 152, 219, 0.4);
+    color: #5dade2;
+}
+
+.hls-btn-skip:hover {
+    background: rgba(52, 152, 219, 0.3);
+    border-color: rgba(52, 152, 219, 0.7);
+    color: #fff;
+}
+
+
+/* ── Video.js control bar: prevent clipping on narrow mobile screens ──────── */
+@media (max-width: 600px) {
+
+    /* Shrink the entire control bar */
+    .hls-player-area media-control-bar,
+    .hls-player-area .vjs-control-bar {
+        font-size: 11px !important;
+    }
+
+    /* Hide playback rate / speed on small screens — use arrow keys instead */
+    .hls-player-area media-playback-rate-button,
+    .hls-player-area .vjs-playback-rate,
+    .hls-player-area media-playback-rate,
+    .hls-player-area [part~="playback-rate"],
+    .hls-player-area [slot="playback-rate"],
+    .hls-player-area [mediaplaybackrate] {
+        display: none !important;
+    }
+}
+
+
+/* ── Hide playback rate button on mobile — it's a direct child, CSS works ── */
+@media (max-width: 600px) {
+
+    .vjs-cloudinator-player media-playback-rate-button,
+    video-player media-playback-rate-button {
+        display: none !important;
+    }
+}
+
+
+/* ── Skip ±10s buttons ───────────────────────────────────────────────────── */
+.hls-btn-skip {
+    display: none !important;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FINAL TABLE OVERRIDE — mobile table matches desktop exactly.
+   Mobile is side-scrollable so no need for different styling.
+   smartTableColumnizer() in JS handles all widths uniformly.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+
+    #filesTable,
+    .file-table .table,
+    .table {
+        table-layout: fixed !important;
+        border-collapse: collapse !important;
+        font-size: 13px !important;
+    }
+
+    /* Undo sticky first column (white background conflict) */
+    .table th:first-child,
+    .table td:first-child {
+        position: static !important;
+        background: inherit !important;
+        box-shadow: none !important;
+        width: auto !important;
+        z-index: auto !important;
+    }
+
+    /* Match desktop row/cell colors */
+    .table tbody tr {
+        background: transparent !important;
+    }
+
+    .table td {
+        background: transparent !important;
+        color: white !important;
+        padding: 6px 8px !important;
+        line-height: 1.2 !important;
+        font-size: 13px !important;
+        vertical-align: middle !important;
+    }
+
+    /* Actions cell — always centred, never top-pinned even in tall rows */
+    .table td.actions-cell {
+        vertical-align: middle !important;
+    }
+
+    .table th {
+        background: linear-gradient(135deg, #34495e, #2c3e50) !important;
+        color: white !important;
+        padding: 18px 13px !important;
+        font-size: 13px !important;
+        line-height: 1.2 !important;
+    }
+
+    /* Name cell word-wrap same as desktop */
+    .table td:nth-child(2) {
+        white-space: normal !important;
+        word-break: break-word !important;
+        overflow-wrap: anywhere !important;
+    }
+
+    /* ── Parent-directory sticky row — restore desktop appearance on mobile ──
+       The generic .table tbody tr / .table td rules above paint every row
+       rgba(48,84,140). Re-assert the desktop parent-dir-sticky colours here
+       so the ".. (Parent Directory)" row is visually distinct on mobile too.
+       ─────────────────────────────────────────────────────────────────────── */
+    #filesTable tbody tr.parent-dir-sticky,
+    .table tbody tr.parent-dir-sticky {
+        background: rgba(22, 48, 95, 0.97) !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4) !important;
+        border-bottom: 1px solid rgba(52, 152, 219, 0.3) !important;
+        position: sticky !important;
+        top: var(--table-thead-h, 57px) !important;
+        z-index: 15 !important;
+    }
+
+    /* TD cells inherit the row colour — needed because .table td sets
+       background directly on the cell, overriding the row background */
+    #filesTable tbody tr.parent-dir-sticky td,
+    .table tbody tr.parent-dir-sticky td {
+        background: rgba(22, 48, 95, 0.97) !important;
+    }
+
+    #filesTable tbody tr.parent-dir-sticky:hover,
+    .table tbody tr.parent-dir-sticky:hover {
+        background: rgba(32, 65, 118, 0.97) !important;
+        cursor: pointer !important;
+    }
+
+    #filesTable tbody tr.parent-dir-sticky:hover td,
+    .table tbody tr.parent-dir-sticky:hover td {
+        background: rgba(32, 65, 118, 0.97) !important;
+    }
+
+    /* Icon and link colour — match desktop's accent blue */
+    #filesTable tbody tr.parent-dir-sticky .folder-link,
+    .table tbody tr.parent-dir-sticky .folder-link {
+        color: #5dade2 !important;
+        font-weight: 600 !important;
+    }
+
+    #filesTable tbody tr.parent-dir-sticky .file-icon,
+    .table tbody tr.parent-dir-sticky .file-icon {
+        color: #5dade2 !important;
+    }
+}
+
+/* ── PDF iframe mobile fix ───────────────────────────────────────────────────
+   Prevents the pdf.js iframe from causing horizontal page scroll on mobile.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* 1. Lock the page from scrolling sideways while the viewer modal is open */
+body:has(#fileViewerModal.show) {
+    overflow: hidden;
+}
+
+/* 2. Clamp the modal content to the viewport width on ALL screens
+      (prevents the 94 vw box from ever extending past the edge on narrow
+       viewports where vw includes any scrollbar gutter) */
+#fileViewerModal .file-viewer-modal-content {
+    max-width: min(900px, 100vw);
+}
+
+/* 3. On mobile go truly full-screen so there is zero gap for content to bleed */
+@media (max-width: 768px) {
+    #fileViewerModal .file-viewer-modal-content {
+        width: 100vw !important;
+        max-width: 100vw !important;
+        height: 100dvh !important;
+        max-height: 100dvh !important;
+        border-radius: 0 !important;
+        margin: 0 !important;
+    }
+
+    /* Ensure the viewer body fills its parent and the iframe can't overflow */
+    .file-viewer-body.viewer-pdf {
+        width: 100%;
+        max-width: 100%;
+        overflow: hidden;
+    }
+
+    /* The iframe itself: hard-clamp to viewport width */
+    .file-viewer-body.viewer-pdf iframe {
+        max-width: 100vw !important;
+        width: 100% !important;
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Fallback for browsers where backdrop-filter genuinely doesn't apply at
+   all (not just under GPU/compositing pressure - actual lack of support,
+   e.g. some Android WebViews and in-app browsers). In that case the
+   backdrop-filter declarations above are simply dropped by the parser and
+   only the flat background/alpha is ever painted - which is what makes a
+   panel authored to look "glassy" (i.e. tuned assuming blur is doing most
+   of the visual work) read as a plain, highly-opaque solid box instead,
+   with the cursor-glow completely hidden behind it.
+   This block only fires when backdrop-filter truly isn't supported, and
+   drops these panels' opacity further so the theme colour/glow still
+   reads through via plain alpha blending - the one thing every browser
+   can render - instead of relying on blur to carry the "glass" look.
+   Placed at the end of the file so it wins the cascade over the
+   unconditional per-breakpoint rules above it. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+
+    .modal {
+        background-color: rgba(15, 30, 58, 0.55);
+    }
+
+    .modal-content {
+        background: linear-gradient(145deg, rgba(30, 60, 114, 0.78) 0%, rgba(42, 82, 152, 0.78) 100%);
+    }
+
+    .header,
+    .breadcrumb,
+    .upload-section,
+    .storage-stats {
+        background: rgba(255, 255, 255, 0.18);
+    }
+
+    .file-table {
+        background: rgba(255, 255, 255, 0.15) !important;
+    }
+
+    .table tbody tr {
+        background: transparent !important;
+    }
+
+    .table td {
+        background: transparent !important;
+    }
+}
+
+/* ===========================================================================
+   Version History modal — version-history-row cards inside #versionHistoryList
+   =========================================================================== */
+
+.version-history-list {
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.version-history-empty {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 14px;
+    text-align: center;
+    padding: 20px 0;
+}
+
+.version-history-row {
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.version-history-row:last-child {
+    margin-bottom: 0;
+}
+
+.version-history-row-main {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 13px;
+}
+
+.version-history-date {
+    color: #fff;
+    font-weight: 500;
+}
+
+.version-history-size,
+.version-history-mode {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.version-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    text-transform: capitalize;
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.version-status-badge.status-completed {
+    background: rgba(46, 204, 113, 0.18);
+    color: #2ecc71;
+}
+
+.version-status-badge.status-failed {
+    background: rgba(231, 76, 60, 0.18);
+    color: #e74c3c;
+}
+
+.version-status-badge.status-deleted {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.version-status-badge.status-pending,
+.version-status-badge.status-processing,
+.version-status-badge.status-verifying {
+    background: rgba(241, 196, 15, 0.18);
+    color: #f1c40f;
+}
+
+.version-history-error {
+    margin-top: 6px;
+    font-size: 12px;
+    color: #e74c3c;
+}
+
+.version-history-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.version-history-delete-confirm {
+    margin-top: 10px;
+    padding: 10px;
+    border: 1px solid rgba(231, 76, 60, 0.4);
+    border-radius: 6px;
+    background: rgba(231, 76, 60, 0.08);
+}
+
+.version-history-delete-confirm p {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 13px;
+    margin: 0 0 8px 0;
+}
+
+.version-history-delete-confirm-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+
+/* ===========================================================================
+   Download Options modal — two big choice buttons (download now / version history)
+   =========================================================================== */
+
+.download-options-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.download-option-btn {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    padding: 14px 16px;
+    text-align: left;
+    font-size: 14px;
+}
+
+.download-option-btn i {
+    font-size: 20px;
+    flex-shrink: 0;
+    width: 24px;
+    text-align: center;
+}
+
+.download-option-btn span {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.download-option-btn strong {
+    font-size: 14px;
+}
+
+.download-option-btn small {
+    font-size: 12px;
+    opacity: 0.75;
+    font-weight: 400;
+}
+
+
+/* ===========================================================================
+   Version History — "Retry Now" banner (shown when the newest version failed)
+   =========================================================================== */
+
+.version-history-retry-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    border: 1px solid rgba(241, 196, 15, 0.4);
+    border-radius: 8px;
+    background: rgba(241, 196, 15, 0.1);
+}
+
+.version-history-retry-banner-text {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #f1c40f;
+    font-size: 13px;
+}
+
+.version-history-retry-banner-text i {
+    flex-shrink: 0;
+}
+
+
+/* ===========================================================================
+   Notification modal must stack ABOVE other modals.
+   Every .modal is z-index:1000, and #notificationModal comes earlier in the
+   page than #versionHistoryModal, so with equal z-index the later modal
+   painted over it — Restore/Delete results appeared BEHIND the Version
+   History modal and you had to close it to read them. 1100 clears every
+   modal but stays below the toasts (10000) and tooltips (999999).
+   =========================================================================== */
+
+#notificationModal {
+    z-index: 1100;
+}
+
+/* ===========================================================================
+   Version History — retention line, inline result line, show/hide toolbar
+   =========================================================================== */
+
+.version-history-retention {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.65);
+}
+
+.version-history-retention.is-near-limit {
+    color: #f1c40f;
+}
+
+.version-history-status {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 9px 12px;
+    margin-bottom: 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.version-history-status i {
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
+.version-history-status.status-success {
+    border-color: rgba(46, 204, 113, 0.4);
+    background: rgba(46, 204, 113, 0.1);
+    color: #2ecc71;
+}
+
+.version-history-status.status-error {
+    border-color: rgba(231, 76, 60, 0.4);
+    background: rgba(231, 76, 60, 0.1);
+    color: #e74c3c;
+}
+
+.version-history-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+}

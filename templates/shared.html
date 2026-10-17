@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>{% if valid %}{{ name }} — Shared File{% else %}Link Not Available{% endif %} — Cloudinator FTP</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}"
+        integrity="sha384-5xIjiXmIqBXreuPUUtpnwCKFRm0p7kMWRihzZymGZltbTKgyd/X8uGJBfpfdBsvw" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/shared.css') }}"
+        integrity="sha384-fIYHCuJAHpXvVTnYl91yLMsS013aeC9OlzrPb5ARaWcA8OMaOGBXOSjpdcUe41dE" />
+    <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp"
+        integrity="sha384-mTiIzUOmh2SfP6u6yyTJHcQnVqctGnma9JMZGwuIrFkKfjVtO7Ok8CMTjA8szFUp" />
+</head>
+
+<body{% if valid %} data-security-mode="{{ security_mode }}" data-request-state="{{ request_state or '' }}"
+    data-token="{{ token }}" data-is-dir="{{ 'true' if is_dir else 'false' }}"
+    data-unlocked="{{ 'true' if unlocked else 'false' }}" {% if security_mode=='passkey'
+    %}data-passkey-url="{{ url_for('shared_verify_passkey', token=token) }}" {% endif %} {% if security_mode=='approval'
+    %}data-request-url="{{ url_for('shared_request_access', token=token) }}"
+    data-status-url="{{ url_for('shared_request_status', token=token) }}" {% endif %} {% endif %}>
+    <div class="card">
+        {% if valid %}
+        <div class="icon-circle{% if security_mode != 'public' and not unlocked %} locked{% endif %}">
+            {% if security_mode == 'passkey' and not unlocked %}
+            <i class="fas fa-key"></i>
+            {% elif security_mode == 'approval' and not unlocked %}
+            <i class="fas fa-user-clock"></i>
+            {% else %}
+            <i class="fas {{ 'fa-folder' if is_dir else 'fa-file' }}"></i>
+            {% endif %}
+        </div>
+        <h1>{{ name }}</h1>
+        <p class="meta">
+            {{ size_display }}{% if size_truncated %}+{% endif %}
+            {% if is_dir %} · folder (downloads as .zip){% endif %}
+        </p>
+
+        {% if unlocked %}
+        <a class="btn-download" href="{{ url_for('shared_file_download', token=token) }}">
+            <i class="fas fa-download"></i> Download{% if is_dir %} All (.zip){% endif %}
+        </a>
+        {% if downloads_remaining is not none %}
+        <p class="truncated-note">{{ downloads_remaining }} download{{ 's' if downloads_remaining != 1 else '' }}
+            remaining on this approval.</p>
+        {% endif %}
+
+        {% if is_dir %}
+        <div id="folderBrowser">
+            <div id="browserBreadcrumbs" class="browser-breadcrumbs"></div>
+            <div id="browserSelectionBar" class="browser-selection-bar">
+                <span id="browserSelectionCount">0 selected</span>
+                <button type="button" id="browserDownloadSelectedBtn" class="btn-download">
+                    Download selected
+                </button>
+            </div>
+            <div id="browserList" class="browser-list"></div>
+            <p id="browserError" class="gate-error"></p>
+        </div>
+        {% endif %}
+
+        {% elif security_mode == 'passkey' %}
+        <p class="desc">This item is protected — enter the passkey to unlock the download.</p>
+        <form id="passkeyForm" class="gate-form" autocomplete="off">
+            <input type="text" id="passkeyInput" class="form-input" placeholder="Enter passkey" autocomplete="off"
+                required>
+            <button type="submit" class="btn-download" id="passkeySubmit">
+                <i class="fas fa-unlock"></i> Unlock
+            </button>
+        </form>
+        <p class="gate-error" id="gateError"></p>
+
+        {% elif security_mode == 'approval' %}
+        {% if request_state == 'pending' %}
+        <p class="desc">Your access request is waiting for approval. This page will update automatically once it's
+            reviewed.</p>
+        <div class="spinner"></div>
+        {% elif request_state == 'denied' %}
+        <p class="desc error-text">Your access request was denied.</p>
+        <form id="requestForm" class="gate-form" autocomplete="off">
+            <input type="text" id="requesterName" class="form-input" placeholder="Your name" required>
+            <input type="text" id="requesterNote" class="form-input" placeholder="Note (optional)">
+            <button type="submit" class="btn-download" id="requestSubmit">
+                <i class="fas fa-paper-plane"></i> Request Again
+            </button>
+        </form>
+        <p class="gate-error" id="gateError"></p>
+        {% elif request_state == 'used_up' %}
+        <p class="desc">Your approved downloads for this link have been used up.</p>
+        <form id="requestForm" class="gate-form" autocomplete="off">
+            <input type="text" id="requesterName" class="form-input" placeholder="Your name" required>
+            <input type="text" id="requesterNote" class="form-input" placeholder="Note (optional)">
+            <button type="submit" class="btn-download" id="requestSubmit">
+                <i class="fas fa-paper-plane"></i> Request Access
+            </button>
+        </form>
+        <p class="gate-error" id="gateError"></p>
+        {% else %}
+        <p class="desc">This item requires the owner's approval. Submit a request and check back — you don't need to
+            keep this tab open.</p>
+        <form id="requestForm" class="gate-form" autocomplete="off">
+            <input type="text" id="requesterName" class="form-input" placeholder="Your name" required>
+            <input type="text" id="requesterNote" class="form-input" placeholder="Note (optional)">
+            <button type="submit" class="btn-download" id="requestSubmit">
+                <i class="fas fa-paper-plane"></i> Request Access
+            </button>
+        </form>
+        <p class="gate-error" id="gateError"></p>
+        {% endif %}
+        {% endif %}
+
+        {% if size_truncated %}
+        <p class="truncated-note">This folder is large — size shown is a lower bound.</p>
+        {% endif %}
+        {% else %}
+        <div class="icon-circle error">
+            <i class="fas fa-link-slash"></i>
+        </div>
+        <h1>Link Not Available</h1>
+        <p class="desc">
+            This share link doesn't exist, has expired, or was revoked by its owner.
+            Ask them to send a new link if you still need this file.
+        </p>
+        {% endif %}
+        <div class="footer-note">Shared via Cloudinator FTP</div>
+    </div>
+
+    {% if valid and ((security_mode == 'passkey' and not unlocked) or security_mode == 'approval' or (unlocked and
+    is_dir)) %}
+    <script src="{{ url_for('static', filename='js/shared.js') }}"
+        integrity="sha384-fhy7D5ZO3UlQh0o7Vs/JfXcwcj+K9JaNWCHe4W6QxhTH/M+Cm/yRoKSFjjrJ/n6O"></script>
+    {% endif %}
+    <audio id="bgMusic" autoplay loop preload="auto">
+        <source src="{{ url_for('static', filename='audio/bg_mus.opus') }}" type="audio/ogg">
+    </audio>
+    <script src="{{ url_for('static', filename='js/bg_audio.js') }}"
+        integrity="sha384-fnKFD46RxXXr8Wv2S8hVHI/auoEbJUAJ7ZSarLpvgN1DYKgX3stzxTsCpsOBM6GS" defer></script>
+    </body>
+
+</html>
