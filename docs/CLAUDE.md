@@ -4,11 +4,13 @@
 
 # READ HERE FIRST - IMPORTANT AS THIS IS DEFAULT INSTRUCTION
 
-Provide a one-liner commit message for every prompt (2 commit message), 1 message for your next commit prompt output, 2nd is in case the user did not commit your prompt, add it on top of it (cumulative)
+Provide a one-liner commit message for every prompt (2 commit message), 1 message for your next commit prompt output, 2nd is in case the user did not commit your prompt, add it on top of it (cumulative).
 
-Refer to claude.md and update it accordingly, there is a coding_guidelines.md which needed to be updated in case you made some changes to the code, it is there as a guide on modifying code in cloudinatorftp repository
+Refer to claude.md and update it accordingly, there is a coding_guidelines.md which needed to be updated in case you made some changes to the code, it is there as a guide on modifying code in cloudinatorftp repository.
 
-Provide a comprehensive, detailed turn over prompt for every changes you make for other AI turnover and memory transfer, you must include list of files the user needs to add to conversation in bullet form
+If you make some changes to code or created a new file (py, css, mjs, js, etc.) that are text. Please always use LF line endings as general rule. Never CRLF. Reason: CRLF is local repo, when uploaded to github, uses LF instead, causing STALE in SRI hashes, standardized LF line endings across all files fixes it.
+
+Provide a comprehensive, detailed turn over prompt for every changes you make for other AI turnover and memory transfer, you must include list of files the user needs to add to conversation in bullet form.
 
 If this file is provided (CLAUDE.md), please always ask for CODING_GUIDELINES.md if not included and/or if you made changes to code.
 
