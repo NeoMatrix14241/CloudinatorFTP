@@ -16,6 +16,8 @@ below fails any test run in which another root module was imported from the real
 """
 
 import hashlib
+import http.cookiejar
+import itertools
 import json
 import os
 import shutil
@@ -25,7 +27,9 @@ import sys
 import time
 import types
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 
 import pytest
@@ -231,8 +235,158 @@ def scratch_tools():
         free_port=free_port,
         is_inside=_is_inside,
         real_config_hashes=_hash_real_configs,
+        HttpClient=HttpClient,
+        run_in_scratch=run_in_scratch,
+        test_users=TEST_USERS,
         repo_root=REPO_ROOT,
     )
+
+
+# --------------------------------------------------------------------------------------
+# Test users, scratch-database helper and a cookie-aware HTTP client
+# --------------------------------------------------------------------------------------
+# Synthetic accounts, created in the SCRATCH database before the server starts. (A fresh
+# database also seeds the built-in admin / guest default users; tests never rely on those.)
+TEST_USERS = {
+    "qa_writer": ("QaWriter-Pass-1!", "readwrite"),
+    "qa_reader": ("QaReader-Pass-1!", "readonly"),
+}
+
+_SCRATCH_PRELUDE = (
+    "import os, sys\n"
+    "sys.path.insert(0, os.getcwd())\n"
+    "from paths import ensure_dirs\n"
+    "ensure_dirs()\n"
+    "from database import db\n"
+)
+
+
+def run_in_scratch(root, code, *args) -> str:
+    """Run Python inside the scratch copy (cwd = scratch, so paths.py / database.py are the
+    copy's own) with `db` (database.db) in scope. Returns stdout; raises on a non-zero exit.
+    """
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env.update(
+        {
+            "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8",
+            "CLOUDINATOR_FTP_ROOT": str(Path(root) / "data" / "storage"),
+        }
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", _SCRATCH_PRELUDE + code, *args],
+        cwd=str(root),
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+    )
+    if out.returncode != 0:
+        raise RuntimeError(f"scratch snippet failed:\n{out.stderr.strip()}")
+    return out.stdout
+
+
+_SEED_CODE = (
+    "import json\n"
+    "for name, (pw, role) in json.loads(sys.argv[1]).items():\n"
+    "    assert db.add_user(name, pw, role), name\n"
+)
+
+# Every client gets its own fake client IP, sent as CF-Connecting-IP (the header the app
+# trusts, see get_client_ip() in core.py), so each test has its own login rate-limit bucket.
+_ip_counter = itertools.count(1)
+
+
+def _next_ip() -> str:
+    n = next(_ip_counter)
+    return f"10.77.{n // 250}.{n % 250 + 1}"
+
+
+class Reply:
+    """One HTTP answer: status, headers (case-insensitive), body and every Set-Cookie line."""
+
+    def __init__(self, status, headers, body):
+        self.status = status
+        self.headers = headers
+        self.body = body
+        self.set_cookies = headers.get_all("Set-Cookie") or []
+
+    @property
+    def text(self) -> str:
+        return self.body.decode("utf-8", errors="replace")
+
+    def json(self):
+        return json.loads(self.text)
+
+    def header(self, name, default=""):
+        return self.headers.get(name, default)
+
+
+JSON_HEADERS = {"Accept": "application/json"}
+
+
+class HttpClient:
+    """A browser-like client: keeps cookies, never follows redirects, always sends a fixed
+    fake client IP. Standard library only."""
+
+    def __init__(self, base_url, ip=None):
+        self.base_url = base_url
+        self.ip = ip or _next_ip()
+        self.jar = http.cookiejar.CookieJar()
+        self._opener = urllib.request.build_opener(
+            _NoRedirect, urllib.request.HTTPCookieProcessor(self.jar)
+        )
+
+    def request(self, method, path, fields=None, json_body=None, headers=None) -> Reply:
+        hdrs = {"CF-Connecting-IP": self.ip}
+        hdrs.update(headers or {})
+        hdrs = {k: v for k, v in hdrs.items() if v is not None}
+        data = None
+        if fields is not None:
+            data = urllib.parse.urlencode(fields).encode("utf-8")
+            hdrs.setdefault("Content-Type", "application/x-www-form-urlencoded")
+        elif json_body is not None:
+            data = json.dumps(json_body).encode("utf-8")
+            hdrs.setdefault("Content-Type", "application/json")
+        req = urllib.request.Request(
+            self.base_url + path, data=data, headers=hdrs, method=method
+        )
+        try:
+            with self._opener.open(req, timeout=30) as r:
+                return Reply(r.status, r.headers, r.read())
+        except urllib.error.HTTPError as e:
+            return Reply(e.code, e.headers, e.read())
+
+    def get(self, path, headers=None) -> Reply:
+        return self.request("GET", path, headers=headers)
+
+    def post_form(self, path, fields, headers=None) -> Reply:
+        return self.request("POST", path, fields=fields, headers=headers)
+
+    def csrf_token(self) -> str:
+        return self.get("/csrf-token").json()["csrf_token"]
+
+    def login(self, username, password, csrf_token=None) -> Reply:
+        token = self.csrf_token() if csrf_token is None else csrf_token
+        return self.post_form(
+            "/login",
+            {"username": username, "password": password, "csrf_token": token},
+        )
+
+    def api(self, method, path, fields=None, json_body=None) -> Reply:
+        """A state-changing or JSON call the way the front end makes it: CSRF header from the
+        current session plus an Accept: application/json header."""
+        headers = dict(JSON_HEADERS)
+        if method not in ("GET", "HEAD"):
+            headers["X-CSRFToken"] = self.csrf_token()
+        return self.request(
+            method, path, fields=fields, json_body=json_body, headers=headers
+        )
+
+    def cookie_header(self) -> str:
+        return "; ".join(f"{c.name}={c.value}" for c in self.jar)
 
 
 class ScratchServer:
@@ -244,6 +398,34 @@ class ScratchServer:
         self.base_url = f"http://127.0.0.1:{port}"
         self.real_config_hashes = real_hashes
         self._opener = urllib.request.build_opener(_NoRedirect)
+        self.users = dict(TEST_USERS)
+        self.storage = self.root / "data" / "storage"
+
+    def client(self, ip=None) -> HttpClient:
+        """A new anonymous browser-like client with its own fake IP (own rate-limit bucket)."""
+        return HttpClient(self.base_url, ip)
+
+    def login_as(self, username) -> HttpClient:
+        """A new client already logged in as one of TEST_USERS."""
+        client = self.client()
+        reply = client.login(username, self.users[username][0])
+        assert reply.status == 302, f"login as {username} failed: {reply.status}"
+        return client
+
+    def db(self, code, *args) -> str:
+        """Run Python against the SCRATCH database (`db` is database.db); returns stdout."""
+        return run_in_scratch(self.root, code, *args)
+
+    def make_user(self, role="readwrite"):
+        """Create a throw-away account in the scratch database; returns (name, password)."""
+        name, password = f"tmp_{uuid.uuid4().hex[:10]}", f"Tmp-{uuid.uuid4().hex[:12]}!"
+        self.db(
+            "assert db.add_user(sys.argv[1], sys.argv[2], sys.argv[3])",
+            name,
+            password,
+            role,
+        )
+        return name, password
 
     def get(self, path, headers=None):
         """GET without following redirects. Returns (status, headers, body_bytes)."""
@@ -277,6 +459,9 @@ def scratch_server(tmp_path_factory):
         pytest.fail(
             "scratch isolation check failed, nothing started:\n" + "\n".join(violations)
         )
+
+    # Create the test accounts in the scratch database BEFORE the server starts.
+    run_in_scratch(root, _SEED_CODE, json.dumps(TEST_USERS))
 
     (root / ".manage_pids").mkdir(exist_ok=True)
     stop_file = root / ".manage_pids" / "dev.stop"
