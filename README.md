@@ -76,6 +76,7 @@ Platform-specific deployment and production guides are available in the **[`docs
 - 📄 [PDF.js](https://mozilla.github.io/pdf.js/) - v3.11.174
 - 🖼️ [libvips](https://www.libvips.org/) - v8.18.1
 - 🔧 [Git](https://git-scm.com/) - Latest Version/Build
+- 🟢 [Node.js](https://nodejs.org/en) - v24.22.0 LTS
 
 ## 🚀 Quick Start
 
