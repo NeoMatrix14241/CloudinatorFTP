@@ -81,9 +81,9 @@ jobs:
 
             - name: Set up Python (for the SARIF parser)
               if: always()
-              uses: actions/setup-python@v6
+              uses: actions/setup-python@v7
               with:
-                  python-version: "3.12"
+                  python-version: "3.14.7"
 
             - name: Convert SARIF to CSV
               if: always()
@@ -124,9 +124,9 @@ jobs:
                   merge-multiple: true
 
             - name: Set up Python
-              uses: actions/setup-python@v6
+              uses: actions/setup-python@v7
               with:
-                  python-version: "3.12"
+                  python-version: "3.14.7"
 
             - name: Combine into one CSV
               run: python tests/codeql_sarif_parser.py sarif-all --out codeql-findings
