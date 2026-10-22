@@ -239,12 +239,7 @@ def test_logout_ends_the_session(server):
 
 @pytest.mark.xfail(
     strict=True,
-    reason=(
-        "KNOWN LIMITATION: the session is a stateless signed cookie, so a copy of the cookie "
-        "taken before logout is still accepted afterwards. Only deleting the user or rotating "
-        "the server token (kick_sessions) invalidates it. If this ever XPASSes, the limitation "
-        "is fixed: remove the marker."
-    ),
+    reason="KNOWN LIMITATION: a session cookie survives logout (CLAUDE.md part 58)",
 )
 def test_cookie_copied_before_logout_is_rejected_after_logout(server):
     client = server.login_as(RW)

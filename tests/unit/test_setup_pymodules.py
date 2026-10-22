@@ -108,3 +108,73 @@ def test_script_appends_only_through_the_function():
     assert not re.search(
         r'echo\s+"\$\{pkg\}\$\{constraint\}"\s*>>', text
     ), "a plain echo >> append is back in setup_pymodules.sh"
+
+
+# ---------------------------------------------------------------------------- the .venv block
+def _venv_block():
+    text = SCRIPT.read_text(encoding="utf-8")
+    start = text.index("\t# Create virtual environment")
+    end = text.index("\t# Install packages using the activated environment")
+    return text[start:end]
+
+
+def _run_venv_block(tmp_path, fake_python3, is_termux):
+    """Run the real venv block in bash with a fake python3 that records its arguments and
+    creates the activation script the way a venv of that platform would."""
+    if BASH is None:
+        pytest.skip("bash not available")
+    (tmp_path / "pre.sh").write_text(fake_python3, encoding="utf-8")
+    (tmp_path / "block.sh").write_text(
+        f"IS_TERMUX={is_termux}\nwork() {{\n{_venv_block()}\n}}\nwork\n",
+        encoding="utf-8",
+    )
+    return subprocess.run(
+        [BASH, "-c", "source pre.sh; source block.sh"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+FAKE_LINUX = (
+    'python3() { echo "$*" > args.txt; mkdir -p .venv/bin; '
+    'echo "touch activated_bin" > .venv/bin/activate; }\n'
+)
+FAKE_WINDOWS = (
+    'python3() { echo "$*" > args.txt; mkdir -p .venv/Scripts; '
+    'echo "touch activated_scripts" > .venv/Scripts/activate; }\n'
+)
+
+
+def test_venv_block_activates_the_linux_layout(tmp_path):
+    result = _run_venv_block(tmp_path, FAKE_LINUX, 0)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "activated_bin").exists()
+    assert (tmp_path / "args.txt").read_text(
+        encoding="utf-8"
+    ).strip() == "-m venv .venv"
+
+
+def test_venv_block_activates_the_windows_layout(tmp_path):
+    result = _run_venv_block(tmp_path, FAKE_WINDOWS, 0)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "activated_scripts").exists()
+
+
+def test_venv_block_keeps_system_packages_visible_on_termux_only(tmp_path):
+    _run_venv_block(tmp_path, FAKE_LINUX, 1)
+    args = (tmp_path / "args.txt").read_text(encoding="utf-8").strip()
+    assert args == "-m venv --system-site-packages .venv"
+
+
+def test_venv_block_fails_clearly_when_no_activation_script_exists(tmp_path):
+    result = _run_venv_block(tmp_path, "python3() { mkdir -p .venv; }\n", 0)
+    assert result.returncode == 1
+    assert "activation script not found" in result.stdout
+
+
+def test_activation_scripts_are_sourced_not_executed():
+    block = _venv_block()
+    assert "source .venv/bin/activate" in block
+    assert "source .venv/Scripts/activate" in block

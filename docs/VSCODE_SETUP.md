@@ -16,6 +16,7 @@ This document lists my recommended Visual Studio Code extensions and settings us
 | Python Indent | Kevin Rose |
 | shfmt | Martin Kühl |
 | YAML | Red Hat |
+| Even Better TOML | tamasfe |
 
 ## VS Code Settings
 

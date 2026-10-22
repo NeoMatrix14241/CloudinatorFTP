@@ -140,3 +140,21 @@ def test_run_in_scratch_raises_with_the_error_text(scratch_tools, tmp_path):
 def test_test_users_cover_both_roles(scratch_tools):
     roles = {role for _pw, role in scratch_tools.test_users.values()}
     assert roles == {"readwrite", "readonly"}
+
+
+def test_multipart_bodies_carry_fields_and_files(make_client):
+    client = make_client()
+    sent = client.request(
+        "POST",
+        "/echo",
+        fields={"file_id": "abc", "chunk_num": "0"},
+        files={"chunk": ("blob", b"\x00binary")},
+    ).json()
+    content_type = sent["headers"]["content-type"]
+    assert content_type.startswith("multipart/form-data; boundary=")
+    boundary = content_type.split("boundary=")[1]
+    body = sent["body"]
+    # three parts plus the closing delimiter
+    assert body.count(f"--{boundary}") == 4 and body.rstrip().endswith("--")
+    assert 'name="file_id"' in body and "abc" in body
+    assert 'name="chunk"; filename="blob"' in body

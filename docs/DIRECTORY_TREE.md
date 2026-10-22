@@ -95,10 +95,19 @@ CloudinatorFTP
 │   └── shared.html
 ├── tests
 │   ├── application
-│   │   └── test_boot.py
+│   │   ├── test_authorization.py
+│   │   ├── test_boot.py
+│   │   ├── test_login.py
+│   │   ├── test_path_containment.py
+│   │   └── test_upload_integrity.py
+│   ├── performance
+│   │   └── test_slow_download.py
 │   ├── unit
+│   │   ├── test_http_client.py
+│   │   ├── test_manage_qa.py
 │   │   ├── test_paths.py
 │   │   ├── test_qa_runner.py
+│   │   ├── test_response_timeout.py
 │   │   ├── test_scratch_copy.py
 │   │   └── test_setup_pymodules.py
 │   ├── check.py

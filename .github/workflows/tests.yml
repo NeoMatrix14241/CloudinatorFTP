@@ -10,69 +10,69 @@
 name: Tests
 
 on:
-    push:
-        branches: ["main", "dev"]
-    pull_request:
-        branches: ["main", "dev"]
-    workflow_dispatch:
+  push:
+    branches: ["main", "dev"]
+  pull_request:
+    branches: ["main", "dev"]
+  workflow_dispatch:
 
 permissions:
-    contents: read
+  contents: read
 
 concurrency:
-    group: tests-${{ github.ref }}
-    cancel-in-progress: true
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-    static-checks:
-        name: smoke + check
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout repository
-              uses: actions/checkout@v7
+  static-checks:
+    name: smoke + check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
-            - name: Set up Python
-              uses: actions/setup-python@v7
-              with:
-                  python-version: "3.14.7"
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14.7"
 
-            - name: Install pyflakes
-              run: python -m pip install --upgrade pip pyflakes
+      - name: Install pyflakes
+        run: python -m pip install --upgrade pip pyflakes
 
-            # syntax, pyflakes, route table + snapshot, import rules, hooks, tools/, helpers/, manage.sh
-            - name: Smoke test
-              run: python tests/smoke.py
+      # syntax, pyflakes, route table + snapshot, import rules, hooks, tools/, helpers/, manage.sh
+      - name: Smoke test
+        run: python tests/smoke.py
 
-            # per-module: syntax, pyflakes, project-import resolution, helpers layering.
-            # --skip-packages: this runner does not install the server's requirements.txt.
-            - name: Module checks
-              run: python tests/check.py -q --skip-packages
+      # per-module: syntax, pyflakes, project-import resolution, helpers layering.
+      # --skip-packages: this runner does not install the server's requirements.txt.
+      - name: Module checks
+        run: python tests/check.py -q --skip-packages
 
-    behavior:
-        name: behavioral tests
-        needs: static-checks
-        runs-on: ubuntu-latest
-        continue-on-error: true
-        steps:
-            - name: Checkout repository
-              uses: actions/checkout@v7
+  behavior:
+    name: behavioral tests
+    needs: static-checks
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
-            - name: Set up Python
-              uses: actions/setup-python@v7
-              with:
-                  python-version: "3.14.7"
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14.7"
 
-            - name: Install dependencies
-              run: python -m pip install --upgrade pip pyflakes -r requirements.txt -r requirements-dev.txt
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip pyflakes -r requirements.txt -r requirements-dev.txt
 
-            # static checks + pytest, JUnit XML into ./artifacts
-            - name: QA runner (ci)
-              run: python tests/qa.py ci
+      # static checks + pytest, JUnit XML into ./artifacts
+      - name: QA runner (ci)
+        run: python tests/qa.py ci
 
-            - name: Upload test results
-              if: always()
-              uses: actions/upload-artifact@v7
-              with:
-                  name: test-results
-                  path: artifacts/
-                  if-no-files-found: ignore
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: artifacts/
+          if-no-files-found: ignore

@@ -888,6 +888,10 @@ app.config.update(
     SESSION_REFRESH_EACH_REQUEST=True,  # cookie expiry slides forward on every request
     SESSION_COOKIE_NAME="cloudinator_session",
     MAX_CONTENT_LENGTH=MAX_CONTENT_LENGTH,  # now actually enforced by Quart, was previously unset
+    # Quart's default RESPONSE_TIMEOUT is 60 s for the WHOLE response, not an idle timeout, so any
+    # download that takes longer than a minute end to end (a big file through the Cloudflare
+    # tunnel) was cut off mid-stream. None = no cap, as with Waitress before the Quart migration.
+    RESPONSE_TIMEOUT=None,
 )
 
 # ---------------------------------------------------------------------------

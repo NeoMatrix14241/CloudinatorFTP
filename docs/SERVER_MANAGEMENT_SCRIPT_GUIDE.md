@@ -1,10 +1,10 @@
 # 🖥️ manage.sh — Server Management Script Guide
 
-**Last Updated**: 2026-10-17
+**Last Updated**: 2026-10-22
 **Works on**: Windows (Git Bash), Linux, and Android (Termux)
 **Checked against**: `manage.sh` itself (commands, menu numbers, and behaviour below are read from the script, not from memory)
 
-`manage.sh` runs the Cloudinator server in the **background** so your terminal stays free, and gives you one entry point for the maintenance utilities (users, config, SMB, share links, version engine, SRI hash checking, the automated quality checks, and so on).
+`manage.sh` runs the Cloudinator server in the **background** so your terminal stays free, and gives you one entry point for the maintenance utilities (users, config, SMB, share links, version engine, SRI hash checking, the automated quality checks, the folder-tree and route-snapshot tools, and so on).
 
 ## 📋 Table of Contents
 
@@ -14,13 +14,14 @@
 4. [Log Commands](#log-commands)
 5. [Utility Commands](#utility-commands)
 6. [Quality Assurance Commands](#quality-assurance-commands)
-7. [security.txt Command](#securitytxt-command)
-8. [Interactive Menu](#interactive-menu)
-9. [Files and Folders It Uses](#files-and-folders-it-uses)
-10. [How Background Mode and Ctrl-C Work](#how-background-mode-and-ctrl-c-work)
-11. [WebDAV Is a Separate Process](#webdav-is-a-separate-process)
-12. [Environment Variable: PYTHON](#environment-variable-python)
-13. [Troubleshooting](#troubleshooting)
+7. [Developer Tools Commands](#developer-tools-commands)
+8. [security.txt Command](#securitytxt-command)
+9. [Interactive Menu](#interactive-menu)
+10. [Files and Folders It Uses](#files-and-folders-it-uses)
+11. [How Background Mode and Ctrl-C Work](#how-background-mode-and-ctrl-c-work)
+12. [WebDAV Is a Separate Process](#webdav-is-a-separate-process)
+13. [Environment Variable: PYTHON](#environment-variable-python)
+14. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -118,16 +119,16 @@ Utilities run in the **foreground** and are safe to use while the server is up. 
 
 | Command | Runs | Purpose |
 |---|---|---|
-| `version-manage` | `version_manage.py` | Version Engine: list, restore, delete file versions (no arguments opens its own menu) |
-| `setup-smb` | `smb_setup.py` | One-time SMB setup (see `SMB_PROTOCOL_DEPLOYMENT.md`) |
-| `kick-sessions` | `kick_sessions.py` | Force logout of every active session (server must be running) |
+| `version-manage` | `tools/version_manage.py` | Version Engine: list, restore, delete file versions (no arguments opens its own menu) |
+| `setup-smb` | `tools/smb_setup.py` | One-time SMB setup (see `SMB_PROTOCOL_DEPLOYMENT.md`) |
+| `kick-sessions` | `tools/kick_sessions.py` | Force logout of every active session (server must be running) |
 | `config` | `config.py` | Interactive configuration (see `CONFIG_PY_REFERENCE.md`) |
-| `manage-users` | `manage_users.py` | Manage user credentials |
-| `reset-db` | `reset_db.py` | Reset the database |
-| `setup-storage` | `setup_storage.py` | Configure storage |
+| `manage-users` | `tools/manage_users.py` | Manage user credentials |
+| `reset-db` | `tools/reset_db.py` | Reset the database |
+| `setup-storage` | `tools/setup_storage.py` | Configure storage |
 | `update-modules [-y]` | `setup_pymodules.sh` | Update Python packages (alias: `setup-modules`) |
-| `revoke-shares` | `revoke_sharing.py` | Share link management |
-| `validate-sri [--fix]` | `sri_validator.py` | Check (or repair) the Subresource Integrity hashes in the templates |
+| `revoke-shares` | `tools/revoke_sharing.py` | Share link management |
+| `validate-sri [--fix]` | `tools/sri_validator.py` | Check (or repair) the Subresource Integrity hashes in the templates |
 | `termux-setup` | `termux_setup.sh` | First-time setup, Android/Termux only |
 
 When a utility finishes, the script prints whether it finished, was interrupted (Ctrl-C), or exited with an error code.
@@ -179,7 +180,7 @@ Your HTML templates load scripts and stylesheets with an `integrity="sha384-..."
 - `--fix` only changes `integrity` values. Line endings and the rest of each template stay exactly as they were.
 - It always looks in the `templates/` and `static/` folders next to `manage.sh`, wherever you run it from. `--templates DIR` and `--static DIR` override that.
 - **When to run it:** after you edit any JS or CSS under `static/` (including `bg_audio.js`, whose hash is repeated in four templates), and after you change a third-party file such as pdf.js. Then open each page once and look for blocked-script errors in the browser console.
-- **From the interactive menu (`./manage.sh menu`, option 21)** it runs the check, and if any hash is stale or missing it asks `Fix the stale/missing hashes now? [y/N]`. `y` runs the same repair as `--fix`; Enter or `n` leaves everything unchanged (and reminds you of the shell command). The question appears only when the check found a fixable problem, not when everything is OK, when you press Ctrl-C, or when the `templates/` or `static/` folder is missing.
+- **From the interactive menu (`./manage.sh menu`, option 20)** it runs the check, and if any hash is stale or missing it asks `Fix the stale/missing hashes now? [y/N]`. `y` runs the same repair as `--fix`; Enter or `n` leaves everything unchanged (and reminds you of the shell command). The question appears only when the check found a fixable problem, not when everything is OK, when you press Ctrl-C, or when the `templates/` or `static/` folder is missing.
 - Because it exits with 1 when something is wrong, you can also use it in a script or git pre-commit hook: `./manage.sh validate-sri || exit 1`.
 
 Limits: browsers only enforce the hash on `<script>` tags and on stylesheet/preload links (icon and `locale.json` links accept the attribute but ignore it). Tags that JavaScript adds at runtime are not in any template, so they are not checked. The hash must match the bytes the **server** sends, so if git converts line endings on checkout, run the command on the server's copy.
@@ -216,10 +217,63 @@ Extra arguments go straight to `qa.py`: `--skip-packages` (do not warn about pac
 ./manage.sh qa quick || exit 1    # usable from a script or git hook: exit code 1 means a step failed
 ```
 
+- **Slow tests:** `qa layer performance` runs the end-to-end download test only when `CLOUDINATOR_SLOW_TESTS=1` is set in the environment (about 85 s); otherwise it is reported as skipped.
 - **One-time setup:** the test packages are not in `requirements.txt`. Run `python -m pip install -r requirements-dev.txt` once.
 - **SKIP is not PASS:** a step that cannot run (Node.js missing, a layer folder that does not exist yet) is reported as `SKIP` with the reason and does not fail the run. A `FAIL` does.
 - **Misplaced test files:** a `test_*.py` file directly inside `tests/` runs in no layer, so `qa` reports it as a `FAIL` and tells you to move it into `tests/unit/` or `tests/application/`.
 - **Exit codes:** `0` all steps passed or were skipped, `1` at least one step failed, `2` unknown mode or layer, `130` Ctrl-C.
+
+---
+
+## Developer Tools Commands
+
+Two small tools from the `tests/` folder have their own commands. They only **read** source files and folder names (they never start the app or touch your database, cache or storage), so they are safe while a server is up. They run in the foreground, and Ctrl-C cancels them.
+
+| Command | Runs | Purpose |
+|---|---|---|
+| `dir-tree` | `tests/dir_tree.py` | Print the project folder tree and save it to `docs/DIRECTORY_TREE.md` |
+| `smoke [options]` | `tests/smoke.py` | Fast static safety net. `--save` writes the route snapshot `tests/smoke_routes.json` |
+
+### dir-tree
+
+```bash
+./manage.sh dir-tree
+```
+
+- Prints the tree and writes it to `docs/DIRECTORY_TREE.md`, creating `docs/` if it is missing. The file is overwritten every time and never lists itself.
+- Folders come first, then files, each sorted A to Z ignoring case.
+- **Hidden completely:** `__pycache__`, `.git`, `.venv`, `venv`, `env`, `.pytest_cache`, `.manage_pids` and `logs`.
+- **Shown but not opened** (printed as `... (reason)`): `images`, `cmaps`, `iccs`, `locale`, `standard_fonts`, `wasm`, `uploads` and `webfonts`. They are matched by folder **name** only, so any folder with one of those names is collapsed, including a project-root `images/` folder.
+- Vendored files get a short note after their name (`pdf.mjs`, `pdf.worker.mjs`, `viewer.mjs`, `viewer.css`, `video.js`, `video.css`, `all.min.js`). The lists are at the top of `tests/dir_tree.py` if you want to change them.
+- It takes **no options**; anything typed after the command is ignored.
+- **When to run it:** after files are added, moved or removed, then commit `docs/DIRECTORY_TREE.md`.
+
+### smoke
+
+```bash
+./manage.sh smoke            # run every check (a few seconds)
+./manage.sh smoke --save     # run every check, then write the route snapshot
+./manage.sh smoke -v         # also print the route table
+./manage.sh smoke --files    # also list every .py file that was scanned
+```
+
+Anything after `smoke` goes straight to `tests/smoke.py`. The checks, in short:
+
+- every `.py` file parses (syntax), and `pyflakes` finds undefined names (skipped with a hint if `pyflakes` is not installed);
+- the route table: one function per endpoint name, and no URL and method registered twice;
+- every `url_for('x')` and endpoint-name list refers to a real endpoint;
+- hooks (`before_request`, `after_request`, error handlers, and so on) exist only in `middleware.py`;
+- import rules: no `from x import *`, only the launchers import `app`, no import cycles, route modules do not import each other (except the documented pairs), `helpers/` modules stay small leaf utilities, and `app.py` imports every `routes/*.py`;
+- every script in `tools/` puts the project root on `sys.path` before its first project import;
+- `manage.sh` launches only files that exist, and `bash -n manage.sh` passes;
+- the route snapshot (below).
+
+Exit code `1` means at least one check **FAIL**ed. A `SKIP` is not a pass of that check. `qa quick` runs `smoke.py` as well; use `smoke` on its own when you only want the quick answer.
+
+**The route snapshot.** `tests/smoke_routes.json` lists every route (methods, URL and endpoint). Check 11 **fails** if a route in the snapshot has disappeared from the code (`LOST`), so a route cannot vanish unnoticed. Routes that are not in the snapshot yet only produce a warning (`11b`). Run `--save` after a green run when you added or removed a route **on purpose**, then commit the file. Before the first `--save`, check 11 is reported as `SKIP`.
+
+- `--save` runs **all** the checks first and then saves the snapshot **even if one of them failed**, so read the report before you commit the file.
+- **From the interactive menu (option 27)** it first warns, then asks `Save the route snapshot? [y/N]`. Saving after a route was lost by mistake would hide the loss, so Enter or `n` leaves the file unchanged and reminds you of the shell command. From the shell, `smoke --save` does not ask.
 
 ---
 
@@ -281,6 +335,8 @@ Shows whether a server is running, then a numbered list. Every number is the sam
 | 23 | `qa tests` | Quality Assurance |
 | 24 | `qa layer` (asks which layer, default unit) | Quality Assurance |
 | 25 | `qa ci` | Quality Assurance |
+| 26 | `dir-tree` | Developer Tools |
+| 27 | `smoke --save` (warns, then asks y/N) | Developer Tools |
 
 Type `q` to quit. After each action it waits for Enter before redrawing.
 
@@ -298,6 +354,10 @@ Type `q` to quit. After each action it waits for Enter before redrawing.
 | `static/.well-known/security.txt` | Edited by `security-txt` |
 | `templates/*.html`, `static/` | Read by `validate-sri`; the templates are rewritten only when you add `--fix` |
 | `tests/qa.py` | The runner every `qa` command calls |
+| `tests/dir_tree.py` | The tool `dir-tree` runs |
+| `docs/DIRECTORY_TREE.md` | Written by `dir-tree` (overwritten each run; commit it after files change) |
+| `tests/smoke.py` | The tool `smoke` runs (`qa` runs it too) |
+| `tests/smoke_routes.json` | The route snapshot written by `smoke --save` (commit it) |
 | `artifacts/` | JUnit XML written by `qa ci` (not committed; add it to `.gitignore`) |
 | a temporary folder (system temp) | The scratch copy of the project the tests run in; removed by pytest afterwards |
 
@@ -359,6 +419,11 @@ This applies to the servers and every utility.
 | `pytest is not installed` (from `qa`) | Run `python -m pip install -r requirements-dev.txt` |
 | `qa` says `SKIP: node is not installed` | Not an error. Install Node.js if you want the JavaScript syntax check |
 | `qa` reports a `layout` FAIL | A `test_*.py` file sits directly in `tests/`. Move it into `tests/unit/` or `tests/application/` |
+| `smoke exited with code 1` | At least one smoke check FAILed. Read the `[FAIL]` lines in its report |
+| `smoke` reports `[FAIL] 11 no route lost` with `LOST` lines | A route that is in `tests/smoke_routes.json` is gone from the code. If you removed it on purpose, run `./manage.sh smoke --save`; if not, put the route back |
+| `smoke` reports `[WARN] 11b ... not in the snapshot` | New routes. Not an error; run `./manage.sh smoke --save` once you are sure they are intended |
+| `smoke` reports `[SKIP] 11 route snapshot` | There is no `tests/smoke_routes.json` yet. Run `./manage.sh smoke --save` once after a green run |
+| `smoke` reports `[SKIP] 2 pyflakes` | `pyflakes` is not installed. Run `python -m pip install pyflakes` (this is the check that finds missing imports) |
 | `sri_validator exited with code 1` | `validate-sri` found a stale, missing or unresolvable hash. Read the report above it, then run with `--fix` |
 | `Permission denied` running `./manage.sh` | Run `chmod +x manage.sh`, or use `bash manage.sh <command>` |
 | `termux-setup` says Android-only | You are not on Termux. Follow the message for your platform |

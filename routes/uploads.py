@@ -100,6 +100,8 @@ async def upload():
 
             if not file_id:
                 return "File ID is required for chunked upload", 400
+            if not storage.is_safe_chunk_id(file_id):
+                return "Invalid file ID", 400
 
             # Track this upload
             chunk_tracker.track_upload(session_id, file_id)
@@ -264,6 +266,8 @@ async def cleanup_chunks():
             return jsonify({"error": "File ID is required"}), 400
 
         file_id = data["file_id"]
+        if not storage.is_safe_chunk_id(file_id):
+            return jsonify({"error": "Invalid file ID"}), 400
 
         # Untrack and cleanup
         chunk_tracker.untrack_upload(session_id, file_id)
@@ -316,6 +320,8 @@ async def cancel_upload():
             return jsonify({"error": "File ID is required"}), 400
 
         file_id = data["file_id"]
+        if not storage.is_safe_chunk_id(file_id):
+            return jsonify({"error": "Invalid file ID"}), 400
         filename = data.get("filename", "Unknown file")
 
         print(f"🚫 Cancelling upload: {file_id} ({filename})")

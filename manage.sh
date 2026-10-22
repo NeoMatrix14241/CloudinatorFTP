@@ -1384,6 +1384,30 @@ _menu_qa_layer() {
 	cmd_qa layer "$layer"
 }
 
+# ── cmd_smoke ─────────────────────────────────────────────────────────────────
+# tests/smoke.py is the fast static safety net (syntax, pyflakes, routes, hooks, imports,
+# manage.sh). It only READS source files, so it is safe while a server runs. Everything typed
+# after the command goes straight to it: --save (write the route snapshot
+# tests/smoke_routes.json), -v (print the route table), --files (list the scanned files).
+# smoke.py exits 1 on a FAIL, and run_utility returns that code.
+cmd_smoke() {
+	run_utility "tests/smoke.py" "$@"
+}
+
+# Menu flavour of `smoke --save` (menu #27). The snapshot is the baseline that check 11
+# compares against: saving it after a route was lost BY MISTAKE would hide the loss for good,
+# so ask first. Enter / n / Ctrl-D / Ctrl-C leave tests/smoke_routes.json untouched. (smoke.py
+# runs all its checks before it saves, so the report is on screen either way.)
+_menu_smoke_save() {
+	warn "This overwrites tests/smoke_routes.json with the routes the code has NOW."
+	info "Do it only after a green smoke run, and only when every added or removed route is intended."
+	if _confirm "Save the route snapshot?"; then
+		cmd_smoke --save
+	else
+		info "Left unchanged. Save later with: ./manage.sh smoke --save"
+	fi
+}
+
 # ── cmd_dashboard ─────────────────────────────────────────────────────────────
 cmd_dashboard() {
 	header "Cloudinator — Server Manager"
@@ -1525,7 +1549,7 @@ cmd_menu() {
 		echo "  16) setup_pymodules.sh  — Setup and Update Python packages"
 		echo "  17) revoke_sharing.py   — Share link management (links, passkeys, approvals)"
 		echo "  18) security.txt        — Update static/.well-known/security.txt"
-		# Always listed so the menu numbers match `./manage.sh help` (25 entries).
+		# Always listed so the menu numbers match `./manage.sh help` (27 entries).
 		# Off Termux, cmd_termux_setup just explains that it is Android-only.
 		if is_termux; then
 			echo "  19) termux_setup.sh     — Termux initial setup (Android only)"
@@ -1540,6 +1564,10 @@ cmd_menu() {
 		echo "  23) qa tests            — pytest on every layer folder (unit, application, ...)"
 		echo "  24) qa layer            — run ONE layer (asks which)"
 		echo "  25) qa ci               — quick + JUnit XML in ./artifacts (what GitHub runs)"
+		echo ""
+		echo -e "  ${BOLD}Developer Tools${NC}  ${DIM}(files in tests/; safe while a server runs)${NC}"
+		echo "  26) dir_tree.py         — Regenerate docs/DIRECTORY_TREE.md (project folder tree)"
+		echo "  27) smoke.py --save     — Save the route snapshot tests/smoke_routes.json (asks first)"
 		echo ""
 		echo "   q) Quit"
 		echo ""
@@ -1579,6 +1607,8 @@ cmd_menu() {
 		23) _menu_run cmd_qa tests ;;
 		24) _menu_run _menu_qa_layer ;;
 		25) _menu_run cmd_qa ci ;;
+		26) _menu_run run_utility "tests/dir_tree.py" ;;
+		27) _menu_run _menu_smoke_save ;;
 		q | Q)
 			echo ""
 			success "Goodbye!"
@@ -1694,6 +1724,20 @@ ${BOLD}QUALITY ASSURANCE COMMANDS${NC}  (foreground; safe to run while a server 
   qa ci                 quick, with JUnit XML written to ./artifacts (what GitHub runs)
   qa --version          which copy of tests/qa.py you have
 
+${BOLD}DEVELOPER TOOLS COMMANDS${NC}  (foreground; safe while a server is up — they only read source files and folder names)
+  dir-tree              python tests/dir_tree.py — print the project folder tree and save it
+                          to docs/DIRECTORY_TREE.md (vendored pdf.js / video.js / Font Awesome
+                          folders are listed but not walked). Takes no options. Run it after
+                          files are added, moved or removed, then commit the result.
+  smoke [options]       python tests/smoke.py — fast static safety net: syntax, pyflakes,
+                          routes, hooks, imports, manage.sh. No options = run the checks
+                          (exit code 1 if any check FAILs). Options go straight to smoke.py:
+                          --save    write the route snapshot tests/smoke_routes.json (menu #27
+                                    asks y/N first). Use it after a green run when a route was
+                                    added or removed ON PURPOSE.
+                          -v        also print the route table
+                          --files   list every .py file that was scanned
+
 ${BOLD}OTHER${NC}
   dashboard             Status overview + quick commands (default with no args)
   menu                  Interactive menu
@@ -1709,7 +1753,8 @@ ${BOLD}MENU ↔ COMMAND MAP${NC}  (in ./manage.sh menu type the number; from the
   19  termux-setup (Android/Termux only; shown dimmed elsewhere)
   20  validate-sri
   21  qa quick             22  qa static             23  qa tests
-  24  qa layer (asks)      25  qa ci                 q  quit
+  24  qa layer (asks)      25  qa ci                 26  dir-tree
+  27  smoke --save (asks y/N first)                  q  quit
 
 ${BOLD}EXAMPLES${NC}
   Servers
@@ -1770,6 +1815,11 @@ ${BOLD}EXAMPLES${NC}
     ./manage.sh qa ci                            # quick + JUnit XML in ./artifacts (what GitHub runs)
     ./manage.sh qa quick --fail-fast             # stop at the first failing step
     ./manage.sh qa --version                     # which tests/qa.py you have
+  Developer Tools
+    ./manage.sh dir-tree                         # regenerate docs/DIRECTORY_TREE.md
+    ./manage.sh smoke                            # run the fast static checks
+    ./manage.sh smoke --save                     # accept the current routes as the new snapshot
+    ./manage.sh smoke -v                         # run the checks and print the route table
   Other
     ./manage.sh menu                             # interactive mode
     ./manage.sh help                             # this text
@@ -1829,6 +1879,8 @@ main() {
 	termux-setup) cmd_termux_setup ;;
 	validate-sri) cmd_validate_sri "$@" ;;
 	qa) cmd_qa "$@" ;;
+	dir-tree) run_utility "tests/dir_tree.py" "$@" ;;
+	smoke) cmd_smoke "$@" ;;
 	menu) cmd_menu ;;
 	dashboard) cmd_dashboard ;;
 	help | --help | -h) cmd_help ;;

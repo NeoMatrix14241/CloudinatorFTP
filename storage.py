@@ -177,6 +177,8 @@ def count_directory_items(path):
 
 
 def save_chunk(file_id, chunk_num, chunk_data):
+    if not is_safe_chunk_id(file_id):
+        return False
     tmp_dir = os.path.join(ROOT_DIR, ".chunks", file_id)
     os.makedirs(tmp_dir, exist_ok=True)
     chunk_path = os.path.join(tmp_dir, f"{chunk_num}")
@@ -375,6 +377,8 @@ def assemble_chunks(file_id, filename, dest_path=""):
 
 def cleanup_chunks(file_id, total_chunks=None):
     """Clean up temporary chunk files using Windows-safe deletion"""
+    if not is_safe_chunk_id(file_id):
+        return
     tmp_dir = os.path.join(ROOT_DIR, ".chunks", file_id)
 
     # Check for assembly protection marker
@@ -703,12 +707,24 @@ def get_dir_info(path):
 def is_safe_path(path):
     """Check if path is safe (no directory traversal)"""
     try:
-        # Resolve the path and check if it's within ROOT_DIR
-        resolved = os.path.realpath(os.path.join(ROOT_DIR, path))
-        root_real = os.path.realpath(ROOT_DIR)
-        return resolved.startswith(root_real)
-    except Exception:
+        # Resolve the path and check if it's within ROOT_DIR. os.path.commonpath compares whole
+        # path components: a plain startswith() accepted a SIBLING folder whose name begins with
+        # the root's name (storage -> storage_backup).
+        root_real = os.path.normcase(os.path.realpath(ROOT_DIR))
+        resolved = os.path.normcase(os.path.realpath(os.path.join(ROOT_DIR, path)))
+        return os.path.commonpath([resolved, root_real]) == root_real
+    except (ValueError, OSError):  # ValueError: NUL byte, or different drives on Windows
         return False
+
+
+def is_safe_chunk_id(file_id):
+    """An upload/chunk id is ONE folder name under .chunks/. Anything that could leave that
+    folder (separators, a drive letter, '..', '.', NUL, an empty or huge value) is refused."""
+    if not isinstance(file_id, str) or not file_id or len(file_id) > 200:
+        return False
+    if file_id in (".", ".."):
+        return False
+    return not any(ch in file_id for ch in "/\\:\x00")
 
 
 def is_valid_path(path):

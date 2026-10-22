@@ -304,6 +304,24 @@ def _next_ip() -> str:
     return f"10.77.{n // 250}.{n % 250 + 1}"
 
 
+def _multipart(fields, files):
+    """Encode a multipart/form-data body. files = {name: (filename, bytes)}."""
+    boundary = "qa-" + uuid.uuid4().hex
+    parts = []
+    for name, value in fields.items():
+        parts.append(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
+        )
+    for name, (filename, content) in files.items():
+        head = (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; '
+            f'filename="{filename}"\r\nContent-Type: application/octet-stream\r\n\r\n'
+        )
+        parts.append(head.encode() + content + b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode())
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
 class Reply:
     """One HTTP answer: status, headers (case-insensitive), body and every Set-Cookie line."""
 
@@ -339,12 +357,17 @@ class HttpClient:
             _NoRedirect, urllib.request.HTTPCookieProcessor(self.jar)
         )
 
-    def request(self, method, path, fields=None, json_body=None, headers=None) -> Reply:
+    def request(
+        self, method, path, fields=None, json_body=None, headers=None, files=None
+    ) -> Reply:
         hdrs = {"CF-Connecting-IP": self.ip}
         hdrs.update(headers or {})
         hdrs = {k: v for k, v in hdrs.items() if v is not None}
         data = None
-        if fields is not None:
+        if files is not None:
+            data, content_type = _multipart(fields or {}, files)
+            hdrs.setdefault("Content-Type", content_type)
+        elif fields is not None:
             data = urllib.parse.urlencode(fields).encode("utf-8")
             hdrs.setdefault("Content-Type", "application/x-www-form-urlencoded")
         elif json_body is not None:
@@ -375,14 +398,19 @@ class HttpClient:
             {"username": username, "password": password, "csrf_token": token},
         )
 
-    def api(self, method, path, fields=None, json_body=None) -> Reply:
+    def api(self, method, path, fields=None, json_body=None, files=None) -> Reply:
         """A state-changing or JSON call the way the front end makes it: CSRF header from the
         current session plus an Accept: application/json header."""
         headers = dict(JSON_HEADERS)
         if method not in ("GET", "HEAD"):
             headers["X-CSRFToken"] = self.csrf_token()
         return self.request(
-            method, path, fields=fields, json_body=json_body, headers=headers
+            method,
+            path,
+            fields=fields,
+            json_body=json_body,
+            headers=headers,
+            files=files,
         )
 
     def cookie_header(self) -> str:

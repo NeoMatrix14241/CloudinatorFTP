@@ -343,6 +343,30 @@ case "$choice" in
 y | Y)
 	echo "Installing updated packages..."
 	PHASE="install"
+
+	# Create virtual environment (falls back safely if python3 isn't aliased).
+	# Termux: bcrypt, cryptography, pyppmd, psutil and pynacl come from `pkg` and live in the SYSTEM
+	# site-packages (see SYSTEM_MANAGED above), so the venv must keep seeing them. Without
+	# --system-site-packages pip would try to build them from source inside the venv, which fails
+	# on Android.
+	venv_args=()
+	if [ "$IS_TERMUX" -eq 1 ]; then
+		venv_args=(--system-site-packages)
+	fi
+	python3 -m venv "${venv_args[@]}" .venv 2>/dev/null || python -m venv "${venv_args[@]}" .venv
+
+	# Cross-platform activation: detects Linux vs Windows (Git Bash)
+	if [ -f ".venv/bin/activate" ]; then
+		source .venv/bin/activate # Linux
+	elif [ -f ".venv/Scripts/activate" ]; then
+		source .venv/Scripts/activate # Windows (Git Bash/WSL)
+	else
+		echo "Error: Virtual environment activation script not found!"
+		exit 1
+	fi
+
+	# Install packages using the activated environment
+	python -m pip install --upgrade pip
 	python -m pip install -r "$REQ" -c "$CONSTRAINTS" --upgrade --no-cache-dir
 
 	echo

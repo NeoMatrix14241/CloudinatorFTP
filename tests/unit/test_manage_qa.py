@@ -1,10 +1,11 @@
 """
-Tests for the Quality Assurance section of manage.sh (menu 21-25 and the `qa` command).
+Tests for the Quality Assurance section of manage.sh (menu 21-25 and the `qa` command) and for
+its Developer Tools section (menu 26-27, the `dir-tree` and `smoke` commands).
 
 They read the real manage.sh and only run side-effect-free commands (`help`, `qa --version`,
 `qa bogus`, `qa layer nope`); no server is started and nothing is written. The numbering test
 guards against the menu drifting from its dispatch table and from `help` (CLAUDE.md records
-three earlier renumbering accidents).
+three earlier renumbering accidents). Raise LAST_ENTRY whenever the menu grows.
 """
 
 import re
@@ -22,7 +23,7 @@ pytestmark = pytest.mark.skipif(
     BASH is None or not SCRIPT.is_file(), reason="bash or manage.sh not found"
 )
 
-LAST_ENTRY = 25
+LAST_ENTRY = 27
 
 
 def _text():
@@ -84,10 +85,43 @@ def test_menu_arms_run_the_expected_qa_modes():
         ), num
 
 
+def test_menu_arms_run_the_developer_tools():
+    body = _function("cmd_menu")
+    for num, call in {
+        26: 'run_utility "tests/dir_tree.py"',
+        27: "_menu_smoke_save",
+    }.items():
+        assert re.search(
+            rf"^\t\t{num}\) _menu_run {re.escape(call)} ;;$", body, re.M
+        ), num
+
+
 def test_qa_is_dispatched_and_launches_the_runner_through_run_utility():
     assert re.search(r"^\tqa\) cmd_qa \"\$@\" ;;$", _function("main"), re.M)
     assert 'run_utility "tests/qa.py"' in _function("cmd_qa")
     assert (ROOT / "tests" / "qa.py").is_file()
+
+
+def test_developer_tools_are_dispatched_and_launch_their_scripts():
+    main = _function("main")
+    assert re.search(
+        r"^\tdir-tree\) run_utility \"tests/dir_tree.py\" \"\$@\" ;;$", main, re.M
+    )
+    assert re.search(r"^\tsmoke\) cmd_smoke \"\$@\" ;;$", main, re.M)
+    assert 'run_utility "tests/smoke.py"' in _function("cmd_smoke")
+    assert (ROOT / "tests" / "dir_tree.py").is_file()
+    assert (ROOT / "tests" / "smoke.py").is_file()
+
+
+def test_help_documents_the_developer_tools():
+    out = _run("help").stdout
+    for text in (
+        "DEVELOPER TOOLS COMMANDS",
+        "dir-tree",
+        "smoke [options]",
+        "smoke --save",
+    ):
+        assert text in out, text
 
 
 def test_help_documents_every_qa_mode():
