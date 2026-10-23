@@ -205,6 +205,24 @@ def save_chunk(file_id, chunk_num, chunk_data):
         return False
 
 
+def chunks_complete(file_id, total_chunks):
+    """True when the chunk files 0 .. total_chunks-1 of upload `file_id` are all on disk.
+
+    The last chunk is checked first (one stat), so a normal in-order upload pays the full
+    scan once, at its end. Used by routes/uploads.py to start the assembly when the LAST
+    MISSING chunk arrives, in whatever order the chunks came."""
+    if not is_safe_chunk_id(file_id):
+        return False
+    if not isinstance(total_chunks, int) or total_chunks < 1:
+        return False
+    tmp_dir = os.path.join(ROOT_DIR, ".chunks", file_id)
+    if not os.path.isfile(os.path.join(tmp_dir, str(total_chunks - 1))):
+        return False
+    return all(
+        os.path.isfile(os.path.join(tmp_dir, str(i))) for i in range(total_chunks - 1)
+    )
+
+
 def verify_chunks_complete(file_id, expected_chunks=None):
     """Verify all chunks exist and map them for assembly"""
     tmp_dir = os.path.join(ROOT_DIR, ".chunks", file_id)
@@ -282,8 +300,11 @@ def verify_chunks_complete(file_id, expected_chunks=None):
     }
 
 
-def assemble_chunks(file_id, filename, dest_path=""):
-    """Enhanced chunk assembly with pre-verification and protection"""
+def assemble_chunks(file_id, filename, dest_path="", total_chunks=None):
+    """Enhanced chunk assembly with pre-verification and protection.
+
+    `total_chunks` (the count the client announced) makes the verification strict: a folder
+    with more or fewer chunk files than announced is never published."""
     print(f"🔨 Starting assembly for {filename} (ID: {file_id})")
 
     # Only replace slashes, preserve all other characters
@@ -295,7 +316,7 @@ def assemble_chunks(file_id, filename, dest_path=""):
     try:
         # Step 1: Verify and map all chunks first
         print(f"🔍 Verifying chunks for {file_id}...")
-        chunk_info = verify_chunks_complete(file_id)
+        chunk_info = verify_chunks_complete(file_id, total_chunks)
         total_chunks = chunk_info["total_chunks"]
         chunk_map = chunk_info["chunk_map"]
         tmp_dir = chunk_info["tmp_dir"]
@@ -713,13 +734,17 @@ def is_safe_path(path):
         root_real = os.path.normcase(os.path.realpath(ROOT_DIR))
         resolved = os.path.normcase(os.path.realpath(os.path.join(ROOT_DIR, path)))
         return os.path.commonpath([resolved, root_real]) == root_real
-    except (ValueError, OSError):  # ValueError: NUL byte, or different drives on Windows
+    except (
+        ValueError,
+        OSError,
+    ):  # ValueError: NUL byte, or different drives on Windows
         return False
 
 
 def is_safe_chunk_id(file_id):
     """An upload/chunk id is ONE folder name under .chunks/. Anything that could leave that
-    folder (separators, a drive letter, '..', '.', NUL, an empty or huge value) is refused."""
+    folder (separators, a drive letter, '..', '.', NUL, an empty or huge value) is refused.
+    """
     if not isinstance(file_id, str) or not file_id or len(file_id) > 200:
         return False
     if file_id in (".", ".."):

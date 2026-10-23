@@ -2,8 +2,12 @@
 Chunked upload integrity: what arrives must be exactly what was sent, and one user's chunks must
 never end up in another user's file. Against the REAL application, from a scratch copy.
 
-The front end names an upload  fid_<counter>_<file size>  (static/js/index.js, generateFileId):
-the counter restarts at 1 on every page load and nothing identifies the user or the tab.
+The front end names an upload  fid_<counter>_<file size>_<random hex>  (static/js/index.js,
+generateFileId): the counter restarts at 1 on every page load, so the browser's id alone can repeat
+between users. The SERVER therefore keys every upload by the session as well
+(routes/uploads.py, _chunk_key; CLAUDE.md 5.16), and starts the assembly when every chunk is on
+disk, whatever the order they arrived in. The tests below send the OLD short id on purpose: any
+safe id is accepted, and it is the case that used to collide.
 """
 
 import time
@@ -54,8 +58,8 @@ def test_a_three_chunk_upload_is_assembled_in_order(server):
 
 
 def test_an_upload_whose_last_chunk_arrives_early_never_publishes_a_wrong_file(server):
-    # Assembly starts when the chunk NUMBERED total-1 arrives, so a client that sends it before
-    # the others loses the file (see the next test). It must at least never publish wrong bytes.
+    # Whatever the order, the file is published only when the last MISSING chunk has arrived,
+    # and never with wrong bytes (the next test checks the result once everything is there).
     client = server.login_as("qa_writer")
     name = f"early_{uuid.uuid4().hex[:8]}.bin"
     parts = [b"AAAA", b"BBBB", b"CCCC"]
@@ -67,10 +71,6 @@ def test_an_upload_whose_last_chunk_arrives_early_never_publishes_a_wrong_file(s
     assert not target.exists() or target.read_bytes() == b"".join(parts)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN LIMITATION: assembly starts at the chunk numbered total-1 (CLAUDE.md part 63)",
-)
 def test_chunks_arriving_out_of_order_still_assemble_correctly(server):
     client = server.login_as("qa_writer")
     name = f"shuffled_{uuid.uuid4().hex[:8]}.bin"
@@ -82,12 +82,8 @@ def test_chunks_arriving_out_of_order_still_assemble_correctly(server):
     assert _wait_for(lambda: target.exists() and target.read_bytes() == b"".join(parts))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN BUG 3: chunk folders are keyed by file_id only (CLAUDE.md part 63)",
-)
 def test_two_users_with_the_same_upload_id_do_not_mix_their_chunks(server):
-    # Same id because the id only holds a counter and the file size (e.g. two 8-byte files).
+    # Same id: the short counter + size form (e.g. two 8-byte files) that two browsers can produce.
     name, password = server.make_user("readwrite")
     alice, bob = server.login_as("qa_writer"), server.client()
     assert bob.login(name, password).status == 302
@@ -99,3 +95,8 @@ def test_two_users_with_the_same_upload_id_do_not_mix_their_chunks(server):
     target = server.storage / f"alice_{tag}.txt"
     assert _wait_for(lambda: target.exists())
     assert target.read_bytes() == b"AAAAaaaa", "Alice's file contains Bob's data"
+    # Bob finishes his own file: it must hold his bytes only.
+    _chunk(bob, file_id, 1, 2, f"bob_{tag}.txt", b"bbbb")
+    bobs = server.storage / f"bob_{tag}.txt"
+    assert _wait_for(lambda: bobs.exists())
+    assert bobs.read_bytes() == b"BBBBbbbb", "Bob's file contains Alice's data"

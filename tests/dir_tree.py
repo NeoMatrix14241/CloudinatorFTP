@@ -9,6 +9,7 @@ EXCLUDED_DIRS = {
     ".pytest_cache",
     ".manage_pids",
     "logs",
+    "artifacts",  # JUnit XML written by `./manage.sh qa ci` (not committed)
 }
 
 # Show the directory, skip its contents, and optionally explain why.

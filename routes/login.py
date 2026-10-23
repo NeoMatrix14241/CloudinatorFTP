@@ -35,6 +35,7 @@ from auth import (
     login_user,
     is_logged_in,
     get_role,
+    revoke_current_session,
 )
 
 
@@ -146,6 +147,10 @@ async def logout():
         if session_id:
             chunk_tracker.cleanup_session_chunks(session_id)
 
+        # End the session on the SERVER too (5.17): a copy of the cookie taken before this
+        # logout is refused from now on. Must run before session.clear(); never raises.
+        revoke_current_session()
+
         # Clear the session completely
         session.clear()
 
@@ -178,5 +183,7 @@ async def logout():
 
     except Exception as e:
         logging.error(f"Logout error: {e}", exc_info=True)
-        session.clear()  # Still try to clear session even if other operations fail
+        # Still try to end and clear the session even if other operations fail
+        revoke_current_session()
+        session.clear()
         return redirect(url_for("login", logged_out="1"))

@@ -19,9 +19,10 @@
 9. [Interactive Menu](#interactive-menu)
 10. [Files and Folders It Uses](#files-and-folders-it-uses)
 11. [How Background Mode and Ctrl-C Work](#how-background-mode-and-ctrl-c-work)
-12. [WebDAV Is a Separate Process](#webdav-is-a-separate-process)
-13. [Environment Variable: PYTHON](#environment-variable-python)
-14. [Troubleshooting](#troubleshooting)
+12. [How `stop` Works](#how-stop-works)
+13. [WebDAV Is a Separate Process](#webdav-is-a-separate-process)
+14. [Environment Variables: PYTHON and STOP_GRACE_SECS](#environment-variables-python-and-stop_grace_secs)
+15. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -49,7 +50,7 @@ The script detects where it is running and adjusts. You do not have to tell it.
 | | Windows | Linux | Android (Termux) |
 |---|---|---|---|
 | **Shell** | Git Bash (the script detects `msys`/`cygwin`) | bash | bash |
-| **Stopping the server** | `taskkill //F` on the saved PID (immediate, forced) | Polite stop first, then force-kill after about 5 seconds if it has not exited | Same as Linux |
+| **Stopping the server** | Graceful request through a stop file, then `taskkill //F //T` on the whole process tree if it has not exited within `STOP_GRACE_SECS` (default 45 s) | The same stop file, plus a `SIGTERM` for the production server, then `kill -9` on the process group after `STOP_GRACE_SECS` | Same as Linux |
 | **Uptime in `status`** | Shows just `running` | Real uptime from `ps` | Real uptime from `ps` |
 | **Port sweep for orphaned WebDAV** | Uses `netstat` | Uses `lsof` **if it is installed** (skipped silently otherwise) | Same as Linux, so it needs `lsof` |
 | **`termux-setup`** | Explains it is Android-only and points to `pip install -r requirements.txt` | Explains it is Android-only and points to `LINUX_DEPLOYMENT.md` | Runs `termux_setup.sh` |
@@ -69,7 +70,7 @@ Only **one** server can run at a time (production *or* dev). Trying to start the
 |---|---|
 | `./manage.sh start server` | Start `prod_server.py` (Hypercorn) in the background |
 | `./manage.sh start dev_server` | Start `dev_server.py` (Quart) in the background |
-| `./manage.sh stop` | Stop whichever server is running, then clean up WebDAV (see below) |
+| `./manage.sh stop` | Ask the running server to shut down gracefully, force it after `STOP_GRACE_SECS` (default 45), then clean up WebDAV and the Version Engine (see [How `stop` Works](#how-stop-works)) |
 | `./manage.sh restart` | Stop and start again whichever server is running |
 | `./manage.sh restart-webdav` | Restart **only** WebDAV, without touching the main server |
 | `./manage.sh status` | Shows both servers as running/stopped, PID, uptime, log file name, and the last 5 log lines |
@@ -78,7 +79,8 @@ Details worth knowing:
 
 - **Start** waits about 0.8 seconds and checks the process is still alive. If it died right away it prints `crashed immediately` and tells you to run `python prod_server.py` (or `dev_server.py`) in the foreground to see the real error.
 - **Start** first cleans up any leftover WebDAV process from a previous crash, so a stale one cannot block the ports.
-- **Restart** needs a server to be running. If none is, it tells you to use `start` instead.
+- **Stop** is graceful first: the server gets the same shutdown as a first Ctrl+C and stops its helpers itself, so a stop can take several seconds; it is forced only after `STOP_GRACE_SECS`. Details in [How `stop` Works](#how-stop-works).
+- **Restart** needs a server to be running. If none is, it tells you to use `start` instead. It is `stop`, a 0.5 second pause, then `start` of the same server, so it waits for the graceful shutdown too.
 - **restart-webdav** needs a running server and a WebDAV PID file. It kills the WebDAV process and waits up to about 10 seconds for the server's own watchdog to respawn it, then reports the new PID. Use it to recover a stuck WebDAV listener (for example after a large cancelled download) without disconnecting web users.
 
 ---
@@ -349,7 +351,9 @@ Type `q` to quit. After each action it waits for Enter before redrawing.
 | Path | Purpose |
 |---|---|
 | `.manage_pids/prod.pid`, `dev.pid` | PID of the running server |
+| `.manage_pids/prod.stop`, `dev.stop` | The graceful-stop request: `stop` creates it, the server deletes it (= acknowledged) and shuts down. Normally it exists for under a second |
 | `.manage_pids/webdav.pid` | PID of the WebDAV process (written by the server, not by `manage.sh`) |
+| `.manage_pids/version_engine.pid` | PID of the Version Engine worker (written by `version_engine.py`) |
 | `logs/prod_server_YYYY-MM-DD.log`, `logs/dev_server_YYYY-MM-DD.log` | One log per day per server type, written by the app's own logger. It rolls to a new file at midnight without a restart |
 | `static/.well-known/security.txt` | Edited by `security-txt` |
 | `templates/*.html`, `static/` | Read by `validate-sri`; the templates are rewritten only when you add `--fix` |
@@ -378,6 +382,40 @@ The practical result: closing a log view or pressing Ctrl-C **never** stops the 
 
 ---
 
+## How `stop` Works
+
+`./manage.sh stop` (and the stop half of `restart`) shuts the server down in two stages, the same two stages as pressing Ctrl+C in the foreground (once = graceful, twice = force quit). Pressing Ctrl+C never reaches a background server (see above), so `stop` has to ask in another way.
+
+**Stage 1 - graceful (up to `STOP_GRACE_SECS`, default 45 seconds)**
+
+1. `stop` creates the *stop file* `.manage_pids/prod.stop` (or `dev.stop`). A file is used because Windows cannot deliver a catchable signal to a detached process that has no console.
+2. For the **production server on Linux / Termux** it also sends a plain `SIGTERM`, which the server treats as the same graceful stop. The dev server does not get the signal (Quart's own `SIGTERM` handling would skip its cleanup).
+3. The server checks for the file about twice a second, deletes it (that is how `stop` knows it was understood) and starts shutting down. Its own shutdown code then stops WebDAV, SFTP / FTP / SMB and the Version Engine, so open transfers and the database get a chance to finish cleanly.
+4. `stop` checks every half second whether the process has exited and prints `Server shut down gracefully.` as soon as it has.
+
+**Stage 2 - forced**
+
+- If the server is still alive when `STOP_GRACE_SECS` run out, `stop` prints `Server did not exit gracefully` and kills the **whole process tree**: `taskkill //F //T` on Windows, `kill -9` on the process group (then on the PID) on Linux / Termux.
+- If the stop file is **still there after about 6 seconds**, the running server was started before this feature existed and never reads it. `stop` says `Server ignored the stop request (started before this manage.sh version?)`, stops waiting at once instead of idling for the full grace time, and goes straight to the forced stage. This happens at most once, for a server that was started with an older `manage.sh`.
+
+**Cleanup after either stage**
+
+`stop` removes the stop file and the server's PID file, then makes sure nothing is left behind:
+
+1. **WebDAV:** kills the process in `webdav.pid`, then sweeps the WebDAV ports (see [WebDAV Is a Separate Process](#webdav-is-a-separate-process)).
+2. **Version Engine:** kills the process in `version_engine.pid`, then every process whose command line contains `version_engine.py` and `--worker` (found with PowerShell on Windows, `pgrep` or `ps` elsewhere). Only Python processes are ever killed.
+
+**When no server is running**
+
+`stop` still looks for leftovers. If a Version Engine worker, a `version_engine.pid` or a `webdav.pid` is found it cleans them up and says so; otherwise it prints `No server is currently running.`
+
+**Related behaviour**
+
+- `start` also deletes a stale stop file and kills orphaned WebDAV / Version Engine processes before it launches (the production server clears a stale stop file when it boots too), so a stop file left by a crashed run cannot shut a new server down at once.
+- A long `STOP_GRACE_SECS` only matters when the server is slow to stop; a healthy server exits in a few seconds. See [Environment Variables](#environment-variables-python-and-stop_grace_secs) to change it.
+
+---
+
 ## WebDAV Is a Separate Process
 
 WebDAV runs as its own operating-system process next to the main server, tracked by `.manage_pids/webdav.pid`. Killing the main server does not automatically kill it, so `stop` and `start` also clean it up:
@@ -391,7 +429,9 @@ If a stale process ever holds a port or a log file open (a common Windows compla
 
 ---
 
-## Environment Variable: PYTHON
+## Environment Variables: PYTHON and STOP_GRACE_SECS
+
+### PYTHON
 
 By default the script uses `python` from your PATH, falling back to `python3`. To force a specific interpreter:
 
@@ -400,6 +440,17 @@ PYTHON=python3.11 ./manage.sh start server
 ```
 
 This applies to the servers and every utility.
+
+### STOP_GRACE_SECS
+
+How long `stop` (and `restart`) waits for the graceful shutdown before it forces the server down. Default **45** seconds. Use a **whole number of seconds**; the value is not validated, so something like `1.5` or `abc` breaks the wait.
+
+```bash
+STOP_GRACE_SECS=90 ./manage.sh stop       # give a busy server more time
+STOP_GRACE_SECS=10 ./manage.sh restart    # impatient: force after 10 seconds
+```
+
+Raise it if the server is usually busy with large transfers or a Version Engine scan when you stop it; lower it if you would rather force quickly. It applies only to that one command, set it again (or export it) when you want it every time. See [How `stop` Works](#how-stop-works).
 
 ---
 
@@ -411,6 +462,10 @@ This applies to the servers and every utility.
 | `crashed immediately` | The server died on startup (often an import error before logging began). Run `python prod_server.py` in the foreground to see the real error |
 | `Only one server can run at a time` | The other server is running. Run `./manage.sh stop` first |
 | `No log file found` | Nothing has been logged today for that server. Start it, or check the folder `logs/` |
+| `Server ignored the stop request (started before this manage.sh version?)` | The running server predates the stop-file feature and never reads it. `stop` forces it down straight away; the next `start` will be a current server |
+| `Server did not exit gracefully — forcing the whole process tree down…` | The server did not finish shutting down within `STOP_GRACE_SECS`. Nothing is wrong with the command; if it keeps happening, look at the end of the server log for what was still running, or raise `STOP_GRACE_SECS` |
+| `stop` takes a long time | It is waiting for the graceful shutdown (up to `STOP_GRACE_SECS`, default 45 s). Open transfers, WebDAV and the Version Engine are being closed. Wait, or force it sooner with a smaller `STOP_GRACE_SECS` |
+| `No server is running, but leftover helper processes or PID files were found` | A previous server died and left WebDAV or a Version Engine worker behind. `stop` cleans them up by itself |
 | `No WebDAV PID file found` (restart-webdav) | WebDAV did not start. Check `WEBDAV_ENABLED` and `WEBDAV_HTTPS_ENABLED` in `config.py`, and the server log |
 | `WebDAV did not come back within 10s` | The respawn failed. Read the server log for the actual error |
 | `Script not found` | A utility file is missing from the project folder |

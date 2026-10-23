@@ -3783,8 +3783,23 @@ function addToUploadQueue(itemData) {
 
 let _fileIdCounter = 0;
 
+// Upload id: fid_<counter>_<file size>_<16 random hex>. The counter restarts at 1 on every page
+// load, so on its own two tabs (or two users) uploading files of the same size would send the
+// same id; the random part makes it unique. The server adds the session on top (routes/uploads.py,
+// _chunk_key). Only letters, digits and underscores, at most 128 characters (server limit).
+function _randomHex(byteCount) {
+    const bytes = new Uint8Array(byteCount);
+    try {
+        // getRandomValues also works on plain-http LAN pages (randomUUID needs a secure context)
+        crypto.getRandomValues(bytes);
+    } catch (e) {
+        for (let i = 0; i < byteCount; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
 function generateFileId(file) {
-    return `fid_${++_fileIdCounter}_${file.size}`;
+    return `fid_${++_fileIdCounter}_${file.size}_${_randomHex(8)}`;
 }
 
 function removeFromQueue(fileId) {

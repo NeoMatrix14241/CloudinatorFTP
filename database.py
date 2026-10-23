@@ -274,6 +274,11 @@ def _do_bootstrap(conn):
         CREATE INDEX IF NOT EXISTS idx_access_req_token ON share_access_requests(token);
         CREATE INDEX IF NOT EXISTS idx_access_req_status ON share_access_requests(status);
         CREATE INDEX IF NOT EXISTS idx_access_req_access_token ON share_access_requests(access_token);
+
+        CREATE TABLE IF NOT EXISTS revoked_sessions (
+            session_id TEXT PRIMARY KEY,
+            revoked_at REAL NOT NULL DEFAULT (unixepoch())
+        );
     """)
 
     # ── Migration: add nt_hash column for SMB/NTLM auth (idempotent) ───────
@@ -350,6 +355,39 @@ class _Database:
             )
         print("🔑 Server token rotated — all sessions invalidated")
         return new_token
+
+    # ------------------------------------------------------------------
+    # Ended sessions (5.17). The session is a signed cookie the browser holds, so
+    # session.clear() on logout only empties the cookie in THAT browser; a copy of the old
+    # cookie stayed valid until it expired. Logout now records the session's id here and
+    # auth.is_logged_in() refuses any cookie whose id is listed. Rows are only needed for as
+    # long as a cookie could still be valid (PERMANENT_SESSION_LIFETIME, 24 h); they are
+    # purged after REVOKED_SESSION_KEEP_SECS, far longer than that.
+    # ------------------------------------------------------------------
+    REVOKED_SESSION_KEEP_SECS = 30 * 24 * 3600
+
+    def revoke_session(self, session_id: str) -> None:
+        if not session_id or not isinstance(session_id, str):
+            return
+        with _write_lock, _connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO revoked_sessions(session_id, revoked_at) "
+                "VALUES(?, unixepoch())",
+                (session_id,),
+            )
+            conn.execute(
+                "DELETE FROM revoked_sessions WHERE revoked_at < unixepoch() - ?",
+                (self.REVOKED_SESSION_KEEP_SECS,),
+            )
+
+    def is_session_revoked(self, session_id: str) -> bool:
+        if not session_id or not isinstance(session_id, str):
+            return False
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM revoked_sessions WHERE session_id=?", (session_id,)
+            ).fetchone()
+        return row is not None
 
     def check_login(self, username: str, password: str) -> bool:
         with _connect() as conn:

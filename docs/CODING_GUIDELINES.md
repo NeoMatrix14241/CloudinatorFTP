@@ -137,6 +137,7 @@ Authentication is intentionally SQLite-based and not file-based.
 - get_role()
 - login_user()
 - logout_user()
+- revoke_current_session()
 - current_user()
 - is_logged_in()
 
@@ -150,12 +151,15 @@ The app uses Quart session state and stores a server token in the DB. This ensur
 - deleted users are automatically logged out
 - server token rotation invalidates active sessions
 - login state is checked consistently by middleware and route handlers
+- a logged-out session stays logged out: logout records the session id in the `revoked_sessions` table and `is_logged_in()` refuses it (5.17)
 
 ### 5.3 Logout and the Clear-Site-Data header
 
 [../routes/login.py](../routes/login.py) sends `Clear-Site-Data: "executionContexts"` only, on `GET /login` and on `/logout`, and only over HTTPS. The directives `"cache"`, `"cookies"`, `"storage"` and `"*"` were removed in 4.89: in the owner's measurements they made the browser do synchronous clearing work (a 3-15 s logout), while `"executionContexts"` takes 0.1-0.5 s. Do not add them back without measuring logout time again in Chrome and Edge.
 
 What replaced them: the cache policy is `Cache-Control: no-cache, no-store, must-revalidate` (set by the logout route and, for every authenticated response, by `after_request` in [../middleware.py](../middleware.py)); the session and cookies are removed by `session.clear()` and `delete_cookie()` in the logout route. Not cleared any more: `localStorage`, `sessionStorage` and IndexedDB of the site, so keep secrets out of them.
+
+**Logout ends the session on the server (5.17).** The session is a signed cookie, so `session.clear()` only empties the copy in the browser that logs out; a copy of the old cookie stays valid until it expires. The logout route therefore calls `revoke_current_session()` in [../auth.py](../auth.py) BEFORE `session.clear()` (the id lives in the session); it stores `session["session_id"]` in the `revoked_sessions` table ([../database.py](../database.py), `db.revoke_session()`), and `is_logged_in()` refuses any cookie whose id is listed there (`db.is_session_revoked()`). Rules: `/login` must keep setting a fresh `session["session_id"]` (a session without an id cannot be ended); any new code path that ends a session on purpose (an admin kick, a password change) should call `revoke_current_session()` or `db.revoke_session(id)` too; `revoke_current_session()` never raises, so a database problem cannot block a logout. Rows are purged after 30 days (`REVOKED_SESSION_KEEP_SECS`), which must stay longer than `PERMANENT_SESSION_LIFETIME`. The unit tests are `tests/unit/test_session_revocation.py`; the end-to-end check is `tests/application/test_login.py`.
 
 After changing login or logout code, test by hand: log in, open a folder, log out, press Back (private data must not appear) and time `GET /logout` in the browser's network tab.
 
@@ -321,6 +325,23 @@ Large file handling is managed through the upload system.
 
 This allows the browser to monitor a large upload rebuild without blocking the main request loop.
 
+### 10.3 Upload ids and chunk keys
+
+The browser names each upload with an id (`generateFileId` in [../static/js/index.js](../static/js/index.js): `fid_<counter>_<file size>_<16 random hex>`). That id is only unique inside one page, so the server never uses it as it is: [../routes/uploads.py](../routes/uploads.py) builds a **chunk key** `<first 16 hex of sha256(session_id)>_<client id>` (`_chunk_key`) and uses the key for the `.chunks/<key>/` folder, `chunk_tracker`, `assembly_queue` (`job.file_id` is the key), the metadata file, the cleanup and cancel routes, `/api/protect_assembly/<id>` and the status routes. Rules when touching this code:
+
+- Any new code that takes an upload id from a request must go through `_valid_client_upload_id()` and `_chunk_key()`; never join a request value into a path or look it up in `assembly_queue` / `chunk_tracker` directly. A session without a `session_id` has no key.
+- Responses and URLs carry the client id, not the key (`_client_file_id()` maps back); the front end does not know the key exists.
+- The client id is at most 128 characters so the key stays within the 200 characters allowed by `storage.is_safe_chunk_id()`.
+- Chunk folders of the same upload from older server versions have no prefix; the age-based cleanup removes them.
+
+### 10.4 When the assembly starts
+
+`/upload` calls `storage.chunks_complete(key, total_chunks)` after every saved chunk and queues the assembly when chunk files `0..total-1` are all present, in whatever order they arrived (the last chunk is checked first, so an in-order upload scans once, at its end). A retried chunk while the job is pending or processing queues nothing. `storage.assemble_chunks(..., total_chunks)` re-verifies the announced count, so a folder with a different number of chunk files is never published. Pure helpers of this section are covered by `tests/unit/test_upload_chunk_keys.py`, the behaviour by `tests/application/test_upload_integrity.py`.
+
+### 10.5 Recovering uploads at startup
+
+`detect_ready_assemblies()` in [../routes/uploads.py](../routes/uploads.py) re-queues uploads that were complete when the server stopped. A folder under `.chunks/` is assembled only when it has a usable `.metadata` (`_read_upload_metadata()`: non-empty `filename`, string `dest_path`, integer `total_chunks >= 1`; `/upload` writes it only once every chunk is on disk), the destination passes `storage.is_safe_path()`, and `storage.verify_chunks_complete(id, total_chunks)` finds exactly that many sequential chunks. Folders without metadata, or with a different chunk count, are skipped and removed later by the age-based orphan cleanup; never assemble "whatever is there" (5.17: that used to publish truncated `recovered_file_...` files). Covered by `tests/unit/test_recover_uploads.py`.
+
 ## 11. Previewing, media conversion, and HLS
 
 The app supports preview generation for media and document types.
@@ -408,6 +429,10 @@ The project includes a validator for static asset integrity checks. See [../tool
 ### 15.3 Security.txt and robots
 
 The app exposes metadata endpoints for crawlers and security scanners through [../routes/site_meta.py](../routes/site_meta.py) and the static security file under [../static/.well-known/security.txt](../static/.well-known/security.txt).
+
+### 15.4 Client IP and the login lockout
+
+`get_client_ip()` in [../core.py](../core.py) feeds the login lockout (`RateLimiter`) and the request logger. It reads `CF-Connecting-IP` (then `X-Forwarded-For`) **only when `request.remote_addr` is loopback** (`_TRUSTED_PROXY_NETWORKS`; cloudflared connects from loopback); every other peer is identified by its real address, so a client that reaches the port directly cannot choose its own lockout bucket. A reverse proxy on another machine must be added to `_TRUSTED_PROXY_NETWORKS`, otherwise all its users share one bucket. Tests connect from loopback, so their fake `CF-Connecting-IP` header still works (18.x test rules); the rule itself is covered by `tests/unit/test_client_ip_trust.py`. `webdav_server.py` has its own `_client_ip()` for its audit log; it is not the lockout and was not changed.
 
 ## 16. Utilities and project tooling
 
@@ -773,7 +798,7 @@ Tools are direct-entry utilities, not application services. Avoid importing them
 | [../tests/qa.py](../tests/qa.py) | The one QA runner for developers, `manage.sh` (the `qa` command, menu 21-25) and GitHub: `static` (smoke, check, SRI, `node --check`), `tests` (pytest on every existing layer folder), `quick`, `layer <name>`, `ci` (JUnit XML to `./artifacts`); prints PASS/FAIL/SKIP per step, exit 1 on any failure (including a `layout` FAIL when a `test_*.py` file sits directly in `tests/` instead of a layer folder), never passes `--force`; `python tests/qa.py --version` prints which copy you run; the "pip install" hint appears only when pytest cannot be imported. | A SKIP (missing tool or folder) is not a pass of that check. |
 | [../tests/smoke.py](../tests/smoke.py) | Read-only project safety checks: syntax, optional pyflakes, route/endpoints, hooks, import cycles/layering, route-module registration, tool launch paths, shell syntax, and route snapshot changes. | Does not import/start the app, issue HTTP requests, or test filesystem/runtime behavior. Run it with `./manage.sh smoke [--save\|-v\|--files]`; options pass straight through. `--save` intentionally updates the route snapshot, runs all checks first and saves even if one failed; menu 27 (`smoke --save`) asks y/N before saving. |
 | [../tests/smoke_routes.json](../tests/smoke_routes.json) | Baseline route signature consumed by `smoke.py`. | Update only when route additions/removals are intended and reviewed. |
-| [../tests/unit/](../tests/unit/) | `test_paths.py` (every `paths.py` getter, setter, reset, merge-safe save, corrupt config), `test_scratch_copy.py` (the harness isolates everything and the guard catches outside paths), `test_qa_runner.py` (plan selection, exit codes, skip handling, the stray-file `layout` check), `test_setup_pymodules.py` (the `append_req_line()` function of `setup_pymodules.sh`, run in bash), `test_http_client.py` (the HTTP client and scratch helpers of `conftest.py`), `test_response_timeout.py` (parses `core.py`: Quart's 60 s `RESPONSE_TIMEOUT` must be switched off; strict xfail until the 5.11 patch is applied), `test_manage_qa.py` (the Quality Assurance and Developer Tools sections of `manage.sh`: menu numbers 1-27 agree between listing, dispatch and help (`LAST_ENTRY` = 27); the `qa` modes; the `dir-tree` and `smoke` commands and menu 26-27; exit codes). | Not application behavior beyond `paths.py`. |
+| [../tests/unit/](../tests/unit/) | `test_paths.py` (every `paths.py` getter, setter, reset, merge-safe save, corrupt config), `test_scratch_copy.py` (the harness isolates everything and the guard catches outside paths), `test_qa_runner.py` (plan selection, exit codes, skip handling, the stray-file `layout` check), `test_setup_pymodules.py` (the `append_req_line()` function of `setup_pymodules.sh`, run in bash), `test_http_client.py` (the HTTP client and scratch helpers of `conftest.py`), `test_response_timeout.py` (parses `core.py`: Quart's 60 s `RESPONSE_TIMEOUT` must be switched off; strict xfail until the 5.11 patch is applied), `test_session_revocation.py` (logout ends the session on the server, the two `revoked_sessions` methods), `test_recover_uploads.py` (startup recovery assembles only complete uploads), `test_client_ip_trust.py` (`get_client_ip()` trusts the proxy headers only from a loopback peer), `test_upload_chunk_keys.py` (chunk keys per session and `storage.chunks_complete`), `test_manage_qa.py` (the Quality Assurance and Developer Tools sections of `manage.sh`: menu numbers 1-27 agree between listing, dispatch and help (`LAST_ENTRY` = 27); the `qa` modes; the `dir-tree` and `smoke` commands and menu 26-27; exit codes). | Not application behavior beyond `paths.py`. |
 | [../tests/performance/](../tests/performance/) | `test_slow_download.py`: opt-in (`CLOUDINATOR_SLOW_TESTS=1`) proof that a 200 MB download throttled to about 2.5 MB/s (80 s) arrives complete. | Needs about 85 s; skipped by default. |
 | [../tests/application/](../tests/application/) | `test_path_containment.py` (traversal against 11 read routes, sibling-folder and chunk-id escapes on the read, write, share and upload paths, legitimate-use controls; both holes it found are fixed and the tests keep them closed), `test_upload_integrity.py` (chunk ordering, no wrong file ever published; two recorded xfails: upload ids collide between users, assembly starts at the last chunk number), `test_login.py` (login page headers and cookie flags, CSRF, login, lockout, logout, session invalidation) and `test_authorization.py` (anonymous sweep over every declared route against the reviewed `PUBLIC_ENDPOINTS`, readonly refusals, role changes), plus `test_boot.py`: starts the real app from the scratch copy and checks `/login`, `/robots.txt`, anonymous `/`, that data folders were created only in the scratch tree and that the real `storage_config.json` / `server_config.json` are untouched. | Login, CSRF, lockout, session and authorization only (5.08); no upload, share, file-operation or version behavior yet. |
 

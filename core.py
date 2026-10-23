@@ -54,6 +54,7 @@ import time
 import logging
 import uuid
 import socket
+import ipaddress
 
 # get_local_ip's real implementation now lives in helpers/net_utils.py (no
 # side effects on import) — aliased here so the wrapper below can
@@ -187,10 +188,10 @@ _SHARE_UNLOCK_MAX_AGE = 30 * 24 * 3600  # 30 days
 #      reach this process directly and forge headers the way they could
 #      against a plain reverse-proxy with an exposed port. Every request
 #      that reaches this app genuinely came through Cloudflare.
-#   2. request.remote_addr is therefore useless here — it's cloudflared's
-#      local connection to this process, so it reads the same
-#      loopback-ish address for every request, real traffic and attack
-#      traffic alike.
+#   2. request.remote_addr is therefore useless as the CLIENT identity
+#      here — it's cloudflared's local connection to this process, so it
+#      reads the same loopback address for every tunnelled request; it is
+#      only useful to decide whether the headers below may be trusted.
 # CF-Connecting-IP is what to trust instead: Cloudflare sets this itself
 # at the edge with the real connecting client's IP and overwrites/strips
 # whatever the client tried to put there — unlike X-Forwarded-For, which
@@ -199,26 +200,50 @@ _SHARE_UNLOCK_MAX_AGE = 30 * 24 * 3600  # 30 days
 # ("1.2.3.4, <real ip>") rather than replacing it — so blindly taking
 # XFF's first entry (the old behavior here) would have logged the
 # attacker's chosen fake IP, not their real one. CF-Connecting-IP doesn't
-# have that hole. X-Forwarded-For is kept only as a fallback for local/
-# direct access (e.g. hitting dev_server.py on the LAN with no tunnel in
-# front of it, where there's no CF-Connecting-IP to read).
+# have that hole. X-Forwarded-For is kept only as a fallback for a loopback
+# proxy that sets no CF-Connecting-IP (see the trust rule below).
 #
-# This trust chain assumes the app is ONLY reachable through the tunnel.
-# If this port is also directly reachable (bound to 0.0.0.0 with the
-# firewall open, port-forwarded, etc.) rather than solely through
-# cloudflared, someone could connect directly and set CF-Connecting-IP
-# themselves, and it would be trusted here just as wrongly as XFF was.
-# Worth double-checking that's not the case if this matters to you.
+# This trust chain used to ASSUME the app was only reachable through the
+# tunnel. It is now ENFORCED (CLAUDE.md 5.16): the two headers are read only
+# when the TCP peer (request.remote_addr) is a loopback address, which is
+# where cloudflared connects from. A client that reaches the port directly
+# (LAN, port-forward, 0.0.0.0 with an open firewall) has a non-loopback peer
+# address, its CF-Connecting-IP / X-Forwarded-For headers are ignored and the
+# lockout is keyed by its real address, so it cannot forge a fresh counter.
+# Limit: a reverse proxy running on ANOTHER machine is not trusted either;
+# every request would then look like one client (the proxy's address). Add that
+# address to _TRUSTED_PROXY_NETWORKS below if you ever need it.
 # ------------------------------------------------------------------
+_TRUSTED_PROXY_NETWORKS = (
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+)
+
+
+def _is_trusted_proxy(addr) -> bool:
+    """True when `addr` (a remote_addr string) is one of the trusted proxy networks."""
+    if not addr or not isinstance(addr, str):
+        return False
+    try:
+        ip = ipaddress.ip_address(addr.split("%", 1)[0])
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return any(ip in net for net in _TRUSTED_PROXY_NETWORKS)
+
+
 def get_client_ip() -> str:
-    cf_ip = request.headers.get("CF-Connecting-IP", "").strip()
-    if cf_ip:
-        return cf_ip
-    return (
-        request.headers.get("X-Forwarded-For", request.remote_addr or "")
-        .split(",")[0]
-        .strip()
-    )
+    peer = request.remote_addr or ""
+    if _is_trusted_proxy(peer):
+        cf_ip = request.headers.get("CF-Connecting-IP", "").strip()
+        if cf_ip:
+            return cf_ip
+        xff = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        if xff:
+            return xff
+    return peer
 
 
 # ------------------------------------------------------------------
