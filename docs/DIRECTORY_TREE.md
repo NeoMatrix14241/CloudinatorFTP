@@ -5,8 +5,6 @@ CloudinatorFTP
 │   └── workflows
 │       ├── codeql.yml
 │       └── tests.yml
-├── artifacts
-│   └── pytest.xml
 ├── docs
 │   ├── ANDROID_DEPLOYMENT.md
 │   ├── CLAUDE.md
@@ -97,19 +95,33 @@ CloudinatorFTP
 │   ├── application
 │   │   ├── test_authorization.py
 │   │   ├── test_boot.py
+│   │   ├── test_file_index_recovery.py
+│   │   ├── test_file_monitor_recovery.py
 │   │   ├── test_login.py
 │   │   ├── test_path_containment.py
-│   │   └── test_upload_integrity.py
+│   │   ├── test_recover_uploads.py
+│   │   ├── test_revoke_code_generation.py
+│   │   ├── test_session_revocation.py
+│   │   ├── test_upload_integrity.py
+│   │   ├── test_version_restore.py
+│   │   └── test_version_routes.py
 │   ├── performance
 │   │   └── test_slow_download.py
+│   ├── protocols
+│   │   ├── conftest.py
+│   │   ├── test_ftp_protocol.py
+│   │   └── test_sftp_protocol.py
+│   ├── refactor
 │   ├── unit
+│   │   ├── test_client_ip_trust.py
 │   │   ├── test_http_client.py
 │   │   ├── test_manage_qa.py
 │   │   ├── test_paths.py
 │   │   ├── test_qa_runner.py
 │   │   ├── test_response_timeout.py
 │   │   ├── test_scratch_copy.py
-│   │   └── test_setup_pymodules.py
+│   │   ├── test_setup_pymodules.py
+│   │   └── test_upload_chunk_keys.py
 │   ├── check.py
 │   ├── codeql_sarif_parser.py
 │   ├── conftest.py
