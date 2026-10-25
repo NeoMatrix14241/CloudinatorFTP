@@ -19,3 +19,4 @@ uploads/
 htmlcov/
 artifacts/
 .hypothesis/
+docs/TESTING_STRATEGY.md

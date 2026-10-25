@@ -5,8 +5,7 @@
 # Job "behavioral tests" (CLAUDE.md 5.00): runs `python tests/qa.py ci`, the same runner as
 # manage.sh/developers (static checks + pytest). The tests start the app as a SUBPROCESS from a
 # scratch copy of the project (tests/conftest.py), so no real data and no production config is
-# touched. continue-on-error: it is informational until it has been green for a while; then
-# remove that line and add the job to the required checks.
+# touched.
 name: Tests
 
 on:
@@ -52,7 +51,6 @@ jobs:
     name: behavioral tests
     needs: static-checks
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7

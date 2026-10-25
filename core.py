@@ -255,6 +255,10 @@ class RateLimiter:
     After MAX_ATTEMPTS failures within WINDOW seconds, the IP is locked
     out for LOCKOUT seconds.
     All state is in-memory — resets on server restart (intentional).
+
+    Every method takes an optional `key`; without it the bucket is the client IP
+    (the login limiter). The share-passkey limiter passes "<ip>|<token>" so a
+    visitor is counted per link (CLAUDE.md 5.21).
     """
 
     MAX_ATTEMPTS = 5  # failures before lockout
@@ -269,8 +273,8 @@ class RateLimiter:
     def _get_ip(self) -> str:
         return get_client_ip()
 
-    def is_blocked(self) -> bool:
-        ip = self._get_ip()
+    def is_blocked(self, key: str | None = None) -> bool:
+        ip = key or self._get_ip()
         with self._lock:
             expiry = self._locked.get(ip)
             if expiry:
@@ -281,8 +285,8 @@ class RateLimiter:
                     self._attempts.pop(ip, None)
         return False
 
-    def record_failure(self):
-        ip = self._get_ip()
+    def record_failure(self, key: str | None = None):
+        ip = key or self._get_ip()
         now = time.time()
         with self._lock:
             attempts = [t for t in self._attempts.get(ip, []) if now - t < self.WINDOW]
@@ -292,20 +296,20 @@ class RateLimiter:
                 self._locked[ip] = now + self.LOCKOUT
                 print(f"IP locked out after {self.MAX_ATTEMPTS} failed attempts: {ip}")
 
-    def record_success(self):
-        ip = self._get_ip()
+    def record_success(self, key: str | None = None):
+        ip = key or self._get_ip()
         with self._lock:
             self._attempts.pop(ip, None)
             self._locked.pop(ip, None)
 
-    def remaining_lockout(self) -> int:
-        ip = self._get_ip()
+    def remaining_lockout(self, key: str | None = None) -> int:
+        ip = key or self._get_ip()
         with self._lock:
             expiry = self._locked.get(ip, 0)
             return max(0, int(expiry - time.time()))
 
-    def attempts_remaining(self) -> int:
-        ip = self._get_ip()
+    def attempts_remaining(self, key: str | None = None) -> int:
+        ip = key or self._get_ip()
         now = time.time()
         with self._lock:
             recent = [t for t in self._attempts.get(ip, []) if now - t < self.WINDOW]
@@ -313,6 +317,9 @@ class RateLimiter:
 
 
 rate_limiter = RateLimiter()
+# Separate instance (and buckets) for wrong passkeys on /shared/<token>/passkey, same policy as
+# the login limiter; a passkey lockout never blocks the login page and the reverse.
+share_passkey_limiter = RateLimiter()
 
 # File monitoring and real-time updates
 from file_monitor import get_file_monitor, init_file_monitor
@@ -390,6 +397,7 @@ __all__ = [
     "bulk_zip_progress",
     "bulk_zip_cancelled",
     "rate_limiter",
+    "share_passkey_limiter",
     "request_logger",
     "SLOW_REQUEST_THRESHOLD_SECONDS",
     "csrf",
@@ -1380,10 +1388,9 @@ _REVOKE_CODE_TTL = 120  # seconds a code stays valid
 
 
 def _issue_revoke_all_code(session_id: str) -> tuple:
-    import random
-
     nonce = str(uuid.uuid4())
-    code = "".join(random.choices("0123456789", k=10))
+    # secrets, not random: the code is a confirmation secret (CLAUDE.md 5.25)
+    code = "".join(_secrets.choice("0123456789") for _ in range(10))
     with _revoke_all_codes_lock:
         # Only one outstanding code per session — a fresh attempt invalidates any prior one
         for existing_nonce, entry in list(_revoke_all_codes.items()):
