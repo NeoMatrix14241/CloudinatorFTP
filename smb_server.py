@@ -77,6 +77,35 @@ def _get_stable_uid(username: str) -> int:
 # ── Tree Connect hook — per-user read/write enforcement ────────────────────
 
 
+def _apply_role(connData, tid: int):
+    """Set this tree's per-connection read-only flag from the user's CURRENT role.
+
+    Fails safe: only a confirmed "readwrite" role loosens it; an unknown or
+    deleted user and any lookup error leave it locked. Called at tree connect
+    AND before every write-capable command (CLAUDE.md 5.31), so a role change
+    reaches trees and handles that are already open."""
+    if tid not in connData.get("ConnectedShares", {}):
+        return
+    username = connData.get("user_name")
+    role = None
+    if username:
+        try:
+            from database import db
+
+            role = db.get_role(username)
+        except Exception as e:
+            log.warning(f"SMB: role lookup failed for {username!r}: {e}")
+    readonly_value = "no" if role == "readwrite" else "yes"
+    connData["ConnectedShares"][tid]["read only"] = readonly_value
+    if os.environ.get("SMB_DEBUG_ROLE") == "1":
+        print(
+            f"SMB-ROLE: tid={tid} user={username!r} role={role!r} "
+            f"-> read_only={readonly_value!r} "
+            f"all_tids={list(connData.get('ConnectedShares', {}).keys())}",
+            flush=True,
+        )
+
+
 def _make_tree_connect_hooks():
     """
     Returns (smb1_hook, smb2_hook, smb1_orig_holder, smb2_orig_holder).
@@ -87,28 +116,6 @@ def _make_tree_connect_hooks():
     only touches positional-or-keyword defaults, never keyword-only
     ones) — found and fixed here before shipping.
     """
-
-    def _apply_role(connData, tid: int):
-        if tid not in connData.get("ConnectedShares", {}):
-            return
-        username = connData.get("user_name")
-        role = None
-        if username:
-            try:
-                from database import db
-
-                role = db.get_role(username)
-            except Exception as e:
-                log.warning(f"SMB: role lookup failed for {username!r}: {e}")
-        readonly_value = "no" if role == "readwrite" else "yes"
-        connData["ConnectedShares"][tid]["read only"] = readonly_value
-        if os.environ.get("SMB_DEBUG_ROLE") == "1":
-            print(
-                f"SMB-ROLE: tid={tid} user={username!r} role={role!r} "
-                f"-> read_only={readonly_value!r} "
-                f"all_tids={list(connData.get('ConnectedShares', {}).keys())}",
-                flush=True,
-            )
 
     smb1_orig_holder = [None]
     smb2_orig_holder = [None]
@@ -148,6 +155,33 @@ def _make_tree_connect_hooks():
         smb1_orig_holder,
         smb2_orig_holder,
     )
+
+
+def _is_in_file_jail(path, file_name):
+    """True only when `file_name` resolves to the share root `path` itself or something below it.
+
+    Replaces impacket's smbserver.isInFileJail (5.31, SECURITY). The original compares
+    `os.path.commonprefix` of the two resolved paths, which works on CHARACTERS, not path
+    components: with the share at /data/storage, a sibling /data/storage_backup/secret.txt
+    shares the prefix "/data/storage" and counted as inside, so every logged-in account could
+    read it, and (readwrite) write, rename and delete in it. realpath still resolves symlinks
+    (a link pointing out of the share stays refused); commonpath compares whole components and
+    normcase makes the comparison case-insensitive on Windows."""
+    share_real = os.path.normcase(os.path.realpath(path))
+    target = os.path.normcase(os.path.realpath(os.path.join(path, file_name)))
+    try:
+        return os.path.commonpath((target, share_real)) == share_real
+    except ValueError:  # e.g. a different drive on Windows
+        return False
+
+
+def _install_file_jail_fix():
+    """Swap impacket's path-containment check for _is_in_file_jail. smbserver calls it by its
+    module-level name from every command that takes a path (SMB1 and SMB2, rename included),
+    so one assignment covers all call sites. Idempotent."""
+    from impacket import smbserver
+
+    smbserver.isInFileJail = _is_in_file_jail
 
 
 def _install_setinfo_rename_fix():
@@ -735,6 +769,111 @@ def _install_role_enforcement(server):
     smb2_orig_holder[0] = inner.hookSmb2Command(smb2.SMB2_TREE_CONNECT, smb2_hook)
 
 
+def _install_live_role_enforcement(server):
+    """
+    Make a role change reach trees and handles that are ALREADY OPEN (5.31).
+
+    _install_role_enforcement() sets the per-connection read-only flag only at
+    Tree Connect, so an account demoted (or deleted) while its drive was mapped
+    kept full write access on that tree until the client disconnected, and
+    Windows keeps a mapped drive connected for hours. impacket checks the flag
+    in SMB2 CREATE and SET_INFO but not in WRITE (a handle opened earlier
+    writes freely), so these three commands now re-read the role first:
+    - CREATE / SET_INFO: re-apply the flag, then impacket's own check decides
+      (create or overwrite, mkdir, delete, rename, truncate);
+    - WRITE: re-apply the flag and refuse with STATUS_ACCESS_DENIED when it is
+      locked (reads on the same handle are not affected).
+    One database read per command (about 0.1 ms); fails safe like _apply_role.
+    """
+    from impacket import smb3structs as smb2
+    from impacket.nt_errors import STATUS_ACCESS_DENIED
+
+    inner = server.getServer()
+
+    def _make_guard(name, refuse_when_locked):
+        holder = [None]
+
+        def guard(*args, **kwargs):
+            try:
+                connId, smbServer, recvPacket = args[0], args[1], args[2]
+                connData = smbServer.getConnectionData(connId)
+                tid = recvPacket["TreeID"]
+                _apply_role(connData, tid)
+                smbServer.setConnectionData(connId, connData)
+                shares = connData.get("ConnectedShares", {})
+                locked = shares.get(tid, {}).get("read only") == "yes"
+            except Exception as e:
+                log.warning(f"SMB {name} live role check error: {e}")
+                locked = True  # cannot tell: do not let a write through
+            if locked and refuse_when_locked:
+                return [smb2.SMB2Error()], None, STATUS_ACCESS_DENIED
+            return holder[0](*args, **kwargs)
+
+        return guard, holder
+
+    for name, cmd, refuse in (
+        ("CREATE", smb2.SMB2_CREATE, False),
+        ("SET_INFO", smb2.SMB2_SET_INFO, False),
+        ("WRITE", smb2.SMB2_WRITE, True),
+    ):
+        guard, holder = _make_guard(name, refuse)
+        holder[0] = inner.hookSmb2Command(cmd, guard)
+
+
+def _session_flags(response) -> int:
+    """SessionFlags of a SESSION_SETUP answer. impacket sets the field only for
+    guest and anonymous sessions, so a normal login has none (0)."""
+    try:
+        return response["SessionFlags"]
+    except KeyError:
+        return 0
+
+
+def _install_guest_block(server):
+    """
+    Refuse guest and anonymous sessions (5.31, SECURITY).
+
+    impacket grants a session without any credential check in two cases: an
+    empty user name (anonymous, or a "guest" session when the client does not
+    set the anonymous flag) and ANY user name while its credential table is
+    empty. The guest session has role None, so it cannot write, but it could
+    LIST AND DOWNLOAD every file of the share, and `setAuthCallback` runs only
+    after the fact and cannot veto. The server config option that disables
+    anonymous logons does not cover the guest branch, so the final
+    SESSION_SETUP answer is checked instead: a success flagged guest or null
+    is turned into STATUS_LOGON_FAILURE and the connection stays unauthenticated.
+    Only NTLM logins with a known user and a matching NT hash get a session.
+    """
+    from impacket import smb3structs as smb2
+    from impacket.nt_errors import STATUS_LOGON_FAILURE, STATUS_SUCCESS
+
+    inner = server.getServer()
+    holder = [None]
+    refused_flags = smb2.SMB2_SESSION_FLAG_IS_GUEST | smb2.SMB2_SESSION_FLAG_IS_NULL
+
+    def session_setup_guard(*args, **kwargs):
+        result = holder[0](*args, **kwargs)
+        try:
+            responses, _packets, status = result
+            if status != STATUS_SUCCESS:
+                return result
+            if not responses or not (_session_flags(responses[0]) & refused_flags):
+                return result
+        except Exception as e:
+            log.warning(f"SMB guest check error, refusing the session: {e}")
+        connId, smbServer = args[0], args[1]
+        try:
+            connData = smbServer.getConnectionData(connId, False)
+            connData["Authenticated"] = False
+            smbServer.setConnectionData(connId, connData)
+        except Exception as e:
+            log.warning(f"SMB guest block could not reset the session: {e}")
+        log.warning("SMB: guest/anonymous session refused (no valid credentials)")
+        return [smb2.SMB2Error()], None, STATUS_LOGON_FAILURE
+
+    holder[0] = inner.hookSmb2Command(smb2.SMB2_SESSION_SETUP, session_setup_guard)
+
+
 def _install_signing_diagnostics(server):
     """
     Opt-in (SMB_DEBUG_SIGNING=1). Windows 11 24H2 requires SMB signing by
@@ -1097,11 +1236,14 @@ def start() -> bool:
         server.addShare(SMB_SHARE_NAME, ROOT_DIR, "CloudinatorFTP", readOnly="yes")
         server.setSMB2Support(True)
         server.setAuthCallback(_auth_callback)
+        _install_file_jail_fix()
         _install_setinfo_rename_fix()
         _install_setdelete_retry_fix()
         _install_create_share_delete_fix(server)
         _install_quiet_netbios_timeout()
         _install_role_enforcement(server)
+        _install_live_role_enforcement(server)
+        _install_guest_block(server)
         _install_audit_logging(server)
 
         if os.environ.get("SMB_DEBUG_SIGNING") == "1":

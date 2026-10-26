@@ -93,8 +93,13 @@ Platform-specific deployment and production guides are available in the **[`docs
 
 Install termux packages
 ``` Bash
-apt update -y && apt full-upgrade -y && pkg install curl -y
+pkg update -y && pkg upgrade -y && pkg install curl -y
+
+# For main branch (stable):
 curl -sL https://tinyurl.com/CloudinatorFTP | bash
+
+# For dev branch:
+curl -sL https://tinyurl.com/CloudinatorFTP-dev | bash
 ```
 
 > The above URL runs `termux_setup.sh` automatically. This script installs all required Termux packages, applies Android-specific PyPPMd patches, requests storage permission, and **retries up to 5 times** on failure. After cloning the repo you can also run it directly with `bash termux_setup.sh`.
@@ -120,7 +125,7 @@ cd CloudinatorFTP
 ```bash
 python -m venv .venv                    # Create the python environment
 source ./.venv/Scripts/activate         # Windows (Git Bash): use the created environment
-# source .venv/bin/activate             # Linux / macOS / Android (Termux): use this line instead
+source .venv/bin/activate               # Linux / macOS / Android (Termux): use this line instead
 pip install -r requirements.txt         # Main requirements
 pip install -r requirements-dev.txt     # Dev only (optional) - if you will modify the code and run the tests
 ```

@@ -27,7 +27,7 @@ run_setup() {
     pkg --check-mirror update && \
     pkg update -y && \
     pkg upgrade -y && \
-    pkg install -y build-essential clang make binutils llvm rust python \
+    pkg install -y termux-am build-essential clang make binutils llvm rust python \
     python-pip python-bcrypt python-cryptography python-pyppmd python-psutil \
     libffi openssl libxml2 libxslt git cloudflared ffmpeg libvips libsodium || return 1
     SODIUM_INSTALL=system pip install -U pynacl || return 1
