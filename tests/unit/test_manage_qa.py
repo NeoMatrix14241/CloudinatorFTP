@@ -1,9 +1,9 @@
 """
 Tests for the Quality Assurance section of manage.sh (menu 21-25 and the `qa` command) and for
-its Developer Tools section (menu 26-27, the `dir-tree` and `smoke` commands).
+its Developer Tools section (menu 26-28: `dir-tree`, `smoke --save` and `qa audit`).
 
 They read the real manage.sh and only run side-effect-free commands (`help`, `qa --version`,
-`qa bogus`, `qa layer nope`); no server is started and nothing is written. The numbering test
+`qa bogus`, `qa layer nope`; `qa audit` is only checked in the source, it would use the network); no server is started and nothing is written. The numbering test
 guards against the menu drifting from its dispatch table and from `help` (CLAUDE.md records
 three earlier renumbering accidents). Raise LAST_ENTRY whenever the menu grows.
 """
@@ -23,7 +23,7 @@ pytestmark = pytest.mark.skipif(
     BASH is None or not SCRIPT.is_file(), reason="bash or manage.sh not found"
 )
 
-LAST_ENTRY = 27
+LAST_ENTRY = 28
 
 
 def _text():
@@ -79,6 +79,7 @@ def test_menu_arms_run_the_expected_qa_modes():
         23: "cmd_qa tests",
         24: "_menu_qa_layer",
         25: "cmd_qa ci",
+        28: "cmd_qa audit",
     }.items():
         assert re.search(
             rf"^\t\t{num}\) _menu_run {re.escape(call)} ;;$", body, re.M
@@ -133,9 +134,16 @@ def test_help_documents_every_qa_mode():
         "qa tests",
         "qa layer <name>",
         "qa ci",
+        "qa audit",
         "qa --version",
     ):
         assert text in out, text
+
+
+def test_qa_audit_is_an_accepted_mode_and_stays_out_of_quick():
+    body = _function("cmd_qa")
+    assert re.search(r"quick \| static \| tests \| ci \| layer \| audit \|", body)
+    assert "| audit)" in body  # the error message lists it
 
 
 def test_unknown_qa_mode_exits_2():

@@ -11,14 +11,22 @@ this one file, so "green locally" and "green in CI" mean the same commands ran.
     python tests/qa.py layer <name>        one layer: unit integration application protocols property
                                            reliability performance frontend
     python tests/qa.py ci                  quick, with JUnit XML written to ./artifacts (or --out DIR)
+    python tests/qa.py audit               pip-audit on the installed packages (needs network and
+                                           `python -m pip install pip-audit`); NOT part of quick / ci
+    python tests/qa.py audit --path DIR    the same for another environment's site-packages folder
+                                           (CI keeps pip-audit in its own venv, away from the app's)
 
     --skip-packages   pass to check.py (use where requirements.txt is not installed, like CI static job)
     --out DIR         write JUnit XML for the pytest steps into DIR
     --fail-fast       stop at the first failing step
 
 Exit code: 0 = every step passed or was skipped, 1 = at least one step failed, 130 = Ctrl-C.
-A SKIP never hides a failure: tools that are not installed (node) or files that do not exist
-(tools/sri_validator.py) are reported as SKIP with the reason.
+A SKIP never hides a failure: tools that are not installed (node, pip-audit) or files that do not
+exist (tools/sri_validator.py) are reported as SKIP with the reason.
+
+`audit` stays out of quick / ci on purpose: new advisories appear without any code change and an
+offline machine cannot run it, so it must never turn the everyday run (or a pull request) red.
+Known, accepted findings go into tests/audit_ignore.txt (one advisory ID per line, then a reason).
 
 Standard library only. This script never imports the application and never passes --force to
 check.py.
@@ -26,6 +34,7 @@ check.py.
 
 import argparse
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -33,7 +42,7 @@ import time
 from pathlib import Path
 
 QA_VERSION = (
-    "5.03"  # `python tests/qa.py --version`: tells you which copy of this file you run
+    "5.32"  # `python tests/qa.py --version`: tells you which copy of this file you run
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -131,6 +140,53 @@ def _pytest_step(name, dirs, out):
     )
 
 
+def _audit_ignores(path):
+    """Advisory IDs from tests/audit_ignore.txt: the first word of every non-comment line."""
+    ids = []
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ids
+    for line in lines:
+        word = line.split("#", 1)[0].split()
+        if word:
+            ids.append(word[0])
+    return ids
+
+
+def _venv_python_location(venv, exe):
+    """`exe` re-spelled to start with `venv` exactly as $VIRTUAL_ENV writes it, or None when `exe`
+    is not inside that virtual environment (then pip-audit's warning is justified)."""
+    if not venv:
+        return None
+
+    def norm(p):
+        return p.replace("\\", "/").rstrip("/").lower()
+
+    if not norm(exe).startswith(norm(venv) + "/"):
+        return None
+    venv = venv.rstrip("/\\")
+    return venv + exe[len(venv) :]
+
+
+def _audit_step(path=None):
+    """pip-audit on the packages installed for THIS interpreter (what actually runs), or on
+    the site-packages folder `path` of another environment."""
+    if importlib.util.find_spec("pip_audit") is None:
+        return Step(
+            "audit", skip="pip-audit is not installed: python -m pip install pip-audit"
+        )
+    cmd = [PY, "-m", "pip_audit", "--progress-spinner", "off"]
+    cmd += ["--path", str(path)] if path else ["--local"]
+    for vuln_id in _audit_ignores(ROOT / "tests" / "audit_ignore.txt"):
+        cmd += ["--ignore-vuln", vuln_id]
+    return Step(
+        "audit",
+        [cmd],
+        hint="upgrade the package, or add the advisory ID and the reason to tests/audit_ignore.txt",
+    )
+
+
 def _existing_layers():
     return [n for n in LAYERS if (ROOT / "tests" / n).is_dir()]
 
@@ -153,7 +209,7 @@ def _with_layout(steps):
     return ([layout] if layout else []) + steps
 
 
-def build_plan(mode, layer=None, skip_packages=False, out=None):
+def build_plan(mode, layer=None, skip_packages=False, out=None, path=None):
     """Return the list of Steps for a mode. Raises ValueError for unknown input."""
     if mode == "static":
         return _static_steps(skip_packages)
@@ -164,6 +220,8 @@ def build_plan(mode, layer=None, skip_packages=False, out=None):
         return _with_layout(
             [_pytest_step("pytest", [ROOT / "tests" / n for n in layers], out)]
         )
+    if mode == "audit":
+        return [_audit_step(path)]
     if mode in ("quick", "ci"):
         return _static_steps(skip_packages) + build_plan("tests", out=out)
     if mode == "layer":
@@ -226,18 +284,30 @@ def run_steps(steps, fail_fast=False, cwd=ROOT):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="CloudinatorFTP QA runner")
     ap.add_argument("--version", action="version", version=f"qa.py {QA_VERSION}")
-    ap.add_argument("mode", choices=["static", "tests", "quick", "layer", "ci"])
+    ap.add_argument(
+        "mode", choices=["static", "tests", "quick", "layer", "ci", "audit"]
+    )
     ap.add_argument("layer", nargs="?", help="layer name (mode 'layer' only)")
     ap.add_argument("--skip-packages", action="store_true")
     ap.add_argument("--out", metavar="DIR")
     ap.add_argument("--fail-fast", action="store_true")
+    ap.add_argument(
+        "--path", metavar="DIR", help="site-packages to audit (mode 'audit' only)"
+    )
     args = ap.parse_args(argv)
 
+    if args.mode == "audit":
+        # pip-audit warns "your local environment will not be audited" when the interpreter path
+        # does not START WITH $VIRTUAL_ENV as plain text; Git Bash spells the venv C:/..., Windows
+        # spells the interpreter C:\... (the venv IS audited: this interpreter is the venv's).
+        location = _venv_python_location(os.environ.get("VIRTUAL_ENV"), PY)
+        if location:
+            os.environ.setdefault("PIPAPI_PYTHON_LOCATION", location)
     out = args.out or ("artifacts" if args.mode == "ci" else None)
     if out:
         Path(out).mkdir(parents=True, exist_ok=True)
     try:
-        steps = build_plan(args.mode, args.layer, args.skip_packages, out)
+        steps = build_plan(args.mode, args.layer, args.skip_packages, out, args.path)
     except ValueError as e:
         print(f"qa: {e}", file=sys.stderr)
         return 2

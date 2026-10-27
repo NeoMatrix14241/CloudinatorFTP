@@ -3,3 +3,4 @@
 # Install with:  python -m pip install -r requirements-dev.txt
 pytest>=9.1.1
 pytest-timeout>=2.4
+pip-audit>=2.10.1

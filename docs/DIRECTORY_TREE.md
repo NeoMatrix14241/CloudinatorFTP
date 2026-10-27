@@ -3,9 +3,13 @@ CloudinatorFTP
 │   ├── codeql
 │   │   └── codeql-config.yml
 │   └── workflows
+│       ├── audit.yml
 │       ├── codeql.yml
 │       └── tests.yml
 ├── docs
+│   ├── rulesets
+│   │   ├── dev.json
+│   │   └── main.json
 │   ├── ANDROID_DEPLOYMENT.md
 │   ├── CLAUDE.md
 │   ├── CODING_GUIDELINES.md
@@ -16,6 +20,7 @@ CloudinatorFTP
 │   ├── SERVER_MANAGEMENT_SCRIPT_GUIDE.md
 │   ├── SETUP_TUNNEL_ADVANCED.md
 │   ├── SMB_PROTOCOL_DEPLOYMENT.md
+│   ├── TESTING_STRATEGY.md
 │   ├── USER_GUIDE.md
 │   ├── VSCODE_SETUP.md
 │   └── WINDOWS_DEPLOYMENT.md
@@ -110,18 +115,22 @@ CloudinatorFTP
 │   ├── protocols
 │   │   ├── conftest.py
 │   │   ├── test_ftp_protocol.py
-│   │   └── test_sftp_protocol.py
-│   ├── refactor
+│   │   ├── test_sftp_protocol.py
+│   │   ├── test_smb_protocol.py
+│   │   └── test_webdav_protocol.py
 │   ├── unit
 │   │   ├── test_client_ip_trust.py
 │   │   ├── test_http_client.py
 │   │   ├── test_manage_qa.py
 │   │   ├── test_paths.py
+│   │   ├── test_qa_audit.py
 │   │   ├── test_qa_runner.py
 │   │   ├── test_response_timeout.py
 │   │   ├── test_scratch_copy.py
 │   │   ├── test_setup_pymodules.py
-│   │   └── test_upload_chunk_keys.py
+│   │   ├── test_upload_chunk_keys.py
+│   │   └── test_webdav_listener_binds.py
+│   ├── audit_ignore.txt
 │   ├── check.py
 │   ├── codeql_sarif_parser.py
 │   ├── conftest.py

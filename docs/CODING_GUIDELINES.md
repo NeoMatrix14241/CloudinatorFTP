@@ -440,6 +440,7 @@ The app exposes metadata endpoints for crawlers and security scanners through [.
 - **No session without credentials.** `smb_server._install_guest_block()` turns impacket's guest and anonymous sessions into `STATUS_LOGON_FAILURE`; do not remove it when upgrading impacket without re-running `tests/protocols/test_smb_protocol.py`.
 - **Containment uses path components, not string prefixes.** impacket's `isInFileJail` (a `commonprefix` check) is replaced by `smb_server._is_in_file_jail` (`commonpath` + `realpath` + `normcase`). Never write `startswith(root)` or `commonprefix` for a containment check: `/data/storage_backup` starts with `/data/storage`.
 - **Hypercorn binds.** `webdav_server._listener_binds()` decides `bind` / `insecure_bind`: `insecure_bind` is only honoured when TLS is configured, so a plain-only listener goes into `bind`.
+- Branch rules: `main` and `dev` require a pull request and the checks `smoke + check` and `behavioral tests` (`docs/rulesets/`); never rename those two jobs in `tests.yml`.
 - Every rule above has a test in `tests/protocols/` (or `tests/unit/test_webdav_listener_binds.py`); a protocol change needs a restart of the server.
 
 ## 16. Utilities and project tooling
@@ -482,6 +483,8 @@ The repo includes shell orchestration and deployment scripts such as:
 These are not the app logic itself, but they are critical for development, installation, and service control on Windows, Linux, and Android/Termux.
 
 ## 18. Testing philosophy and validation
+
+> **`docs/TESTING_STRATEGY.md` is `.gitignored`.** After all the testing phases were implemented the owner keeps that planning document out of the repository: it exists only on the owner's machine and is attached to a conversation on request. Do not assume it is on GitHub, do not link to it from a committed document, do not `git add -f` it, and do not record a fact only there. The facts live in `docs/CLAUDE.md` (sync notes and changelog), in this section, in the test docstrings and in `python tests/qa.py --help`. Keep updating the local copy when the tests change. If `git ls-files docs/TESTING_STRATEGY.md` still lists it, run `git rm --cached docs/TESTING_STRATEGY.md` once (`.gitignore` does not untrack a file that is already tracked).
 
 The project's automated checks are static: they read the source and do not start the app. Examples include:
 
@@ -685,6 +688,7 @@ Run checks from the project root. These static checks do not import or start the
 | JavaScript asset | `node --check static/js/index.js` (substitute the edited file); `./manage.sh validate-sri` |
 | Template/static asset hashes | `./manage.sh validate-sri`; repair with `./manage.sh validate-sri --fix` |
 | `manage.sh` | `bash -n manage.sh`; `python tests/smoke.py` |
+| `requirements.txt` / `constraints.txt` | `python tests/qa.py audit` (needs `python -m pip install pip-audit` and network; not part of `quick`); a finding that cannot be fixed yet goes into `tests/audit_ignore.txt` with the reason; `.github/workflows/audit.yml` repeats it weekly |
 | File monitor/index behavior | Run the narrow temporary-tree test for the changed behavior, then `python tests/smoke.py` |
 | Anything with pytest coverage (`paths.py`, test harness, server boot) | `python tests/qa.py quick`; one layer: `python tests/qa.py layer unit` / `layer application` (needs `requirements-dev.txt`) |
 | `setup_pymodules.sh` | `bash -n setup_pymodules.sh`; `python tests/qa.py layer unit` (covers `append_req_line()`) |

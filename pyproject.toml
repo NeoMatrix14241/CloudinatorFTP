@@ -15,7 +15,7 @@ timeout = 120
 markers = [
     "application: black-box tests against a scratch server started as a subprocess",
     "integration: tests multiple real application components",
-    "protocol: starts FTP, SFTP or WebDAV against an isolated service",
+    "protocol: starts FTP, SFTP, WebDAV or SMB against an isolated service",
     "property: property-based or generated-input tests",
     "reliability: concurrency, fault-injection and recovery tests",
     "performance: scale and performance tests",
