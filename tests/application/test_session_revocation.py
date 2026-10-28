@@ -41,6 +41,11 @@ class FakeSession(dict):
         self.cleared = True
         super().clear()
 
+    def __eq__(self, other):
+        return dict.__eq__(self, other)
+
+    __hash__ = None
+
 
 class FakeDb:
     def __init__(self, token="t1", roles=None, revoked=()):

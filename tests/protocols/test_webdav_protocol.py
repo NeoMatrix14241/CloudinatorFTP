@@ -67,6 +67,7 @@ class DavEnv:
     def _connection(self):
         if self.tls:
             ctx = ssl.create_default_context()
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             return http.client.HTTPSConnection(
@@ -470,6 +471,7 @@ def test_the_certificate_but_never_the_key_can_be_downloaded_without_login(dav_h
 
 def test_the_tls_listener_speaks_http_1_1_only(dav_https):
     ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     ctx.set_alpn_protocols(["h2", "http/1.1"])

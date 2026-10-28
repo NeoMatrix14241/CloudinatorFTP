@@ -532,6 +532,7 @@ Rules:
 - The advanced CodeQL workflow cannot run while the repository's CodeQL "default setup" is enabled; disable the default setup first.
 - Parse downloaded results by hand with `python tests/codeql_sarif_parser.py <artifact.zip | .sarif file | folder>`; CSV files are written next to the script (add `tests/*.csv`, `tests/*.sarif` and `tests/*.zip` to `.gitignore`).
 - When a workflow, the parser's `VENDORED` list or the CodeQL config changes, update sections 18.1, 25.5, 25.8 and 27.2 together.
+- CodeQL also scans `tests/`. Rules for test code (5.37): never leave an empty `except ...: pass` (use `with contextlib.suppress(...):  # why the error is expected`); set `ctx.minimum_version = ssl.TLSVersion.TLSv1_2` right after every `ssl.create_default_context()` even when verification is switched off for a self-signed test server; bind test sockets to `127.0.0.1`, not `0.0.0.0`; a `dict` subclass that adds an attribute defines `__eq__` (and `__hash__ = None`). In upload tests wait for the expected CONTENT (`exists() and read_bytes() == expected`), never only for the file to exist.
 
 
 ## 19. Key contributor conventions

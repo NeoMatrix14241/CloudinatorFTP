@@ -93,10 +93,12 @@ def test_two_users_with_the_same_upload_id_do_not_mix_their_chunks(server):
     _chunk(bob, file_id, 0, 2, f"bob_{tag}.txt", b"BBBB")
     _chunk(alice, file_id, 1, 2, f"alice_{tag}.txt", b"aaaa")
     target = server.storage / f"alice_{tag}.txt"
-    assert _wait_for(lambda: target.exists())
-    assert target.read_bytes() == b"AAAAaaaa", "Alice's file contains Bob's data"
+    assert _wait_for(
+        lambda: target.exists() and target.read_bytes() == b"AAAAaaaa"
+    ), f"Alice's file is wrong or missing: {target.read_bytes() if target.exists() else None!r}"
     # Bob finishes his own file: it must hold his bytes only.
     _chunk(bob, file_id, 1, 2, f"bob_{tag}.txt", b"bbbb")
     bobs = server.storage / f"bob_{tag}.txt"
-    assert _wait_for(lambda: bobs.exists())
-    assert bobs.read_bytes() == b"BBBBbbbb", "Bob's file contains Alice's data"
+    assert _wait_for(
+        lambda: bobs.exists() and bobs.read_bytes() == b"BBBBbbbb"
+    ), f"Bob's file is wrong or missing: {bobs.read_bytes() if bobs.exists() else None!r}"

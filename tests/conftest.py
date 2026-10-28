@@ -30,6 +30,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -535,10 +536,8 @@ def scratch_server(tmp_path_factory):
         yield server
     finally:
         # Same graceful request manage.sh uses (dev_server.py watches this file).
-        try:
+        with suppress(OSError):  # best-effort stop request
             stop_file.write_text("stop", "utf-8")
-        except OSError:
-            pass
         try:
             proc.wait(timeout=20)
         except subprocess.TimeoutExpired:

@@ -18,6 +18,7 @@ import ftplib
 import io
 import ssl
 import uuid
+from contextlib import suppress
 
 import pytest
 
@@ -48,6 +49,7 @@ class FtpEnv:
         tls = self.tls if tls is None else tls
         if tls:
             ctx = ssl.create_default_context()
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             ftp = ftplib.FTP_TLS(context=ctx)
@@ -305,20 +307,20 @@ def test_files_outside_the_storage_root_cannot_be_downloaded(ftp, world):
     client = ftp.login_as(RW)
     for path in _paths_to_outside(world):
         buf = io.BytesIO()
-        try:
+        with suppress(
+            ftplib.error_perm, ftplib.error_temp
+        ):  # refusal is the expected result
             client.retrbinary(f"RETR {path}", buf.write)
-        except (ftplib.error_perm, ftplib.error_temp):
-            pass
         assert b"TOP-SECRET" not in buf.getvalue(), path
 
 
 def test_the_root_cannot_be_left_by_changing_directory(ftp, world):
     client = ftp.login_as(RW)
     for target in ("..", "../..", "/..", "/../.."):
-        try:
+        with suppress(
+            ftplib.error_perm, ftplib.error_temp
+        ):  # refusal is the expected result
             client.cwd(target)
-        except (ftplib.error_perm, ftplib.error_temp):
-            pass
         assert client.pwd() == "/", target
     assert not any(n.startswith("outside_") for n in client.nlst())
 
@@ -328,15 +330,15 @@ def test_nothing_can_be_written_outside_the_storage_root(ftp, world):
     for n, path in enumerate(_paths_to_outside(world)[:3]):
         escape = f"escape_{world.tag}_{n}.txt"
         target = path.replace(f"outside_{world.tag}.txt", escape)
-        try:
+        with suppress(
+            ftplib.error_perm, ftplib.error_temp
+        ):  # refusal is the expected result
             upload(client, target, b"ATTACKER")
-        except (ftplib.error_perm, ftplib.error_temp):
-            pass
         assert not (ftp.data / escape).exists(), target
-    try:
+    with suppress(
+        ftplib.error_perm, ftplib.error_temp
+    ):  # refusal is the expected result
         client.mkd(f"../madedir_{world.tag}")
-    except (ftplib.error_perm, ftplib.error_temp):
-        pass
     assert not (ftp.data / f"madedir_{world.tag}").exists()
 
 
@@ -347,10 +349,10 @@ def test_files_outside_the_storage_root_cannot_be_deleted_or_renamed(ftp, world)
             lambda p=path: client.delete(p),
             lambda p=path: client.rename(p, f"moved_{world.tag}.txt"),
         ):
-            try:
+            with suppress(
+                ftplib.error_perm, ftplib.error_temp
+            ):  # refusal is the expected result
                 action()
-            except (ftplib.error_perm, ftplib.error_temp):
-                pass
     assert world.outside.read_text(encoding="utf-8") == "TOP-SECRET-PARENT"
     assert (world.sibling / "secret.txt").exists()
     assert not (ftp.storage / f"moved_{world.tag}.txt").exists()

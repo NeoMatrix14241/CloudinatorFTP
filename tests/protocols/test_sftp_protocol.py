@@ -16,6 +16,7 @@ Not covered: public-key login (not supported by the server), very large transfer
 
 import io
 import uuid
+from contextlib import suppress
 
 import paramiko
 import pytest
@@ -60,10 +61,8 @@ class SftpEnv:
 
     def close_all(self):
         for t in self._open:
-            try:
+            with suppress(Exception):  # best-effort cleanup
                 t.close()
-            except Exception:
-                pass
         self._open.clear()
 
 
@@ -353,15 +352,11 @@ def test_nothing_can_be_written_outside_the_storage_root(sftp, world):
     for n, path in enumerate(_paths_to_outside(world)[:3]):
         escape = f"escape_{world.tag}_{n}.txt"
         target = path.replace(f"outside_{world.tag}.txt", escape)
-        try:
+        with suppress(OSError, IOError):  # refusal is the expected result
             put(client, target, b"ATTACKER")
-        except (OSError, IOError):
-            pass
         assert not (sftp.data / escape).exists(), target
-    try:
+    with suppress(OSError, IOError):  # refusal is the expected result
         client.mkdir(f"../madedir_{world.tag}")
-    except (OSError, IOError):
-        pass
     assert not (sftp.data / f"madedir_{world.tag}").exists()
 
 
@@ -372,10 +367,8 @@ def test_files_outside_the_storage_root_cannot_be_deleted_or_renamed(sftp, world
             lambda p=path: client.remove(p),
             lambda p=path: client.rename(p, f"moved_{world.tag}.txt"),
         ):
-            try:
+            with suppress(OSError, IOError):  # refusal is the expected result
                 action()
-            except (OSError, IOError):
-                pass
     assert world.outside.read_text(encoding="utf-8") == "TOP-SECRET-PARENT"
     assert (world.sibling / "secret.txt").exists()
     assert not (sftp.storage / f"moved_{world.tag}.txt").exists()

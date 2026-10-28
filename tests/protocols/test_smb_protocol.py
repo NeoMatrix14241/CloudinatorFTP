@@ -24,6 +24,7 @@ import os
 import socket
 import time
 import uuid
+from contextlib import suppress
 
 import pytest
 
@@ -77,7 +78,7 @@ def occupy_a_port():
         socket, "SO_EXCLUSIVEADDRUSE"
     ):  # Windows: SO_REUSEADDR would let a bind through
         holder.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-    holder.bind(("0.0.0.0", 0))
+    holder.bind(("127.0.0.1", 0))
     holder.listen(5)
     return holder
 
@@ -101,10 +102,8 @@ class SmbEnv:
 
     def close_all(self):
         for conn in self._open:
-            try:
+            with suppress(Exception):  # best-effort cleanup
                 conn.close()
-            except Exception:
-                pass
         self._open.clear()
 
 
@@ -443,10 +442,8 @@ def test_a_file_handle_opened_before_a_demotion_stops_accepting_data(
     with pytest.raises(SessionError) as err:
         conn.writeFile(tree, handle, b"AFTER-THE-DEMOTION", 6)
     assert status_of(err) == ACCESS_DENIED
-    try:
+    with suppress(SessionError):  # the close may report the refused write again
         conn.closeFile(tree, handle)
-    except SessionError:
-        pass
     assert (smb.storage / target).read_bytes() == b"before"
 
 
@@ -520,15 +517,11 @@ def test_nothing_can_be_written_outside_the_storage_root(smb, world):
     for n, path in enumerate(_paths_to_outside(world)[:4]):
         escape = f"escape_{world.tag}_{n}.txt"
         target = path.replace(f"outside_{world.tag}.txt", escape)
-        try:
+        with suppress(Exception):  # refusal is the expected result
             put(conn, target, b"ATTACKER")
-        except Exception:
-            pass
         assert not (smb.data / escape).exists(), target
-    try:
+    with suppress(Exception):  # refusal is the expected result
         conn.createDirectory(SHARE, f"..\\madedir_{world.tag}")
-    except Exception:
-        pass
     assert not (smb.data / f"madedir_{world.tag}").exists()
 
 
@@ -539,10 +532,8 @@ def test_files_outside_the_storage_root_cannot_be_deleted_or_renamed(smb, world)
             lambda p=path: conn.deleteFile(SHARE, p),
             lambda p=path: conn.rename(SHARE, p, f"moved_{world.tag}.txt"),
         ):
-            try:
+            with suppress(Exception):  # refusal is the expected result
                 action()
-            except Exception:
-                pass
     assert world.outside.read_text(encoding="utf-8") == "TOP-SECRET-PARENT"
     assert (world.sibling / "secret.txt").exists()
     assert not (smb.storage / f"moved_{world.tag}.txt").exists()
@@ -561,10 +552,8 @@ def test_a_symlink_pointing_outside_is_not_followed(smb, world):
         except Exception:
             content = b""
         assert b"TOP-SECRET" not in content
-        try:
+        with suppress(Exception):  # refusal is the expected result
             put(conn, link.name, b"ATTACKER")
-        except Exception:
-            pass
         assert world.outside.read_text(encoding="utf-8") == "TOP-SECRET-PARENT"
     finally:
         link.unlink(missing_ok=True)
