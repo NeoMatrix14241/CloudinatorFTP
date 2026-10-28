@@ -1295,10 +1295,16 @@ def start() -> bool:
         if port != 445
         else f"📡 SMB:     \\\\{LOCAL_IP}\\{SMB_SHARE_NAME}"
     )
-    print(
-        f"   Windows → Map Network Drive → \\\\{LOCAL_IP}\\{SMB_SHARE_NAME}"
-        + (f" /TCPPORT:{port}" if port != 445 else "")
-    )
+    if port == 445:
+        print(f"   Windows → Map Network Drive → \\\\{LOCAL_IP}\\{SMB_SHARE_NAME}")
+    else:
+        # The Map Network Drive dialog has no port field and rejects
+        # /TCPPORT; only `net use` accepts it (drive letter first).
+        print(
+            f"   Windows → Command Prompt (the Map Network Drive dialog cannot "
+            f"take a port): net use Z: \\\\{LOCAL_IP}\\{SMB_SHARE_NAME} /TCPPORT:{port}"
+        )
+        print("   (/TCPPORT needs Windows 11 24H2+ / Server 2025+)")
     return True
 
 
