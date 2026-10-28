@@ -1,10 +1,10 @@
 # 🖥️ manage.sh — Server Management Script Guide
 
-**Last Updated**: 2026-10-02
+**Last Updated**: 2026-10-22
 **Works on**: Windows (Git Bash), Linux, and Android (Termux)
 **Checked against**: `manage.sh` itself (commands, menu numbers, and behaviour below are read from the script, not from memory)
 
-`manage.sh` runs the Cloudinator server in the **background** so your terminal stays free, and gives you one entry point for the maintenance utilities (users, config, SMB, share links, version engine, SRI hash checking, and so on).
+`manage.sh` runs the Cloudinator server in the **background** so your terminal stays free, and gives you one entry point for the maintenance utilities (users, config, SMB, share links, version engine, SRI hash checking, the automated quality checks, the folder-tree and route-snapshot tools, and so on).
 
 ## 📋 Table of Contents
 
@@ -13,13 +13,16 @@
 3. [Server Commands](#server-commands)
 4. [Log Commands](#log-commands)
 5. [Utility Commands](#utility-commands)
-6. [security.txt Command](#securitytxt-command)
-7. [Interactive Menu](#interactive-menu)
-8. [Files and Folders It Uses](#files-and-folders-it-uses)
-9. [How Background Mode and Ctrl-C Work](#how-background-mode-and-ctrl-c-work)
-10. [WebDAV Is a Separate Process](#webdav-is-a-separate-process)
-11. [Environment Variable: PYTHON](#environment-variable-python)
-12. [Troubleshooting](#troubleshooting)
+6. [Quality Assurance Commands](#quality-assurance-commands)
+7. [Developer Tools Commands](#developer-tools-commands)
+8. [security.txt Command](#securitytxt-command)
+9. [Interactive Menu](#interactive-menu)
+10. [Files and Folders It Uses](#files-and-folders-it-uses)
+11. [How Background Mode and Ctrl-C Work](#how-background-mode-and-ctrl-c-work)
+12. [How `stop` Works](#how-stop-works)
+13. [WebDAV Is a Separate Process](#webdav-is-a-separate-process)
+14. [Environment Variables: PYTHON and STOP_GRACE_SECS](#environment-variables-python-and-stop_grace_secs)
+15. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -47,7 +50,7 @@ The script detects where it is running and adjusts. You do not have to tell it.
 | | Windows | Linux | Android (Termux) |
 |---|---|---|---|
 | **Shell** | Git Bash (the script detects `msys`/`cygwin`) | bash | bash |
-| **Stopping the server** | `taskkill //F` on the saved PID (immediate, forced) | Polite stop first, then force-kill after about 5 seconds if it has not exited | Same as Linux |
+| **Stopping the server** | Graceful request through a stop file, then `taskkill //F //T` on the whole process tree if it has not exited within `STOP_GRACE_SECS` (default 45 s) | The same stop file, plus a `SIGTERM` for the production server, then `kill -9` on the process group after `STOP_GRACE_SECS` | Same as Linux |
 | **Uptime in `status`** | Shows just `running` | Real uptime from `ps` | Real uptime from `ps` |
 | **Port sweep for orphaned WebDAV** | Uses `netstat` | Uses `lsof` **if it is installed** (skipped silently otherwise) | Same as Linux, so it needs `lsof` |
 | **`termux-setup`** | Explains it is Android-only and points to `pip install -r requirements.txt` | Explains it is Android-only and points to `LINUX_DEPLOYMENT.md` | Runs `termux_setup.sh` |
@@ -67,7 +70,7 @@ Only **one** server can run at a time (production *or* dev). Trying to start the
 |---|---|
 | `./manage.sh start server` | Start `prod_server.py` (Hypercorn) in the background |
 | `./manage.sh start dev_server` | Start `dev_server.py` (Quart) in the background |
-| `./manage.sh stop` | Stop whichever server is running, then clean up WebDAV (see below) |
+| `./manage.sh stop` | Ask the running server to shut down gracefully, force it after `STOP_GRACE_SECS` (default 45), then clean up WebDAV and the Version Engine (see [How `stop` Works](#how-stop-works)) |
 | `./manage.sh restart` | Stop and start again whichever server is running |
 | `./manage.sh restart-webdav` | Restart **only** WebDAV, without touching the main server |
 | `./manage.sh status` | Shows both servers as running/stopped, PID, uptime, log file name, and the last 5 log lines |
@@ -76,7 +79,8 @@ Details worth knowing:
 
 - **Start** waits about 0.8 seconds and checks the process is still alive. If it died right away it prints `crashed immediately` and tells you to run `python prod_server.py` (or `dev_server.py`) in the foreground to see the real error.
 - **Start** first cleans up any leftover WebDAV process from a previous crash, so a stale one cannot block the ports.
-- **Restart** needs a server to be running. If none is, it tells you to use `start` instead.
+- **Stop** is graceful first: the server gets the same shutdown as a first Ctrl+C and stops its helpers itself, so a stop can take several seconds; it is forced only after `STOP_GRACE_SECS`. Details in [How `stop` Works](#how-stop-works).
+- **Restart** needs a server to be running. If none is, it tells you to use `start` instead. It is `stop`, a 0.5 second pause, then `start` of the same server, so it waits for the graceful shutdown too.
 - **restart-webdav** needs a running server and a WebDAV PID file. It kills the WebDAV process and waits up to about 10 seconds for the server's own watchdog to respawn it, then reports the new PID. Use it to recover a stuck WebDAV listener (for example after a large cancelled download) without disconnecting web users.
 
 ---
@@ -117,17 +121,16 @@ Utilities run in the **foreground** and are safe to use while the server is up. 
 
 | Command | Runs | Purpose |
 |---|---|---|
-| `version-manage` | `version_manage.py` | Version Engine: list, restore, delete file versions (no arguments opens its own menu) |
-| `setup-smb` | `smb_setup.py` | One-time SMB setup (see `SMB_PROTOCOL_DEPLOYMENT.md`) |
-| `kick-sessions` | `kick_sessions.py` | Force logout of every active session (server must be running) |
+| `version-manage` | `tools/version_manage.py` | Version Engine: list, restore, delete file versions (no arguments opens its own menu) |
+| `setup-smb` | `tools/smb_setup.py` | One-time SMB setup (see `SMB_PROTOCOL_DEPLOYMENT.md`) |
+| `kick-sessions` | `tools/kick_sessions.py` | Force logout of every active session (server must be running) |
 | `config` | `config.py` | Interactive configuration (see `CONFIG_PY_REFERENCE.md`) |
-| `manage-users` | `manage_users.py` | Manage user credentials |
-| `debug-pw` | `debug_passwords.py` | Debug passwords |
-| `reset-db` | `reset_db.py` | Reset the database |
-| `setup-storage` | `setup_storage.py` | Configure storage |
+| `manage-users` | `tools/manage_users.py` | Manage user credentials |
+| `reset-db` | `tools/reset_db.py` | Reset the database |
+| `setup-storage` | `tools/setup_storage.py` | Configure storage |
 | `update-modules [-y]` | `setup_pymodules.sh` | Update Python packages (alias: `setup-modules`) |
-| `revoke-shares` | `revoke_sharing.py` | Share link management |
-| `validate-sri [--fix]` | `sri_validator.py` | Check (or repair) the Subresource Integrity hashes in the templates |
+| `revoke-shares` | `tools/revoke_sharing.py` | Share link management |
+| `validate-sri [--fix]` | `tools/sri_validator.py` | Check (or repair) the Subresource Integrity hashes in the templates |
 | `termux-setup` | `termux_setup.sh` | First-time setup, Android/Termux only |
 
 When a utility finishes, the script prints whether it finished, was interrupted (Ctrl-C), or exited with an error code.
@@ -179,7 +182,7 @@ Your HTML templates load scripts and stylesheets with an `integrity="sha384-..."
 - `--fix` only changes `integrity` values. Line endings and the rest of each template stay exactly as they were.
 - It always looks in the `templates/` and `static/` folders next to `manage.sh`, wherever you run it from. `--templates DIR` and `--static DIR` override that.
 - **When to run it:** after you edit any JS or CSS under `static/` (including `bg_audio.js`, whose hash is repeated in four templates), and after you change a third-party file such as pdf.js. Then open each page once and look for blocked-script errors in the browser console.
-- **From the interactive menu (`./manage.sh menu`, option 21)** it runs the check, and if any hash is stale or missing it asks `Fix the stale/missing hashes now? [y/N]`. `y` runs the same repair as `--fix`; Enter or `n` leaves everything unchanged (and reminds you of the shell command). The question appears only when the check found a fixable problem, not when everything is OK, when you press Ctrl-C, or when the `templates/` or `static/` folder is missing.
+- **From the interactive menu (`./manage.sh menu`, option 20)** it runs the check, and if any hash is stale or missing it asks `Fix the stale/missing hashes now? [y/N]`. `y` runs the same repair as `--fix`; Enter or `n` leaves everything unchanged (and reminds you of the shell command). The question appears only when the check found a fixable problem, not when everything is OK, when you press Ctrl-C, or when the `templates/` or `static/` folder is missing.
 - Because it exits with 1 when something is wrong, you can also use it in a script or git pre-commit hook: `./manage.sh validate-sri || exit 1`.
 
 Limits: browsers only enforce the hash on `<script>` tags and on stylesheet/preload links (icon and `locale.json` links accept the attribute but ignore it). Tags that JavaScript adds at runtime are not in any template, so they are not checked. The hash must match the bytes the **server** sends, so if git converts line endings on checkout, run the command on the server's copy.
@@ -192,6 +195,87 @@ Limits: browsers only enforce the hash on `<script>` tags and on stylesheet/prel
 ```
 
 It runs `setup_pymodules.sh`, which rewrites `requirements.txt` and `constraints.txt`, runs a pip dry-run to check the versions fit together, and asks once more before installing or upgrading. Ctrl-C at the first question cancels with nothing changed.
+
+---
+
+## Quality Assurance Commands
+
+The `qa` commands run the project's automated checks. Every one of them is a single call to `tests/qa.py`, the same runner the GitHub **Tests** workflow uses, so a green run here means the same commands passed that GitHub runs. They run in the **foreground** and are safe while a server is up: the tests copy the project into a temporary folder and start their own server there on a free port, so they never touch your real `db/`, `cache/`, `versions/` or storage folders.
+
+| Command | What it runs |
+|---|---|
+| `qa` or `qa quick` | `smoke.py`, `check.py`, the SRI check, `node --check` on the first-party JavaScript (skipped if Node.js is not installed) and every pytest layer |
+| `qa static` | Only the static checks above (no pytest) |
+| `qa tests` | Only pytest, on every `tests/<layer>` folder that exists |
+| `qa layer <name>` | One layer: `unit`, `integration`, `application`, `protocols`, `property`, `reliability`, `performance` or `frontend` |
+| `qa ci` | Same as `quick`, and writes JUnit XML into `./artifacts` (what GitHub runs) |
+| `qa --version` | Prints which copy of `tests/qa.py` you have |
+
+Extra arguments go straight to `qa.py`: `--skip-packages` (do not warn about packages that are not installed), `--out DIR` (write JUnit XML into `DIR`) and `--fail-fast` (stop at the first failing step).
+
+```bash
+./manage.sh qa                    # everything
+./manage.sh qa layer unit         # one layer
+./manage.sh qa quick || exit 1    # usable from a script or git hook: exit code 1 means a step failed
+```
+
+- **Slow tests:** `qa layer performance` runs the end-to-end download test only when `CLOUDINATOR_SLOW_TESTS=1` is set in the environment (about 85 s); otherwise it is reported as skipped.
+- **One-time setup:** the test packages are not in `requirements.txt`. Run `python -m pip install -r requirements-dev.txt` once.
+- **SKIP is not PASS:** a step that cannot run (Node.js missing, a layer folder that does not exist yet) is reported as `SKIP` with the reason and does not fail the run. A `FAIL` does.
+- **Misplaced test files:** a `test_*.py` file directly inside `tests/` runs in no layer, so `qa` reports it as a `FAIL` and tells you to move it into `tests/unit/` or `tests/application/`.
+- **Exit codes:** `0` all steps passed or were skipped, `1` at least one step failed, `2` unknown mode or layer, `130` Ctrl-C.
+
+---
+
+## Developer Tools Commands
+
+Two small tools from the `tests/` folder have their own commands. They only **read** source files and folder names (they never start the app or touch your database, cache or storage), so they are safe while a server is up. They run in the foreground, and Ctrl-C cancels them.
+
+| Command | Runs | Purpose |
+|---|---|---|
+| `dir-tree` | `tests/dir_tree.py` | Print the project folder tree and save it to `docs/DIRECTORY_TREE.md` |
+| `smoke [options]` | `tests/smoke.py` | Fast static safety net. `--save` writes the route snapshot `tests/smoke_routes.json` |
+
+### dir-tree
+
+```bash
+./manage.sh dir-tree
+```
+
+- Prints the tree and writes it to `docs/DIRECTORY_TREE.md`, creating `docs/` if it is missing. The file is overwritten every time and never lists itself.
+- Folders come first, then files, each sorted A to Z ignoring case.
+- **Hidden completely:** `__pycache__`, `.git`, `.venv`, `venv`, `env`, `.pytest_cache`, `.manage_pids` and `logs`.
+- **Shown but not opened** (printed as `... (reason)`): `images`, `cmaps`, `iccs`, `locale`, `standard_fonts`, `wasm`, `uploads` and `webfonts`. They are matched by folder **name** only, so any folder with one of those names is collapsed, including a project-root `images/` folder.
+- Vendored files get a short note after their name (`pdf.mjs`, `pdf.worker.mjs`, `viewer.mjs`, `viewer.css`, `video.js`, `video.css`, `all.min.js`). The lists are at the top of `tests/dir_tree.py` if you want to change them.
+- It takes **no options**; anything typed after the command is ignored.
+- **When to run it:** after files are added, moved or removed, then commit `docs/DIRECTORY_TREE.md`.
+
+### smoke
+
+```bash
+./manage.sh smoke            # run every check (a few seconds)
+./manage.sh smoke --save     # run every check, then write the route snapshot
+./manage.sh smoke -v         # also print the route table
+./manage.sh smoke --files    # also list every .py file that was scanned
+```
+
+Anything after `smoke` goes straight to `tests/smoke.py`. The checks, in short:
+
+- every `.py` file parses (syntax), and `pyflakes` finds undefined names (skipped with a hint if `pyflakes` is not installed);
+- the route table: one function per endpoint name, and no URL and method registered twice;
+- every `url_for('x')` and endpoint-name list refers to a real endpoint;
+- hooks (`before_request`, `after_request`, error handlers, and so on) exist only in `middleware.py`;
+- import rules: no `from x import *`, only the launchers import `app`, no import cycles, route modules do not import each other (except the documented pairs), `helpers/` modules stay small leaf utilities, and `app.py` imports every `routes/*.py`;
+- every script in `tools/` puts the project root on `sys.path` before its first project import;
+- `manage.sh` launches only files that exist, and `bash -n manage.sh` passes;
+- the route snapshot (below).
+
+Exit code `1` means at least one check **FAIL**ed. A `SKIP` is not a pass of that check. `qa quick` runs `smoke.py` as well; use `smoke` on its own when you only want the quick answer.
+
+**The route snapshot.** `tests/smoke_routes.json` lists every route (methods, URL and endpoint). Check 11 **fails** if a route in the snapshot has disappeared from the code (`LOST`), so a route cannot vanish unnoticed. Routes that are not in the snapshot yet only produce a warning (`11b`). Run `--save` after a green run when you added or removed a route **on purpose**, then commit the file. Before the first `--save`, check 11 is reported as `SKIP`.
+
+- `--save` runs **all** the checks first and then saves the snapshot **even if one of them failed**, so read the report before you commit the file.
+- **From the interactive menu (option 27)** it first warns, then asks `Save the route snapshot? [y/N]`. Saving after a route was lost by mistake would hide the loss, so Enter or `n` leaves the file unchanged and reminds you of the shell command. From the shell, `smoke --save` does not ask.
 
 ---
 
@@ -226,19 +310,35 @@ Only the flags you pass are changed. Existing fields and any extra custom fields
 
 Shows whether a server is running, then a numbered list. Every number is the same as a shell command.
 
-| # | Command | # | Command |
-|---|---|---|---|
-| 1 | `start server` | 11 | `setup-smb` |
-| 2 | `start dev_server` | 12 | `kick-sessions` |
-| 3 | `stop` | 13 | `manage-users` |
-| 4 | `restart` | 14 | `debug-pw` |
-| 5 | `status` | 15 | `reset-db` |
-| 6 | `logs` (asks which server and whether to follow) | 16 | `setup-storage` |
-| 7 | `clean-logs` | 17 | `update-modules` |
-| 8 | `restart-webdav` | 18 | `revoke-shares` |
-| 9 | `version-manage` | 19 | `security-txt` |
-| 10 | `config` | 20 | `termux-setup` (shown dimmed when not on Termux) |
-| | | 21 | `validate-sri` (checks, then asks y/N before fixing) |
+| # | Command | Group |
+|---|---|---|
+| 1 | `start server` | Servers |
+| 2 | `start dev_server` | Servers |
+| 3 | `stop` | Servers |
+| 4 | `restart` | Servers |
+| 5 | `status` | Servers |
+| 6 | `logs` (asks which server and whether to follow) | Servers |
+| 7 | `clean-logs` | Servers |
+| 8 | `restart-webdav` | Servers |
+| 9 | `version-manage` | Utilities |
+| 10 | `config` | Utilities |
+| 11 | `setup-smb` | Utilities |
+| 12 | `kick-sessions` | Utilities |
+| 13 | `manage-users` | Utilities |
+| 14 | `reset-db` | Utilities |
+| 15 | `setup-storage` | Utilities |
+| 16 | `update-modules` | Utilities |
+| 17 | `revoke-shares` | Utilities |
+| 18 | `security-txt` | Utilities |
+| 19 | `termux-setup` (shown dimmed when not on Termux) | Utilities |
+| 20 | `validate-sri` (checks, then asks y/N before fixing) | Utilities |
+| 21 | `qa quick` | Quality Assurance |
+| 22 | `qa static` | Quality Assurance |
+| 23 | `qa tests` | Quality Assurance |
+| 24 | `qa layer` (asks which layer, default unit) | Quality Assurance |
+| 25 | `qa ci` | Quality Assurance |
+| 26 | `dir-tree` | Developer Tools |
+| 27 | `smoke --save` (warns, then asks y/N) | Developer Tools |
 
 Type `q` to quit. After each action it waits for Enter before redrawing.
 
@@ -251,10 +351,19 @@ Type `q` to quit. After each action it waits for Enter before redrawing.
 | Path | Purpose |
 |---|---|
 | `.manage_pids/prod.pid`, `dev.pid` | PID of the running server |
+| `.manage_pids/prod.stop`, `dev.stop` | The graceful-stop request: `stop` creates it, the server deletes it (= acknowledged) and shuts down. Normally it exists for under a second |
 | `.manage_pids/webdav.pid` | PID of the WebDAV process (written by the server, not by `manage.sh`) |
+| `.manage_pids/version_engine.pid` | PID of the Version Engine worker (written by `version_engine.py`) |
 | `logs/prod_server_YYYY-MM-DD.log`, `logs/dev_server_YYYY-MM-DD.log` | One log per day per server type, written by the app's own logger. It rolls to a new file at midnight without a restart |
 | `static/.well-known/security.txt` | Edited by `security-txt` |
 | `templates/*.html`, `static/` | Read by `validate-sri`; the templates are rewritten only when you add `--fix` |
+| `tests/qa.py` | The runner every `qa` command calls |
+| `tests/dir_tree.py` | The tool `dir-tree` runs |
+| `docs/DIRECTORY_TREE.md` | Written by `dir-tree` (overwritten each run; commit it after files change) |
+| `tests/smoke.py` | The tool `smoke` runs (`qa` runs it too) |
+| `tests/smoke_routes.json` | The route snapshot written by `smoke --save` (commit it) |
+| `artifacts/` | JUnit XML written by `qa ci` (not committed; add it to `.gitignore`) |
+| a temporary folder (system temp) | The scratch copy of the project the tests run in; removed by pytest afterwards |
 
 Because background mode discards raw console output (see [Startup messages](#startup-messages-are-not-shown-in-background-mode)), the log files are where diagnostics live.
 
@@ -273,6 +382,40 @@ The practical result: closing a log view or pressing Ctrl-C **never** stops the 
 
 ---
 
+## How `stop` Works
+
+`./manage.sh stop` (and the stop half of `restart`) shuts the server down in two stages, the same two stages as pressing Ctrl+C in the foreground (once = graceful, twice = force quit). Pressing Ctrl+C never reaches a background server (see above), so `stop` has to ask in another way.
+
+**Stage 1 - graceful (up to `STOP_GRACE_SECS`, default 45 seconds)**
+
+1. `stop` creates the *stop file* `.manage_pids/prod.stop` (or `dev.stop`). A file is used because Windows cannot deliver a catchable signal to a detached process that has no console.
+2. For the **production server on Linux / Termux** it also sends a plain `SIGTERM`, which the server treats as the same graceful stop. The dev server does not get the signal (Quart's own `SIGTERM` handling would skip its cleanup).
+3. The server checks for the file about twice a second, deletes it (that is how `stop` knows it was understood) and starts shutting down. Its own shutdown code then stops WebDAV, SFTP / FTP / SMB and the Version Engine, so open transfers and the database get a chance to finish cleanly.
+4. `stop` checks every half second whether the process has exited and prints `Server shut down gracefully.` as soon as it has.
+
+**Stage 2 - forced**
+
+- If the server is still alive when `STOP_GRACE_SECS` run out, `stop` prints `Server did not exit gracefully` and kills the **whole process tree**: `taskkill //F //T` on Windows, `kill -9` on the process group (then on the PID) on Linux / Termux.
+- If the stop file is **still there after about 6 seconds**, the running server was started before this feature existed and never reads it. `stop` says `Server ignored the stop request (started before this manage.sh version?)`, stops waiting at once instead of idling for the full grace time, and goes straight to the forced stage. This happens at most once, for a server that was started with an older `manage.sh`.
+
+**Cleanup after either stage**
+
+`stop` removes the stop file and the server's PID file, then makes sure nothing is left behind:
+
+1. **WebDAV:** kills the process in `webdav.pid`, then sweeps the WebDAV ports (see [WebDAV Is a Separate Process](#webdav-is-a-separate-process)).
+2. **Version Engine:** kills the process in `version_engine.pid`, then every process whose command line contains `version_engine.py` and `--worker` (found with PowerShell on Windows, `pgrep` or `ps` elsewhere). Only Python processes are ever killed.
+
+**When no server is running**
+
+`stop` still looks for leftovers. If a Version Engine worker, a `version_engine.pid` or a `webdav.pid` is found it cleans them up and says so; otherwise it prints `No server is currently running.`
+
+**Related behaviour**
+
+- `start` also deletes a stale stop file and kills orphaned WebDAV / Version Engine processes before it launches (the production server clears a stale stop file when it boots too), so a stop file left by a crashed run cannot shut a new server down at once.
+- A long `STOP_GRACE_SECS` only matters when the server is slow to stop; a healthy server exits in a few seconds. See [Environment Variables](#environment-variables-python-and-stop_grace_secs) to change it.
+
+---
+
 ## WebDAV Is a Separate Process
 
 WebDAV runs as its own operating-system process next to the main server, tracked by `.manage_pids/webdav.pid`. Killing the main server does not automatically kill it, so `stop` and `start` also clean it up:
@@ -286,7 +429,9 @@ If a stale process ever holds a port or a log file open (a common Windows compla
 
 ---
 
-## Environment Variable: PYTHON
+## Environment Variables: PYTHON and STOP_GRACE_SECS
+
+### PYTHON
 
 By default the script uses `python` from your PATH, falling back to `python3`. To force a specific interpreter:
 
@@ -295,6 +440,17 @@ PYTHON=python3.11 ./manage.sh start server
 ```
 
 This applies to the servers and every utility.
+
+### STOP_GRACE_SECS
+
+How long `stop` (and `restart`) waits for the graceful shutdown before it forces the server down. Default **45** seconds. Use a **whole number of seconds**; the value is not validated, so something like `1.5` or `abc` breaks the wait.
+
+```bash
+STOP_GRACE_SECS=90 ./manage.sh stop       # give a busy server more time
+STOP_GRACE_SECS=10 ./manage.sh restart    # impatient: force after 10 seconds
+```
+
+Raise it if the server is usually busy with large transfers or a Version Engine scan when you stop it; lower it if you would rather force quickly. It applies only to that one command, set it again (or export it) when you want it every time. See [How `stop` Works](#how-stop-works).
 
 ---
 
@@ -306,10 +462,23 @@ This applies to the servers and every utility.
 | `crashed immediately` | The server died on startup (often an import error before logging began). Run `python prod_server.py` in the foreground to see the real error |
 | `Only one server can run at a time` | The other server is running. Run `./manage.sh stop` first |
 | `No log file found` | Nothing has been logged today for that server. Start it, or check the folder `logs/` |
+| `Server ignored the stop request (started before this manage.sh version?)` | The running server predates the stop-file feature and never reads it. `stop` forces it down straight away; the next `start` will be a current server |
+| `Server did not exit gracefully — forcing the whole process tree down…` | The server did not finish shutting down within `STOP_GRACE_SECS`. Nothing is wrong with the command; if it keeps happening, look at the end of the server log for what was still running, or raise `STOP_GRACE_SECS` |
+| `stop` takes a long time | It is waiting for the graceful shutdown (up to `STOP_GRACE_SECS`, default 45 s). Open transfers, WebDAV and the Version Engine are being closed. Wait, or force it sooner with a smaller `STOP_GRACE_SECS` |
+| `No server is running, but leftover helper processes or PID files were found` | A previous server died and left WebDAV or a Version Engine worker behind. `stop` cleans them up by itself |
 | `No WebDAV PID file found` (restart-webdav) | WebDAV did not start. Check `WEBDAV_ENABLED` and `WEBDAV_HTTPS_ENABLED` in `config.py`, and the server log |
 | `WebDAV did not come back within 10s` | The respawn failed. Read the server log for the actual error |
 | `Script not found` | A utility file is missing from the project folder |
 | A page loads but a script or stylesheet does nothing; console shows an integrity error | A stale SRI hash. Run `./manage.sh validate-sri --fix`, then reload (hard refresh) |
+| `qa exited with code 1` | At least one step failed. Read the `FAIL` lines in the summary at the end, then the output of that step above it |
+| `pytest is not installed` (from `qa`) | Run `python -m pip install -r requirements-dev.txt` |
+| `qa` says `SKIP: node is not installed` | Not an error. Install Node.js if you want the JavaScript syntax check |
+| `qa` reports a `layout` FAIL | A `test_*.py` file sits directly in `tests/`. Move it into `tests/unit/` or `tests/application/` |
+| `smoke exited with code 1` | At least one smoke check FAILed. Read the `[FAIL]` lines in its report |
+| `smoke` reports `[FAIL] 11 no route lost` with `LOST` lines | A route that is in `tests/smoke_routes.json` is gone from the code. If you removed it on purpose, run `./manage.sh smoke --save`; if not, put the route back |
+| `smoke` reports `[WARN] 11b ... not in the snapshot` | New routes. Not an error; run `./manage.sh smoke --save` once you are sure they are intended |
+| `smoke` reports `[SKIP] 11 route snapshot` | There is no `tests/smoke_routes.json` yet. Run `./manage.sh smoke --save` once after a green run |
+| `smoke` reports `[SKIP] 2 pyflakes` | `pyflakes` is not installed. Run `python -m pip install pyflakes` (this is the check that finds missing imports) |
 | `sri_validator exited with code 1` | `validate-sri` found a stale, missing or unresolvable hash. Read the report above it, then run with `--fix` |
 | `Permission denied` running `./manage.sh` | Run `chmod +x manage.sh`, or use `bash manage.sh <command>` |
 | `termux-setup` says Android-only | You are not on Termux. Follow the message for your platform |

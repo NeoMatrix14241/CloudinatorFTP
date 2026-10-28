@@ -1,0 +1,7 @@
+# Test-only packages (CLAUDE.md 5.00). Kept apart from requirements.txt on purpose:
+# setup_pymodules.sh generates and rewrites requirements.txt / constraints.txt.
+# Install with:  python -m pip install -r requirements-dev.txt
+pytest>=9.1.1
+pytest-timeout>=2.4
+pip-audit>=2.10.1
+coverage>=7.17.0

@@ -1,0 +1,55 @@
+# Coverage report for CloudinatorFTP (CLAUDE.md 5.34): every test layer under coverage.py, the
+# application and protocol servers included (they run as subprocesses in scratch copies; see the
+# comments in pyproject.toml [tool.coverage.run]). Same runner as developers:
+# `python tests/qa.py coverage`. Linux on purpose: on Windows the test harness stops the servers
+# with TerminateProcess and their coverage data is lost, so the numbers here are the real ones.
+# NOT a required check: it is slow and informational until a floor (--fail-under) is agreed.
+# `schedule` only runs once this file is on the default branch.
+name: Coverage
+
+on:
+    schedule:
+        - cron: "41 3 * * 1"
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: coverage-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    coverage:
+        name: coverage report
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v7
+
+            - name: Set up Python
+              uses: actions/setup-python@v7
+              with:
+                  python-version: "3.14.7"
+
+            - name: Install dependencies
+              run: python -m pip install --upgrade pip pyflakes -r requirements.txt -r requirements-dev.txt "coverage>=7.10"
+
+            - name: Tests under coverage (all layers)
+              run: python tests/qa.py coverage --out artifacts
+
+            - name: Summary
+              if: always()
+              run: |
+                  if [ -f artifacts/.coverage ]; then
+                    echo "### Coverage" >> "$GITHUB_STEP_SUMMARY"
+                    python -m coverage report --format=markdown --data-file=artifacts/.coverage >> "$GITHUB_STEP_SUMMARY" || true
+                  fi
+
+            - name: Upload coverage report
+              if: always()
+              uses: actions/upload-artifact@v7
+              with:
+                  name: coverage
+                  path: artifacts/
+                  if-no-files-found: ignore

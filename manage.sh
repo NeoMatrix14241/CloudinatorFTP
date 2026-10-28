@@ -93,6 +93,24 @@ webdav_pid_file() {
 	echo "${PID_DIR}/webdav.pid"
 }
 
+# The Version Engine worker is ALSO its own OS process (version_engine.py
+# --worker, spawned by the server). version_engine.py writes its PID here.
+ve_pid_file() {
+	echo "${PID_DIR}/version_engine.pid"
+}
+
+# Graceful-stop request file. `stop` creates it; prod_server.py / dev_server.py
+# poll for it, delete it (= "acknowledged") and shut down exactly like the
+# first Ctrl+C does. Needed because Windows cannot deliver a catchable
+# signal to a detached, console-less process.
+stop_file_for() {
+	echo "${PID_DIR}/$1.stop"
+}
+
+# Seconds `stop` waits for that graceful shutdown before forcing it.
+# Override:  STOP_GRACE_SECS=90 ./manage.sh stop
+STOP_GRACE_SECS="${STOP_GRACE_SECS:-45}"
+
 script_for() {
 	case "$1" in
 	prod) echo "prod_server.py" ;;
@@ -395,6 +413,10 @@ cmd_start() {
 	# _kill_webdav_child's own comment for the full story). Safe to call
 	# unconditionally — a no-op when nothing's actually orphaned.
 	_kill_webdav_child
+	# Same for an orphaned Version Engine worker: starting a second one would
+	# put two engines on one database (duplicate scans, "database is locked").
+	_kill_version_engine_child
+	rm -f "$(stop_file_for "$type")"
 
 	local script pid_file log
 	script=$(script_for "$type")
@@ -478,7 +500,7 @@ _kill_webdav_child() {
 		pid=$(read_pid "$pf")
 		if [[ -n "$pid" ]]; then
 			if is_windows; then
-				taskkill //F //PID "$pid" &>/dev/null || true
+				taskkill //F //T //PID "$pid" &>/dev/null || true
 			else
 				kill "$pid" 2>/dev/null || true
 				local i=0
@@ -577,46 +599,160 @@ _pid_is_python() {
 	fi
 }
 
+# ── Process-tree helpers ──────────────────────────────────────────────────────
+# True while PID is a live python process.
+_pid_alive() {
+	local pid="$1"
+	[[ -n "$pid" ]] || return 1
+	if is_windows; then
+		tasklist //FI "PID eq ${pid}" //NH 2>/dev/null | grep -qi "python"
+	else
+		kill -0 "$pid" 2>/dev/null
+	fi
+}
+
+# Hard-kill PID AND everything it started. Plain `taskkill //F //PID` (what
+# `stop` used before) and a plain `kill` only hit that one process, so the
+# Version Engine and WebDAV children survived as orphans.
+#   Windows : taskkill //F //T  (kill tree)
+#   POSIX   : the launcher used setsid, so the server is its own process-group
+#             leader (PGID == PID) and the children share that group:
+#             `kill -9 -- -PID` takes the whole group.
+_kill_tree() {
+	local pid="$1"
+	[[ -n "$pid" ]] || return 0
+	if is_windows; then
+		taskkill //F //T //PID "$pid" &>/dev/null || true
+	else
+		kill -9 -- "-${pid}" 2>/dev/null || true
+		kill -9 "$pid" 2>/dev/null || true
+	fi
+	return 0
+}
+
+# Wait up to $2 seconds for PID $1 to exit. Optional $3 = stop-request file:
+# a current server deletes it within ~0.5 s of seeing it; if it is still
+# there after 6 s the running server predates this feature (it never reads
+# the file), so give up waiting at once instead of idling for the full grace.
+# Returns 0 = exited, 1 = still running.
+_wait_for_exit() {
+	local pid="$1" max="$2" stopfile="${3:-}"
+	local ticks=0 max_ticks=$((max * 2))
+	while _pid_alive "$pid" && ((ticks < max_ticks)); do
+		sleep 0.5
+		ticks=$((ticks + 1))
+		if [[ -n "$stopfile" && -e "$stopfile" ]] && ((ticks >= 12)); then
+			warn "Server ignored the stop request (started before this manage.sh version?)."
+			break
+		fi
+	done
+	if _pid_alive "$pid"; then
+		return 1
+	fi
+	return 0
+}
+
+# PIDs of any Version Engine worker (python ... version_engine.py --worker),
+# one per line. There is no port to sweep (unlike WebDAV), so the command
+# line is the only reliable fingerprint. Never fails.
+_ve_worker_pids() {
+	local out=""
+	if is_windows; then
+		# wmic is gone from current Windows; Get-CimInstance is the replacement.
+		# Name filter: this powershell's own command line contains the pattern.
+		out=$(powershell.exe -NoProfile -NonInteractive -Command \
+			"Get-CimInstance Win32_Process | Where-Object { \$_.Name -like 'python*' -and \$_.CommandLine -like '*version_engine.py*--worker*' } | ForEach-Object { \$_.ProcessId }" \
+			2>/dev/null | tr -d '\r') || true
+	elif command -v pgrep &>/dev/null; then
+		out=$(pgrep -f -- 'version_engine\.py.* --worker' 2>/dev/null) || true
+	else
+		out=$(ps -eo pid,args 2>/dev/null | grep -E 'version_engine\.py.* --worker' | grep -v grep | awk '{print $1}') || true
+	fi
+	out="${out//[^0-9$'\n']/}"
+	printf '%s\n' "$out" | grep -v '^$' | grep -vx "$$" || true
+}
+
+# Kill the Version Engine worker: pid file first (tree kill), then every
+# process whose command line says it is a worker. Safe no-op when none run.
+_kill_version_engine_child() {
+	local pf pid p
+	pf=$(ve_pid_file)
+	if [[ -f "$pf" ]]; then
+		pid=$(read_pid "$pf")
+		if [[ -n "$pid" ]] && _pid_is_python "$pid"; then
+			_kill_tree "$pid"
+		fi
+		rm -f "$pf"
+	fi
+	for p in $(_ve_worker_pids); do
+		if _pid_is_python "$p"; then
+			_kill_tree "$p"
+		fi
+	done
+	return 0
+}
+
 # ── cmd_stop ──────────────────────────────────────────────────────────────────
+# Mirrors prod_server.py's two Ctrl+C stages:
+#   1. graceful  - ask the server to shut down (stop file, plus SIGTERM for the
+#                  production server on POSIX) and wait up to STOP_GRACE_SECS.
+#                  The server then stops WebDAV, SFTP/FTP/SMB and the Version
+#                  Engine itself (its `finally:` block).
+#   2. forced    - if it is still alive, kill the whole process tree.
+# Either way the leftovers sweep afterwards makes sure no WebDAV process or
+# Version Engine worker is left behind (pid file + port / command-line sweeps).
 cmd_stop() {
 	local type
 	type=$(active_server)
 
 	if [[ -z "$type" ]]; then
-		warn "No server is currently running."
+		# The tracked server is gone, but its children can outlive it.
+		local stray
+		stray="$(_ve_worker_pids)"
+		if [[ -n "$stray" || -f "$(ve_pid_file)" || -f "$(webdav_pid_file)" ]]; then
+			warn "No server is running, but leftover helper processes or PID files were found."
+			info "Cleaning up WebDAV / Version Engine leftovers…"
+			_kill_webdav_child
+			_kill_version_engine_child
+			success "Leftovers cleaned up."
+		else
+			warn "No server is currently running."
+		fi
 		return 0
 	fi
 
-	local pid_file pid script
+	local pid_file pid script stopfile
 	pid_file=$(pid_file_for "$type")
 	pid=$(read_pid "$pid_file")
 	script=$(script_for "$type")
+	stopfile=$(stop_file_for "$type")
 
 	info "Stopping ${BOLD}${script}${NC} (PID ${pid})…"
 
-	if is_windows; then
-		# taskkill with the real Windows PID — immediate and reliable
-		taskkill //F //PID "$pid" &>/dev/null ||
-			kill -9 "$pid" 2>/dev/null ||
-			true
-		sleep 0.3
-	else
+	mkdir -p "$PID_DIR"
+	: >"$stopfile"
+	# POSIX production server: SIGTERM is handled as a graceful stop. (Not for
+	# dev_server: Quart's own SIGTERM handling would skip its cleanup.) An older
+	# server that predates this feature simply dies from it; the sweeps below
+	# then clean up its children.
+	if [[ "$type" == "prod" ]] && ! is_windows; then
 		kill "$pid" 2>/dev/null || true
-		local i=0
-		while kill -0 "$pid" 2>/dev/null && ((i < 10)); do
-			sleep 0.5
-			i=$((i + 1))
-		done
-		if kill -0 "$pid" 2>/dev/null; then
-			warn "Process did not exit gracefully — sending SIGKILL…"
-			kill -9 "$pid" 2>/dev/null || true
-		fi
 	fi
 
-	rm -f "$pid_file"
+	info "Waiting up to ${STOP_GRACE_SECS}s for a graceful shutdown (WebDAV, SFTP/FTP/SMB, Version Engine)…"
+	if _wait_for_exit "$pid" "$STOP_GRACE_SECS" "$stopfile"; then
+		success "Server shut down gracefully."
+	else
+		warn "Server did not exit gracefully — forcing the whole process tree down (like a second Ctrl+C)…"
+		_kill_tree "$pid"
+		sleep 0.3
+	fi
 
-	# Clean up the orphaned WebDAV child — see _kill_webdav_child above.
+	rm -f "$stopfile" "$pid_file"
+
+	# Whatever the shutdown path was, make sure nothing is left behind.
 	_kill_webdav_child
+	_kill_version_engine_child
 
 	success "${script} stopped."
 }
@@ -1216,6 +1352,64 @@ _menu_validate_sri() {
 	fi
 }
 
+# ── cmd_qa ────────────────────────────────────────────────────────────────────
+# Quality Assurance: every `qa` command is ONE call to tests/qa.py, the same runner the
+# GitHub "Tests" workflow uses, so "green here" and "green on GitHub" mean the same commands
+# ran. Safe while a server is running: the pytest layers copy the project into a temp folder
+# and start their own server there on a free port; they never touch the real db/, cache/,
+# versions/ or storage folders and never import the real app. A failing step makes qa.py exit
+# 1, which run_utility reports and returns, so `./manage.sh qa quick || exit 1` works in a
+# hook or script. Modes: quick | static | tests | layer <name> | ci | audit | coverage (+ --version / --help);
+# `audit` (pip-audit, needs network and `pip install pip-audit`) and `coverage` (coverage.py,
+# `pip install "coverage>=7.10"`) are not part of quick or ci.
+# extra flags (--skip-packages, --out DIR, --fail-fast, --path DIR, --fail-under N) go straight to qa.py.
+cmd_qa() {
+	local mode="${1:-quick}"
+	if (($# > 0)); then shift; fi
+	case "$mode" in
+	quick | static | tests | ci | layer | audit | coverage | --version | --help | -h)
+		run_utility "tests/qa.py" "$mode" "$@"
+		;;
+	*)
+		error "Unknown qa mode: ${mode}  (use: quick | static | tests | layer <name> | ci | audit | coverage)"
+		return 2
+		;;
+	esac
+}
+
+# Menu flavour of `qa layer` (menu #24): asks which layer, default unit. An unknown name is
+# reported by qa.py itself (exit code 2 with the list of valid layers).
+_menu_qa_layer() {
+	local layer=""
+	_ask layer "  Layer: unit / integration / application / protocols / property / reliability / performance / frontend [unit]: " || return 130
+	layer="${layer:-unit}"
+	cmd_qa layer "$layer"
+}
+
+# ── cmd_smoke ─────────────────────────────────────────────────────────────────
+# tests/smoke.py is the fast static safety net (syntax, pyflakes, routes, hooks, imports,
+# manage.sh). It only READS source files, so it is safe while a server runs. Everything typed
+# after the command goes straight to it: --save (write the route snapshot
+# tests/smoke_routes.json), -v (print the route table), --files (list the scanned files).
+# smoke.py exits 1 on a FAIL, and run_utility returns that code.
+cmd_smoke() {
+	run_utility "tests/smoke.py" "$@"
+}
+
+# Menu flavour of `smoke --save` (menu #27). The snapshot is the baseline that check 11
+# compares against: saving it after a route was lost BY MISTAKE would hide the loss for good,
+# so ask first. Enter / n / Ctrl-D / Ctrl-C leave tests/smoke_routes.json untouched. (smoke.py
+# runs all its checks before it saves, so the report is on screen either way.)
+_menu_smoke_save() {
+	warn "This overwrites tests/smoke_routes.json with the routes the code has NOW."
+	info "Do it only after a green smoke run, and only when every added or removed route is intended."
+	if _confirm "Save the route snapshot?"; then
+		cmd_smoke --save
+	else
+		info "Left unchanged. Save later with: ./manage.sh smoke --save"
+	fi
+}
+
 # ── cmd_dashboard ─────────────────────────────────────────────────────────────
 cmd_dashboard() {
 	header "Cloudinator — Server Manager"
@@ -1267,6 +1461,7 @@ cmd_dashboard() {
 	echo ""
 	echo -e "  ${DIM}Run  ./manage.sh help  for all commands${NC}"
 	echo -e "  ${DIM}Run  ./manage.sh menu  for interactive mode${NC}"
+	echo -e "  ${DIM}Run  ./manage.sh qa quick  to run every automated check${NC}"
 	echo ""
 }
 
@@ -1356,7 +1551,7 @@ cmd_menu() {
 		echo "  16) setup_pymodules.sh  — Setup and Update Python packages"
 		echo "  17) revoke_sharing.py   — Share link management (links, passkeys, approvals)"
 		echo "  18) security.txt        — Update static/.well-known/security.txt"
-		# Always listed so the menu numbers match `./manage.sh help` (20 entries).
+		# Always listed so the menu numbers match `./manage.sh help` (27 entries).
 		# Off Termux, cmd_termux_setup just explains that it is Android-only.
 		if is_termux; then
 			echo "  19) termux_setup.sh     — Termux initial setup (Android only)"
@@ -1364,6 +1559,19 @@ cmd_menu() {
 			echo -e "  ${DIM}19) termux_setup.sh     — Termux initial setup (Android only — n/a on this system)${NC}"
 		fi
 		echo "  20) sri_validator.py    — Check SRI hashes in templates (offers to fix)"
+		echo ""
+		echo -e "  ${BOLD}Quality Assurance${NC}  ${DIM}(runs tests/qa.py; safe while a server runs)${NC}"
+		echo "  21) qa quick            — smoke + check + SRI + JS syntax + all automated tests"
+		echo "  22) qa static           — smoke + check + SRI + JS syntax only (no pytest)"
+		echo "  23) qa tests            — pytest on every layer folder (unit, application, ...)"
+		echo "  24) qa layer            — run ONE layer (asks which)"
+		echo "  25) qa ci               — quick + JUnit XML in ./artifacts (what GitHub runs)"
+		echo ""
+		echo -e "  ${BOLD}Developer Tools${NC}  ${DIM}(files in tests/; safe while a server runs)${NC}"
+		echo "  26) dir_tree.py         — Regenerate docs/DIRECTORY_TREE.md (project folder tree)"
+		echo "  27) smoke.py --save     — Save the route snapshot tests/smoke_routes.json (asks first)"
+		echo "  28) qa audit            — pip-audit on the installed packages (needs network; not part of qa quick)"
+		echo "  29) qa coverage         — every test layer under coverage.py (slow; not part of qa quick)"
 		echo ""
 		echo "   q) Quit"
 		echo ""
@@ -1398,6 +1606,15 @@ cmd_menu() {
 		18) _menu_run cmd_security_txt ;;
 		19) _menu_run cmd_termux_setup ;;
 		20) _menu_run _menu_validate_sri ;;
+		21) _menu_run cmd_qa quick ;;
+		22) _menu_run cmd_qa static ;;
+		23) _menu_run cmd_qa tests ;;
+		24) _menu_run _menu_qa_layer ;;
+		25) _menu_run cmd_qa ci ;;
+		26) _menu_run run_utility "tests/dir_tree.py" ;;
+		27) _menu_run _menu_smoke_save ;;
+		28) _menu_run cmd_qa audit ;;
+		29) _menu_run cmd_qa coverage ;;
 		q | Q)
 			echo ""
 			success "Goodbye!"
@@ -1426,7 +1643,13 @@ ${BOLD}USAGE${NC}
 ${BOLD}SERVER COMMANDS${NC}  (mutually exclusive — only one server at a time)
   start  server         Start production server (hypercorn) in the background
   start  dev_server     Start dev server (quart) in the background
-  stop                  Gracefully stop the running server
+  stop                  Stop the running server: asks it to shut down gracefully
+                          first (like the first Ctrl+C: stops WebDAV, SFTP/FTP/SMB
+                          and the Version Engine), waits up to STOP_GRACE_SECS
+                          (default 45), then kills the whole process tree (like a
+                          second Ctrl+C) and sweeps any leftover WebDAV / Version
+                          Engine process. Also cleans up leftovers when no server
+                          is running.
   restart               Restart the currently active server
   restart-webdav        Restart ONLY WebDAV (recovers a wedged/stuck WebDAV
                           listener without touching the main server — see
@@ -1494,6 +1717,38 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
                           under static/, then reload each page once.
   termux-setup          bash termux_setup.sh  (Android/Termux only)
 
+${BOLD}QUALITY ASSURANCE COMMANDS${NC}  (foreground; safe to run while a server is up — the tests use a scratch copy)
+  Every qa command is one call to python tests/qa.py, the runner GitHub uses too. Extra
+  arguments go straight to it (--skip-packages, --out DIR, --fail-fast). Exit code 1 if any
+  step failed. Needs the test packages once: python -m pip install -r requirements-dev.txt
+  qa [quick]            smoke.py + check.py + SRI check + node --check on first-party JS
+                          (skipped if node is not installed) + every pytest layer folder
+  qa static             only the static checks (no pytest)
+  qa tests              only pytest, on every tests/<layer> folder that exists
+  qa layer <name>       one layer: unit | integration | application | protocols | property |
+                          reliability | performance | frontend
+  qa ci                 quick, with JUnit XML written to ./artifacts (what GitHub runs)
+  qa audit              pip-audit on the installed packages (python -m pip install pip-audit; needs
+                          network; NOT part of quick / ci; accepted findings: tests/audit_ignore.txt)
+  qa coverage           all test layers under coverage.py (python -m pip install "coverage>=7.10");
+                          report + artifacts/coverage.xml + artifacts/htmlcov; --fail-under N;
+                          NOT part of quick / ci (slow; on Windows server code reads too low)
+  qa --version          which copy of tests/qa.py you have
+
+${BOLD}DEVELOPER TOOLS COMMANDS${NC}  (foreground; safe while a server is up — they only read source files and folder names)
+  dir-tree              python tests/dir_tree.py — print the project folder tree and save it
+                          to docs/DIRECTORY_TREE.md (vendored pdf.js / video.js / Font Awesome
+                          folders are listed but not walked). Takes no options. Run it after
+                          files are added, moved or removed, then commit the result.
+  smoke [options]       python tests/smoke.py — fast static safety net: syntax, pyflakes,
+                          routes, hooks, imports, manage.sh. No options = run the checks
+                          (exit code 1 if any check FAILs). Options go straight to smoke.py:
+                          --save    write the route snapshot tests/smoke_routes.json (menu #27
+                                    asks y/N first). Use it after a green run when a route was
+                                    added or removed ON PURPOSE.
+                          -v        also print the route table
+                          --files   list every .py file that was scanned
+
 ${BOLD}OTHER${NC}
   dashboard             Status overview + quick commands (default with no args)
   menu                  Interactive menu
@@ -1507,7 +1762,11 @@ ${BOLD}MENU ↔ COMMAND MAP${NC}  (in ./manage.sh menu type the number; from the
   13  manage-users          14  reset-db             15  setup-storage
   16  update-modules        17  revoke-shares        18  security-txt
   19  termux-setup (Android/Termux only; shown dimmed elsewhere)
-  20  validate-sri         q  quit
+  20  validate-sri
+  21  qa quick             22  qa static             23  qa tests
+  24  qa layer (asks)      25  qa ci                 26  dir-tree
+  27  smoke --save (asks y/N first)                  28  qa audit (pip-audit; needs network)
+  29  qa coverage (slow)                              q  quit
 
 ${BOLD}EXAMPLES${NC}
   Servers
@@ -1559,6 +1818,22 @@ ${BOLD}EXAMPLES${NC}
     ./manage.sh security-txt show                # print the current security.txt
     ./manage.sh security-txt --contact you@example.com --expires 2030-09-03 --preferred-lang en,fil --canonical https://yourdomain.com/.well-known/security.txt
     ./manage.sh security-txt --expires-in-days 365     # only change Expires (1 year from now, UTC)
+  Quality Assurance
+    ./manage.sh qa                               # same as: qa quick
+    ./manage.sh qa quick                         # smoke + check + SRI + JS syntax + every pytest layer
+    ./manage.sh qa static                        # only the static checks (no pytest)
+    ./manage.sh qa tests                         # only pytest, every layer folder that exists
+    ./manage.sh qa layer unit                    # one layer (unit | integration | application | ...)
+    ./manage.sh qa ci                            # quick + JUnit XML in ./artifacts (what GitHub runs)
+    ./manage.sh qa audit                         # pip-audit on the installed packages (network)
+    ./manage.sh qa coverage                      # all layers under coverage.py (slow)
+    ./manage.sh qa quick --fail-fast             # stop at the first failing step
+    ./manage.sh qa --version                     # which tests/qa.py you have
+  Developer Tools
+    ./manage.sh dir-tree                         # regenerate docs/DIRECTORY_TREE.md
+    ./manage.sh smoke                            # run the fast static checks
+    ./manage.sh smoke --save                     # accept the current routes as the new snapshot
+    ./manage.sh smoke -v                         # run the checks and print the route table
   Other
     ./manage.sh menu                             # interactive mode
     ./manage.sh help                             # this text
@@ -1585,6 +1860,9 @@ ${BOLD}CTRL-C${NC}
 ${BOLD}ENVIRONMENT${NC}
   PYTHON   Python interpreter to use (default: python, else python3, from PATH)
            e.g.  PYTHON=python3.11 ./manage.sh start server
+  STOP_GRACE_SECS
+           Seconds 'stop' waits for the graceful shutdown before forcing it
+           (default 45)   e.g.  STOP_GRACE_SECS=90 ./manage.sh stop
 
 EOF
 }
@@ -1614,6 +1892,9 @@ main() {
 	security-txt) cmd_security_txt "$@" ;;
 	termux-setup) cmd_termux_setup ;;
 	validate-sri) cmd_validate_sri "$@" ;;
+	qa) cmd_qa "$@" ;;
+	dir-tree) run_utility "tests/dir_tree.py" "$@" ;;
+	smoke) cmd_smoke "$@" ;;
 	menu) cmd_menu ;;
 	dashboard) cmd_dashboard ;;
 	help | --help | -h) cmd_help ;;

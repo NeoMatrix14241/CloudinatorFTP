@@ -137,6 +137,7 @@ Authentication is intentionally SQLite-based and not file-based.
 - get_role()
 - login_user()
 - logout_user()
+- revoke_current_session()
 - current_user()
 - is_logged_in()
 
@@ -150,12 +151,15 @@ The app uses Quart session state and stores a server token in the DB. This ensur
 - deleted users are automatically logged out
 - server token rotation invalidates active sessions
 - login state is checked consistently by middleware and route handlers
+- a logged-out session stays logged out: logout records the session id in the `revoked_sessions` table and `is_logged_in()` refuses it (5.17)
 
 ### 5.3 Logout and the Clear-Site-Data header
 
 [../routes/login.py](../routes/login.py) sends `Clear-Site-Data: "executionContexts"` only, on `GET /login` and on `/logout`, and only over HTTPS. The directives `"cache"`, `"cookies"`, `"storage"` and `"*"` were removed in 4.89: in the owner's measurements they made the browser do synchronous clearing work (a 3-15 s logout), while `"executionContexts"` takes 0.1-0.5 s. Do not add them back without measuring logout time again in Chrome and Edge.
 
 What replaced them: the cache policy is `Cache-Control: no-cache, no-store, must-revalidate` (set by the logout route and, for every authenticated response, by `after_request` in [../middleware.py](../middleware.py)); the session and cookies are removed by `session.clear()` and `delete_cookie()` in the logout route. Not cleared any more: `localStorage`, `sessionStorage` and IndexedDB of the site, so keep secrets out of them.
+
+**Logout ends the session on the server (5.17).** The session is a signed cookie, so `session.clear()` only empties the copy in the browser that logs out; a copy of the old cookie stays valid until it expires. The logout route therefore calls `revoke_current_session()` in [../auth.py](../auth.py) BEFORE `session.clear()` (the id lives in the session); it stores `session["session_id"]` in the `revoked_sessions` table ([../database.py](../database.py), `db.revoke_session()`), and `is_logged_in()` refuses any cookie whose id is listed there (`db.is_session_revoked()`). Rules: `/login` must keep setting a fresh `session["session_id"]` (a session without an id cannot be ended); any new code path that ends a session on purpose (an admin kick, a password change) should call `revoke_current_session()` or `db.revoke_session(id)` too; `revoke_current_session()` never raises, so a database problem cannot block a logout. Rows are purged after 30 days (`REVOKED_SESSION_KEEP_SECS`), which must stay longer than `PERMANENT_SESSION_LIFETIME`. The unit tests are `tests/unit/test_session_revocation.py`; the end-to-end check is `tests/application/test_login.py`.
 
 After changing login or logout code, test by hand: log in, open a folder, log out, press Back (private data must not appear) and time `GET /logout` in the browser's network tab.
 
@@ -321,6 +325,23 @@ Large file handling is managed through the upload system.
 
 This allows the browser to monitor a large upload rebuild without blocking the main request loop.
 
+### 10.3 Upload ids and chunk keys
+
+The browser names each upload with an id (`generateFileId` in [../static/js/index.js](../static/js/index.js): `fid_<counter>_<file size>_<16 random hex>`). That id is only unique inside one page, so the server never uses it as it is: [../routes/uploads.py](../routes/uploads.py) builds a **chunk key** `<first 16 hex of sha256(session_id)>_<client id>` (`_chunk_key`) and uses the key for the `.chunks/<key>/` folder, `chunk_tracker`, `assembly_queue` (`job.file_id` is the key), the metadata file, the cleanup and cancel routes, `/api/protect_assembly/<id>` and the status routes. Rules when touching this code:
+
+- Any new code that takes an upload id from a request must go through `_valid_client_upload_id()` and `_chunk_key()`; never join a request value into a path or look it up in `assembly_queue` / `chunk_tracker` directly. A session without a `session_id` has no key.
+- Responses and URLs carry the client id, not the key (`_client_file_id()` maps back); the front end does not know the key exists.
+- The client id is at most 128 characters so the key stays within the 200 characters allowed by `storage.is_safe_chunk_id()`.
+- Chunk folders of the same upload from older server versions have no prefix; the age-based cleanup removes them.
+
+### 10.4 When the assembly starts
+
+`/upload` calls `storage.chunks_complete(key, total_chunks)` after every saved chunk and queues the assembly when chunk files `0..total-1` are all present, in whatever order they arrived (the last chunk is checked first, so an in-order upload scans once, at its end). A retried chunk while the job is pending or processing queues nothing. `storage.assemble_chunks(..., total_chunks)` re-verifies the announced count, so a folder with a different number of chunk files is never published. Pure helpers of this section are covered by `tests/unit/test_upload_chunk_keys.py`, the behaviour by `tests/application/test_upload_integrity.py`. Since 5.38 `storage.assemble_chunks` writes the chunks to a hidden `.assembling_<hex>.part` file in the target folder, checks its size and publishes it with `os.replace`, so no reader ever sees a partial file and a failed assembly never touches an existing file of the same name (it removes only the temp file); keep any change to the assembly atomic, and keep the temp file in the target's folder.
+
+### 10.5 Recovering uploads at startup
+
+`detect_ready_assemblies()` in [../routes/uploads.py](../routes/uploads.py) re-queues uploads that were complete when the server stopped. A folder under `.chunks/` is assembled only when it has a usable `.metadata` (`_read_upload_metadata()`: non-empty `filename`, string `dest_path`, integer `total_chunks >= 1`; `/upload` writes it only once every chunk is on disk), the destination passes `storage.is_safe_path()`, and `storage.verify_chunks_complete(id, total_chunks)` finds exactly that many sequential chunks. Folders without metadata, or with a different chunk count, are skipped and removed later by the age-based orphan cleanup; never assemble "whatever is there" (5.17: that used to publish truncated `recovered_file_...` files). Covered by `tests/unit/test_recover_uploads.py`.
+
 ## 11. Previewing, media conversion, and HLS
 
 The app supports preview generation for media and document types.
@@ -368,6 +389,8 @@ The project can expose file access through alternate protocols in addition to th
 
 Some services are started as background threads in-process; WebDAV is separated into its own process for resilience and recovery, as described in the module comments and the architecture notes. This is a deliberate choice to avoid a wedged WebDAV loop taking down the entire app. The Version Engine ([../version_engine.py](../version_engine.py)) is also a separate OS process, started by the launcher (`version_engine.start()` in [../dev_server.py](../dev_server.py) / [../prod_server.py](../prod_server.py)) independently of `protocol_manager.py`.
 
+**Shutdown contract (4.99).** Every separate OS process the server spawns must die with it, however the server ends: (1) graceful: `./manage.sh stop` creates `.manage_pids/prod.stop` / `dev.stop` (prod also gets SIGTERM on POSIX), the launcher shuts down like the first Ctrl+C and its `finally:` block calls `protocol_manager.stop_all()` and `version_engine.stop()`; (2) forced: after `STOP_GRACE_SECS` (default 45) `manage.sh` kills the whole process tree (`taskkill //F //T`, or `kill -9 -- -PGID`); (3) sweeps: pid files plus the WebDAV port sweep and a `version_engine.py --worker` command-line sweep; (4) orphan guard: the children watch `CLOUDINATOR_PARENT_PID` via [../helpers/parent_watch.py](../helpers/parent_watch.py) and exit if the parent vanishes. A new child process must be added to all four.
+
 ## 14. Front-end structure
 
 The frontend is served directly from [../templates](../templates) and [../static](../static).
@@ -401,11 +424,24 @@ The project is security-conscious about browser policy. The inline style hash an
 
 ### 15.2 SRI validation
 
-The project includes a validator for static asset integrity checks. See [../tools/sri_validator.py](../tools/sri_validator.py) and the manage.sh entry for validate-sri.
+The project includes a validator for static asset integrity checks. See [../tools/sri_validator.py](../tools/sri_validator.py) and the manage.sh entry for validate-sri. An SRI hash is computed over the raw bytes of the file, so the repository is LF everywhere (see 19.1); `python tests/qa.py ci` runs the check on GitHub, and a stale hash fails that run. After editing anything under `static/` or `templates/` run `./manage.sh validate-sri --fix` and commit the templates together with the asset.
 
 ### 15.3 Security.txt and robots
 
 The app exposes metadata endpoints for crawlers and security scanners through [../routes/site_meta.py](../routes/site_meta.py) and the static security file under [../static/.well-known/security.txt](../static/.well-known/security.txt).
+
+### 15.4 Client IP and the login lockout
+
+`get_client_ip()` in [../core.py](../core.py) feeds the login lockout (`RateLimiter`) and the request logger. It reads `CF-Connecting-IP` (then `X-Forwarded-For`) **only when `request.remote_addr` is loopback** (`_TRUSTED_PROXY_NETWORKS`; cloudflared connects from loopback); every other peer is identified by its real address, so a client that reaches the port directly cannot choose its own lockout bucket. A reverse proxy on another machine must be added to `_TRUSTED_PROXY_NETWORKS`, otherwise all its users share one bucket. Tests connect from loopback, so their fake `CF-Connecting-IP` header still works (18.x test rules); the rule itself is covered by `tests/unit/test_client_ip_trust.py`. `webdav_server.py` has its own `_client_ip()` for its audit log (it is not a lockout); since 5.21 it applies the same rule (headers only from a loopback `REMOTE_ADDR`, helper `_is_loopback_peer()`), covered by `tests/unit/test_webdav_client_ip.py`. `RateLimiter` methods take an optional `key` (default: the client IP); `share_passkey_limiter` is a second instance used by `/shared/<token>/passkey` with the key `"<ip>|<token>"` (5 wrong passkeys in 60 s lock that client out of that link for 300 s, answered with 429 and `Retry-After`; covered by `tests/application/test_share_hardening.py` and `tests/unit/test_rate_limiter_keys.py`).
+
+### 15.5 Protocol servers: permission rules (5.29 to 5.31)
+
+- **Read the role LIVE.** A role (and the existence of the account) is read from the database at the moment of each permission decision, never once at login or tree connect: `ftp_server.py` on every command, `sftp_server.py` through `_current_role()` (also on every write to an open handle), `smb_server.py` through `_apply_role()` called by the CREATE / SET_INFO / WRITE guards, `webdav_server.py` through the 30-second `_AuthCache` (the only cache; keep it short). Fail CLOSED: an unknown user or a lookup error means `readonly`.
+- **No session without credentials.** `smb_server._install_guest_block()` turns impacket's guest and anonymous sessions into `STATUS_LOGON_FAILURE`; do not remove it when upgrading impacket without re-running `tests/protocols/test_smb_protocol.py`.
+- **Containment uses path components, not string prefixes.** impacket's `isInFileJail` (a `commonprefix` check) is replaced by `smb_server._is_in_file_jail` (`commonpath` + `realpath` + `normcase`). Never write `startswith(root)` or `commonprefix` for a containment check: `/data/storage_backup` starts with `/data/storage`.
+- **Hypercorn binds.** `webdav_server._listener_binds()` decides `bind` / `insecure_bind`: `insecure_bind` is only honoured when TLS is configured, so a plain-only listener goes into `bind`.
+- Branch rules: `main` and `dev` require a pull request and the checks `smoke + check` and `behavioral tests` (`docs/rulesets/`); never rename those two jobs in `tests.yml`.
+- Every rule above has a test in `tests/protocols/` (or `tests/unit/test_webdav_listener_binds.py`); a protocol change needs a restart of the server.
 
 ## 16. Utilities and project tooling
 
@@ -429,6 +465,7 @@ Examples include:
 The helper folder contains utility modules with leaf-style responsibilities:
 
 - [../helpers/net_utils.py](../helpers/net_utils.py)
+- [../helpers/parent_watch.py](../helpers/parent_watch.py)
 - [../helpers/lanman_guard.py](../helpers/lanman_guard.py)
 - [../helpers/hypercorn_ssl_fix.py](../helpers/hypercorn_ssl_fix.py)
 - [../helpers/ssl_cert.py](../helpers/ssl_cert.py)
@@ -447,6 +484,8 @@ These are not the app logic itself, but they are critical for development, insta
 
 ## 18. Testing philosophy and validation
 
+> **`docs/TESTING_STRATEGY.md` is tracked for now** and is updated with every testing change. Once ALL the CI / testing phases are 100% implemented the owner will add it to `.gitignore` and keep it only on his machine; from then on do not assume it is on GitHub, do not link to it from a committed document, do not `git add -f` it and do not record a fact only there (the facts live in `docs/CLAUDE.md`, in this section, in the test docstrings and in `python tests/qa.py --help`). Check which state applies with `git ls-files docs/TESTING_STRATEGY.md` (a path printed = tracked). If it is in `.gitignore` but still tracked, `git rm --cached docs/TESTING_STRATEGY.md` once.
+
 The project's automated checks are static: they read the source and do not start the app. Examples include:
 
 - [../tests/smoke.py](../tests/smoke.py)
@@ -463,19 +502,37 @@ The project’s internal notes in [../docs/CLAUDE.md](../docs/CLAUDE.md) describ
 
 This is especially important because the app is intentionally designed as a single app object with many route modules.
 
+Since 5.00 there is also a behavioral **pytest** suite next to the static checks (Phase 1 of the test plan: `tests/conftest.py`, `tests/unit/`, `tests/application/`, run through `python tests/qa.py`). It is deliberately built around two rules:
+
+- **Never import the application in the pytest process.** `paths.py` and `config.py` read their JSON next to the code and `core.py` starts the file monitor, search crawler and cleanup threads at import. The suite therefore copies the source tree into a temporary folder, writes fresh `storage_config.json` / `server_config.json` that point inside it (all protocols, search, ffmpeg, libvips and the Version Engine off, ephemeral port), checks that every data path resolves inside that folder, and starts `dev_server.py` there as a subprocess (stopped through the same `.manage_pids/dev.stop` file `manage.sh` uses). Tests talk to it over HTTP. In-process imports from the real tree are limited to side-effect-free leaf modules (today only `paths`); an autouse guard in `tests/conftest.py` fails any test that imports another root module.
+- **Test files in subfolders are not exempt from `smoke.py`.** The `tests/` exemption in checks 4, 5 and 6b covers only files directly in `tests/`. A file in `tests/unit/` or `tests/application/` that contains `import app`, a quoted `url_for('x')` / `request.endpoint == 'x'` for an unknown endpoint, or a hook/route decorator fails the smoke test. Use literal URLs in tests.
+
+Rules for application tests (`tests/application/`, written against the real app through `scratch_server`):
+
+- Use `server.client()` or `server.login_as("qa_writer" | "qa_reader")` so every test has its own fake client IP (`CF-Connecting-IP`) and therefore its own login rate-limit bucket; never reuse a client across tests.
+- Create throw-away accounts with `server.make_user(role)` and change the scratch database with `server.db(code, *args)` (`db` is `database.db`); never touch the real database.
+- Fetch the CSRF token BEFORE invalidating a session: a request to the public `/csrf-token` runs the session hooks and clears the cookie of a deleted user.
+- A new public route must be added to `PUBLIC_ENDPOINTS` in `tests/application/test_authorization.py` on purpose (and to the public list in `validate_session`); a new mutating route belongs in `READONLY_REFUSED`.
+- Test files cannot import `conftest`; repeat small constants or use a fixture.
+- Slow end-to-end tests live in `tests/performance/` and are skipped unless `CLOUDINATOR_SLOW_TESTS=1` is set (`CLOUDINATOR_SLOW_TESTS=1 python tests/qa.py layer performance`); never put a test that takes more than a few seconds in the default layers.
+- Containment tests (`test_path_containment.py`) state the DESIRED behaviour. A confirmed hole is kept visible with `xfail(strict=True)` and a one-line reason that points to the sync note; when the hole is fixed the test XPASSes and the run fails until the marker is removed. Create per-test names (`outside_<tag>.txt`, `storage_<tag>`) so tests never collide, and poll (`_wait_for`) for background jobs instead of sleeping blindly.
+
+Test-only packages live in `requirements-dev.txt` (never in `requirements.txt` / `constraints.txt`, which `setup_pymodules.sh` rewrites): `python -m pip install -r requirements-dev.txt`.
+
 ### 18.1 Automated checks on GitHub (dev and main)
 
 Two GitHub Actions workflows run on every push and pull request to `main` and `dev`:
 
-- [../.github/workflows/tests.yml](../.github/workflows/tests.yml) installs only `pyflakes` and runs `python tests/smoke.py` and `python tests/check.py -q --skip-packages`: the same static checks as on a developer machine, nothing is imported or started. `--skip-packages` hides "package not installed" warnings because the runner does not install `requirements.txt`.
+- [../.github/workflows/tests.yml](../.github/workflows/tests.yml) installs only `pyflakes` and runs `python tests/smoke.py` and `python tests/check.py -q --skip-packages`: the same static checks as on a developer machine, nothing is imported or started. `--skip-packages` hides "package not installed" warnings because the runner does not install `requirements.txt`. A second job, `behavioral tests` (informational for now: `continue-on-error: true`; it needs `smoke + check` first), installs `requirements.txt` and `requirements-dev.txt` and runs `python tests/qa.py ci` (static checks, SRI, `node --check`, pytest; JUnit XML is uploaded as the `test-results` artifact). Keep the `smoke + check` job name unchanged: branch protection may require it.
 - [../.github/workflows/codeql.yml](../.github/workflows/codeql.yml) runs CodeQL for Python and JavaScript and keeps the raw SARIF files. It converts them to CSV with [../tests/codeql_sarif_parser.py](../tests/codeql_sarif_parser.py) and uploads the artifacts `sarif-artifact-<language>`, `codeql-csv-<language>` and the combined `codeql-findings-csv`. Vendored third-party files are excluded through [../.github/codeql/codeql-config.yml](../.github/codeql/codeql-config.yml); keep that list in step with `VENDORED` in the parser.
 
 Rules:
 
-- Run `python tests/smoke.py` and `python tests/check.py` locally before pushing; fix a red Tests run, do not bypass it.
+- Run `python tests/smoke.py` and `python tests/check.py` locally before pushing; fix a red Tests run, do not bypass it. For a change that has tests, also run `python tests/qa.py quick` (or one layer: `python tests/qa.py layer unit`).
 - The advanced CodeQL workflow cannot run while the repository's CodeQL "default setup" is enabled; disable the default setup first.
 - Parse downloaded results by hand with `python tests/codeql_sarif_parser.py <artifact.zip | .sarif file | folder>`; CSV files are written next to the script (add `tests/*.csv`, `tests/*.sarif` and `tests/*.zip` to `.gitignore`).
 - When a workflow, the parser's `VENDORED` list or the CodeQL config changes, update sections 18.1, 25.5, 25.8 and 27.2 together.
+- CodeQL also scans `tests/`. Rules for test code (5.37): never leave an empty `except ...: pass` (use `with contextlib.suppress(...):  # why the error is expected`); set `ctx.minimum_version = ssl.TLSVersion.TLSv1_2` right after every `ssl.create_default_context()` even when verification is switched off for a self-signed test server; bind test sockets to `127.0.0.1`, not `0.0.0.0`, EXCEPT the SMB port holder `occupy_a_port()` in `test_smb_protocol.py`, which must bind `0.0.0.0` to block the server's own wildcard bind on Windows (it takes the wildcard address from `socket.getaddrinfo(None, 0, AF_INET, SOCK_STREAM, 0, AI_PASSIVE)` so no `0.0.0.0` literal is written; if CodeQL still reports it, dismiss it as "used in tests"); a `dict` subclass that adds an attribute defines `__eq__` (and `__hash__ = None`). In upload tests wait for the expected CONTENT (`exists() and read_bytes() == expected`), never only for the file to exist.
 
 
 ## 19. Key contributor conventions
@@ -489,6 +546,19 @@ When editing this project, keep these conventions in mind:
 5. Prefer filesystem-safe operations and make sure cache/index reconciliation is consistent with the live filesystem.
 6. Distinguish between app runtime modules and helper leaf modules.
 7. Preserve the project’s design of one shared app object and one central config source.
+8. All files are LF (see 19.1). Python is Black-formatted and shell scripts are shfmt-formatted; check with `black --check <file>` and `shfmt -d <file>` before handing a file over.
+9. Commit messages describe the change; avoid generic ones such as "Renormalize with LF line endings".
+
+### 19.1 Line endings, formatters and editor setup
+
+- **LF everywhere.** `.gitattributes` has `* text=auto eol=lf`, `eol=lf` for `*.py *.sh *.js *.mjs *.css *.html *.json *.md *.txt *.ftl`, and `binary` for images, fonts, `*.wasm`, `*.pfb`, `*.bcmap`. It exists because SRI hashes are byte hashes: a CRLF working tree on Windows and an LF checkout on the GitHub runner produced different hashes and the `behavioral tests` job failed with 22 stale hashes (CLAUDE.md part 56).
+- **Fixing a stray CRLF file:** `sed -i 's/\r$//' <file>`, then `git add --renormalize .`; if it was a template asset, `./manage.sh validate-sri --fix` afterwards.
+- **Editor (VS Code, owner):** user setting `"files.eol": "\n"`; default terminal Git Bash; `[python]` formatter `ms-python.black-formatter`, `[shellscript]` formatter `mkhl.shfmt`; Alt+Shift+F formats only the file types an installed extension supports. Extensions: Better Jinja, Black Formatter, HTML CSS Support, Pylance, Python, Python Debugger, Python Environments, Python Indent, shfmt, YAML.
+- **Formatter rules for contributors (including Claude):** Black with its defaults (88 columns, no `[tool.black]` section) and shfmt with its defaults (tab indentation). The existing project files are clean under both.
+- **Develop inside a virtual environment:** `python -m venv .venv`; Git Bash on Windows `source ./.venv/Scripts/activate` (the script must be sourced, not executed); Linux, macOS and Termux `source .venv/bin/activate`; then `pip install -r requirements.txt` and, for tests and CI, `pip install -r requirements-dev.txt`. `bash setup_pymodules.sh` (or `./manage.sh update-modules`) creates and activates `.venv` itself when you answer `y`. Keep the README command tables in sync with `manage.sh`.
+- **GitHub Actions (since 5.09, Node 24):** `actions/checkout@v7`, `actions/setup-python@v7`, `actions/upload-artifact@v7`, `actions/download-artifact@v8`, `github/codeql-action/init@v4` and `analyze@v4`. Keep the major tags current (Node 20 is deprecated) and never replace a workflow file from an old copy: ask for the current one first.
+- **Quart timeouts are TOTAL-time caps, not idle timeouts:** `RESPONSE_TIMEOUT` (default 60 s) for sending a whole response and `BODY_TIMEOUT` (default 60 s) for receiving a whole request body. A transfer that can legitimately take longer than a minute (a download through the tunnel, a ZIP stream, an SSE stream, a big upload chunk on a slow uplink) is cut off mid-stream unless the cap is raised or switched off. `core.py` must set `RESPONSE_TIMEOUT=None` (the 5.11 patch); `tests/unit/test_response_timeout.py` guards it.
+- **Shell scripts under Git Bash:** never rely on `grep`, `head`, `sed` or `$(...)` to see a `\r`; use an `od` hex dump or bash `printf` escapes (see `append_req_line()` in `setup_pymodules.sh`).
 
 ## 20. Typical development flow
 
@@ -619,7 +689,13 @@ Run checks from the project root. These static checks do not import or start the
 | JavaScript asset | `node --check static/js/index.js` (substitute the edited file); `./manage.sh validate-sri` |
 | Template/static asset hashes | `./manage.sh validate-sri`; repair with `./manage.sh validate-sri --fix` |
 | `manage.sh` | `bash -n manage.sh`; `python tests/smoke.py` |
+| `requirements.txt` / `constraints.txt` | `python tests/qa.py audit` (`pip-audit` is in `requirements-dev.txt`; needs network; not part of `quick`); a finding that cannot be fixed yet goes into `tests/audit_ignore.txt` with the reason; `.github/workflows/audit.yml` repeats it weekly |
+| Anything with tests (a periodic look, not every change) | `python tests/qa.py coverage` (`coverage` is in `requirements-dev.txt`; slow; not part of `quick`); read the server numbers from the Linux workflow `.github/workflows/coverage.yml` (on Windows the harness kills the servers and their data is lost); never add `source` to `[tool.coverage.run]` in `pyproject.toml` (the subprocess servers would measure nothing) |
 | File monitor/index behavior | Run the narrow temporary-tree test for the changed behavior, then `python tests/smoke.py` |
+| Anything with pytest coverage (`paths.py`, test harness, server boot) | `python tests/qa.py quick`; one layer: `python tests/qa.py layer unit` / `layer application` (needs `requirements-dev.txt`) |
+| `setup_pymodules.sh` | `bash -n setup_pymodules.sh`; `python tests/qa.py layer unit` (covers `append_req_line()`) |
+| `manage.sh` | `bash -n manage.sh`; `shfmt -d manage.sh`; `python tests/smoke.py` (10a/10b); `python tests/qa.py layer unit` (menu-numbering tests); update the guide and `LAST_ENTRY` if the menu changed |
+| New or changed test, `tests/conftest.py` or `tests/qa.py` | `python tests/check.py tests`; `python tests/smoke.py`; `python tests/qa.py layer unit`; never import `app` / `core` / `config` in a test (see 18) |
 
 `tests/smoke.py` is read-only and checks the whole project's syntax, import/layering constraints, route registration, endpoint references, hooks, and manage.sh references. `tests/check.py` selects a smaller group/module and supports `--config`; its `--import` option really imports modules and is refused for app modules with startup side effects unless forced. Do not use `--force` on a live server.
 
@@ -672,7 +748,7 @@ This section is the file-by-file map of executable, first-party project code. Th
 | [../realtime_stats.py](../realtime_stats.py) | Storage statistics/filesystem activity SSE, polling support, initial state and missed-change catch-up. Connects file-monitor callbacks to clients. | Keep sequence/epoch/catch-up payloads aligned with `file_monitor.py`, `routes/stats.py`, and `static/js/index.js`. |
 | [../search_index.py](../search_index.py) | SQLite deep-search index manager, FTS5 trigram and LIKE fallback, crawler, incremental mutations and full-walk reconciliation. | Maintain synchronization between FTS and metadata tables, completion marker behavior, path normalization, and API pagination/count expectations. |
 | [../sftp_server.py](../sftp_server.py) | Paramiko SSH/SFTP server with host key, DB auth, rooted path mapping, permission enforcement, cipher hardening and audit logging. | Preserve containment including Windows paths/symlinks, Paramiko OS-flag interpretation, host-key stability, and readonly behavior. |
-| [../smb_server.py](../smb_server.py) | impacket SMB listener, periodic credential refresh, per-connection role enforcement, audit hooks and port fallback. | Its hooks patch/vendor internal behavior; check impacket version compatibility, Windows-specific fixes, NT hash lifecycle, and fallback port behavior. |
+| [../smb_server.py](../smb_server.py) | impacket SMB listener, periodic credential refresh, live role enforcement (tree connect, CREATE, SET_INFO, WRITE), guest/anonymous block, corrected path jail, audit hooks and port fallback. | Its hooks patch/vendor internal behavior; check impacket version compatibility, Windows-specific fixes, NT hash lifecycle, and fallback port behavior. |
 | [../storage.py](../storage.py) | Filesystem API for listing, path validation, directory info, file operations, chunk storage/assembly/cleanup and storage statistics. | Routes and protocol adapters must validate caller paths; coordinate listing changes with `file_index.py`, mutations with `file_monitor.py`, and uploads with `routes/uploads.py`. |
 | [../version_engine.py](../version_engine.py) | Parent-process lifecycle API and `--worker` engine for snapshots, content-addressed storage, restore, scan, retention and GC. | Keep the process API used by both launchers, DB/object-store schema, crash recovery, and tracking/exclusion configuration aligned. |
 | [../version_history.py](../version_history.py) | Web-facing synchronous adapter for history, restore, download, retry, deletion and in-flight restore state. | Routes offload blocking calls; web restore targets `.recovered/`, not the original file. Coordinate API/schema changes with `routes/versions.py` and `tools/version_manage.py`. |
@@ -707,6 +783,7 @@ The helpers package is intentionally made of leaf utilities; the static checks r
 | [../helpers/hypercorn_ssl_fix.py](../helpers/hypercorn_ssl_fix.py) | One-time patch to bound/handle Hypercorn TLS shutdown. | Called by production and WebDAV processes; revalidate against Hypercorn internals on dependency upgrades. |
 | [../helpers/lanman_guard.py](../helpers/lanman_guard.py) | Windows LanmanServer/elevation/port checks and pending-setup state access. | Used by SMB setup/server and DB reset paths; preserve platform guards and state format. |
 | [../helpers/net_utils.py](../helpers/net_utils.py) | Local IP discovery with fallback. | Imported by launchers/protocol servers; must stay side-effect-light and not import the app. |
+| [../helpers/parent_watch.py](../helpers/parent_watch.py) | Orphan guard for child processes: polls the PID in `CLOUDINATOR_PARENT_PID` and shuts the child down when the parent is gone. | Used by `webdav_server.py` and `version_engine.py --worker`; stdlib only, no `__file__` tricks; the parent must set the env var in every spawn (`protocol_manager._spawn_webdav_process`, `version_engine._spawn_version_engine_process`). |
 | [../helpers/ssl_cert.py](../helpers/ssl_cert.py) | Shared certificate/key creation, IP SAN discovery, path resolution, regeneration and CLI instructions. | Used by production/WebDAV/FTPS; regeneration replaces trust material and needs operator notification. |
 
 ### 25.4 Operator tools
@@ -730,9 +807,15 @@ Tools are direct-entry utilities, not application services. Avoid importing them
 |---|---|---|
 | [../tests/check.py](../tests/check.py) | Parameterized static source checks for syntax, pyflakes, project imports, import-name resolution, helper layering; optional guarded subprocess imports and JSON config checks. | AST/import heuristics are not full runtime coverage; `--import` executes modules and may have side effects when forced. |
 | [../tests/codeql_sarif_parser.py](../tests/codeql_sarif_parser.py) | Converts CodeQL SARIF files (loose, zipped artifacts or folders) to per-language and combined CSV files; skips vendored files by default; optional `--fail-on` exit code. Standard library only. | Used by `codeql.yml` and by hand; keep `VENDORED` in step with `.github/codeql/codeql-config.yml`. |
-| [../tests/dir_tree.py](../tests/dir_tree.py) | Walks a filtered directory tree (`collect_entries()`, `build_tree()`), prints it and saves it to `docs/directory_tree.txt`. | It is a diagnostic utility, not a product behavior test. It rewrites `docs/directory_tree.txt` (creating `docs/` if needed) and skips that file itself; regenerate and commit it after files are added, moved or removed. `EXCLUDE_DIR_WALK` matches folder names only. |
-| [../tests/smoke.py](../tests/smoke.py) | Read-only project safety checks: syntax, optional pyflakes, route/endpoints, hooks, import cycles/layering, route-module registration, tool launch paths, shell syntax, and route snapshot changes. | Does not import/start the app, issue HTTP requests, or test filesystem/runtime behavior. `--save` intentionally updates the route snapshot. |
+| [../tests/conftest.py](../tests/conftest.py) | Shared pytest fixtures: `build_scratch()` copies the source tree into a temp folder and writes scratch `storage_config.json` / `server_config.json`; `paths_outside()` asks the copy's own `paths.py` where it would keep data and lists anything outside the scratch folder; `scratch_server` starts `dev_server.py` there on an ephemeral port and stops it through `.manage_pids/dev.stop`; autouse guard against in-process imports of application modules. Since 5.08 also: seeded accounts `qa_writer` (readwrite) and `qa_reader` (readonly), `scratch_server.client()` / `login_as()` / `db()` / `make_user()` / `.storage`, and a cookie-aware `HttpClient` / `Reply` (no redirect following, own fake client IP per client, `api()` adds the CSRF and JSON headers). | It never runs the application in-process and does not start protocol servers or the Version Engine. |
+| [../tests/dir_tree.py](../tests/dir_tree.py) | Walks a filtered directory tree (`collect_entries()`, `build_tree()`), prints it and saves it to `docs/DIRECTORY_TREE.md`. | It is a diagnostic utility, not a product behavior test. Run it with `./manage.sh dir-tree` (menu 26); it takes no options. It rewrites `docs/DIRECTORY_TREE.md` (creating `docs/` if needed) and skips that file itself; regenerate and commit it after files are added, moved or removed. `EXCLUDE_DIR_WALK` matches folder names only. |
+| [../tests/qa.py](../tests/qa.py) | The one QA runner for developers, `manage.sh` (the `qa` command, menu 21-25) and GitHub: `static` (smoke, check, SRI, `node --check`), `tests` (pytest on every existing layer folder), `quick`, `layer <name>`, `ci` (JUnit XML to `./artifacts`); prints PASS/FAIL/SKIP per step, exit 1 on any failure (including a `layout` FAIL when a `test_*.py` file sits directly in `tests/` instead of a layer folder), never passes `--force`; `python tests/qa.py --version` prints which copy you run; the "pip install" hint appears only when pytest cannot be imported. | A SKIP (missing tool or folder) is not a pass of that check. |
+| [../tests/smoke.py](../tests/smoke.py) | Read-only project safety checks: syntax, optional pyflakes, route/endpoints, hooks, import cycles/layering, route-module registration, tool launch paths, shell syntax, and route snapshot changes. | Does not import/start the app, issue HTTP requests, or test filesystem/runtime behavior. Run it with `./manage.sh smoke [--save\|-v\|--files]`; options pass straight through. `--save` intentionally updates the route snapshot, runs all checks first and saves even if one failed; menu 27 (`smoke --save`) asks y/N before saving. |
 | [../tests/smoke_routes.json](../tests/smoke_routes.json) | Baseline route signature consumed by `smoke.py`. | Update only when route additions/removals are intended and reviewed. |
+| [../tests/unit/](../tests/unit/) | `test_paths.py` (every `paths.py` getter, setter, reset, merge-safe save, corrupt config), `test_scratch_copy.py` (the harness isolates everything and the guard catches outside paths), `test_qa_runner.py` (plan selection, exit codes, skip handling, the stray-file `layout` check), `test_setup_pymodules.py` (the `append_req_line()` function of `setup_pymodules.sh`, run in bash), `test_http_client.py` (the HTTP client and scratch helpers of `conftest.py`), `test_response_timeout.py` (parses `core.py`: Quart's 60 s `RESPONSE_TIMEOUT` must be switched off; strict xfail until the 5.11 patch is applied), `test_session_revocation.py` (logout ends the session on the server, the two `revoked_sessions` methods), `test_recover_uploads.py` (startup recovery assembles only complete uploads), `test_client_ip_trust.py` (`get_client_ip()` trusts the proxy headers only from a loopback peer), `test_webdav_client_ip.py` (the same rule for the WebDAV audit address), `test_rate_limiter_keys.py` (`RateLimiter` buckets by key), `test_revoke_code_generation.py` (the revoke-all code is made with `secrets`, never `random`), `test_upload_chunk_keys.py` (chunk keys per session and `storage.chunks_complete`), `test_manage_qa.py` (the Quality Assurance and Developer Tools sections of `manage.sh`: menu numbers 1-27 agree between listing, dispatch and help (`LAST_ENTRY` = 27); the `qa` modes; the `dir-tree` and `smoke` commands and menu 26-27; exit codes). | Not application behavior beyond `paths.py`. |
+| [../tests/protocols/](../tests/protocols/) | `conftest.py` (`protocol_lab`: scratch copy with the accounts `qa_writer` / `qa_reader`; `launch`: starts one protocol server from the copy as a separate process on an ephemeral port and stops it) `test_webdav_protocol.py` (HTTPS listener and plain fallback: Basic auth, readwrite cycle, readonly 403 on every write method, role changes after the 30 s credential cache, containment, no plaintext listener next to TLS, certificate download, HTTP/1.1 only; one strict xfail: the plain listener never opens because `insecure_bind` is ignored without TLS) and `test_sftp_protocol.py` (logins, readwrite and readonly file operations, containment, weak ciphers and MACs refused, no forwarding or commands; one strict xfail: the role is read once per session) and `test_ftp_protocol.py` (FTP fallback and FTPS: logins refused, the whole file cycle for a readwrite account, every change refused for a readonly account, roles read from the database on every command, nothing leaves the storage root, FTPS needs TLS on control and data). | Real protocol servers over real sockets (5.26); about 1 minute (bcrypt logins). SMB follows. Run with `python tests/qa.py layer protocols` (also part of `qa quick`); marker `protocol`. |
+| [../tests/performance/](../tests/performance/) | `test_slow_download.py`: opt-in (`CLOUDINATOR_SLOW_TESTS=1`) proof that a 200 MB download throttled to about 2.5 MB/s (80 s) arrives complete. | Needs about 85 s; skipped by default. |
+| [../tests/application/](../tests/application/) | `test_path_containment.py` (traversal against 11 read routes, sibling-folder and chunk-id escapes on the read, write, share and upload paths, legitimate-use controls; both holes it found are fixed and the tests keep them closed), `test_upload_integrity.py` (chunk ordering, no wrong file ever published; two recorded xfails: upload ids collide between users, assembly starts at the last chunk number), `test_login.py` (login page headers and cookie flags, CSRF, login, lockout, logout, session invalidation, a copied cookie refused after logout on every kind of route), `test_shares.py` (share links: public / passkey / approval gates, expiry, revocation, folder confinement, revoke-all code), `test_share_hardening.py` (passkey attempt limit per client and link, `/api/share` on an already shared item reports what the link really has), `test_version_restore.py` (version history on the real engine: restore, download, delete, retention, refusals), `test_version_routes.py` (the HTTP routes `/api/versions/*` and `/download/recovered/*`: input validation, JSON shape, headers, the cross-file guard over HTTP, recovered-file containment), `test_file_index_recovery.py` (file index: damaged, foreign and stale files, walks, audit), `test_file_monitor_recovery.py` (`file_monitor.py` with no server and no watchdog: damaged, foreign and half-valid `storage_index.json`, the walk's numbers, save only on change, rejected suspect-empty and unreadable-root walks, per-folder correction against a fresh walk, file index kept in step, the app's own folders ignored) and `test_authorization.py` (anonymous sweep over every declared route against the reviewed `PUBLIC_ENDPOINTS`, readonly refusals, role changes), plus `test_boot.py`: starts the real app from the scratch copy and checks `/login`, `/robots.txt`, anonymous `/`, that data folders were created only in the scratch tree and that the real `storage_config.json` / `server_config.json` are untouched. | Login, CSRF, lockout, session, authorization, containment, upload integrity and share links (5.18); version history and file-index recovery on the real modules (5.19, no server: they run snippets in their own scratch copy with `scratch_tools.run_in_scratch`); the HTTP routes `/api/versions/*` are driven in the normal scratch server (5.22): `version_history.init()` runs in `core.py` even with the engine subprocess off, and versions are captured by a snippet that calls `Engine.snapshot_file()` through `server.db()`; the engine's worker, watcher and scanner threads are not covered. |
 
 ### 25.6 Frontend source and stylesheets
 
@@ -766,14 +849,17 @@ Template IDs, `data-*` properties, endpoint names and asset order are executable
 
 | File | Purpose |
 |---|---|
-| [../manage.sh](../manage.sh) | Operator CLI/menu for server start/stop/restart/status/logs and wrapped utilities; also handles PID/log management, WebDAV restart, security.txt and SRI operations. |
-| [../setup_pymodules.sh](../setup_pymodules.sh) | Generates `requirements.txt`/`constraints.txt`, resolves package constraints, handles Termux system packages and offers installation. |
+| [../manage.sh](../manage.sh) | Operator CLI/menu for server start/stop/restart/status/logs and wrapped utilities; also handles PID/log management, WebDAV restart, security.txt and SRI operations, the Quality Assurance section (menu 21-25 and the `qa` command, which only call `tests/qa.py`) and the Developer Tools section (menu 26-27: `dir-tree` runs `tests/dir_tree.py`, `smoke [options]` runs `tests/smoke.py`; menu 27 is `smoke --save` and asks y/N first); the menu numbering (`LAST_ENTRY`, now 27) is enforced by `tests/unit/test_manage_qa.py`. `stop` is two-stage (graceful stop file / SIGTERM, then process-tree kill) and always sweeps WebDAV and Version Engine leftovers. |
+| [../setup_pymodules.sh](../setup_pymodules.sh) | Generates `requirements.txt`/`constraints.txt`, resolves package constraints, handles Termux system packages and offers installation. New package lines are appended through `append_req_line()` (adds a missing final newline first; keeps CRLF files CRLF, detected from an `od` hex dump and written with `printf` escapes; never `grep` / `head` / `$(...)` for a CR, because they hide it in Git Bash); `tests/unit/test_setup_pymodules.py` covers it. The install branch creates and activates `.venv` (`.venv/bin` on Linux and Termux, `.venv/Scripts` on Windows Git Bash; on Termux with `--system-site-packages` so the `pkg` packages stay visible) and installs inside it; the venv block is tested too. |
+| [../.gitattributes](../.gitattributes) | Line-ending policy: LF for every text type, `binary` for images/fonts/wasm. Do not remove entries: SRI hashes depend on it. |
 | [../termux_setup.sh](../termux_setup.sh) | Installs Termux native/Python prerequisites with retry logic and requests shared-storage permission. |
 | [../requirements.txt](../requirements.txt) | Declares Python dependency ranges used by setup. Update alongside imports and compatibility-sensitive protocol libraries. |
 | [../constraints.txt](../constraints.txt) | Generated/platform package constraints, particularly Termux-managed packages; regenerate through the setup workflow rather than hand-editing without reason. |
 | [../server_config.json](../server_config.json) | Persisted runtime/server/protocol/feature settings loaded by `config.py`. |
 | [../storage_config.json](../storage_config.json) | Persisted storage, database and cache directory overrides read by `paths.py`. |
-| [../.github/workflows/tests.yml](../.github/workflows/tests.yml) | GitHub Actions: `tests/smoke.py` and `tests/check.py` on every push / pull request to `main` and `dev`. |
+| [../.github/workflows/tests.yml](../.github/workflows/tests.yml) | GitHub Actions on every push / pull request to `main` and `dev`: job `smoke + check` (`tests/smoke.py`, `tests/check.py`) and job `behavioral tests` (`python tests/qa.py ci`, informational for now). |
+| [../pyproject.toml](../pyproject.toml) | Tool configuration only (no `[project]` / `[build-system]`): `[tool.pytest.ini_options]` with `pythonpath = ["."]`, `--import-mode=importlib` (tests/ has no `__init__.py`), `timeout = 120`, markers. Do not keep a `pytest.ini` next to it: pytest would use that instead. |
+| [../requirements-dev.txt](../requirements-dev.txt) | Test-only packages (`pytest`, `pytest-timeout`); not managed by `setup_pymodules.sh`. Deliberately NOT merged into `requirements.txt` / `setup_pymodules.sh`: that is the production dependency list, and the script rewrites constraints to `<next_major` and drops version floors. |
 | [../.github/workflows/codeql.yml](../.github/workflows/codeql.yml) | GitHub Actions: CodeQL for Python and JavaScript on `main` and `dev` plus a weekly run; stores SARIF and CSV artifacts. |
 | [../.github/codeql/codeql-config.yml](../.github/codeql/codeql-config.yml) | CodeQL configuration: `paths-ignore` for vendored third-party files (pdf.js, video.js, Font Awesome). |
 | [../README.md](../README.md) | Project overview, installation and usage; keep its command examples in sync with `manage.sh` and `tools/`. |
@@ -965,6 +1051,7 @@ The rows below list each Python file's **direct** imports, grouped as standard l
 | [../helpers/hypercorn_ssl_fix.py](../helpers/hypercorn_ssl_fix.py) | `asyncio` | `hypercorn.asyncio.tcp_server*` | `logging_setup` |
 | [../helpers/lanman_guard.py](../helpers/lanman_guard.py) | `ctypes`, `json`, `os`, `platform`, `subprocess`, `datetime`, `socket*` | None | None |
 | [../helpers/net_utils.py](../helpers/net_utils.py) | `socket` | None | None |
+| [../helpers/parent_watch.py](../helpers/parent_watch.py) | `os`, `sys`, `threading`, `time`, `ctypes*` | None | None |
 | [../helpers/ssl_cert.py](../helpers/ssl_cert.py) | `datetime`, `ipaddress`, `os`, `socket`, `sys*` | `cryptography*` | `paths*`, `config*` |
 | [../tools/kick_sessions.py](../tools/kick_sessions.py) | `os`, `secrets`, `sys` | None | `database` |
 | [../tools/manage_users.py](../tools/manage_users.py) | `os`, `sys`, `getpass*`, `datetime*` | None | `paths`, `database` |
@@ -978,6 +1065,9 @@ The rows below list each Python file's **direct** imports, grouped as standard l
 | [../tests/codeql_sarif_parser.py](../tests/codeql_sarif_parser.py) | `argparse`, `collections`, `csv`, `fnmatch`, `json`, `re`, `sys`, `zipfile`, `pathlib`, `urllib.parse` | None | None |
 | [../tests/dir_tree.py](../tests/dir_tree.py) | `pathlib` | None | None |
 | [../tests/smoke.py](../tests/smoke.py) | `argparse`, `ast`, `json`, `os`, `re`, `shutil`, `subprocess`, `sys`, `pathlib` | `pyflakes*` | None |
+| [../tests/conftest.py](../tests/conftest.py) | `hashlib`, `json`, `os`, `shutil`, `socket`, `subprocess`, `sys`, `time`, `types`, `urllib.*`, `pathlib` | `pytest` | None (loads project code only in the scratch subprocess) |
+| [../tests/qa.py](../tests/qa.py) | `argparse`, `shutil`, `subprocess`, `sys`, `time`, `pathlib` | None | None |
+| [../tests/unit/test_paths.py](../tests/unit/test_paths.py) | `json`, `os` | `pytest` | `paths` (the only module tests import in-process) |
 
 ### 27.3 Inbound project imports
 
@@ -1094,7 +1184,7 @@ Template-loaded local scripts/styles carry SRI hashes. `tools/sri_validator.py` 
 | `file_monitor.py` / `file_index.py` | `storage_index.json` and `file_index.json` under configured cache paths. | Routes/storage and browser stats/listing; do not confuse these caches with the deep-search DB. |
 | `search_index.py` | `search_index.db` under configured DB path. | Core crawler, file monitor updates, `/api/search` route. |
 | `version_engine.py` / `version_history.py` | Version DB/object storage and `.recovered/` under configured roots. | Launchers, version routes, version CLI and config tracking rules. |
-| `manage.sh` | Launches server scripts and Python tools; delegates package setup and SRI checks. | Keep commands, menu dispatch, script paths and this file map aligned after moving/renaming a tool. |
+| `manage.sh` | Launches server scripts and Python tools; delegates package setup and SRI checks. | Keep commands, menu dispatch, script paths and this file map aligned after moving/renaming a tool. Any new child process the server spawns needs (a) its PID file / command-line fingerprint in the `stop` sweeps and (b) the parent-PID env var for the orphan guard. |
 
 ## 29. What “all references” means here
 

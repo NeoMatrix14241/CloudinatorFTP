@@ -14,3 +14,8 @@ cache/
 db/
 logs/
 uploads/
+.pytest_cache/
+.coverage
+htmlcov/
+artifacts/
+.hypothesis/

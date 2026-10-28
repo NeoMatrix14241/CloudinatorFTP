@@ -186,10 +186,20 @@ def _make_sftp_handle_class():
         so no custom read/write needed — just set those attributes.
         """
 
-        def __init__(self, fobj, flags=0):
+        def __init__(self, fobj, flags=0, may_write=None):
             super().__init__(flags)
             self.readfile = fobj
             self.writefile = fobj
+            # Callable returning True while the account may still write. Checked
+            # on every write so a handle opened BEFORE a demotion stops
+            # accepting data at once (5.29). None = no check (old behaviour).
+            self._may_write = may_write
+
+        def write(self, offset, data):
+            if self._may_write is not None and not self._may_write():
+                log.warning("SFTP write() PERMISSION_DENIED: role changed mid-session")
+                return paramiko.SFTP_PERMISSION_DENIED
+            return super().write(offset, data)
 
         def stat(self):
             try:
@@ -226,13 +236,35 @@ class _CloudinatorSFTPInterface:
 
         self._p = paramiko
         self._username = getattr(server, "username", "")
-        self._role = getattr(server, "role", "readonly")
+        # Role at login; kept only as the fallback and for the login line. Every
+        # permission decision goes through _current_role(), which re-reads the
+        # database, so a demotion applies to sessions that are already open (5.29).
+        self._login_role = getattr(server, "role", "readonly")
         # Set on the _SSHServer instance in _handle_connection() right
         # after construction — see that function for where this comes
         # from. Falls back to "?" defensively; should always be present
         # in practice since it's set before start_server() is called.
         self._client_ip = getattr(server, "client_addr", ("?", "?"))[0]
         self._realpath, self._to_sftp = _make_realpath(root_dir)
+
+    def _current_role(self) -> str:
+        """The account's role RIGHT NOW (live database read, no cache).
+
+        Read per operation instead of once at login: an admin demoting an
+        account (or deleting it) must stop writes in the sessions it already
+        has open, not only in the next login. Fails CLOSED: an unknown or
+        deleted account, or any database error, counts as "readonly"."""
+        try:
+            from database import db
+
+            return db.get_role(self._username) or "readonly"
+        except Exception as exc:
+            log.warning(
+                "SFTP role lookup failed for user=%r (%s): treating as readonly",
+                self._username,
+                exc,
+            )
+            return "readonly"
 
     # ── Audit logging (new) ─────────────────────────────────────────────
     # One-line success-path audit trail for every write operation below.
@@ -271,7 +303,7 @@ class _CloudinatorSFTPInterface:
         except PermissionError as e:
             log.warning(
                 f"SFTP list_folder PERMISSION_DENIED: requested={path!r} "
-                f"resolved={real!r} user={self._username!r} role={self._role!r} os_error={e}"
+                f"resolved={real!r} user={self._username!r} role={self._login_role!r} os_error={e}"
             )
             return self._p.SFTP_PERMISSION_DENIED
         except FileNotFoundError:
@@ -307,10 +339,11 @@ class _CloudinatorSFTPInterface:
         real = self._realpath(path)
         is_write = _is_write_open(flags)
 
-        if is_write and self._role != "readwrite":
+        role = self._current_role() if is_write else self._login_role
+        if is_write and role != "readwrite":
             log.warning(
                 f"SFTP open() PERMISSION_DENIED (readonly role): requested={path!r} "
-                f"resolved={real!r} user={self._username!r} role={self._role!r} flags={flags}"
+                f"resolved={real!r} user={self._username!r} role={role!r} flags={flags}"
             )
             return self._p.SFTP_PERMISSION_DENIED
 
@@ -331,7 +364,7 @@ class _CloudinatorSFTPInterface:
         except PermissionError as e:
             log.warning(
                 f"SFTP open() PERMISSION_DENIED (OS-level): requested={path!r} "
-                f"resolved={real!r} user={self._username!r} role={self._role!r} os_error={e}"
+                f"resolved={real!r} user={self._username!r} role={self._login_role!r} os_error={e}"
             )
             return self._p.SFTP_PERMISSION_DENIED
         except IsADirectoryError:
@@ -343,7 +376,9 @@ class _CloudinatorSFTPInterface:
             self._audit("upload", path, extra=f"mode={mode}")
 
         # Return a proper paramiko SFTPHandle — the adapter will use it directly.
-        return _make_sftp_handle_class()(fobj, flags)
+        return _make_sftp_handle_class()(
+            fobj, flags, may_write=lambda: self._current_role() == "readwrite"
+        )
 
     def canonicalize(self, path: str) -> str:
         """Called for SSH_FXP_REALPATH — return canonical SFTP path."""
@@ -352,10 +387,11 @@ class _CloudinatorSFTPInterface:
     # ── Write operations (role-gated) ─────────────────────────────────────
 
     def _check_write(self):
-        if self._role != "readwrite":
+        role = self._current_role()
+        if role != "readwrite":
             log.warning(
                 f"SFTP write-op PERMISSION_DENIED (readonly role): "
-                f"user={self._username!r} role={self._role!r}"
+                f"user={self._username!r} role={role!r}"
             )
             return self._p.SFTP_PERMISSION_DENIED
         return None

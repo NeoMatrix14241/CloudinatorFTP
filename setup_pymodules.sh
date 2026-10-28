@@ -137,6 +137,27 @@ regex_escape() {
 	printf '%s' "$1" | sed -E 's/[][(){}.*^$+?|\\]/\\&/g'
 }
 
+# Appends one line to a requirements file. If the file does not end with a newline (hand-edited,
+# or written by an editor that omits the last one) a newline is added FIRST. A plain
+# `echo "$line" >>file` glued the new package onto the last line ("pyOpenSSL<27pyflakes<5")
+# whenever a package was missing from requirements.txt. A file that already uses CRLF (git on
+# Windows) keeps CRLF for the new line.
+# Under Git Bash on Windows grep, `head` and $(...) can all hide the CR characters, so CRLF is
+# detected from a HEX DUMP of the first bytes (od prints plain ASCII) and the line ending is
+# written with printf escapes, never through a shell variable that holds a CR.
+# tests/unit/test_setup_pymodules.py covers this function.
+append_req_line() {
+	local file="$1" line="$2" crlf=0 hex
+	if [ -s "$file" ]; then
+		hex=" $(od -An -v -tx1 -N 4096 "$file" | tr -d '\n')"
+		case "$hex" in *" 0d 0a"*) crlf=1 ;; esac
+		if [ -n "$(tail -c1 "$file")" ]; then
+			if [ "$crlf" -eq 1 ]; then printf '\r\n' >>"$file"; else printf '\n' >>"$file"; fi
+		fi
+	fi
+	if [ "$crlf" -eq 1 ]; then printf '%s\r\n' "$line" >>"$file"; else printf '%s\n' "$line" >>"$file"; fi
+}
+
 # `pkg` is Termux's own wrapper -- it doesn't exist on Windows/regular Linux
 # (and FreeBSD's unrelated `pkg` would false-positive a plain `command -v`
 # check, hence checking Termux's own env vars instead).
@@ -284,7 +305,7 @@ for pkg in "${packages[@]}"; do
 	if grep -qE "^${pkg_regex}([>=<~!]|$)" "$REQ"; then
 		sed -i -E "s/^${pkg_regex}([>=<~!].*)?\$/${pkg}${constraint}/" "$REQ"
 	else
-		echo "${pkg}${constraint}" >>"$REQ"
+		append_req_line "$REQ" "${pkg}${constraint}"
 	fi
 done
 
@@ -322,6 +343,30 @@ case "$choice" in
 y | Y)
 	echo "Installing updated packages..."
 	PHASE="install"
+
+	# Create virtual environment (falls back safely if python3 isn't aliased).
+	# Termux: bcrypt, cryptography, pyppmd, psutil and pynacl come from `pkg` and live in the SYSTEM
+	# site-packages (see SYSTEM_MANAGED above), so the venv must keep seeing them. Without
+	# --system-site-packages pip would try to build them from source inside the venv, which fails
+	# on Android.
+	venv_args=()
+	if [ "$IS_TERMUX" -eq 1 ]; then
+		venv_args=(--system-site-packages)
+	fi
+	python3 -m venv "${venv_args[@]}" .venv 2>/dev/null || python -m venv "${venv_args[@]}" .venv
+
+	# Cross-platform activation: detects Linux vs Windows (Git Bash)
+	if [ -f ".venv/bin/activate" ]; then
+		source .venv/bin/activate # Linux
+	elif [ -f ".venv/Scripts/activate" ]; then
+		source .venv/Scripts/activate # Windows (Git Bash/WSL)
+	else
+		echo "Error: Virtual environment activation script not found!"
+		exit 1
+	fi
+
+	# Install packages using the activated environment
+	python -m pip install --upgrade pip
 	python -m pip install -r "$REQ" -c "$CONSTRAINTS" --upgrade --no-cache-dir
 
 	echo

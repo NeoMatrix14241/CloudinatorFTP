@@ -339,6 +339,12 @@ def _spawn_webdav_process() -> "subprocess.Popen | None":
     # started.
     env["PYTHONUTF8"] = "1"
 
+    # Orphan guard: webdav_server.py's _run_standalone() watches this PID
+    # (helpers/parent_watch.py) and shuts itself down if this process dies
+    # without calling stop_all() - a hard kill (taskkill /F, SIGKILL,
+    # crash, os._exit) otherwise leaves WebDAV running and holding its port.
+    env["CLOUDINATOR_PARENT_PID"] = str(os.getpid())
+
     # stdout/stderr: PIPE'd and actively read by _pump_child_output threads
     # below, rather than inherited via an OS-level handle.
     #

@@ -30,7 +30,22 @@ def login_user(username: str):
     db.update_last_login(username)
 
 
+def revoke_current_session() -> None:
+    """Record the current session's id as ended, so a COPY of its cookie stops working too.
+
+    Call it BEFORE session.clear() (the id lives in the session). Never raises: a database
+    problem must not stop a logout; the cookie is still cleared by the caller."""
+    session_id = session.get("session_id")
+    if not session_id:
+        return
+    try:
+        db.revoke_session(session_id)
+    except Exception as exc:
+        print(f"⚠️ Could not record the ended session: {exc}")
+
+
 def logout_user():
+    revoke_current_session()
     session.clear()
 
 
@@ -46,6 +61,9 @@ def is_logged_in() -> bool:
          (rotating the token via revoke_session.py invalidates all sessions)
       3. The user still exists in the DB
          (deleting a user immediately invalidates their session)
+      4. The session's id was not ended by a logout (5.17): a copy of a cookie that was
+         logged out stays refused. (A session without an id cannot be listed; /login always
+         sets one.)
     """
     username = session.get("username")
     if not username or not session.get("logged_in"):
@@ -56,6 +74,10 @@ def is_logged_in() -> bool:
         return False
 
     if db.get_role(username) is None:  # user was deleted
+        session.clear()
+        return False
+
+    if db.is_session_revoked(session.get("session_id")):  # logged out
         session.clear()
         return False
 

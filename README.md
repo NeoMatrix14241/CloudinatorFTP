@@ -76,6 +76,7 @@ Platform-specific deployment and production guides are available in the **[`docs
 - 📄 [PDF.js](https://mozilla.github.io/pdf.js/) - v3.11.174
 - 🖼️ [libvips](https://www.libvips.org/) - v8.18.1
 - 🔧 [Git](https://git-scm.com/) - Latest Version/Build
+- 🟢 [Node.js](https://nodejs.org/en) - v24.22.0 LTS
 
 ## 🚀 Quick Start
 
@@ -92,8 +93,13 @@ Platform-specific deployment and production guides are available in the **[`docs
 
 Install termux packages
 ``` Bash
-apt update -y && apt full-upgrade -y && pkg install curl -y
+pkg update -y && pkg upgrade -y && pkg install curl -y
+
+# For main branch (stable):
 curl -sL https://tinyurl.com/CloudinatorFTP | bash
+
+# For dev branch:
+curl -sL https://tinyurl.com/CloudinatorFTP-dev | bash
 ```
 
 > The above URL runs `termux_setup.sh` automatically. This script installs all required Termux packages, applies Android-specific PyPPMd patches, requests storage permission, and **retries up to 5 times** on failure. After cloning the repo you can also run it directly with `bash termux_setup.sh`.
@@ -117,21 +123,26 @@ cd CloudinatorFTP
 #### 3. 🐍 Install Python Dependencies
 
 ```bash
-pip install -r requirements.txt
+python -m venv .venv                    # Create the python environment
+source ./.venv/Scripts/activate         # Windows (Git Bash): use the created environment
+source .venv/bin/activate               # Linux / macOS / Android (Termux): use this line instead
+pip install -r requirements.txt         # Main requirements
+pip install -r requirements-dev.txt     # Dev only (optional) - if you will modify the code and run the tests
 ```
 
-#### 3b. 📡 Install Protocol Server Dependencies (Optional)
+> **Note**: the activation script must be **sourced** (`source ...`). Running `./.venv/Scripts/activate` on its own starts a subshell and activates nothing. Windows virtual environments keep their scripts in `.venv/Scripts`, Linux, macOS and Termux in `.venv/bin`. `bash setup_pymodules.sh` (or `./manage.sh update-modules`) creates and activates `.venv` for you when you answer `y`.
+
+#### 3b. 📡 Install Protocol Server Dependencies (Optional - but included in requirements.txt)
 
 To enable WebDAV, SFTP, and FTP protocol access alongside the web UI:
 
 ```bash
-pip install wsgidav cheroot paramiko pyftpdlib
+pip install wsgidav paramiko pyftpdlib
 ```
 
 | Package | Enables |
 |---------|---------|
-| `wsgidav` | WebDAV (HTTPS on port 8443 by default) |
-| `cheroot` | WebDAV HTTPS (port 8443) |
+| `wsgidav` | WebDAV (HTTP on port 8080, HTTPS on port 8443 by default) |
 | `paramiko` | SFTP (port 2222) |
 | `pyftpdlib` | FTP (port 2121) |
 
@@ -153,7 +164,7 @@ Every setting is explained in the [Configuration Reference](./docs/CONFIG_PY_REF
 **Update security.txt and robots.txt(Important for tunneling else optional up to you)**
 ```
 # use your own details
-# you can also use "bash manage.sh menu > 19 to create security.txt
+# you can also use "bash manage.sh menu > 18 to create security.txt
 # or run:
 # bash manage.sh security-txt --contact you@example.com --expires 2030-09-03 --preferred-lang en,fil --canonical https://yourdomain.com/.well-known/security.txt
 static\.well-known\security.txt
@@ -179,14 +190,14 @@ python tools/manage_users.py
 
 > 💡 **Recommended for Windows/Linux:** Use [`manage.sh`](#️-server-management-script-managesh) to run servers in the background while keeping your terminal free for utilities.
 
-For Waitress WSGI (Production/Live)
+For Hypercorn ASGI (Production/Live, HTTP/1.1, HTTP/2 and HTTP/3)
 ```bash
-python prod_server.py # Waitress Server (WSGI)
+python prod_server.py # Hypercorn server (ASGI)
 ```
 
-For Flask WSGI (Development/Testing)
+For the Quart development server (Development/Testing, HTTP/1.1)
 ```bash
-python dev_server.py # Flask Server (WSGI)
+python dev_server.py # Quart dev server (ASGI)
 ```
 
 Protocol servers (WebDAV, SFTP, FTP) start **automatically** alongside the web server — no extra command needed.
@@ -344,6 +355,7 @@ chmod +x manage.sh
 | `./manage.sh start dev_server` | Start `dev_server.py` (Quart) in the background |
 | `./manage.sh stop` | Gracefully stop whichever server is running |
 | `./manage.sh restart` | Restart the currently active server |
+| `./manage.sh restart-webdav` | Restart only WebDAV (recovers a stuck WebDAV without touching the web UI) |
 | `./manage.sh status` | Show server status, PID, uptime, and recent log tail |
 
 ### 📋 Log Commands
@@ -356,6 +368,7 @@ Logs are always saved to `logs/` regardless of whether you're watching them.
 | `./manage.sh logs server` | Last 50 lines of production logs |
 | `./manage.sh logs server -f` | Follow live production logs |
 | `./manage.sh logs dev_server -f` | Follow live dev logs |
+| `./manage.sh clean-logs` | List and delete old log files (asks for confirmation) |
 
 > 💡 **Ctrl-C while following logs detaches your terminal without stopping the server.**
 
@@ -371,6 +384,35 @@ Run any utility **while a server is running in the same terminal**:
 | `./manage.sh manage-users` | `python tools/manage_users.py` |
 | `./manage.sh reset-db` | `python tools/reset_db.py` |
 | `./manage.sh setup-storage` | `python tools/setup_storage.py` |
+| `./manage.sh version-manage` | `python tools/version_manage.py` (Version Engine: list, restore, delete file versions) |
+| `./manage.sh setup-smb` | `python tools/smb_setup.py` (one-time SMB setup) |
+| `./manage.sh kick-sessions` | `python tools/kick_sessions.py` (force logout of every session; the server must be running) |
+| `./manage.sh revoke-shares` | `python tools/revoke_sharing.py` (share link management) |
+| `./manage.sh security-txt` | Update `static/.well-known/security.txt` (RFC 9116) |
+| `./manage.sh validate-sri [--fix]` | `python tools/sri_validator.py` (check or repair the Subresource Integrity hashes) |
+| `./manage.sh update-modules [-y]` | `bash setup_pymodules.sh` (see [Updating Python Dependencies](#-updating-python-dependencies)) |
+| `./manage.sh termux-setup` | `bash termux_setup.sh` (first-time setup, Android/Termux only) |
+
+### Quality Assurance Commands
+
+The automated checks (needs `pip install -r requirements-dev.txt` once). They run in the foreground and are safe while a server is running: the tests use a scratch copy of the project and never touch your data.
+
+| Command | What it runs |
+|---------|--------------|
+| `./manage.sh qa` or `qa quick` | `smoke.py`, `check.py`, the SRI check, `node --check` on the JavaScript (if Node.js is installed) and every pytest layer |
+| `./manage.sh qa static` | Only the static checks (no pytest) |
+| `./manage.sh qa tests` | Only pytest |
+| `./manage.sh qa layer unit` | One layer: `unit`, `application`, `performance`, ... |
+| `./manage.sh qa ci` | Same as `quick`, with JUnit XML in `./artifacts` (what GitHub runs) |
+
+### Developer Tools Commands
+
+Two helpers for people who change the code. They never touch your stored files and need no running server (`dir-tree` rewrites `docs/DIRECTORY_TREE.md`, `smoke --save` rewrites `tests/smoke_routes.json`).
+
+| Command | What it runs |
+|---------|--------------|
+| `./manage.sh dir-tree` | `python tests/dir_tree.py` (prints the project folder tree and saves it to `docs/DIRECTORY_TREE.md`) |
+| `./manage.sh smoke [options]` | `python tests/smoke.py` (fast static checks: syntax, pyflakes, routes, hooks, imports). `--save` writes the route snapshot `tests/smoke_routes.json` (the menu asks y/N first; the shell command does not), `-v` prints the route table, `--files` lists the scanned files |
 
 ### 🎛️ Interactive Menu
 
@@ -378,7 +420,7 @@ Run any utility **while a server is running in the same terminal**:
 ./manage.sh menu
 ```
 
-A numbered menu covering all server and utility commands with live status shown at the top.
+A numbered menu (27 entries: servers, utilities, quality assurance and developer tools) with live status shown at the top.
 
 ### 💡 Typical Workflow
 
@@ -417,13 +459,16 @@ Or via `manage.sh` (works on all platforms):
 ```
 
 The script will:
-1. Query PyPI for the latest available version of each package
-2. Update `requirements.txt` in place
-3. Prompt you to install the updates immediately
+1. Query PyPI for the latest available version of each package and set a ceiling below the next major version
+2. Update `requirements.txt` in place and rewrite `constraints.txt` (on Termux it locks the packages installed with `pkg`)
+3. Check with a dry run that the constraints can be resolved together
+4. Ask whether to install now: on `y` it creates and activates `.venv` (`.venv/Scripts` on Windows Git Bash, `.venv/bin` on Linux and Termux) and installs the packages there
 
-> **Android / Termux**: Run the same command in your Termux session.
+`requirements-dev.txt` (the test packages) is not touched by the script: install it yourself with `pip install -r requirements-dev.txt`.
+
+> **Android / Termux**: Run the same command in your Termux session. The virtual environment is created with `--system-site-packages` so the packages installed by `pkg` stay visible.
 > **Windows**: Run in Git Bash, or double-click if you have a `.bat` wrapper.
-> **Linux**: Activate your virtual environment first (`source venv/bin/activate`).
+> **Linux**: No need to activate anything first, the script does it.
 
 ---
 
@@ -470,17 +515,19 @@ python tools/manage_users.py
 ```
 
 **Available Options:**
-1. **List users** - List all users
+1. **List users** - List all users (flags accounts that still have a default password)
 2. **Add user** - Create additional user accounts
-3. **Update password** - Change existing user passwords
-4. **Update role** - Change existing user account role
+3. **Change password** - Change an existing user's password
+4. **Change role** - Change an existing user's role
 5. **Delete user** - Remove user accounts
+6. **Remove default users** - Delete `admin` and `guest` if they still have their default passwords
+7. **Exit**
 
 ### 🔑 Default Credentials
 
 | Username | Password | Role | Access Level |
 |----------|----------|------|-------------|
-| `admin` | `password123` | readwrite | Full access |
+| `admin` | `admin123` | readwrite | Full access |
 | `guest` | `guest123` | readonly | Download only |
 
 **🚨 Security Warning**: Change these default passwords immediately!
@@ -495,10 +542,11 @@ python tools/manage_users.py
 ```
 
 This tool helps:
-- Test if passwords work correctly
-- Verify password hashes
-- Regenerate user files if corrupted
-- Debug authentication issues
+- See which accounts exist, their role and last login (and which still use a default password)
+- Set a new password for an account you are locked out of
+- Fix a wrong role, or remove the default accounts
+
+> After 5 failed logins a client is locked out for 5 minutes, so wait for the lockout to end before trying again.
 
 ## 🛠️ Troubleshooting
 
@@ -594,6 +642,14 @@ New-NetFirewallRule -DisplayName "CloudinatorFTP FTP-Passive"   -Direction Inbou
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+Before you open one:
+
+1. Work inside a virtual environment (see [Install Python Dependencies](#3--install-python-dependencies)) and install the test packages: `pip install -r requirements-dev.txt`
+2. Run `./manage.sh qa quick` and make sure it passes (it is what GitHub runs on every push and pull request)
+3. If you change anything under `templates/` or `static/`, run `./manage.sh validate-sri --fix` and commit the updated templates with it
+4. Use **LF** line endings everywhere (`.gitattributes` enforces it) and format Python with Black and shell scripts with shfmt
+5. Read `docs/CODING_GUIDELINES.md` before changing code, and describe your change in your commit message
 
 ## 📄 License
 

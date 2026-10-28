@@ -7,9 +7,9 @@
     <meta name="robots" content="noindex, nofollow">
     <title>{% if valid %}{{ name }} — Shared File{% else %}Link Not Available{% endif %} — Cloudinator FTP</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}"
-        integrity="sha384-5xIjiXmIqBXreuPUUtpnwCKFRm0p7kMWRihzZymGZltbTKgyd/X8uGJBfpfdBsvw" />
+        integrity="sha384-qrALq7+6jBOZIQsNnT6xGkMDru64qD6uTlDra39xrt2SoXl4pO3FX6Roz/RpR/BS" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/shared.css') }}"
-        integrity="sha384-fIYHCuJAHpXvVTnYl91yLMsS013aeC9OlzrPb5ARaWcA8OMaOGBXOSjpdcUe41dE" />
+        integrity="sha384-glsqZszQAK4H7zIy1tAk/81Rog9zQIhdo+9HEQM2eSmyBvRJD9cwN39AhZJvInZz" />
     <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp"
         integrity="sha384-mTiIzUOmh2SfP6u6yyTJHcQnVqctGnma9JMZGwuIrFkKfjVtO7Ok8CMTjA8szFUp" />
 </head>
@@ -129,13 +129,13 @@
     {% if valid and ((security_mode == 'passkey' and not unlocked) or security_mode == 'approval' or (unlocked and
     is_dir)) %}
     <script src="{{ url_for('static', filename='js/shared.js') }}"
-        integrity="sha384-fhy7D5ZO3UlQh0o7Vs/JfXcwcj+K9JaNWCHe4W6QxhTH/M+Cm/yRoKSFjjrJ/n6O"></script>
+        integrity="sha384-horLZJ6J7fypNqh3+PXKeyf4x3VU8ryeYLLaqgEoyzc+IlU7zOA8uEcCh1nRO1m/"></script>
     {% endif %}
     <audio id="bgMusic" autoplay loop preload="auto">
         <source src="{{ url_for('static', filename='audio/bg_mus.opus') }}" type="audio/ogg">
     </audio>
     <script src="{{ url_for('static', filename='js/bg_audio.js') }}"
-        integrity="sha384-fnKFD46RxXXr8Wv2S8hVHI/auoEbJUAJ7ZSarLpvgN1DYKgX3stzxTsCpsOBM6GS" defer></script>
+        integrity="sha384-hm1jtKk9iRd32XFDgQLBrsh0torUKWUnGtTfdwWrLrk2VUnH56WbkhuaL90f1g7i" defer></script>
     </body>
 
 </html>

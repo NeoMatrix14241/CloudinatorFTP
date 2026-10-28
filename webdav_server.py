@@ -631,8 +631,9 @@ def _build_app(root_dir: str):
 
 # ── Server lifecycle ──────────────────────────────────────────────────────
 # Both HTTP and HTTPS run from a single Hypercorn Config/process/thread —
-# `bind` is the TLS listener, `insecure_bind` is the plain-HTTP one, same
-# pattern as prod_server.py. Either can be an empty list to disable that
+# With TLS, `bind` is the TLS listener and `insecure_bind` the plain-HTTP one
+# (same pattern as prod_server.py); WITHOUT TLS the plain listener must go in
+# `bind`, see _listener_binds(). Either can be an empty list to disable that
 # listener independently, matching the old WEBDAV_ENABLED/WEBDAV_HTTPS_ENABLED
 # split.
 
@@ -808,6 +809,23 @@ class _DisconnectAbortMiddleware:
 # line. Nothing needed here.
 
 
+def _listener_binds(http_port, https_port) -> tuple[list, list]:
+    """Return (bind, insecure_bind) for Hypercorn's Config.
+
+    Hypercorn only honours `insecure_bind` WHEN TLS IS CONFIGURED (certfile and
+    keyfile set); without TLS it serves `bind` and ignores `insecure_bind`, so
+    the plain-HTTP fallback listener silently never opened (5.28 xfail).
+    - HTTPS on:  bind = TLS port, insecure_bind = plain port (if any).
+    - HTTPS off: bind = plain port (if any), insecure_bind = [] (no TLS to pair with).
+    """
+    if https_port:
+        return (
+            [f"0.0.0.0:{https_port}"],
+            [f"0.0.0.0:{http_port}"] if http_port else [],
+        )
+    return ([f"0.0.0.0:{http_port}"] if http_port else [], [])
+
+
 def _start_hypercorn(wsgi_app, http_port, https_port, cert_path, key_path):
     """Runs WebDAV (HTTP and/or HTTPS) via Hypercorn in a background thread.
     Returns the Thread object."""
@@ -818,8 +836,7 @@ def _start_hypercorn(wsgi_app, http_port, https_port, cert_path, key_path):
     asgi_app = _DisconnectAbortMiddleware(WsgiToAsgi(wsgi_app))
 
     cfg = Config()
-    cfg.bind = [f"0.0.0.0:{https_port}"] if https_port else []
-    cfg.insecure_bind = [f"0.0.0.0:{http_port}"] if http_port else []
+    cfg.bind, cfg.insecure_bind = _listener_binds(http_port, https_port)
     cfg.errorlog = _build_hypercorn_logger(
         "hypercorn.webdav"
     )  # see _build_hypercorn_logger's docstring
@@ -1036,6 +1053,13 @@ def _run_standalone():
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
+
+    # Orphan guard: if the main server process dies without stopping this
+    # one (taskkill /F, SIGKILL, crash, os._exit), stop WebDAV and exit
+    # instead of lingering on the port. No-op when started by hand.
+    from helpers import parent_watch
+
+    parent_watch.start(stop, label="webdav", grace=10)
 
     # The actual Hypercorn server runs in the thread kept in _webdav_state["thread"] (a daemon thread
     # started by start()) — just block the main thread here until told to

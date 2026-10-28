@@ -1,4 +1,3 @@
-
 from pathlib import Path
 
 EXCLUDED_DIRS = {
@@ -9,6 +8,8 @@ EXCLUDED_DIRS = {
     "env",
     ".pytest_cache",
     ".manage_pids",
+    "logs",
+    "artifacts",  # JUnit XML written by `./manage.sh qa ci` (not committed)
 }
 
 # Show the directory, skip its contents, and optionally explain why.
@@ -41,7 +42,7 @@ FILE_COMMENTS = {
 }
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-OUTPUT_FILE = SCRIPT_DIR.parent / "docs" / "directory_tree.txt"
+OUTPUT_FILE = SCRIPT_DIR.parent / "docs" / "DIRECTORY_TREE.md"
 
 
 def collect_entries(base_path: Path):
@@ -108,7 +109,7 @@ if __name__ == "__main__":
     # Print to terminal.
     print(tree_text, end="")
 
-    # Save to docs/directory_tree.txt, creating docs if necessary.
+    # Save to docs/DIRECTORY_TREE.md, creating docs if necessary.
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_FILE.write_text(tree_text, encoding="utf-8")
 

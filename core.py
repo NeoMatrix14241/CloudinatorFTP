@@ -54,6 +54,7 @@ import time
 import logging
 import uuid
 import socket
+import ipaddress
 
 # get_local_ip's real implementation now lives in helpers/net_utils.py (no
 # side effects on import) — aliased here so the wrapper below can
@@ -187,10 +188,10 @@ _SHARE_UNLOCK_MAX_AGE = 30 * 24 * 3600  # 30 days
 #      reach this process directly and forge headers the way they could
 #      against a plain reverse-proxy with an exposed port. Every request
 #      that reaches this app genuinely came through Cloudflare.
-#   2. request.remote_addr is therefore useless here — it's cloudflared's
-#      local connection to this process, so it reads the same
-#      loopback-ish address for every request, real traffic and attack
-#      traffic alike.
+#   2. request.remote_addr is therefore useless as the CLIENT identity
+#      here — it's cloudflared's local connection to this process, so it
+#      reads the same loopback address for every tunnelled request; it is
+#      only useful to decide whether the headers below may be trusted.
 # CF-Connecting-IP is what to trust instead: Cloudflare sets this itself
 # at the edge with the real connecting client's IP and overwrites/strips
 # whatever the client tried to put there — unlike X-Forwarded-For, which
@@ -199,26 +200,50 @@ _SHARE_UNLOCK_MAX_AGE = 30 * 24 * 3600  # 30 days
 # ("1.2.3.4, <real ip>") rather than replacing it — so blindly taking
 # XFF's first entry (the old behavior here) would have logged the
 # attacker's chosen fake IP, not their real one. CF-Connecting-IP doesn't
-# have that hole. X-Forwarded-For is kept only as a fallback for local/
-# direct access (e.g. hitting dev_server.py on the LAN with no tunnel in
-# front of it, where there's no CF-Connecting-IP to read).
+# have that hole. X-Forwarded-For is kept only as a fallback for a loopback
+# proxy that sets no CF-Connecting-IP (see the trust rule below).
 #
-# This trust chain assumes the app is ONLY reachable through the tunnel.
-# If this port is also directly reachable (bound to 0.0.0.0 with the
-# firewall open, port-forwarded, etc.) rather than solely through
-# cloudflared, someone could connect directly and set CF-Connecting-IP
-# themselves, and it would be trusted here just as wrongly as XFF was.
-# Worth double-checking that's not the case if this matters to you.
+# This trust chain used to ASSUME the app was only reachable through the
+# tunnel. It is now ENFORCED (CLAUDE.md 5.16): the two headers are read only
+# when the TCP peer (request.remote_addr) is a loopback address, which is
+# where cloudflared connects from. A client that reaches the port directly
+# (LAN, port-forward, 0.0.0.0 with an open firewall) has a non-loopback peer
+# address, its CF-Connecting-IP / X-Forwarded-For headers are ignored and the
+# lockout is keyed by its real address, so it cannot forge a fresh counter.
+# Limit: a reverse proxy running on ANOTHER machine is not trusted either;
+# every request would then look like one client (the proxy's address). Add that
+# address to _TRUSTED_PROXY_NETWORKS below if you ever need it.
 # ------------------------------------------------------------------
+_TRUSTED_PROXY_NETWORKS = (
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+)
+
+
+def _is_trusted_proxy(addr) -> bool:
+    """True when `addr` (a remote_addr string) is one of the trusted proxy networks."""
+    if not addr or not isinstance(addr, str):
+        return False
+    try:
+        ip = ipaddress.ip_address(addr.split("%", 1)[0])
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return any(ip in net for net in _TRUSTED_PROXY_NETWORKS)
+
+
 def get_client_ip() -> str:
-    cf_ip = request.headers.get("CF-Connecting-IP", "").strip()
-    if cf_ip:
-        return cf_ip
-    return (
-        request.headers.get("X-Forwarded-For", request.remote_addr or "")
-        .split(",")[0]
-        .strip()
-    )
+    peer = request.remote_addr or ""
+    if _is_trusted_proxy(peer):
+        cf_ip = request.headers.get("CF-Connecting-IP", "").strip()
+        if cf_ip:
+            return cf_ip
+        xff = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        if xff:
+            return xff
+    return peer
 
 
 # ------------------------------------------------------------------
@@ -230,6 +255,10 @@ class RateLimiter:
     After MAX_ATTEMPTS failures within WINDOW seconds, the IP is locked
     out for LOCKOUT seconds.
     All state is in-memory — resets on server restart (intentional).
+
+    Every method takes an optional `key`; without it the bucket is the client IP
+    (the login limiter). The share-passkey limiter passes "<ip>|<token>" so a
+    visitor is counted per link (CLAUDE.md 5.21).
     """
 
     MAX_ATTEMPTS = 5  # failures before lockout
@@ -244,8 +273,8 @@ class RateLimiter:
     def _get_ip(self) -> str:
         return get_client_ip()
 
-    def is_blocked(self) -> bool:
-        ip = self._get_ip()
+    def is_blocked(self, key: str | None = None) -> bool:
+        ip = key or self._get_ip()
         with self._lock:
             expiry = self._locked.get(ip)
             if expiry:
@@ -256,8 +285,8 @@ class RateLimiter:
                     self._attempts.pop(ip, None)
         return False
 
-    def record_failure(self):
-        ip = self._get_ip()
+    def record_failure(self, key: str | None = None):
+        ip = key or self._get_ip()
         now = time.time()
         with self._lock:
             attempts = [t for t in self._attempts.get(ip, []) if now - t < self.WINDOW]
@@ -267,20 +296,20 @@ class RateLimiter:
                 self._locked[ip] = now + self.LOCKOUT
                 print(f"IP locked out after {self.MAX_ATTEMPTS} failed attempts: {ip}")
 
-    def record_success(self):
-        ip = self._get_ip()
+    def record_success(self, key: str | None = None):
+        ip = key or self._get_ip()
         with self._lock:
             self._attempts.pop(ip, None)
             self._locked.pop(ip, None)
 
-    def remaining_lockout(self) -> int:
-        ip = self._get_ip()
+    def remaining_lockout(self, key: str | None = None) -> int:
+        ip = key or self._get_ip()
         with self._lock:
             expiry = self._locked.get(ip, 0)
             return max(0, int(expiry - time.time()))
 
-    def attempts_remaining(self) -> int:
-        ip = self._get_ip()
+    def attempts_remaining(self, key: str | None = None) -> int:
+        ip = key or self._get_ip()
         now = time.time()
         with self._lock:
             recent = [t for t in self._attempts.get(ip, []) if now - t < self.WINDOW]
@@ -288,6 +317,9 @@ class RateLimiter:
 
 
 rate_limiter = RateLimiter()
+# Separate instance (and buckets) for wrong passkeys on /shared/<token>/passkey, same policy as
+# the login limiter; a passkey lockout never blocks the login page and the reverse.
+share_passkey_limiter = RateLimiter()
 
 # File monitoring and real-time updates
 from file_monitor import get_file_monitor, init_file_monitor
@@ -365,6 +397,7 @@ __all__ = [
     "bulk_zip_progress",
     "bulk_zip_cancelled",
     "rate_limiter",
+    "share_passkey_limiter",
     "request_logger",
     "SLOW_REQUEST_THRESHOLD_SECONDS",
     "csrf",
@@ -888,6 +921,10 @@ app.config.update(
     SESSION_REFRESH_EACH_REQUEST=True,  # cookie expiry slides forward on every request
     SESSION_COOKIE_NAME="cloudinator_session",
     MAX_CONTENT_LENGTH=MAX_CONTENT_LENGTH,  # now actually enforced by Quart, was previously unset
+    # Quart's default RESPONSE_TIMEOUT is 60 s for the WHOLE response, not an idle timeout, so any
+    # download that takes longer than a minute end to end (a big file through the Cloudflare
+    # tunnel) was cut off mid-stream. None = no cap, as with Waitress before the Quart migration.
+    RESPONSE_TIMEOUT=None,
 )
 
 # ---------------------------------------------------------------------------
@@ -1351,10 +1388,9 @@ _REVOKE_CODE_TTL = 120  # seconds a code stays valid
 
 
 def _issue_revoke_all_code(session_id: str) -> tuple:
-    import random
-
     nonce = str(uuid.uuid4())
-    code = "".join(random.choices("0123456789", k=10))
+    # secrets, not random: the code is a confirmation secret (CLAUDE.md 5.25)
+    code = "".join(_secrets.choice("0123456789") for _ in range(10))
     with _revoke_all_codes_lock:
         # Only one outstanding code per session — a fresh attempt invalidates any prior one
         for existing_nonce, entry in list(_revoke_all_codes.items()):

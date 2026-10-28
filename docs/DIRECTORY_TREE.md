@@ -3,9 +3,13 @@ CloudinatorFTP
 │   ├── codeql
 │   │   └── codeql-config.yml
 │   └── workflows
+│       ├── audit.yml
 │       ├── codeql.yml
 │       └── tests.yml
 ├── docs
+│   ├── rulesets
+│   │   ├── dev.json
+│   │   └── main.json
 │   ├── ANDROID_DEPLOYMENT.md
 │   ├── CLAUDE.md
 │   ├── CODING_GUIDELINES.md
@@ -16,21 +20,19 @@ CloudinatorFTP
 │   ├── SERVER_MANAGEMENT_SCRIPT_GUIDE.md
 │   ├── SETUP_TUNNEL_ADVANCED.md
 │   ├── SMB_PROTOCOL_DEPLOYMENT.md
+│   ├── TESTING_STRATEGY.md
 │   ├── USER_GUIDE.md
-│   ├── VS-Code-Extensions.txt
+│   ├── VSCODE_SETUP.md
 │   └── WINDOWS_DEPLOYMENT.md
 ├── helpers
 │   ├── __init__.py
 │   ├── hypercorn_ssl_fix.py
 │   ├── lanman_guard.py
 │   ├── net_utils.py
+│   ├── parent_watch.py
 │   └── ssl_cert.py
 ├── images
 │   └── ... (pdfjs dependency)
-├── logs
-│   ├── prod_server_2026-10-12.log
-│   ├── prod_server_2026-10-13.log
-│   └── prod_server_2026-10-14.log
 ├── routes
 │   ├── __init__.py
 │   ├── admin.py
@@ -95,9 +97,45 @@ CloudinatorFTP
 │   ├── login.html
 │   └── shared.html
 ├── tests
+│   ├── application
+│   │   ├── test_authorization.py
+│   │   ├── test_boot.py
+│   │   ├── test_file_index_recovery.py
+│   │   ├── test_file_monitor_recovery.py
+│   │   ├── test_login.py
+│   │   ├── test_path_containment.py
+│   │   ├── test_recover_uploads.py
+│   │   ├── test_revoke_code_generation.py
+│   │   ├── test_session_revocation.py
+│   │   ├── test_upload_integrity.py
+│   │   ├── test_version_restore.py
+│   │   └── test_version_routes.py
+│   ├── performance
+│   │   └── test_slow_download.py
+│   ├── protocols
+│   │   ├── conftest.py
+│   │   ├── test_ftp_protocol.py
+│   │   ├── test_sftp_protocol.py
+│   │   ├── test_smb_protocol.py
+│   │   └── test_webdav_protocol.py
+│   ├── unit
+│   │   ├── test_client_ip_trust.py
+│   │   ├── test_http_client.py
+│   │   ├── test_manage_qa.py
+│   │   ├── test_paths.py
+│   │   ├── test_qa_audit.py
+│   │   ├── test_qa_runner.py
+│   │   ├── test_response_timeout.py
+│   │   ├── test_scratch_copy.py
+│   │   ├── test_setup_pymodules.py
+│   │   ├── test_upload_chunk_keys.py
+│   │   └── test_webdav_listener_binds.py
+│   ├── audit_ignore.txt
 │   ├── check.py
 │   ├── codeql_sarif_parser.py
+│   ├── conftest.py
 │   ├── dir_tree.py
+│   ├── qa.py
 │   ├── smoke.py
 │   └── smoke_routes.json
 ├── tools
@@ -128,9 +166,11 @@ CloudinatorFTP
 ├── paths.py
 ├── prod_server.py
 ├── protocol_manager.py
+├── pyproject.toml
 ├── README.md
 ├── realtime_shares.py
 ├── realtime_stats.py
+├── requirements-dev.txt
 ├── requirements.txt
 ├── search_index.py
 ├── server_config.json

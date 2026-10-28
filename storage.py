@@ -1,6 +1,7 @@
 import os
 import shutil
 import time
+import uuid
 import threading
 import stat
 from config import ROOT_DIR
@@ -177,6 +178,8 @@ def count_directory_items(path):
 
 
 def save_chunk(file_id, chunk_num, chunk_data):
+    if not is_safe_chunk_id(file_id):
+        return False
     tmp_dir = os.path.join(ROOT_DIR, ".chunks", file_id)
     os.makedirs(tmp_dir, exist_ok=True)
     chunk_path = os.path.join(tmp_dir, f"{chunk_num}")
@@ -201,6 +204,24 @@ def save_chunk(file_id, chunk_num, chunk_data):
     except (OSError, IOError) as e:
         print(f"❌ Error saving chunk {chunk_num} for {file_id}: {e}")
         return False
+
+
+def chunks_complete(file_id, total_chunks):
+    """True when the chunk files 0 .. total_chunks-1 of upload `file_id` are all on disk.
+
+    The last chunk is checked first (one stat), so a normal in-order upload pays the full
+    scan once, at its end. Used by routes/uploads.py to start the assembly when the LAST
+    MISSING chunk arrives, in whatever order the chunks came."""
+    if not is_safe_chunk_id(file_id):
+        return False
+    if not isinstance(total_chunks, int) or total_chunks < 1:
+        return False
+    tmp_dir = os.path.join(ROOT_DIR, ".chunks", file_id)
+    if not os.path.isfile(os.path.join(tmp_dir, str(total_chunks - 1))):
+        return False
+    return all(
+        os.path.isfile(os.path.join(tmp_dir, str(i))) for i in range(total_chunks - 1)
+    )
 
 
 def verify_chunks_complete(file_id, expected_chunks=None):
@@ -280,8 +301,11 @@ def verify_chunks_complete(file_id, expected_chunks=None):
     }
 
 
-def assemble_chunks(file_id, filename, dest_path=""):
-    """Enhanced chunk assembly with pre-verification and protection"""
+def assemble_chunks(file_id, filename, dest_path="", total_chunks=None):
+    """Enhanced chunk assembly with pre-verification and protection.
+
+    `total_chunks` (the count the client announced) makes the verification strict: a folder
+    with more or fewer chunk files than announced is never published."""
     print(f"🔨 Starting assembly for {filename} (ID: {file_id})")
 
     # Only replace slashes, preserve all other characters
@@ -289,11 +313,17 @@ def assemble_chunks(file_id, filename, dest_path=""):
     target_dir = os.path.join(ROOT_DIR, dest_path) if dest_path else ROOT_DIR
     target_path = os.path.join(target_dir, safe_filename)
     os.makedirs(target_dir, exist_ok=True)
+    # The chunks are written to this hidden temp file (same folder, so the final os.replace
+    # is atomic) and only renamed onto target_path once the size has been verified: nobody
+    # can read a half-written file, and a failed assembly never touches an existing one.
+    # The short name keeps clear of the file-name length limit; ".part" is what
+    # emergency_cleanup() already treats as a temp file.
+    tmp_path = os.path.join(target_dir, f".assembling_{uuid.uuid4().hex[:12]}.part")
 
     try:
         # Step 1: Verify and map all chunks first
         print(f"🔍 Verifying chunks for {file_id}...")
-        chunk_info = verify_chunks_complete(file_id)
+        chunk_info = verify_chunks_complete(file_id, total_chunks)
         total_chunks = chunk_info["total_chunks"]
         chunk_map = chunk_info["chunk_map"]
         tmp_dir = chunk_info["tmp_dir"]
@@ -312,7 +342,7 @@ def assemble_chunks(file_id, filename, dest_path=""):
         # Step 3: Perform assembly using verified chunk map
         print(f"🔧 Assembling {total_chunks} chunks into {target_path}")
 
-        with open(target_path, "wb") as outfile:
+        with open(tmp_path, "wb") as outfile:
             for i in range(total_chunks):
                 chunk_info_item = chunk_map[i]
                 chunk_path = chunk_info_item["path"]
@@ -332,7 +362,7 @@ def assemble_chunks(file_id, filename, dest_path=""):
                     raise IOError(f"Failed to read chunk {i}: {e}")
 
         # Step 4: Verify final file
-        final_size = os.path.getsize(target_path)
+        final_size = os.path.getsize(tmp_path)
         expected_size = chunk_info["total_size"]
 
         if final_size != expected_size:
@@ -342,7 +372,10 @@ def assemble_chunks(file_id, filename, dest_path=""):
 
         # Ensure the final file is writable
         if os.name == "nt":
-            os.chmod(target_path, stat.S_IWRITE | stat.S_IREAD)
+            os.chmod(tmp_path, stat.S_IWRITE | stat.S_IREAD)
+
+        # Step 4b: publish atomically (replaces an existing file of the same name in one step)
+        os.replace(tmp_path, target_path)
 
         print(f"✅ Assembly successful: {filename} ({final_size} bytes)")
 
@@ -360,8 +393,9 @@ def assemble_chunks(file_id, filename, dest_path=""):
         print(f"❌ Assembly failed for {filename}: {e}")
         # Cleanup on failure
         try:
-            if os.path.exists(target_path):
-                safe_remove_file(target_path)
+            # Only the temp file goes: an existing target_path is left exactly as it was.
+            if os.path.exists(tmp_path):
+                safe_remove_file(tmp_path)
             # Remove protection file if it exists
             protection_file = os.path.join(ROOT_DIR, ".chunks", file_id, ".assembling")
             if os.path.exists(protection_file):
@@ -375,6 +409,8 @@ def assemble_chunks(file_id, filename, dest_path=""):
 
 def cleanup_chunks(file_id, total_chunks=None):
     """Clean up temporary chunk files using Windows-safe deletion"""
+    if not is_safe_chunk_id(file_id):
+        return
     tmp_dir = os.path.join(ROOT_DIR, ".chunks", file_id)
 
     # Check for assembly protection marker
@@ -703,12 +739,28 @@ def get_dir_info(path):
 def is_safe_path(path):
     """Check if path is safe (no directory traversal)"""
     try:
-        # Resolve the path and check if it's within ROOT_DIR
-        resolved = os.path.realpath(os.path.join(ROOT_DIR, path))
-        root_real = os.path.realpath(ROOT_DIR)
-        return resolved.startswith(root_real)
-    except Exception:
+        # Resolve the path and check if it's within ROOT_DIR. os.path.commonpath compares whole
+        # path components: a plain startswith() accepted a SIBLING folder whose name begins with
+        # the root's name (storage -> storage_backup).
+        root_real = os.path.normcase(os.path.realpath(ROOT_DIR))
+        resolved = os.path.normcase(os.path.realpath(os.path.join(ROOT_DIR, path)))
+        return os.path.commonpath([resolved, root_real]) == root_real
+    except (
+        ValueError,
+        OSError,
+    ):  # ValueError: NUL byte, or different drives on Windows
         return False
+
+
+def is_safe_chunk_id(file_id):
+    """An upload/chunk id is ONE folder name under .chunks/. Anything that could leave that
+    folder (separators, a drive letter, '..', '.', NUL, an empty or huge value) is refused.
+    """
+    if not isinstance(file_id, str) or not file_id or len(file_id) > 200:
+        return False
+    if file_id in (".", ".."):
+        return False
+    return not any(ch in file_id for ch in "/\\:\x00")
 
 
 def is_valid_path(path):

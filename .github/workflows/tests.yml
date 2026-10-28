@@ -1,43 +1,76 @@
-# Static safety checks for CloudinatorFTP on every push and pull request to main and dev.
-# Same commands as on the developer machine; nothing is imported or started (see CLAUDE.md,
-# part 33/34): tests/smoke.py = project wiring, tests/check.py = per-module checks.
+# Safety checks for CloudinatorFTP on every push and pull request to main and dev.
+# Job "smoke + check" (static-checks): same commands as on the developer machine; nothing is
+# imported or started (see CLAUDE.md, part 33/34): tests/smoke.py = project wiring,
+# tests/check.py = per-module checks. Keep its name: branch protection may require it.
+# Job "behavioral tests" (CLAUDE.md 5.00): runs `python tests/qa.py ci`, the same runner as
+# manage.sh/developers (static checks + pytest). The tests start the app as a SUBPROCESS from a
+# scratch copy of the project (tests/conftest.py), so no real data and no production config is
+# touched.
 name: Tests
 
 on:
-    push:
-        branches: ["main", "dev"]
-    pull_request:
-        branches: ["main", "dev"]
-    workflow_dispatch:
+  push:
+    branches: ["main", "dev"]
+  pull_request:
+    branches: ["main", "dev"]
+  workflow_dispatch:
 
 permissions:
-    contents: read
+  contents: read
 
 concurrency:
-    group: tests-${{ github.ref }}
-    cancel-in-progress: true
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-    static-checks:
-        name: smoke + check
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout repository
-              uses: actions/checkout@v7
+  static-checks:
+    name: smoke + check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
-            - name: Set up Python
-              uses: actions/setup-python@v6
-              with:
-                  python-version: "3.12"
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14.7"
 
-            - name: Install pyflakes
-              run: python -m pip install --upgrade pip pyflakes
+      - name: Install pyflakes
+        run: python -m pip install --upgrade pip pyflakes
 
-            # syntax, pyflakes, route table + snapshot, import rules, hooks, tools/, helpers/, manage.sh
-            - name: Smoke test
-              run: python tests/smoke.py
+      # syntax, pyflakes, route table + snapshot, import rules, hooks, tools/, helpers/, manage.sh
+      - name: Smoke test
+        run: python tests/smoke.py
 
-            # per-module: syntax, pyflakes, project-import resolution, helpers layering.
-            # --skip-packages: this runner does not install the server's requirements.txt.
-            - name: Module checks
-              run: python tests/check.py -q --skip-packages
+      # per-module: syntax, pyflakes, project-import resolution, helpers layering.
+      # --skip-packages: this runner does not install the server's requirements.txt.
+      - name: Module checks
+        run: python tests/check.py -q --skip-packages
+
+  behavior:
+    name: behavioral tests
+    needs: static-checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14.7"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip pyflakes -r requirements.txt -r requirements-dev.txt
+
+      # static checks + pytest, JUnit XML into ./artifacts
+      - name: QA runner (ci)
+        run: python tests/qa.py ci
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: artifacts/
+          if-no-files-found: ignore

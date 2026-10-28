@@ -1,0 +1,5 @@
+# Known, accepted findings of `python tests/qa.py audit` (pip-audit).
+# One advisory ID per line (PYSEC-..., GHSA-..., CVE-...), then a "#" and the REASON and a date
+# to look at it again. An empty list is the goal; every line here is a vulnerability we run with.
+# Example:
+#   GHSA-xxxx-xxxx-xxxx  # package 1.2.3: fixed only in 2.0, which needs Python 3.15; review 2026-12

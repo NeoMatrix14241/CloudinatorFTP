@@ -45,6 +45,28 @@ if _BG:
     if hasattr(signal, "SIGBREAK"):
         signal.signal(signal.SIGBREAK, signal.SIG_IGN)
 
+# ---------------------------------------------------------------------------
+# Graceful-stop request from manage.sh (2026-10-16) - see prod_server.py for
+# the full reasoning. manage.sh stop creates .manage_pids/dev.stop; the
+# watcher thread started in __main__ below stops WebDAV/SFTP/FTP/SMB and the
+# Version Engine, then exits. A stale file from a crashed run is removed
+# here so it cannot shut the new server down immediately.
+# ---------------------------------------------------------------------------
+_STOP_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".manage_pids", "dev.stop"
+)
+
+
+def _clear_stop_file() -> None:
+    try:
+        os.remove(_STOP_FILE)
+    except OSError:
+        # No stop file present (the normal case).
+        pass
+
+
+_clear_stop_file()
+
 # ensure_dirs() is called inside app.py before anything else loads.
 # NOTE (2026-09-15): app.py's module-level code sets up logging_setup's
 # shared "cloudinatorftp" logger (console + logs/prod_server_YYYY-MM-DD.log)
@@ -74,9 +96,42 @@ import version_engine
 
 version_engine.start()
 
+
+def _stop_file_watcher():
+    """Daemon thread: wait for manage.sh's stop request, clean up the child
+    processes the same way the KeyboardInterrupt path below does, then exit
+    the process (Quart's app.run() has no hook for an external stop)."""
+    import logging
+    import time
+
+    while True:
+        time.sleep(0.5)
+        if os.path.exists(_STOP_FILE):
+            break
+    _clear_stop_file()  # manage.sh sees the file vanish = acknowledged
+    print("\n🛑 Stop requested by manage.sh — stopping development server…", flush=True)
+    for label, fn in (
+        ("protocol servers", protocol_manager.stop_all),
+        ("Version Engine", version_engine.stop),
+    ):
+        try:
+            fn()
+        except Exception as e:
+            print(f"   ⚠️  Error stopping {label}: {e}", flush=True)
+    print("👋 Development server stopped.", flush=True)
+    logging.shutdown()
+    os._exit(0)
+
+
 if __name__ == "__main__":
 
+    import threading as _threading
+
     from config import ROOT_DIR, HOST, PORT, PERMANENT_SESSION_LIFETIME
+
+    _threading.Thread(
+        target=_stop_file_watcher, name="stop-file-watcher", daemon=True
+    ).start()
 
     # ── Quart app config ─────────────────────────────────────────────────────
     app.config.update(
@@ -97,7 +152,7 @@ if __name__ == "__main__":
     print(f"🌐 Server running on http://{LOCAL_IP}:{PORT}")
     if _BG:
         print("🔒 Background service mode (managed by manage.sh)")
-        print("   • Ctrl+C disabled — use './manage.sh stop' to stop")
+        print("   • Ctrl+C disabled — use './manage.sh stop' (graceful, then forced)")
         print("   • Auto-reloader disabled (not usable in detached mode)")
     print("🔧 Configuration:")
     print("   • Debug mode: ON  |  Upload limit: NONE  |  HTTP/1.1 only")

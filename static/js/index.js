@@ -2151,8 +2151,8 @@ const VT = (() => {
     // ── row-windowing tunables ──────────────────────────────────
     // Formula: RENDER_BUFFER = 1; DEFAULT_ROW_HEIGHT = 8
     // RESIZE_DEBOUNCE_MS = 150 by default
-    const RENDER_BUFFER = 12;        // rows to keep mounted above/below the viewport
-    const DEFAULT_ROW_HEIGHT = 96;   // seed estimate; replaced by a real measurement ASAP
+    const RENDER_BUFFER = 18;        // rows to keep mounted above/below the viewport
+    const DEFAULT_ROW_HEIGHT = 144;   // seed estimate; replaced by a real measurement ASAP
     const RESIZE_DEBOUNCE_MS = 150;
 
     let _allFiles = []; // raw server data for current folder
@@ -3783,8 +3783,23 @@ function addToUploadQueue(itemData) {
 
 let _fileIdCounter = 0;
 
+// Upload id: fid_<counter>_<file size>_<16 random hex>. The counter restarts at 1 on every page
+// load, so on its own two tabs (or two users) uploading files of the same size would send the
+// same id; the random part makes it unique. The server adds the session on top (routes/uploads.py,
+// _chunk_key). Only letters, digits and underscores, at most 128 characters (server limit).
+function _randomHex(byteCount) {
+    const bytes = new Uint8Array(byteCount);
+    try {
+        // getRandomValues also works on plain-http LAN pages (randomUUID needs a secure context)
+        crypto.getRandomValues(bytes);
+    } catch (e) {
+        for (let i = 0; i < byteCount; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
 function generateFileId(file) {
-    return `fid_${++_fileIdCounter}_${file.size}`;
+    return `fid_${++_fileIdCounter}_${file.size}_${_randomHex(8)}`;
 }
 
 function removeFromQueue(fileId) {

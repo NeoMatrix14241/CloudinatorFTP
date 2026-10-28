@@ -23,6 +23,7 @@ from werkzeug.exceptions import ClientDisconnected
 import os
 import shutil
 import json
+import hashlib
 import asyncio
 import threading
 import time
@@ -39,6 +40,46 @@ from auth import current_user, get_role
 import storage
 from routes.shares import _prune_expired_shares
 
+# ---------------------------------------------------------------------------
+# Upload ids (CLAUDE.md 5.16). The browser sends an id per file (index.js,
+# generateFileId); it is only unique inside ONE page, so two users (or two
+# tabs) could send the same id. Everything on the server (chunk folder under
+# .chunks/, chunk_tracker, assembly_queue) therefore uses a CHUNK KEY =
+# <16 hex of sha256(session_id)>_<client id>; the client id itself is what the
+# browser sees in every response and URL. A session can only ever reach the keys
+# of its own session id, so one user cannot read, overwrite or cancel another
+# user's chunks, and a status lookup of a foreign id is simply "not found".
+# ---------------------------------------------------------------------------
+MAX_CLIENT_UPLOAD_ID_LEN = 128  # the key adds 17 chars and must stay under 200
+
+
+def _valid_client_upload_id(file_id):
+    """A client upload id: a safe single folder name, at most 128 characters."""
+    return (
+        isinstance(file_id, str)
+        and len(file_id) <= MAX_CLIENT_UPLOAD_ID_LEN
+        and storage.is_safe_chunk_id(file_id)
+    )
+
+
+def _key_prefix(session_id):
+    return hashlib.sha256(str(session_id).encode("utf-8")).hexdigest()[:16] + "_"
+
+
+def _chunk_key(session_id, file_id):
+    """Server-side id of this session's upload `file_id`; None when either is unusable."""
+    if not session_id or not _valid_client_upload_id(file_id):
+        return None
+    return _key_prefix(session_id) + file_id
+
+
+def _client_file_id(session_id, key):
+    """The id the browser used for chunk key `key` (the key itself if it has no prefix)."""
+    prefix = _key_prefix(session_id)
+    if isinstance(key, str) and key.startswith(prefix):
+        return key[len(prefix) :]
+    return key
+
 
 @app.route("/upload", methods=["POST"])
 @login_required
@@ -50,6 +91,9 @@ async def upload():
 
     # Initialize these variables outside the try block to ensure they're available in the except blocks
     file_id = None
+    chunk_key = (
+        None  # server-side id (session + client id), set once file_id is validated
+    )
     filename = None
 
     try:
@@ -100,9 +144,14 @@ async def upload():
 
             if not file_id:
                 return "File ID is required for chunked upload", 400
+            if not _valid_client_upload_id(file_id):
+                return "Invalid file ID", 400
+            if total_chunks < 1 or not 0 <= chunk_num < total_chunks:
+                return "Invalid chunk parameters", 400
+            chunk_key = _chunk_key(session_id, file_id)
 
             # Track this upload
-            chunk_tracker.track_upload(session_id, file_id)
+            chunk_tracker.track_upload(session_id, chunk_key)
 
             chunk = (await request.files).get("chunk")
             if not chunk:
@@ -113,21 +162,37 @@ async def upload():
                 return f"Chunk too large (max {CHUNK_SIZE} bytes)", 413
 
             # Save chunk
-            if not storage.save_chunk(file_id, chunk_num, chunk_data):
+            if not storage.save_chunk(chunk_key, chunk_num, chunk_data):
                 # Cleanup on failure
-                chunk_tracker.untrack_upload(session_id, file_id)
-                storage.cleanup_chunks(file_id)
+                chunk_tracker.untrack_upload(session_id, chunk_key)
+                storage.cleanup_chunks(chunk_key)
                 return "Failed to save chunk", 500
 
             print(
                 f"📦 Saved chunk {chunk_num + 1}/{total_chunks} for {filename} (ID: {file_id})"
             )
 
-            # If this is the last chunk, queue for background assembly
-            if chunk_num == total_chunks - 1:
+            # Queue the background assembly as soon as EVERY chunk 0..total-1 is on disk,
+            # whatever order they arrived in (5.16; before, only the chunk numbered
+            # total-1 could start it, so an early last chunk left the upload hanging).
+            if storage.chunks_complete(chunk_key, total_chunks):
+                existing_job = assembly_queue.get_job_status(chunk_key)
+                if existing_job and existing_job.status in ("pending", "processing"):
+                    # A retry of a chunk after the job was queued: never assemble twice.
+                    return (
+                        jsonify(
+                            {
+                                "status": "upload_complete",
+                                "message": f"Upload complete - processing {filename}...",
+                                "file_id": file_id,
+                                "assembly_queued": True,
+                            }
+                        ),
+                        200,
+                    )
                 try:
                     # Save metadata for assembly worker
-                    chunk_dir = os.path.join(ROOT_DIR, ".chunks", file_id)
+                    chunk_dir = os.path.join(ROOT_DIR, ".chunks", chunk_key)
                     metadata_file = os.path.join(chunk_dir, ".metadata")
                     metadata = {
                         "filename": filename,
@@ -141,7 +206,7 @@ async def upload():
 
                     # Add to background assembly queue
                     assembly_queue.add_job(
-                        file_id, filename, dest_path, total_chunks, session_id
+                        chunk_key, filename, dest_path, total_chunks, session_id
                     )
 
                     print(f"🔄 Queued {filename} for background assembly")
@@ -159,8 +224,8 @@ async def upload():
 
                 except Exception as e:
                     # Failed to queue assembly - cleanup
-                    chunk_tracker.untrack_upload(session_id, file_id)
-                    storage.cleanup_chunks(file_id)
+                    chunk_tracker.untrack_upload(session_id, chunk_key)
+                    storage.cleanup_chunks(chunk_key)
                     print(f"❌ Failed to queue assembly for {filename}: {e}")
                     return f"Failed to queue file assembly: {str(e)}", 500
 
@@ -224,8 +289,8 @@ async def upload():
         )
         # Untrack immediately (fast), but run the actual disk cleanup in the background
         # so this handler returns without blocking a Waitress thread on safe_rmtree.
-        if file_id:
-            chunk_tracker.untrack_upload(session_id, file_id)
+        if chunk_key:
+            chunk_tracker.untrack_upload(session_id, chunk_key)
 
             def _bg_disconnect_cleanup(fid):
                 try:
@@ -235,16 +300,16 @@ async def upload():
                     print(f"⚠️ Background disconnect cleanup error for {fid}: {ex}")
 
             threading.Thread(
-                target=_bg_disconnect_cleanup, args=(file_id,), daemon=True
+                target=_bg_disconnect_cleanup, args=(chunk_key,), daemon=True
             ).start()
         return "", 499
 
     except Exception as e:
         print(f"❌ Upload error: {e}")
         # If there was an error and we were tracking this upload, clean it up
-        if file_id:
-            chunk_tracker.untrack_upload(session_id, file_id)
-            storage.cleanup_chunks(file_id)
+        if chunk_key:
+            chunk_tracker.untrack_upload(session_id, chunk_key)
+            storage.cleanup_chunks(chunk_key)
         return f"Upload error: {str(e)}", 500
 
 
@@ -264,12 +329,19 @@ async def cleanup_chunks():
             return jsonify({"error": "File ID is required"}), 400
 
         file_id = data["file_id"]
+        if not _valid_client_upload_id(file_id):
+            return jsonify({"error": "Invalid file ID"}), 400
+
+        # A session only reaches its own chunk folders; no session id = nothing of its own
+        chunk_key = _chunk_key(session_id, file_id)
+        if chunk_key is None:
+            return jsonify({"success": True, "message": "No chunks to cleanup"}), 200
 
         # Untrack and cleanup
-        chunk_tracker.untrack_upload(session_id, file_id)
+        chunk_tracker.untrack_upload(session_id, chunk_key)
 
-        # Clean up chunks directory for this file_id
-        chunks_dir = os.path.join(ROOT_DIR, ".chunks", file_id)
+        # Clean up chunks directory for this upload
+        chunks_dir = os.path.join(ROOT_DIR, ".chunks", chunk_key)
         if os.path.exists(chunks_dir):
             try:
                 shutil.rmtree(chunks_dir)
@@ -316,16 +388,22 @@ async def cancel_upload():
             return jsonify({"error": "File ID is required"}), 400
 
         file_id = data["file_id"]
+        if not _valid_client_upload_id(file_id):
+            return jsonify({"error": "Invalid file ID"}), 400
         filename = data.get("filename", "Unknown file")
 
         print(f"🚫 Cancelling upload: {file_id} ({filename})")
 
-        # Untrack the upload
-        chunk_tracker.untrack_upload(session_id, file_id)
+        # A session only reaches its own chunk folders (see _chunk_key)
+        chunk_key = _chunk_key(session_id, file_id)
 
-        # Clean up chunks directory for this file_id
-        chunks_dir = os.path.join(ROOT_DIR, ".chunks", file_id)
-        if os.path.exists(chunks_dir):
+        # Untrack the upload
+        if chunk_key:
+            chunk_tracker.untrack_upload(session_id, chunk_key)
+
+        # Clean up chunks directory for this upload
+        chunks_dir = os.path.join(ROOT_DIR, ".chunks", chunk_key) if chunk_key else None
+        if chunks_dir and os.path.exists(chunks_dir):
             try:
                 # Run deletion in a daemon thread so this endpoint returns immediately
                 # and does NOT block a Waitress thread (safe_rmtree can stall on Windows
@@ -347,7 +425,7 @@ async def cancel_upload():
                         print(f"⚠️ Background cleanup error for {fid}: {ex}")
 
                 threading.Thread(
-                    target=_bg_cleanup, args=(chunks_dir, file_id), daemon=True
+                    target=_bg_cleanup, args=(chunks_dir, chunk_key), daemon=True
                 ).start()
                 print(f"🧹 Queued background cleanup for cancelled upload: {file_id}")
 
@@ -572,7 +650,7 @@ async def get_assembly_status():
     for job in jobs:
         job_data.append(
             {
-                "file_id": job.file_id,
+                "file_id": _client_file_id(session_id, job.file_id),
                 "filename": job.filename,
                 "status": job.status,
                 "created_at": job.created_at,
@@ -592,10 +670,11 @@ async def protect_assembly_job(file_id):
         return jsonify({"error": "No session ID"}), 400
 
     # Check if this job belongs to the current session
-    job = assembly_queue.get_job_status(file_id)
+    chunk_key = _chunk_key(session_id, file_id)
+    job = assembly_queue.get_job_status(chunk_key) if chunk_key else None
     if job and job.session_id == session_id:
         # Re-track this upload to prevent cleanup
-        chunk_tracker.track_upload(session_id, file_id)
+        chunk_tracker.track_upload(session_id, chunk_key)
         print(f"🔐 Protected assembly job {file_id} from cleanup")
         return jsonify({"status": "protected"}), 200
 
@@ -606,20 +685,18 @@ async def protect_assembly_job(file_id):
 @login_required
 async def get_single_assembly_status(file_id):
     """Get status of a specific assembly job"""
-    job = assembly_queue.get_job_status(file_id)
-
-    if not job:
-        return jsonify({"error": "Job not found"}), 404
-
-    # Check if user owns this job
     session_id = session.get("session_id")
-    if job.session_id != session_id:
-        return jsonify({"error": "Access denied"}), 403
+    chunk_key = _chunk_key(session_id, file_id)
+    job = assembly_queue.get_job_status(chunk_key) if chunk_key else None
+
+    # Another session's job has another chunk key, so it is "not found" here
+    if not job or job.session_id != session_id:
+        return jsonify({"error": "Job not found"}), 404
 
     return (
         jsonify(
             {
-                "file_id": job.file_id,
+                "file_id": file_id,
                 "filename": job.filename,
                 "status": job.status,
                 "created_at": job.created_at,
@@ -736,7 +813,7 @@ def assembly_worker():
             try:
                 # Perform the actual assembly
                 success = storage.assemble_chunks(
-                    job.file_id, job.filename, job.dest_path
+                    job.file_id, job.filename, job.dest_path, job.total_chunks
                 )
 
                 if success:
@@ -783,8 +860,44 @@ def start_assembly_worker():
     print("🚀 Started background assembly worker")
 
 
+def _read_upload_metadata(chunk_dir):
+    """The `.metadata` of an upload folder as (filename, dest_path, total_chunks), or None.
+
+    `.metadata` is written by /upload only when EVERY chunk has arrived (5.16), so its presence
+    is what says "this upload was complete". None when the file is missing, unreadable or does
+    not hold a usable filename and chunk count."""
+    metadata_file = os.path.join(chunk_dir, ".metadata")
+    if not os.path.isfile(metadata_file):
+        return None
+    try:
+        with open(metadata_file, "r") as f:
+            metadata = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(metadata, dict):
+        return None
+    filename = metadata.get("filename")
+    dest_path = metadata.get("dest_path", "")
+    total_chunks = metadata.get("total_chunks")
+    if not isinstance(filename, str) or not filename.strip():
+        return None
+    if not isinstance(dest_path, str):
+        return None
+    if not isinstance(total_chunks, int) or isinstance(total_chunks, bool):
+        return None
+    if total_chunks < 1:
+        return None
+    return filename, dest_path, total_chunks
+
+
 def detect_ready_assemblies():
-    """Detect chunks that are ready for assembly on startup"""
+    """On startup, re-queue uploads that were COMPLETE when the server stopped.
+
+    Only a folder whose `.metadata` says how many chunks the upload has AND that really holds
+    exactly that many is assembled. Before 5.17 a folder without metadata was assembled from
+    whatever sequential chunks it held and published as `recovered_file_<id>`, so an upload
+    interrupted halfway (browser closed, server restarted) could appear as a truncated file.
+    Such folders are now left alone; the age-based orphan cleanup removes them."""
     try:
         chunks_dir = os.path.join(ROOT_DIR, ".chunks")
         if not os.path.exists(chunks_dir):
@@ -804,28 +917,22 @@ def detect_ready_assemblies():
                     print(f"🛡️ Skipping {file_id} - assembly protection active")
                     continue
 
-                # Look for metadata file first
-                metadata_file = os.path.join(chunk_dir, ".metadata")
-                filename = f"recovered_file_{file_id}"
-                dest_path = ""
-                expected_chunks = None
+                info = _read_upload_metadata(chunk_dir)
+                if info is None:
+                    print(
+                        f"⏭️ Skipping {file_id}: no usable .metadata, the upload never "
+                        "completed (the orphan cleanup removes it)"
+                    )
+                    continue
+                filename, dest_path, expected_chunks = info
+                if dest_path and not storage.is_safe_path(dest_path):
+                    print(f"⚠️ Skipping {file_id}: unsafe destination in .metadata")
+                    continue
+                print(
+                    f"📋 Found metadata for {file_id}: {filename}, expected {expected_chunks} chunks"
+                )
 
-                if os.path.exists(metadata_file):
-                    try:
-                        with open(metadata_file, "r") as f:
-                            metadata = json.load(f)
-                            filename = metadata.get("filename", filename)
-                            dest_path = metadata.get("dest_path", dest_path)
-                            expected_chunks = metadata.get("total_chunks")
-
-                            print(
-                                f"📋 Found metadata for {file_id}: {filename}, expected {expected_chunks} chunks"
-                            )
-                    except Exception as e:
-                        print(f"⚠️ Error reading metadata for {file_id}: {e}")
-                        continue
-
-                # Use enhanced chunk verification
+                # Exactly the announced number of chunks must be on disk
                 try:
                     chunk_info = storage.verify_chunks_complete(
                         file_id, expected_chunks
@@ -840,7 +947,6 @@ def detect_ready_assemblies():
 
                 except Exception as verify_error:
                     print(f"⚠️ Chunk verification failed for {file_id}: {verify_error}")
-                    # Could cleanup incomplete uploads here if desired
                     continue
 
             except Exception as e:
@@ -849,10 +955,10 @@ def detect_ready_assemblies():
 
         if recovered_count > 0:
             print(
-                f"🔄 Recovered {recovered_count} incomplete upload(s) for background assembly"
+                f"🔄 Recovered {recovered_count} complete upload(s) for background assembly"
             )
         else:
-            print("🔍 No incomplete uploads found ready for recovery")
+            print("🔍 No complete uploads found waiting for assembly")
 
     except Exception as e:
         print(f"⚠️ Error detecting ready assemblies: {e}")
