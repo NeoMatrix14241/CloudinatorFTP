@@ -78,7 +78,10 @@ def occupy_a_port():
         socket, "SO_EXCLUSIVEADDRUSE"
     ):  # Windows: SO_REUSEADDR would let a bind through
         holder.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-    holder.bind(("127.0.0.1", 0))
+    # Must be ALL interfaces on purpose: smb_server._try_bind() binds 0.0.0.0, and on Windows a
+    # listener on 127.0.0.1 does NOT block that bind (the server would take this port and
+    # never open the fallback port). CodeQL flags this line; dismiss the alert as "used in tests".
+    holder.bind(("0.0.0.0", 0))
     holder.listen(5)
     return holder
 

@@ -1,6 +1,7 @@
 import os
 import shutil
 import time
+import uuid
 import threading
 import stat
 from config import ROOT_DIR
@@ -312,6 +313,12 @@ def assemble_chunks(file_id, filename, dest_path="", total_chunks=None):
     target_dir = os.path.join(ROOT_DIR, dest_path) if dest_path else ROOT_DIR
     target_path = os.path.join(target_dir, safe_filename)
     os.makedirs(target_dir, exist_ok=True)
+    # The chunks are written to this hidden temp file (same folder, so the final os.replace
+    # is atomic) and only renamed onto target_path once the size has been verified: nobody
+    # can read a half-written file, and a failed assembly never touches an existing one.
+    # The short name keeps clear of the file-name length limit; ".part" is what
+    # emergency_cleanup() already treats as a temp file.
+    tmp_path = os.path.join(target_dir, f".assembling_{uuid.uuid4().hex[:12]}.part")
 
     try:
         # Step 1: Verify and map all chunks first
@@ -335,7 +342,7 @@ def assemble_chunks(file_id, filename, dest_path="", total_chunks=None):
         # Step 3: Perform assembly using verified chunk map
         print(f"🔧 Assembling {total_chunks} chunks into {target_path}")
 
-        with open(target_path, "wb") as outfile:
+        with open(tmp_path, "wb") as outfile:
             for i in range(total_chunks):
                 chunk_info_item = chunk_map[i]
                 chunk_path = chunk_info_item["path"]
@@ -355,7 +362,7 @@ def assemble_chunks(file_id, filename, dest_path="", total_chunks=None):
                     raise IOError(f"Failed to read chunk {i}: {e}")
 
         # Step 4: Verify final file
-        final_size = os.path.getsize(target_path)
+        final_size = os.path.getsize(tmp_path)
         expected_size = chunk_info["total_size"]
 
         if final_size != expected_size:
@@ -365,7 +372,10 @@ def assemble_chunks(file_id, filename, dest_path="", total_chunks=None):
 
         # Ensure the final file is writable
         if os.name == "nt":
-            os.chmod(target_path, stat.S_IWRITE | stat.S_IREAD)
+            os.chmod(tmp_path, stat.S_IWRITE | stat.S_IREAD)
+
+        # Step 4b: publish atomically (replaces an existing file of the same name in one step)
+        os.replace(tmp_path, target_path)
 
         print(f"✅ Assembly successful: {filename} ({final_size} bytes)")
 
@@ -383,8 +393,9 @@ def assemble_chunks(file_id, filename, dest_path="", total_chunks=None):
         print(f"❌ Assembly failed for {filename}: {e}")
         # Cleanup on failure
         try:
-            if os.path.exists(target_path):
-                safe_remove_file(target_path)
+            # Only the temp file goes: an existing target_path is left exactly as it was.
+            if os.path.exists(tmp_path):
+                safe_remove_file(tmp_path)
             # Remove protection file if it exists
             protection_file = os.path.join(ROOT_DIR, ".chunks", file_id, ".assembling")
             if os.path.exists(protection_file):

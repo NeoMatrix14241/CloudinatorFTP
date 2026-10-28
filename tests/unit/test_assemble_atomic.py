@@ -1,0 +1,157 @@
+"""storage.assemble_chunks publishes the file atomically (CLAUDE.md 5.38).
+
+The chunks used to be written straight into the final path, so a download, a listing or the
+file monitor could see an empty or half-written file while the assembly ran, and a failed
+assembly deleted an existing file of the same name. Now the chunks go to a hidden `.part` file
+in the same folder and `os.replace` moves it onto the target once the size has been verified.
+
+assemble_chunks is read out of storage.py with `ast` and run against fakes and a temporary
+folder, so no app and no scratch server is needed.
+"""
+
+import ast
+import os
+import stat
+import time
+import uuid
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _assemble_chunks_source():
+    source = (ROOT / "storage.py").read_text(encoding="utf-8")
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.FunctionDef) and node.name == "assemble_chunks":
+            return ast.get_source_segment(source, node)
+    raise AssertionError("assemble_chunks not found in storage.py")
+
+
+class _OsProxy:
+    """The real os, except that os.replace reports what the folder looks like at that moment."""
+
+    def __init__(self, on_replace):
+        self._on_replace = on_replace
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+    def replace(self, src, dst):
+        self._on_replace(src, dst)
+        return os.replace(src, dst)
+
+
+@pytest.fixture()
+def lab(tmp_path):
+    chunks = tmp_path / ".chunks" / "fid"
+    chunks.mkdir(parents=True)
+    parts = [b"first-", b"second-", b"third"]
+    chunk_map = {}
+    for number, data in enumerate(parts):
+        path = chunks / str(number)
+        path.write_bytes(data)
+        chunk_map[number] = {"path": str(path), "size": len(data)}
+    return tmp_path, chunk_map, b"".join(parts)
+
+
+def _run(lab, *, total_size=None, on_replace=lambda src, dst: None):
+    root, chunk_map, expected = lab
+    events = {"cleaned": [], "removed": []}
+
+    def verify_chunks_complete(file_id, total_chunks):
+        return {
+            "total_chunks": len(chunk_map),
+            "total_size": len(expected) if total_size is None else total_size,
+            "chunk_map": chunk_map,
+            "tmp_dir": str(root / ".chunks" / file_id),
+        }
+
+    def safe_remove_file(path):
+        events["removed"].append(path)
+        os.remove(path)
+        return True
+
+    namespace = {
+        "os": _OsProxy(on_replace),
+        "time": time,
+        "stat": stat,
+        "uuid": uuid,
+        "ROOT_DIR": str(root),
+        "verify_chunks_complete": verify_chunks_complete,
+        "cleanup_chunks": lambda file_id, *a: events["cleaned"].append(file_id),
+        "safe_remove_file": safe_remove_file,
+    }
+    exec(_assemble_chunks_source(), namespace)
+    return namespace["assemble_chunks"], events
+
+
+def _leftovers(root):
+    return [p.name for p in root.iterdir() if p.name.endswith(".part")]
+
+
+def test_the_target_does_not_exist_while_the_chunks_are_being_written(lab):
+    root, _, expected = lab
+    seen = {}
+
+    def on_replace(src, dst):
+        seen["target_existed"] = os.path.exists(dst)
+        seen["src_dir"] = os.path.dirname(src)
+        seen["src_content"] = Path(src).read_bytes()
+        seen["src_name"] = os.path.basename(src)
+
+    assemble, events = _run(lab, on_replace=on_replace)
+    assert assemble("fid", "movie.bin", "", 3) is True
+    assert seen["target_existed"] is False
+    assert seen["src_dir"] == str(root), "the temp file must be in the target folder"
+    assert seen["src_content"] == expected, "the file is replaced only once complete"
+    assert seen["src_name"].startswith(".") and seen["src_name"].endswith(".part")
+    assert (root / "movie.bin").read_bytes() == expected
+    assert _leftovers(root) == []
+    assert events["cleaned"] == ["fid"]
+
+
+def test_an_existing_file_keeps_its_old_content_until_the_new_one_is_complete(lab):
+    root, _, expected = lab
+    (root / "movie.bin").write_bytes(b"OLD VERSION")
+    seen = {}
+
+    def on_replace(src, dst):
+        seen["old_content"] = Path(dst).read_bytes()
+
+    assemble, _ = _run(lab, on_replace=on_replace)
+    assert assemble("fid", "movie.bin", "", 3) is True
+    assert seen["old_content"] == b"OLD VERSION"
+    assert (root / "movie.bin").read_bytes() == expected
+
+
+def test_a_failed_assembly_leaves_an_existing_file_untouched_and_no_temp_file(lab):
+    root, _, expected = lab
+    (root / "movie.bin").write_bytes(b"OLD VERSION")
+    assemble, events = _run(lab, total_size=len(expected) + 1)  # size check fails
+    with pytest.raises(ValueError):
+        assemble("fid", "movie.bin", "", 3)
+    assert (root / "movie.bin").read_bytes() == b"OLD VERSION"
+    assert _leftovers(root) == []
+    assert events["cleaned"] == [], "the chunks are kept after a failed assembly"
+
+
+def test_a_failed_assembly_of_a_new_file_publishes_nothing(lab):
+    root, _, expected = lab
+    assemble, _ = _run(lab, total_size=len(expected) + 1)
+    with pytest.raises(ValueError):
+        assemble("fid", "movie.bin", "", 3)
+    assert not (root / "movie.bin").exists()
+    assert _leftovers(root) == []
+
+
+def test_a_subfolder_gets_its_own_temp_file(lab):
+    root, _, expected = lab
+    seen = {}
+    assemble, _ = _run(
+        lab, on_replace=lambda src, dst: seen.update(dir=os.path.dirname(src))
+    )
+    assert assemble("fid", "movie.bin", "sub", 3) is True
+    assert seen["dir"] == str(root / "sub")
+    assert (root / "sub" / "movie.bin").read_bytes() == expected
