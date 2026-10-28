@@ -1359,18 +1359,19 @@ _menu_validate_sri() {
 # and start their own server there on a free port; they never touch the real db/, cache/,
 # versions/ or storage folders and never import the real app. A failing step makes qa.py exit
 # 1, which run_utility reports and returns, so `./manage.sh qa quick || exit 1` works in a
-# hook or script. Modes: quick | static | tests | layer <name> | ci | audit (+ --version / --help);
-# `audit` (pip-audit, needs network and `pip install pip-audit`) is not part of quick or ci.
-# extra flags (--skip-packages, --out DIR, --fail-fast, --path DIR) go straight to qa.py.
+# hook or script. Modes: quick | static | tests | layer <name> | ci | audit | coverage (+ --version / --help);
+# `audit` (pip-audit, needs network and `pip install pip-audit`) and `coverage` (coverage.py,
+# `pip install "coverage>=7.10"`) are not part of quick or ci.
+# extra flags (--skip-packages, --out DIR, --fail-fast, --path DIR, --fail-under N) go straight to qa.py.
 cmd_qa() {
 	local mode="${1:-quick}"
 	if (($# > 0)); then shift; fi
 	case "$mode" in
-	quick | static | tests | ci | layer | audit | --version | --help | -h)
+	quick | static | tests | ci | layer | audit | coverage | --version | --help | -h)
 		run_utility "tests/qa.py" "$mode" "$@"
 		;;
 	*)
-		error "Unknown qa mode: ${mode}  (use: quick | static | tests | layer <name> | ci | audit)"
+		error "Unknown qa mode: ${mode}  (use: quick | static | tests | layer <name> | ci | audit | coverage)"
 		return 2
 		;;
 	esac
@@ -1570,6 +1571,7 @@ cmd_menu() {
 		echo "  26) dir_tree.py         — Regenerate docs/DIRECTORY_TREE.md (project folder tree)"
 		echo "  27) smoke.py --save     — Save the route snapshot tests/smoke_routes.json (asks first)"
 		echo "  28) qa audit            — pip-audit on the installed packages (needs network; not part of qa quick)"
+		echo "  29) qa coverage         — every test layer under coverage.py (slow; not part of qa quick)"
 		echo ""
 		echo "   q) Quit"
 		echo ""
@@ -1612,6 +1614,7 @@ cmd_menu() {
 		26) _menu_run run_utility "tests/dir_tree.py" ;;
 		27) _menu_run _menu_smoke_save ;;
 		28) _menu_run cmd_qa audit ;;
+		29) _menu_run cmd_qa coverage ;;
 		q | Q)
 			echo ""
 			success "Goodbye!"
@@ -1727,6 +1730,9 @@ ${BOLD}QUALITY ASSURANCE COMMANDS${NC}  (foreground; safe to run while a server 
   qa ci                 quick, with JUnit XML written to ./artifacts (what GitHub runs)
   qa audit              pip-audit on the installed packages (python -m pip install pip-audit; needs
                           network; NOT part of quick / ci; accepted findings: tests/audit_ignore.txt)
+  qa coverage           all test layers under coverage.py (python -m pip install "coverage>=7.10");
+                          report + artifacts/coverage.xml + artifacts/htmlcov; --fail-under N;
+                          NOT part of quick / ci (slow; on Windows server code reads too low)
   qa --version          which copy of tests/qa.py you have
 
 ${BOLD}DEVELOPER TOOLS COMMANDS${NC}  (foreground; safe while a server is up — they only read source files and folder names)
@@ -1760,7 +1766,7 @@ ${BOLD}MENU ↔ COMMAND MAP${NC}  (in ./manage.sh menu type the number; from the
   21  qa quick             22  qa static             23  qa tests
   24  qa layer (asks)      25  qa ci                 26  dir-tree
   27  smoke --save (asks y/N first)                  28  qa audit (pip-audit; needs network)
-   q  quit
+  29  qa coverage (slow)                              q  quit
 
 ${BOLD}EXAMPLES${NC}
   Servers
@@ -1820,6 +1826,7 @@ ${BOLD}EXAMPLES${NC}
     ./manage.sh qa layer unit                    # one layer (unit | integration | application | ...)
     ./manage.sh qa ci                            # quick + JUnit XML in ./artifacts (what GitHub runs)
     ./manage.sh qa audit                         # pip-audit on the installed packages (network)
+    ./manage.sh qa coverage                      # all layers under coverage.py (slow)
     ./manage.sh qa quick --fail-fast             # stop at the first failing step
     ./manage.sh qa --version                     # which tests/qa.py you have
   Developer Tools

@@ -15,10 +15,15 @@ this one file, so "green locally" and "green in CI" mean the same commands ran.
                                            `python -m pip install pip-audit`); NOT part of quick / ci
     python tests/qa.py audit --path DIR    the same for another environment's site-packages folder
                                            (CI keeps pip-audit in its own venv, away from the app's)
+    python tests/qa.py coverage            every tests/ layer under coverage.py, subprocesses included
+                                           (needs `python -m pip install "coverage>=7.10"`); NOT part of
+                                           quick / ci; data, coverage.xml and htmlcov/ go to ./artifacts
+                                           (or --out DIR); --fail-under N makes a total below N% a FAIL
 
     --skip-packages   pass to check.py (use where requirements.txt is not installed, like CI static job)
     --out DIR         write JUnit XML for the pytest steps into DIR
     --fail-fast       stop at the first failing step
+    --fail-under N    coverage mode only: the report fails when the total is below N percent
 
 Exit code: 0 = every step passed or was skipped, 1 = at least one step failed, 130 = Ctrl-C.
 A SKIP never hides a failure: tools that are not installed (node, pip-audit) or files that do not
@@ -42,7 +47,7 @@ import time
 from pathlib import Path
 
 QA_VERSION = (
-    "5.32"  # `python tests/qa.py --version`: tells you which copy of this file you run
+    "5.34"  # `python tests/qa.py --version`: tells you which copy of this file you run
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -63,15 +68,27 @@ VENDOR_JS = {"video.js", "pdf.mjs", "pdf.worker.mjs", "viewer.mjs"}
 
 
 class Step:
-    """One named step: a list of commands run in order (stops at the first failing one)."""
+    """One named step: a list of commands run in order (stops at the first failing one, unless
+    `keep_going`: then the later commands still run and the step is a FAIL if any command failed).
+    """
 
-    def __init__(self, name, cmds=None, skip=None, skip_codes=(), hint="", fail=None):
+    def __init__(
+        self,
+        name,
+        cmds=None,
+        skip=None,
+        skip_codes=(),
+        hint="",
+        fail=None,
+        keep_going=False,
+    ):
         self.name = name
         self.cmds = cmds or []
         self.skip = skip  # reason string -> reported as SKIP, nothing runs
         self.fail = fail  # reason string -> reported as FAIL, nothing runs
         self.skip_codes = tuple(skip_codes)  # exit codes that mean "nothing to run"
         self.hint = hint
+        self.keep_going = keep_going
 
 
 def _static_steps(skip_packages):
@@ -187,6 +204,52 @@ def _audit_step(path=None):
     )
 
 
+def _coverage_data_file(out):
+    """Absolute path of the coverage data file: inherited by every subprocess the tests start
+    (the servers run in scratch copies elsewhere), so all their data lands in ONE place.
+    """
+    return str((Path(out or "artifacts").resolve()) / ".coverage")
+
+
+def _coverage_step(layers, out=None, fail_under=None):
+    """Run every layer under coverage.py. Subprocesses (the scratch-copy servers) are measured by
+    pyproject.toml [tool.coverage.run] patch = subprocess + sigterm = true; relative_files makes
+    the scratch copy's `sftp_server.py` and the repository's one the same file when combined.
+    """
+    if importlib.util.find_spec("coverage") is None:
+        return Step(
+            "coverage",
+            skip='coverage is not installed: python -m pip install "coverage>=7.10"',
+        )
+    if not layers:
+        return Step("coverage", skip="no tests/<layer> folders yet")
+    cov = [PY, "-m", "coverage"]
+    run = cov + [
+        "run",
+        "-m",
+        "pytest",
+        *[str(ROOT / "tests" / n) for n in layers],
+        "-q",
+    ]
+    cmds = [cov + ["erase"], run, cov + ["combine"]]
+    if out:
+        cmds.append(cov + ["xml", "-o", str(Path(out) / "coverage.xml")])
+        cmds.append(cov + ["html", "-d", str(Path(out) / "htmlcov")])
+    report = cov + ["report", "--skip-empty"]
+    if fail_under is not None:
+        report += ["--fail-under", str(fail_under)]
+    cmds.append(report)
+    return Step(
+        "coverage",
+        cmds,
+        skip_codes=(5,),
+        # a failing test must not throw away minutes of collected data: the reports are still
+        # written, and the step is a FAIL anyway
+        keep_going=True,
+        hint="a failing test, or the total is below --fail-under",
+    )
+
+
 def _existing_layers():
     return [n for n in LAYERS if (ROOT / "tests" / n).is_dir()]
 
@@ -209,7 +272,9 @@ def _with_layout(steps):
     return ([layout] if layout else []) + steps
 
 
-def build_plan(mode, layer=None, skip_packages=False, out=None, path=None):
+def build_plan(
+    mode, layer=None, skip_packages=False, out=None, path=None, fail_under=None
+):
     """Return the list of Steps for a mode. Raises ValueError for unknown input."""
     if mode == "static":
         return _static_steps(skip_packages)
@@ -222,6 +287,10 @@ def build_plan(mode, layer=None, skip_packages=False, out=None, path=None):
         )
     if mode == "audit":
         return [_audit_step(path)]
+    if mode == "coverage":
+        return _with_layout(
+            [_coverage_step(_existing_layers(), out or "artifacts", fail_under)]
+        )
     if mode in ("quick", "ci"):
         return _static_steps(skip_packages) + build_plan("tests", out=out)
     if mode == "layer":
@@ -260,13 +329,15 @@ def run_steps(steps, fail_fast=False, cwd=ROOT):
                 status, detail = "SKIP", "nothing to run"
                 break
             if code != 0:
-                status, detail = (
-                    "FAIL",
-                    f"exit {code}: {' '.join(str(c) for c in cmd[:4])}",
-                )
-                if step.hint:
-                    detail += f"  ({step.hint})"
-                break
+                if status != "FAIL":  # the FIRST failure is the one that is reported
+                    status, detail = (
+                        "FAIL",
+                        f"exit {code}: {' '.join(str(c) for c in cmd[:4])}",
+                    )
+                    if step.hint:
+                        detail += f"  ({step.hint})"
+                if not step.keep_going:
+                    break
         results.append((step.name, status, time.monotonic() - t0, detail))
         if status == "FAIL" and fail_fast:
             break
@@ -285,12 +356,13 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="CloudinatorFTP QA runner")
     ap.add_argument("--version", action="version", version=f"qa.py {QA_VERSION}")
     ap.add_argument(
-        "mode", choices=["static", "tests", "quick", "layer", "ci", "audit"]
+        "mode", choices=["static", "tests", "quick", "layer", "ci", "audit", "coverage"]
     )
     ap.add_argument("layer", nargs="?", help="layer name (mode 'layer' only)")
     ap.add_argument("--skip-packages", action="store_true")
     ap.add_argument("--out", metavar="DIR")
     ap.add_argument("--fail-fast", action="store_true")
+    ap.add_argument("--fail-under", type=float, metavar="N", help="coverage mode only")
     ap.add_argument(
         "--path", metavar="DIR", help="site-packages to audit (mode 'audit' only)"
     )
@@ -303,11 +375,23 @@ def main(argv=None):
         location = _venv_python_location(os.environ.get("VIRTUAL_ENV"), PY)
         if location:
             os.environ.setdefault("PIPAPI_PYTHON_LOCATION", location)
-    out = args.out or ("artifacts" if args.mode == "ci" else None)
+    if args.mode == "coverage":
+        os.environ["COVERAGE_FILE"] = _coverage_data_file(args.out)
+        if sys.platform == "win32":
+            print(
+                "qa: note: on Windows the test harness stops the servers it starts with "
+                "TerminateProcess, which gives coverage.py no chance to save: code that runs only "
+                "inside those server processes shows far too low here. Read those numbers from the "
+                "Linux workflow (.github/workflows/coverage.yml).",
+                file=sys.stderr,
+            )
+    out = args.out or ("artifacts" if args.mode in ("ci", "coverage") else None)
     if out:
         Path(out).mkdir(parents=True, exist_ok=True)
     try:
-        steps = build_plan(args.mode, args.layer, args.skip_packages, out, args.path)
+        steps = build_plan(
+            args.mode, args.layer, args.skip_packages, out, args.path, args.fail_under
+        )
     except ValueError as e:
         print(f"qa: {e}", file=sys.stderr)
         return 2

@@ -15,9 +15,33 @@ timeout = 120
 markers = [
     "application: black-box tests against a scratch server started as a subprocess",
     "integration: tests multiple real application components",
-    "protocol: starts FTP, SFTP, WebDAV or SMB against an isolated service",
+    "protocol: starts FTP, SFTP or WebDAV against an isolated service",
     "property: property-based or generated-input tests",
     "reliability: concurrency, fault-injection and recovery tests",
     "performance: scale and performance tests",
     "browser: needs Playwright and Chromium",
 ]
+
+# `python tests/qa.py coverage` (CLAUDE.md 5.34). Needs coverage >= 7.10 (python -m pip install "coverage>=7.10").
+# The tests start the application and the protocol servers as SUBPROCESSES in scratch copies of the
+# project: `patch = subprocess` measures them, `sigterm = true` saves their data when the harness
+# stops them (Linux and macOS; Windows kills them without a chance to save, see qa.py). Do NOT set
+# `source`: coverage would resolve it to the repository, not to the scratch copy a subprocess runs in.
+# relative_files makes `sftp_server.py` in a scratch copy and in the repository the same file.
+[tool.coverage.run]
+branch = true
+parallel = true
+relative_files = true
+omit = [
+    "tests/*",
+    ".venv/*",
+    "venv/*",
+    "*/site-packages/*",
+    "*/sitecustomize.py",
+]
+patch = ["subprocess"]
+sigterm = true
+
+[tool.coverage.report]
+skip_empty = true
+exclude_also = ["if __name__ == .__main__.:", "raise NotImplementedError"]

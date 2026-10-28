@@ -1,6 +1,6 @@
 """
 Tests for the Quality Assurance section of manage.sh (menu 21-25 and the `qa` command) and for
-its Developer Tools section (menu 26-28: `dir-tree`, `smoke --save` and `qa audit`).
+its Developer Tools section (menu 26-29: `dir-tree`, `smoke --save`, `qa audit` and `qa coverage`).
 
 They read the real manage.sh and only run side-effect-free commands (`help`, `qa --version`,
 `qa bogus`, `qa layer nope`; `qa audit` is only checked in the source, it would use the network); no server is started and nothing is written. The numbering test
@@ -23,7 +23,7 @@ pytestmark = pytest.mark.skipif(
     BASH is None or not SCRIPT.is_file(), reason="bash or manage.sh not found"
 )
 
-LAST_ENTRY = 28
+LAST_ENTRY = 29
 
 
 def _text():
@@ -80,6 +80,7 @@ def test_menu_arms_run_the_expected_qa_modes():
         24: "_menu_qa_layer",
         25: "cmd_qa ci",
         28: "cmd_qa audit",
+        29: "cmd_qa coverage",
     }.items():
         assert re.search(
             rf"^\t\t{num}\) _menu_run {re.escape(call)} ;;$", body, re.M
@@ -135,15 +136,18 @@ def test_help_documents_every_qa_mode():
         "qa layer <name>",
         "qa ci",
         "qa audit",
+        "qa coverage",
         "qa --version",
     ):
         assert text in out, text
 
 
-def test_qa_audit_is_an_accepted_mode_and_stays_out_of_quick():
+def test_qa_audit_and_coverage_are_accepted_modes_and_stay_out_of_quick():
     body = _function("cmd_qa")
-    assert re.search(r"quick \| static \| tests \| ci \| layer \| audit \|", body)
-    assert "| audit)" in body  # the error message lists it
+    assert re.search(
+        r"quick \| static \| tests \| ci \| layer \| audit \| coverage \|", body
+    )
+    assert "| audit | coverage)" in body  # the error message lists them
 
 
 def test_unknown_qa_mode_exits_2():

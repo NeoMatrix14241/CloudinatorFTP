@@ -484,7 +484,7 @@ These are not the app logic itself, but they are critical for development, insta
 
 ## 18. Testing philosophy and validation
 
-> **`docs/TESTING_STRATEGY.md` is `.gitignored`.** After all the testing phases were implemented the owner keeps that planning document out of the repository: it exists only on the owner's machine and is attached to a conversation on request. Do not assume it is on GitHub, do not link to it from a committed document, do not `git add -f` it, and do not record a fact only there. The facts live in `docs/CLAUDE.md` (sync notes and changelog), in this section, in the test docstrings and in `python tests/qa.py --help`. Keep updating the local copy when the tests change. If `git ls-files docs/TESTING_STRATEGY.md` still lists it, run `git rm --cached docs/TESTING_STRATEGY.md` once (`.gitignore` does not untrack a file that is already tracked).
+> **`docs/TESTING_STRATEGY.md` is tracked for now** and is updated with every testing change. Once ALL the CI / testing phases are 100% implemented the owner will add it to `.gitignore` and keep it only on his machine; from then on do not assume it is on GitHub, do not link to it from a committed document, do not `git add -f` it and do not record a fact only there (the facts live in `docs/CLAUDE.md`, in this section, in the test docstrings and in `python tests/qa.py --help`). Check which state applies with `git ls-files docs/TESTING_STRATEGY.md` (a path printed = tracked). If it is in `.gitignore` but still tracked, `git rm --cached docs/TESTING_STRATEGY.md` once.
 
 The project's automated checks are static: they read the source and do not start the app. Examples include:
 
@@ -688,7 +688,8 @@ Run checks from the project root. These static checks do not import or start the
 | JavaScript asset | `node --check static/js/index.js` (substitute the edited file); `./manage.sh validate-sri` |
 | Template/static asset hashes | `./manage.sh validate-sri`; repair with `./manage.sh validate-sri --fix` |
 | `manage.sh` | `bash -n manage.sh`; `python tests/smoke.py` |
-| `requirements.txt` / `constraints.txt` | `python tests/qa.py audit` (needs `python -m pip install pip-audit` and network; not part of `quick`); a finding that cannot be fixed yet goes into `tests/audit_ignore.txt` with the reason; `.github/workflows/audit.yml` repeats it weekly |
+| `requirements.txt` / `constraints.txt` | `python tests/qa.py audit` (`pip-audit` is in `requirements-dev.txt`; needs network; not part of `quick`); a finding that cannot be fixed yet goes into `tests/audit_ignore.txt` with the reason; `.github/workflows/audit.yml` repeats it weekly |
+| Anything with tests (a periodic look, not every change) | `python tests/qa.py coverage` (`coverage` is in `requirements-dev.txt`; slow; not part of `quick`); read the server numbers from the Linux workflow `.github/workflows/coverage.yml` (on Windows the harness kills the servers and their data is lost); never add `source` to `[tool.coverage.run]` in `pyproject.toml` (the subprocess servers would measure nothing) |
 | File monitor/index behavior | Run the narrow temporary-tree test for the changed behavior, then `python tests/smoke.py` |
 | Anything with pytest coverage (`paths.py`, test harness, server boot) | `python tests/qa.py quick`; one layer: `python tests/qa.py layer unit` / `layer application` (needs `requirements-dev.txt`) |
 | `setup_pymodules.sh` | `bash -n setup_pymodules.sh`; `python tests/qa.py layer unit` (covers `append_req_line()`) |
