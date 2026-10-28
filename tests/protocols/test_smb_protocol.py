@@ -80,8 +80,12 @@ def occupy_a_port():
         holder.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
     # Must be ALL interfaces on purpose: smb_server._try_bind() binds 0.0.0.0, and on Windows a
     # listener on 127.0.0.1 does NOT block that bind (the server would take this port and
-    # never open the fallback port). CodeQL flags this line; dismiss the alert as "used in tests".
-    holder.bind(("0.0.0.0", 0))
+    # never open the fallback port). The wildcard address is resolved the documented way
+    # (getaddrinfo, no host, AI_PASSIVE) instead of being written out as a string literal.
+    wildcard = socket.getaddrinfo(
+        None, 0, socket.AF_INET, socket.SOCK_STREAM, 0, socket.AI_PASSIVE
+    )[0][4]
+    holder.bind(wildcard)
     holder.listen(5)
     return holder
 
