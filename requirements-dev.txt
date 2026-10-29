@@ -5,3 +5,10 @@ pytest>=9.1.1
 pytest-timeout>=2.4
 pip-audit>=2.10.1
 coverage>=7.17.0
+# 5.40: property-based tests (tests/property/, the load fuzz in tests/unit/test_monitor_cache.py);
+# they run deterministically in the pull-request check and with random inputs in nightly.yml.
+hypothesis>=6.170
+# 5.40: linter, REPORT-ONLY until its findings are triaged ([tool.ruff] in pyproject.toml). Pinned
+# EXACTLY: a new release adds rules, and a linter must not change a green build by itself. The
+# "Ruff (report only)" workflow reads this line, so this is the one place to bump it.
+ruff==0.17.3

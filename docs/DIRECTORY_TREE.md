@@ -2,14 +2,17 @@ CloudinatorFTP
 ├── .github
 │   ├── codeql
 │   │   └── codeql-config.yml
-│   └── workflows
-│       ├── audit.yml
-│       ├── codeql.yml
-│       └── tests.yml
+│   ├── workflows
+│   │   ├── audit.yml
+│   │   ├── codeql.yml
+│   │   ├── coverage.yml
+│   │   └── tests.yml
+│   └── CODEOWNERS
 ├── docs
 │   ├── rulesets
 │   │   ├── dev.json
-│   │   └── main.json
+│   │   ├── main.json
+│   │   └── README.md
 │   ├── ANDROID_DEPLOYMENT.md
 │   ├── CLAUDE.md
 │   ├── CODING_GUIDELINES.md
@@ -119,11 +122,13 @@ CloudinatorFTP
 │   │   ├── test_smb_protocol.py
 │   │   └── test_webdav_protocol.py
 │   ├── unit
+│   │   ├── test_assemble_atomic.py
 │   │   ├── test_client_ip_trust.py
 │   │   ├── test_http_client.py
 │   │   ├── test_manage_qa.py
 │   │   ├── test_paths.py
 │   │   ├── test_qa_audit.py
+│   │   ├── test_qa_coverage.py
 │   │   ├── test_qa_runner.py
 │   │   ├── test_response_timeout.py
 │   │   ├── test_scratch_copy.py

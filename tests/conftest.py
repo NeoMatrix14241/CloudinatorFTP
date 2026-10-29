@@ -83,8 +83,12 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def build_scratch(dest, src_root=REPO_ROOT, port=0) -> Path:
-    """Copy the source tree into `dest` and write config files that point inside it."""
+def build_scratch(dest, src_root=REPO_ROOT, port=0, config=None) -> Path:
+    """Copy the source tree into `dest` and write config files that point inside it.
+
+    `config` (5.40) is merged over the default server_config.json of the scratch copy, e.g. to
+    switch the version engine on for one fixture; the defaults keep every optional service off.
+    """
     dest = Path(dest)
     src_root = Path(src_root)
 
@@ -123,6 +127,7 @@ def build_scratch(dest, src_root=REPO_ROOT, port=0) -> Path:
         "SMB_ENABLED": False,
         "VERSION_ENGINE_ENABLED": False,
     }
+    server_cfg.update(config or {})
     (dest / "storage_config.json").write_text(
         json.dumps(storage_cfg, indent=2), "utf-8"
     )
@@ -240,6 +245,9 @@ def scratch_tools():
         run_in_scratch=run_in_scratch,
         test_users=TEST_USERS,
         repo_root=REPO_ROOT,
+        start_server=start_scratch_server,
+        stop_server=stop_scratch_server,
+        seed_users=seed_scratch_users,
     )
 
 
@@ -429,6 +437,8 @@ class ScratchServer:
         self._opener = urllib.request.build_opener(_NoRedirect)
         self.users = dict(TEST_USERS)
         self.storage = self.root / "data" / "storage"
+        self.stop_file = self.root / ".manage_pids" / "dev.stop"
+        self.log_handle = None  # set by start_scratch_server
 
     def client(self, ip=None) -> HttpClient:
         """A new anonymous browser-like client with its own fake IP (own rate-limit bucket)."""
@@ -473,27 +483,42 @@ class ScratchServer:
         return "\n".join(lines[-n:])
 
 
-@pytest.fixture(scope="session")
-def scratch_server(tmp_path_factory):
-    """Start dev_server.py from a scratch copy of the project on an ephemeral port."""
-    if not (REPO_ROOT / "dev_server.py").exists():
-        pytest.skip("dev_server.py not found next to tests/")
-    real_hashes = _hash_real_configs()
-    root = tmp_path_factory.mktemp("cloudinator_scratch") / "app"
-    port = free_port()
-    build_scratch(root, port=port)
-
-    violations = paths_outside(root)
-    if violations:  # refuse to start anything; this is the production-data safety net
-        pytest.fail(
-            "scratch isolation check failed, nothing started:\n" + "\n".join(violations)
-        )
-
-    # Create the test accounts in the scratch database BEFORE the server starts.
+def seed_scratch_users(root) -> None:
+    """Create TEST_USERS in the scratch database (before the server starts)."""
     run_in_scratch(root, _SEED_CODE, json.dumps(TEST_USERS))
 
+
+def stop_scratch_server(server) -> None:
+    """Stop a server started by start_scratch_server the way manage.sh does (the stop file that
+    dev_server.py watches), then terminate / kill it if it does not exit. Safe to call twice.
+    """
+    proc = server.proc
+    if proc.poll() is None:
+        with suppress(OSError):  # best-effort stop request
+            server.stop_file.write_text("stop", "utf-8")
+        try:
+            proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+    if server.log_handle is not None:
+        server.log_handle.close()
+        server.log_handle = None
+
+
+def start_scratch_server(root, port, real_hashes=None) -> "ScratchServer":
+    """Start dev_server.py inside the scratch copy `root` on `port` and wait until it answers.
+
+    Returns a ScratchServer; the caller stops it with stop_scratch_server. The log file is opened
+    for appending, so a restarted server keeps the log of its first run. Fails the test (after
+    stopping the process) when the server exits early or does not answer within 90 s.
+    """
+    root = Path(root)
     (root / ".manage_pids").mkdir(exist_ok=True)
-    stop_file = root / ".manage_pids" / "dev.stop"
     log_path = root / "scratch_server.log"
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH",)}
     env.update(
@@ -506,7 +531,7 @@ def scratch_server(tmp_path_factory):
     )
     env.pop("CLOUDINATOR_PUBLIC_DOMAIN", None)
 
-    log = open(log_path, "wb")
+    log = open(log_path, "ab")
     proc = subprocess.Popen(
         [sys.executable, "dev_server.py"],
         cwd=str(root),
@@ -515,36 +540,100 @@ def scratch_server(tmp_path_factory):
         stdout=log,
         stderr=subprocess.STDOUT,
     )
-    server = ScratchServer(root, port, proc, log_path, real_hashes)
+    server = ScratchServer(
+        root, port, proc, log_path, real_hashes or _hash_real_configs()
+    )
+    server.log_handle = log
+    deadline = time.monotonic() + 90
+    while True:
+        if proc.poll() is not None:
+            code = proc.returncode
+            stop_scratch_server(server)
+            pytest.fail(
+                f"scratch server exited with code {code} during startup:\n"
+                + server.log_tail()
+            )
+        try:
+            server.get("/login")
+            return server  # any HTTP answer means the server is up
+        except (urllib.error.URLError, OSError):
+            if time.monotonic() > deadline:
+                tail = server.log_tail()
+                stop_scratch_server(server)
+                pytest.fail("scratch server did not answer in 90 s:\n" + tail)
+            time.sleep(0.5)
+
+
+def _build_isolated_scratch(tmp_path_factory, name, config=None):
+    """A scratch copy with the test accounts, checked to lie completely inside its own folder.
+    Returns (root, port); refuses (and starts nothing) if the isolation check fails."""
+    root = tmp_path_factory.mktemp(name) / "app"
+    port = free_port()
+    build_scratch(root, port=port, config=config)
+    violations = paths_outside(root)
+    if violations:  # refuse to start anything; this is the production-data safety net
+        pytest.fail(
+            "scratch isolation check failed, nothing started:\n" + "\n".join(violations)
+        )
+    seed_scratch_users(root)
+    return root, port
+
+
+@pytest.fixture(scope="session")
+def scratch_server(tmp_path_factory):
+    """Start dev_server.py from a scratch copy of the project on an ephemeral port."""
+    if not (REPO_ROOT / "dev_server.py").exists():
+        pytest.skip("dev_server.py not found next to tests/")
+    real_hashes = _hash_real_configs()
+    root, port = _build_isolated_scratch(tmp_path_factory, "cloudinator_scratch")
+    server = start_scratch_server(root, port, real_hashes)
     try:
-        deadline = time.monotonic() + 90
-        while True:
-            if proc.poll() is not None:
-                pytest.fail(
-                    f"scratch server exited with code {proc.returncode} during startup:\n"
-                    + server.log_tail()
-                )
-            try:
-                server.get("/login")
-                break  # any HTTP answer means the server is up
-            except (urllib.error.URLError, OSError):
-                if time.monotonic() > deadline:
-                    pytest.fail(
-                        "scratch server did not answer in 90 s:\n" + server.log_tail()
-                    )
-                time.sleep(0.5)
         yield server
     finally:
-        # Same graceful request manage.sh uses (dev_server.py watches this file).
-        with suppress(OSError):  # best-effort stop request
-            stop_file.write_text("stop", "utf-8")
-        try:
-            proc.wait(timeout=20)
-        except subprocess.TimeoutExpired:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-        log.close()
+        stop_scratch_server(server)
+
+
+# 5.40: a second scratch server with the Version Engine ON. The engine is its own worker process
+# (version_engine.py --worker, started by dev_server.py), so a capture needs real time: the
+# watcher polls every 3 s. Tests that use this fixture wait with a bounded poll (see
+# tests/reliability/test_version_engine_live.py); they are opt-in (CLOUDINATOR_SLOW_TESTS=1).
+def version_engine_config(storage_dir) -> dict:
+    return {
+        "VERSION_ENGINE_ENABLED": True,
+        "VERSION_TRACK_ALL_FILES": True,
+        "VERSION_TRACK_ROOTS": [str(storage_dir)],
+        "VERSION_WATCH_ENABLED": True,
+        "VERSION_SCAN_ENABLED": True,
+        "VERSION_SCAN_INTERVAL": 5,
+        "VERSION_RETENTION_ENABLED": False,
+    }
+
+
+@pytest.fixture(scope="session")
+def scratch_server_with_versions(tmp_path_factory):
+    """Like scratch_server, but with the Version Engine tracking the scratch storage folder."""
+    if not (REPO_ROOT / "dev_server.py").exists():
+        pytest.skip("dev_server.py not found next to tests/")
+    real_hashes = _hash_real_configs()
+    name = "cloudinator_scratch_versions"
+    root = tmp_path_factory.mktemp(name) / "app"
+    port = free_port()
+    storage = root / "data" / "storage"
+    build_scratch(root, port=port, config=version_engine_config(storage))
+    violations = paths_outside(root)
+    cfg = json.loads((root / "server_config.json").read_text("utf-8"))
+    violations += [
+        f"VERSION_TRACK_ROOTS entry outside the scratch folder: {r}"
+        for r in cfg["VERSION_TRACK_ROOTS"]
+        if not _is_inside(r, root)
+    ]
+    if violations:
+        pytest.fail(
+            "scratch isolation check failed, nothing started:\n" + "\n".join(violations)
+        )
+    seed_scratch_users(root)
+    server = start_scratch_server(root, port, real_hashes)
+    try:
+        yield server
+    finally:
+        stop_scratch_server(server)

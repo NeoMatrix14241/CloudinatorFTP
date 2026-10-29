@@ -45,3 +45,49 @@ sigterm = true
 [tool.coverage.report]
 skip_empty = true
 exclude_also = ["if __name__ == .__main__.:", "raise NotImplementedError"]
+
+# Ruff (CLAUDE.md 5.40). REPORT-ONLY for now: the "Ruff (report only)" workflow runs it with
+# --exit-zero and prints the findings as annotations; nothing fails. Once the findings have been
+# triaged (fixed, or ignored below WITH a reason) it becomes a required check inside `smoke + check`.
+# The version is pinned in requirements-dev.txt (a new Ruff release adds rules and must not turn a
+# green build red). Formatting stays with Black; Ruff only lints, so E501 (line length) is off.
+# Run it locally:  python -m ruff check .
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+extend-exclude = [
+    "static",
+    "templates",
+    "docs",
+    "data",
+    "artifacts",
+    ".hypothesis",
+]
+
+[tool.ruff.lint]
+# E/F = pycodestyle errors + pyflakes, B = bugbear (likely bugs), S = bandit (security).
+select = ["E", "F", "B", "S"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Stand-alone scripts put the project root on sys.path first, so their imports follow code.
+"dev_server.py" = ["E402"]
+"prod_server.py" = ["E402"]
+"tools/**" = ["E402"]
+# Tests assert (S101), use throw-away passwords and /tmp-style paths on purpose, read source files
+# with `ast` and run them with exec (S102: the point of the unit tests, see CODING_GUIDELINES.md
+# 18.1), talk to the scratch server on 127.0.0.1 with urllib (S310) and test FTP itself (S321).
+"tests/**" = [
+    "S101",
+    "S102",
+    "S105",
+    "S106",
+    "S108",
+    "S310",
+    "S311",
+    "S321",
+    "S603",
+    "S607",
+    "B905",
+    "E402",
+]

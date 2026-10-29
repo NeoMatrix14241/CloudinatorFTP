@@ -374,8 +374,31 @@ def assemble_chunks(file_id, filename, dest_path="", total_chunks=None):
         if os.name == "nt":
             os.chmod(tmp_path, stat.S_IWRITE | stat.S_IREAD)
 
-        # Step 4b: publish atomically (replaces an existing file of the same name in one step)
-        os.replace(tmp_path, target_path)
+        # Step 4b: publish atomically (replaces an existing file of the same name in one step).
+        # On Windows os.replace raises PermissionError (WinError 5 / 32) while another program has
+        # the TARGET open (a download in progress, antivirus, the search indexer). That is usually
+        # over within a moment, so the replace is retried a few times with a short backoff (the
+        # same schedule file_monitor._save_cache uses for storage_index.json, about 3 s in total).
+        # Only the replace is retried, never the writing: the temp file stays in the target's folder,
+        # so the publish stays one atomic os.replace, and a file that is still busy afterwards is
+        # reported with a clear message instead of a raw OS error. The chunks are kept (they are
+        # removed only after a successful publish) and the existing file is left untouched.
+        publish_error = None
+        for delay in (0, 0.05, 0.1, 0.2, 0.4, 0.8, 1.5):
+            if delay:
+                time.sleep(delay)
+            try:
+                os.replace(tmp_path, target_path)
+                publish_error = None
+                break
+            except PermissionError as e:
+                publish_error = e
+        if publish_error is not None:
+            raise PermissionError(
+                f"Could not replace '{safe_filename}': the existing file is open in another "
+                "program. The upload itself is complete and its chunks are kept; "
+                "close the file there and upload again."
+            ) from publish_error
 
         print(f"✅ Assembly successful: {filename} ({final_size} bytes)")
 
@@ -738,6 +761,12 @@ def get_dir_info(path):
 
 def is_safe_path(path):
     """Check if path is safe (no directory traversal)"""
+    # 5.40: a NUL byte is refused HERE, on every platform. Linux's os.path.realpath raises
+    # ValueError for it (caught below), but Python 3.14 on Windows resolves such a path without an
+    # error, so is_safe_path("a\x00b") said True there and the NUL only failed later, inside the
+    # first open() (found by the first Windows run of tests/property/test_properties.py).
+    if isinstance(path, str) and "\x00" in path:
+        return False
     try:
         # Resolve the path and check if it's within ROOT_DIR. os.path.commonpath compares whole
         # path components: a plain startswith() accepted a SIBLING folder whose name begins with

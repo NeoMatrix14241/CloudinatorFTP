@@ -685,9 +685,19 @@ class InstantFileEventHandler(FileSystemEventHandler):
                 dest_parent = _rel(
                     os.path.dirname(event.dest_path), str(self.monitor.root_path)
                 )
+                # 5.40: a file is counted only while its name is visible (the walk and
+                # on_created skip names starting with "."). A rename from a hidden to a
+                # visible name therefore ADDS a file (storage.assemble_chunks publishes
+                # `.assembling_<hex>.part` onto the final name this way, inside one folder)
+                # and a rename to a hidden name REMOVES one. Before, only a move between two
+                # folders changed anything, so the counters stayed wrong until
+                # _correct_folders() recomputed the folder (a few seconds later). When the
+                # target name already existed (an overwrite) the file was counted before, so
+                # this briefly counts it twice; the same correction pass fixes that too.
+                src_counts = not _src_name.startswith(".")
+                dst_counts = not _dst_name.startswith(".")
 
-                if src_parent != dest_parent:
-                    # Moving to a different folder — transfer file count between parents
+                if src_counts != dst_counts or src_parent != dest_parent:
                     try:
                         file_size = os.path.getsize(event.dest_path)
                     except OSError:
@@ -696,16 +706,28 @@ class InstantFileEventHandler(FileSystemEventHandler):
                     # 4.64: the whole ancestor chain of both parents, not only the
                     # two immediate parents (a file moved between sub-folders used
                     # to leave every higher ancestor wrong until the next walk).
-                    for k in [src_parent, *_parents(src_parent)]:
-                        a = self.monitor._dir_info.get(k)
-                        if a is not None:
-                            a["file_count"] = max(0, a["file_count"] - 1)
-                            a["total_size"] = max(0, a["total_size"] - file_size)
-                    for k in [dest_parent, *_parents(dest_parent)]:
-                        a = self.monitor._dir_info.get(k)
-                        if a is not None:
-                            a["file_count"] += 1
-                            a["total_size"] += file_size
+                    if src_counts:
+                        for k in [src_parent, *_parents(src_parent)]:
+                            a = self.monitor._dir_info.get(k)
+                            if a is not None:
+                                a["file_count"] = max(0, a["file_count"] - 1)
+                                a["total_size"] = max(0, a["total_size"] - file_size)
+                    if dst_counts:
+                        for k in [dest_parent, *_parents(dest_parent)]:
+                            a = self.monitor._dir_info.get(k)
+                            if a is not None:
+                                a["file_count"] += 1
+                                a["total_size"] += file_size
+                    if src_counts != dst_counts:
+                        # The file appeared in / vanished from the counted set: the global
+                        # counters change too (a move between two visible names never does).
+                        sign = 1 if dst_counts else -1
+                        self.monitor._file_count = max(
+                            0, self.monitor._file_count + sign
+                        )
+                        self.monitor._total_size = max(
+                            0, self.monitor._total_size + sign * file_size
+                        )
 
         # --- file index: rename dir keys or update both parent folders ---
         if event.is_directory:
@@ -732,8 +754,12 @@ class InstantFileEventHandler(FileSystemEventHandler):
         if event.is_directory:
             search_index_manager.rename_tree(src_rel, dest_rel)
         else:
-            search_index_manager.remove(src_rel)
-            search_index_manager.add(dest_rel, _dest_name, False)
+            # 5.40: hidden names are never in the search index (on_created skips them), so a
+            # rename to a hidden name must not add one, and a hidden source has nothing to remove.
+            if not _src_name.startswith("."):
+                search_index_manager.remove(src_rel)
+            if not _dest_name.startswith("."):
+                search_index_manager.add(dest_rel, _dest_name, False)
 
         self._schedule_notify()
 

@@ -199,8 +199,6 @@ def _make_server(port: int):
 
     certfile = keyfile = None
     if use_tls:
-        from pyftpdlib.handlers import TLS_FTPHandler as BaseHandler
-
         try:
             certfile, keyfile = _resolve_tls_cert_paths()
         except Exception as e:
@@ -209,7 +207,12 @@ def _make_server(port: int):
                 "falling back to PLAINTEXT FTP."
             )
             use_tls = False
-            from pyftpdlib.handlers import FTPHandler as BaseHandler
+
+    # BaseHandler is bound in exactly one branch (5.40; before, the cert-failure fallback imported
+    # it a second time inside the TLS branch, which pyflakes reports as a redefinition). The TLS
+    # class only exists when pyOpenSSL is installed, so it is imported only when use_tls is set.
+    if use_tls:
+        from pyftpdlib.handlers import TLS_FTPHandler as BaseHandler
     else:
         from pyftpdlib.handlers import FTPHandler as BaseHandler
 

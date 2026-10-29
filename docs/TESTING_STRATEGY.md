@@ -2,8 +2,8 @@
 
 > **Status: tracked in git for now.** It becomes `.gitignored` (a local planning document) only after ALL the phases below are 100% implemented; see `CLAUDE.md` READ HERE FIRST and `CODING_GUIDELINES.md` section 18. Until then update it with every testing change; after that do not link to it from a committed document. The facts it holds are repeated in `CLAUDE.md` and `CODING_GUIDELINES.md`.
 
-**Status (2026-10-23, Version 5.19):** Phases 0, 1 and 2 are DONE (the 5.18 and 5.19 tests are written but their first run on the owner's machine is pending). Phase 3 is partly done (see section 14). Everything still marked "Proposed" below does not exist yet.
-**This is a temporary working document; the owner does not commit it.** The permanent record is `CLAUDE.md` (sync notes 50-67) and `CODING_GUIDELINES.md`.
+**Status (2026-10-29, Version 5.40):** Phases 0, 1 and 2 are DONE. Phase 3 is DONE except that Ruff is report-only until its findings are triaged. Phase 4: the protocol tests are done and in the pull-request tier; `nightly.yml` and the fault / concurrency / restart, live-worker, performance and browser tests are WRITTEN (5.40) but have not run on the real application or on GitHub yet. Phase 5: required checks and CODEOWNERS are done; the coverage floor waits for the first Linux total. Section 14 has the detail.
+**It is committed with every testing change (see the banner above).** The permanent record is `CLAUDE.md` (sync notes) and `CODING_GUIDELINES.md`.
 **Scope:** Quart HTTP routes, SQLite behavior, storage and file index, upload pipeline, version history, sharing, FTP/SFTP/WebDAV, the front-end contracts that break silently (SRI, CSP), and the `manage.sh` Quality Assurance section.
 **Read with:** [CLAUDE.md](CLAUDE.md) (history, rules) and [CODING_GUIDELINES.md](CODING_GUIDELINES.md) (how to change things).
 
@@ -17,11 +17,11 @@ The first draft proposed an in-process Quart test client. Reading the code (Phas
 |---|---|
 | App imported in-process, Quart test client, `pytest-asyncio`, session-scoped app | The app is **never** imported in the pytest process. `tests/conftest.py` copies the source tree to a temp folder and runs `dev_server.py` there as a **subprocess** on an ephemeral port; tests talk to it over HTTP with a standard-library, cookie-aware `HttpClient`. No `pytest-asyncio`, no `httpx` |
 | `pytest.ini` | `pyproject.toml` (`[tool.pytest.ini_options]`, the owner's choice). A leftover `pytest.ini` would silently win, so there must be none |
-| `requirements-dev.txt` with many tools | `pytest>=9.1.1`, `pytest-timeout>=2.4`, `pip-audit>=2.10.1` and `coverage>=7.17.0` (the owner added the last two); hypothesis, mutmut, ruff and playwright are still Proposed |
+| `requirements-dev.txt` with many tools | `pytest>=9.1.1`, `pytest-timeout>=2.4`, `pip-audit>=2.10.1`, `coverage>=7.17.0`, `hypothesis>=6.170` and `ruff==0.17.3` (pinned exactly; 5.40). `mutmut` was dropped (it rewrites functions into trampolines the `ast`-based unit tests cannot read; `tests/mutation_trial.py` replaces it) and `playwright` is installed by the nightly job only |
 | `qa.py` modes `static / quick / layer / coverage / mutation / ci / full` | `static`, `tests`, `quick`, `layer <name>`, `ci`, `audit` (5.32), `coverage` (5.34), plus `--version`, `--skip-packages`, `--out DIR`, `--fail-fast`. Steps: `smoke`, `check`, `sri`, `js-syntax`, `layout`, `pytest`. `mutation`, `full` do not exist |
 | `manage.sh` QA entries 21-26 (with coverage and mutation) | 21-25: `qa quick`, `qa static`, `qa tests`, `qa layer`, `qa ci`; 26-29 are the separate Developer Tools section (`dir-tree`, `smoke --save`, `qa audit` (5.32), `qa coverage` (5.34)). The menu has 29 entries |
-| CI: Python 3.12, only pyflakes, SRI "not yet in CI" | `tests.yml` uses Python **3.14.7** and `@v7` actions; job `smoke + check` and job `behavioral tests` (`needs` the first, `continue-on-error: true`, runs `python tests/qa.py ci`, uploads `artifacts/`). SRI and `node --check` run inside `qa.py` (so in CI through `qa ci`), not as separate steps of the static job |
-| `tests/integration/`, `protocols/`, `property/`, `reliability/`, `frontend/` | Only `tests/unit/`, `tests/application/` and `tests/performance/` exist (one opt-in slow download test) |
+| CI: Python 3.12, only pyflakes, SRI "not yet in CI" | `tests.yml` uses Python **3.14.7** and `@v7` actions; job `smoke + check` and job `behavioral tests` (`needs` the first; both jobs are required checks through the rulesets; runs `python tests/qa.py ci`, uploads `artifacts/`). SRI and `node --check` run inside `qa.py` (so in CI through `qa ci`), not as separate steps of the static job |
+| `tests/integration/`, `protocols/`, `property/`, `reliability/`, `frontend/` | `tests/unit/`, `application/`, `protocols/` (5.26-5.31), `property/`, `reliability/`, `frontend/` (5.40) and `performance/` exist; `tests/integration/` does not (that approach lives in `tests/application/`, see section 6) |
 | Version history, index and shares tested through the app | The scratch config sets `VERSION_ENGINE_ENABLED: false` (and every protocol off). Share tests work through HTTP; version history and the file index are tested by running the REAL modules inside a scratch copy (`run_in_scratch`, no server), see section 6. The HTTP routes `/api/versions/*` still need a scratch server with the engine on (Proposed) |
 
 Two techniques that are NOT in the draft but are now the standing practice:
@@ -59,24 +59,28 @@ The static checks stay the first gate. Pytest does not repeat structural rules t
 
 | Tier | Trigger | Contents | Status |
 |---|---|---|---|
-| **PR** | push / pull request to `main` and `dev` | `smoke`, `check`, then `qa.py ci` = smoke, check, sri, js-syntax, layout, unit + application pytest, JUnit XML | Exists (`behavioral tests` is still informational: `continue-on-error`; it has been green, so removing that line and requiring the job is the next CI step) |
-| **Opt-in** | `CLOUDINATOR_SLOW_TESTS=1` | `tests/performance/test_slow_download.py` (about 85 s, a throttled download that used to be cut at 60 s) | Exists, skipped by default |
-| **Nightly** | `schedule` + manual | Windows runner, protocols, property, reliability, performance, mutation, browser smoke | Proposed |
+| **PR** | push / pull request to `main` and `dev` | `smoke`, `check`, then `qa.py ci` = smoke, check, sri, js-syntax, layout, every existing pytest layer (unit, application, protocols, property) with the opt-in tiers skipped, JUnit XML | Exists; `smoke + check` and `behavioral tests` are required checks (rulesets) |
+| **Opt-in** | `CLOUDINATOR_SLOW_TESTS=1` | `tests/performance/` (the 85 s throttled download, speed baselines), `tests/reliability/` (the live Version Engine worker, concurrency, stop / crash / restart), `tests/frontend/` (Playwright smoke) | Exists; skipped by default (the 5.40 files are written but not yet run on the real application) |
+| **Nightly** | `schedule` (default branch) + manual (any branch) | `nightly.yml`: `qa.py ci` with both opt-in switches on (`CLOUDINATOR_SLOW_TESTS=1`, `CLOUDINATOR_NIGHTLY=1`: Hypothesis with random inputs) on Linux AND Windows; Chromium on Linux. Manual: `mutation.yml` (mutation trial) | Written (5.40), not yet run on GitHub |
 | **Never in CI** | n/a | SMB on port 445, Cloudflare Tunnel, real disk-full, anything touching production paths | n/a |
 
 ## 4. Layout (what exists)
 
 ```text
 CloudinatorFTP/
-├── pyproject.toml            # pytest config ONLY (no [project]); there must be no pytest.ini
-├── requirements-dev.txt      # pytest, pytest-timeout, pip-audit, coverage (never merged into requirements.txt / setup_pymodules.sh)
-├── .github/workflows/        # tests.yml, codeql.yml  (nightly.yml, dependabot.yml: Proposed)
+├── pyproject.toml            # pytest, coverage and ruff config ONLY (no [project]); there must be no pytest.ini
+├── requirements-dev.txt      # pytest, pytest-timeout, pip-audit, coverage, hypothesis, ruff==pinned (never merged into requirements.txt / setup_pymodules.sh)
+├── .github/                  # workflows: tests.yml, codeql.yml, audit.yml, coverage.yml, lint.yml, nightly.yml, mutation.yml; dependabot.yml; CODEOWNERS
 └── tests/
-    ├── smoke.py  check.py  qa.py  dir_tree.py  codeql_sarif_parser.py  smoke_routes.json
-    ├── conftest.py           # scratch copy, scratch server, HttpClient, test users, safety guards
-    ├── unit/                 # pure helpers, qa.py, manage.sh QA section, harness itself, ast-extracted app logic
-    ├── application/          # real app over HTTP: boot, login, authorization, containment, uploads, shares
-    └── performance/          # opt-in slow tests
+    ├── smoke.py  check.py  qa.py  dir_tree.py  codeql_sarif_parser.py  smoke_routes.json  mutation_trial.py
+    ├── conftest.py           # scratch copy, scratch servers (plain and with the Version Engine), start / stop helpers, HttpClient, test users, safety guards
+    ├── unit/                 # pure helpers, qa.py, manage.sh QA section, harness itself, ast-extracted app logic (assemble_chunks, file_monitor handler and cache)
+    ├── application/          # real app over HTTP: boot, login, authorization, containment, uploads, shares, version routes
+    ├── protocols/            # FTP, FTPS, SFTP, WebDAV, SMB against isolated local instances
+    ├── property/             # Hypothesis (deterministic in the required check)
+    ├── reliability/          # opt-in: live Version Engine worker, concurrency, stop / crash / restart
+    ├── performance/          # opt-in: slow download, speed baselines
+    └── frontend/             # opt-in: Playwright smoke
 ```
 
 Rules: `tests/conftest.py` and `tests/qa.py` sit directly in `tests/`; any `tests/test_*.py` directly in `tests/` makes `qa.py` FAIL with the `layout` step (it used to hide as a SKIP). Test file basenames are unique across folders; test modules cannot import `conftest`, so shared constants are repeated locally or provided as fixtures.
@@ -108,9 +112,9 @@ Fallback if this ever proves too brittle (not needed so far): an environment ove
 
 **Layer 4A - application (`tests/application/`):** boot, login / CSRF / lockout / sessions, authorization sweep (every declared route refuses an anonymous caller; one test per mutating route for a readonly account), path containment (about 130 cases), upload integrity, share links (public, passkey, approval, expiry, folder confinement, revoke-all). Exists.
 
-**Layer 4B - protocols (nightly):** FTP/FTPS, SFTP, WebDAV against isolated local instances; SMB is manual. Proposed.
+**Layer 4B - protocols (`tests/protocols/`):** FTP/FTPS, SFTP, WebDAV and SMB against isolated local instances (5.26-5.31). Exists, in the pull-request tier (about 1 minute because of the bcrypt logins).
 
-**Layer 5 - extras:** Hypothesis for path strings and chunk metadata, fault injection and bounded concurrency, performance baselines, node + jsdom suites for `index.js`, a Playwright smoke that fails on CSP or SRI console errors, coverage.py, `mutmut` on pure modules (Linux only). Proposed.
+**Layer 5 - extras:** Hypothesis for path strings and chunk keys (`tests/property/`, 5.40, done), the `storage_index.json` loader fuzz (done), fault injection and bounded concurrency (`tests/reliability/`, written, opt-in), performance baselines (`tests/performance/test_baselines.py`, written, opt-in), a Playwright smoke that fails on script errors, failed requests and SRI mismatches (`tests/frontend/`, written, opt-in), coverage.py (done, 5.34), a mutation trial (`tests/mutation_trial.py`, done, manual). Still Proposed: node + jsdom suites for `index.js`.
 
 ## 7. Fixtures and isolation rules
 
@@ -131,14 +135,16 @@ Rules (all enforced or followed today):
 | Authentication | Bad credentials create no session; the lockout works and resets; a logout ends the session on the SERVER, so a copied cookie is refused on every route kind (5.17) | `test_login.py`, `test_session_revocation.py` |
 | Client identity | Proxy headers (`CF-Connecting-IP`, `X-Forwarded-For`) are trusted only from a loopback peer (5.16) | `test_client_ip_trust.py` |
 | Authorization | Anonymous callers are refused on every non-public route; read-only users cannot mutate; the role is read from the database on every request | `test_authorization.py` |
-| Containment | User paths cannot escape the storage root, including a sibling folder whose name starts with the root's; chunk ids cannot escape `.chunks` | `test_path_containment.py` |
-| Uploads | Assembled bytes match; chunks of two sessions never mix; assembly starts when every chunk is present, in any order; a retried last chunk queues once; startup recovery assembles only complete uploads | `test_upload_integrity.py`, `test_upload_chunk_keys.py`, `test_recover_uploads.py` |
+| Containment | User paths cannot escape the storage root, including a sibling folder whose name starts with the root's; a NUL byte is refused on every platform; chunk ids cannot escape `.chunks` | `test_path_containment.py`, `tests/property/test_properties.py` |
+| Uploads | Assembled bytes match; chunks of two sessions never mix; assembly starts when every chunk is present, in any order; a retried last chunk queues once; startup recovery assembles only complete uploads; the file is published atomically and a busy Windows target is retried, then refused with a clear message (5.38, 5.40); parallel chunks assemble once | `test_upload_integrity.py`, `test_upload_chunk_keys.py`, `test_recover_uploads.py`, `test_assemble_atomic.py`, `test_concurrency.py` (opt-in) |
 | Sharing | Unknown, revoked, expired and wrong-passkey access returns nothing protected; a passkey or approval grant opens only its own link; a shared folder cannot be walked out of; revoke-all needs a fresh single-use code bound to the session | `test_shares.py` |
-| Indexing | Reconcile handles corrupt or stale `file_index.json` without losing valid files; every loaded record is re-scanned before it is served; unchanged data does not rewrite the JSON (4.65) | `test_file_index_recovery.py` (`storage_index.json` / the monitor's reconcile: Proposed) |
-| Version history | Restore returns the intended bytes, not just a label; a failed or refused restore leaves originals consistent; a version of another file is never restorable | `test_version_restore.py` (HTTP routes: Proposed) |
+| Indexing | Reconcile handles corrupt or stale `file_index.json` without losing valid files; every loaded record is re-scanned before it is served; unchanged data does not rewrite the JSON (4.65); `storage_index.json` is written atomically and a foreign, future or corrupt file is never trusted; the counters follow creates, deletes, moves and hidden / visible renames (5.40) | `test_file_index_recovery.py`, `test_monitor_cache.py`, `test_monitor_handler.py` (the monitor's reconcile walk: still Proposed) |
+| Version history | Restore returns the intended bytes, not just a label; a failed or refused restore leaves originals consistent; a version of another file is never restorable; the real worker captures a new and a changed file and history survives a delete | `test_version_restore.py`, `test_version_routes.py` (HTTP, 5.20), `test_version_engine_live.py` (worker, opt-in) |
 | File operations | A failed move / write / restore leaves original and unrelated data consistent | partly (containment, mkdir, rename, delete) |
 | Protocols | Each enabled protocol enforces authentication and role permissions, reads the role live (a demotion or deletion reaches open sessions), refuses guest / anonymous sessions and keeps every path inside the storage root, a sibling folder named like the root included (5.26-5.31) | `tests/protocols/` (FTP, FTPS, SFTP, WebDAV, SMB), `test_webdav_listener_binds.py` |
-| Resource limits | Oversized or expensive inputs are rejected or bounded | partly (`RESPONSE_TIMEOUT` unit test, opt-in slow download) |
+| Resource limits | Oversized or expensive inputs are rejected or bounded; loose speed bounds catch an order-of-magnitude regression | partly (`RESPONSE_TIMEOUT` unit test, opt-in slow download, opt-in `test_baselines.py`) |
+| Restart and crash | After a graceful stop or a kill the accounts and files survive, an interrupted upload publishes nothing, and quick repeated restarts work | `test_restart.py` (opt-in) |
+| Front end | The login page and the file manager load with no script error, failed request, HTTP error or SRI mismatch | `test_browser_smoke.py` (opt-in) |
 
 For each critical operation test valid, malformed, boundary, unauthorized, repeated, dependency-failure and interrupted cases; add concurrency where requests can overlap.
 
@@ -148,7 +154,7 @@ Lives in `pyproject.toml` (the owner's choice), tool tables only: `testpaths`, `
 
 ## 10. Dependencies
 
-`requirements.txt` and `constraints.txt` are managed by `setup_pymodules.sh` (ceilings, Termux handling). Test packages are never added there. `requirements-dev.txt` today: `pytest>=9.1.1`, `pytest-timeout>=2.4`, `pip-audit>=2.10.1`, `coverage>=7.17.0`. CI installs `requirements.txt` as well because the application tests start the real server (Quart, Hypercorn, bcrypt, paramiko, pyftpdlib, wsgidav ...). Proposed later: `hypothesis`, `ruff`, and for nightly only `mutmut` and `playwright`. `qa audit` and `qa coverage` still skip with a hint when their tool is missing. The audit workflow installs pip-audit in its own environment (so its dependencies are not audited as the application's); `tests.yml` and `coverage.yml` install `requirements-dev.txt`, which now brings both tools. Optional system tools (`ffmpeg`, libvips) are not needed: the scratch config disables them.
+`requirements.txt` and `constraints.txt` are managed by `setup_pymodules.sh` (ceilings, Termux handling). Test packages are never added there. `requirements-dev.txt` today: `pytest>=9.1.1`, `pytest-timeout>=2.4`, `pip-audit>=2.10.1`, `coverage>=7.17.0`, `hypothesis>=6.170`, `ruff==0.17.3` (pinned exactly: a new release adds rules and must not change a green build; `lint.yml` reads that line). CI installs `requirements.txt` as well because the application tests start the real server (Quart, Hypercorn, bcrypt, paramiko, pyftpdlib, wsgidav ...). Not in the file: `playwright` (a large download; `python -m pip install playwright` and `python -m playwright install chromium`, done by `nightly.yml` on Linux) and `mutmut` (replaced by `tests/mutation_trial.py`). `qa audit` and `qa coverage` still skip with a hint when their tool is missing. The audit workflow installs pip-audit in its own environment (so its dependencies are not audited as the application's); `tests.yml` and `coverage.yml` install `requirements-dev.txt`, which now brings both tools. Optional system tools (`ffmpeg`, libvips) are not needed: the scratch config disables them.
 
 ## 11. One runner, and the `manage.sh` Quality Assurance section
 
@@ -171,14 +177,18 @@ It prints one line per step with PASS / FAIL / SKIP and the elapsed time and exi
 
 ## 12. GitHub Actions
 
-- **`tests.yml` (owner-maintained):** job `smoke + check` (keep this name; branch protection may require it) and job `behavioral tests` (`needs` the first; `continue-on-error: true`; installs `requirements.txt` + `requirements-dev.txt`; runs `python tests/qa.py ci`; uploads `artifacts/`). Python 3.14.7 in both jobs; `actions/checkout`, `setup-python` and `upload-artifact` at `@v7`; `concurrency` cancels superseded runs; `permissions: contents: read`. The zips never contain workflow files.
-- **`coverage.yml` (5.34):** job `coverage report`: `python tests/qa.py coverage --out artifacts` on Linux, weekly (Monday) and on demand, a markdown summary in the job summary and `artifacts/` (coverage.xml, htmlcov) uploaded; not a required check; `schedule` runs only once the file is on the default branch.
+- **`tests.yml` (owner-maintained):** job `smoke + check` (keep this name; branch protection may require it) and job `behavioral tests` (`needs` the first; both jobs are required checks through the rulesets; installs `requirements.txt` + `requirements-dev.txt`; runs `python tests/qa.py ci`; uploads `artifacts/`). Python 3.14.7 in both jobs; `actions/checkout`, `setup-python` and `upload-artifact` at `@v7`; `concurrency` cancels superseded runs; `permissions: contents: read`. The zips never contain workflow files.
+- **`coverage.yml` (5.34):** job `coverage report`: `python tests/qa.py coverage --out artifacts` on Linux, weekly (Monday) and on demand, a markdown summary in the job summary and `artifacts/` (coverage.xml, htmlcov) uploaded; not a required check; `schedule` runs only once the file is on the default branch. 5.40: **Run workflow** takes an optional `fail_under` percentage (passed through an environment variable) to try a floor without editing the file.
 - **`CODEOWNERS` (5.34):** `.github/CODEOWNERS` lists the owner for everything, `tests/`, `.github/`, `docs/rulesets/` and `pyproject.toml`; the rulesets do not require a code-owner review.
 - **`audit.yml` (5.32):** job `dependency audit`: installs `requirements.txt`, installs pip-audit in a separate venv and runs `python tests/qa.py audit --path <site-packages>`; weekly, on demand and when `requirements.txt`, `constraints.txt`, `tests/audit_ignore.txt` or `tests/qa.py` change. **Not a required check** (new advisories would block unrelated pull requests, and a path-filtered workflow does not report on every pull request).
 - **Branch rules (5.32):** `docs/rulesets/main.json` and `dev.json` (import once, see its README): pull request required (0 approvals), checks `smoke + check` and `behavioral tests` required, no force-push or deletion; admins may bypass (`main`: only through a pull request, `dev`: always). Direct pushes are then rejected: work on a branch and merge by pull request.
 - **`codeql.yml`:** CodeQL Advanced for Python and JavaScript plus the SARIF-to-CSV job; unchanged by the test work.
-- **Proposed:** (`continue-on-error` is gone and the checks are required through the rulesets above); a Windows runner in the matrix (production is Windows, and several recorded bugs are Windows-only: `WinError 32`, junctions, path separators); `nightly.yml` (`ref: [main, dev]` x `os`) for protocols, property, reliability, performance, browser smoke and Linux-only mutation; `.github/dependabot.yml` for `github-actions` and dev requirements; branch protection on `main` and `dev` if the plan allows it.
-- Rules: minimal token permissions; no secrets in jobs that run pull-request code; workflow, marker and threshold changes get the same review as code. `.gitignore` must list `.pytest_cache/`, `artifacts/` (and later `.coverage`, `coverage.xml`, `htmlcov/`, `.hypothesis/`, `mutants/`).
+- **`lint.yml` (5.40):** Ruff in REPORT-ONLY mode (`--exit-zero`; annotations and a summary by rule), rules in `pyproject.toml` `[tool.ruff]` (`E`, `F`, `B`, `S`; Black keeps the formatting), Ruff version read from the pinned line in `requirements-dev.txt`. Path-filtered and not required. Plan: triage the findings once, then add `python -m ruff check .` to the required `smoke + check` job (same check name, so no ruleset change).
+- **`nightly.yml` (5.40):** `schedule` (02:17 UTC, default branch) and manual (any branch: Actions > Nightly > Run workflow > `dev` to test before a merge). Matrix `ubuntu-latest` + `windows-latest` (production is Windows: `WinError 32`, junctions, path separators), `fail-fast: false`, 75 minutes. Runs `python tests/qa.py ci` with `CLOUDINATOR_SLOW_TESTS=1` and `CLOUDINATOR_NIGHTLY=1`; Playwright + Chromium on Linux only. Artifact `nightly-results-<os>` (JUnit XML; the measured baselines are properties). Not required.
+- **`mutation.yml` (5.40):** manual only: `tests/mutation_trial.py` on the file, functions and tests you enter; survivors are reported, never failed.
+- **`dependabot.yml` (5.40):** weekly pip and GitHub Actions updates, pull requests into `dev`. `requirements.txt` / `constraints.txt` are rewritten by `setup_pymodules.sh`: decide which one you trust before merging a pip update.
+- **Still Proposed:** a `qa.py lint` mode and a `manage.sh` menu entry (they need `tests/unit/test_qa_runner.py` and `test_manage_qa.py` updated together); Ruff as a required step; Dependabot security updates (a repository setting, not a file).
+- Rules: minimal token permissions; no secrets in jobs that run pull-request code; workflow, marker and threshold changes get the same review as code. `.gitignore` must list `.pytest_cache/`, `artifacts/` and `.coverage`, `coverage.xml`, `htmlcov/`, `.hypothesis/` (the tests use no example database, so it should stay empty); `mutants/` only if mutmut is ever tried. Workflow inputs go through `env:`, never straight into a `run:` script.
 
 ## 13. Changes made with AI assistance, and definition of done
 
@@ -197,11 +207,13 @@ Done for a critical change: `./manage.sh qa quick` passes locally; relevant nega
 | 0 | Open questions: layering rule for tests, how `paths.py` / `config.py` locate config, import-time threads | **Done** (answers drove the scratch-copy + subprocess design, section 5) |
 | 1 | `pyproject.toml`, `requirements-dev.txt`, `conftest.py` with safety guard, unit tests, `qa.py`, `behavioral tests` job | **Done** (5.00-5.05) |
 | 2 | Application tests for login, authorization, containment, uploads, sharing, index recovery, version restore; `manage.sh` QA section | **Done**: login, authorization, containment, upload integrity, shares (5.18), version restore and file-index recovery (5.19); `manage.sh` QA 21-25. The 5.18 and 5.19 tests wait for their first run on the owner's machine |
-| 3 | Coverage report, Ruff, `pip-audit`, Hypothesis, mutmut trial | **Partly**: Developer Tools (`dir-tree`, `smoke --save`), `pip-audit` (5.32) and the coverage report (5.34) done; Ruff, Hypothesis, mutmut not started |
-| 4 | `nightly.yml`, protocol tests (**done**, 5.26-5.31: FTP, FTPS, SFTP, WebDAV, SMB), fault / concurrency / restart tests, browser smoke, performance baselines | Not started (one opt-in performance test exists) |
-| 5 | Required checks, coverage floor, CODEOWNERS for `tests/` and workflows | **Partly**: required checks through the rulesets in `docs/rulesets/` (imported and active, 5.32); CODEOWNERS (5.34) done; the coverage floor waits for the first Linux baseline (`qa coverage --fail-under N`) |
+| 3 | Coverage report, Ruff, `pip-audit`, Hypothesis, mutation trial | **Done** (Ruff in report-only mode): Developer Tools (`dir-tree`, `smoke --save`), `pip-audit` (5.32), coverage report (5.34), Hypothesis (5.40), Ruff configured and run by `lint.yml` (5.40), `tests/mutation_trial.py` + `mutation.yml` (5.40; mutmut itself was tried on paper and rejected, section 0) |
+| 4 | `nightly.yml`, protocol tests (**done**, 5.26-5.31: FTP, FTPS, SFTP, WebDAV, SMB), fault / concurrency / restart tests, browser smoke, performance baselines | **Written (5.40), not yet run on the real application or on GitHub:** `nightly.yml`, `test_version_engine_live.py` + `scratch_server_with_versions`, `test_concurrency.py`, `test_restart.py`, `test_baselines.py`, `test_browser_smoke.py`. Done means: one green nightly run on Linux and Windows. Known guesses: the browser test's login selectors; the Windows runner's `requirements.txt` install |
+| 5 | Required checks, coverage floor, CODEOWNERS for `tests/` and workflows | **Partly**: required checks through the rulesets in `docs/rulesets/` (imported and active, 5.32); CODEOWNERS (5.34) done; `qa coverage --fail-under N` exists (5.34) and `coverage.yml` takes it as an input (5.40), but the FLOOR waits for the first Linux total: run the Coverage workflow, paste its summary, then pick N a few points below it |
 
-**Version restore and index recovery: done with approach (b)** (5.19): the real modules run inside a scratch copy through `run_in_scratch()`, deterministic, no worker. **Still Proposed:** a fixture `scratch_server_with_versions` (the same scratch copy with `VERSION_ENGINE_ENABLED: true`; the engine is its own worker process, so tests must wait for a capture with a bounded poll and the server starts slower) to drive the HTTP routes `/api/versions/*` end to end, and tests of `file_monitor.py`'s calls into the index and of `storage_index.json`.
+**Version restore and index recovery** (5.19, 5.20, 5.40): the real modules run inside a scratch copy through `run_in_scratch()` (deterministic, no worker), the HTTP routes `/api/versions/*` are covered by `test_version_routes.py` in the normal scratch server (the routes work with the engine off), and the REAL worker is covered by `scratch_server_with_versions` (the same scratch copy with `VERSION_ENGINE_ENABLED: true`, `VERSION_TRACK_ROOTS` = the scratch storage; the engine is its own process, so every wait is a bounded poll). `file_monitor.py`'s calls into the folder and search indexes and `storage_index.json` are covered by `test_monitor_handler.py` and `test_monitor_cache.py` (5.40). **Still Proposed:** the monitor's walks (`_full_walk`, `_reconcile_walk`, `_correct_folders`) on a real tree, and crash recovery of the Version Engine worker (kill it, start it again).
+
+**What is open after 5.40, in order:** (1) run `nightly.yml` once from `dev` (Actions > Nightly > Run workflow), fix what the first run shows; (2) run the Coverage workflow, paste the Linux summary, choose the floor; (3) triage the Ruff findings, then make Ruff a required step; (4) `qa lint` mode and menu entry; (5) CodeQL alert #612 (cyclic import `version_engine` / `config`, needs `config.py`). **The `.gitignore` step is NOT due:** when phases 4 and 5 are 100 % done, add `docs/TESTING_STRATEGY.md` to `.gitignore` and run `git rm --cached docs/TESTING_STRATEGY.md` once so git stops tracking it (the file stays on disk); until then it stays committed.
 
 ## 15. What is not realistic
 
