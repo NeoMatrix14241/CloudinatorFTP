@@ -380,7 +380,7 @@ async def _run():
     # would look incomplete to worker B, SSE clients on worker A would
     # never see events broadcast from worker B, etc). Scaling beyond one
     # process would need that state moved into SQLite/Redis first.
-    hyper_cfg.workers = 1
+    hyper_cfg.workers = 1024
 
     # ── Startup banner ───────────────────────────────────────────────────────
     print("🚀 Starting CloudinatorFTP Production Server (Hypercorn)...")

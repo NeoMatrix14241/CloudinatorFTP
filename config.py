@@ -1,3 +1,4 @@
+import importlib
 import os
 import platform
 import json
@@ -12,6 +13,20 @@ _SERVER_CONFIG_FILE = os.path.join(_HERE, "server_config.json")
 PORT = 5000
 CHUNK_SIZE = 10 * 1024 * 1024  # 10 MB adjustable chunk size
 ENABLE_CHUNKED_UPLOADS = True
+# Upload performance (5.41). All three are saved in server_config.json like CHUNK_SIZE; they have
+# no menu entry, edit the JSON (restart needed).
+# BODY_TIMEOUT: seconds Quart gives ONE request body (a 10 MB upload chunk) to arrive and be
+# parsed. Quart's own default is 60 and it covers the WHOLE body, not each piece of data, so a
+# chunk that needed more than a minute (slow link, busy disk, a stalled event loop) failed with
+# "408 Request Timeout" and the browser stopped the whole upload. 0 = no limit. (core.py already
+# sets RESPONSE_TIMEOUT = None for the same reason on downloads.)
+BODY_TIMEOUT = 600
+# Log the time of every upload stage per chunk and how late the event loop wakes up. Off = no cost.
+UPLOAD_TIMING_ENABLED = False
+# Parse an upload chunk (a request body up to CHUNK_SIZE + 1 MiB) in RAM instead of in a temp file
+# in the system temp folder: one 10 MB write and one read less per chunk, at the price of up to
+# that much RAM per chunk being received at the same moment. Off by default.
+UPLOAD_CHUNKS_IN_MEMORY = False
 HOST = "0.0.0.0"  # Listen on all interfaces
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024 * 1024  # 16GB max file size
 ALLOWED_EXTENSIONS = None  # None = allow all file types.
@@ -951,6 +966,9 @@ def save_server_config():
         "HOST": HOST,
         "CHUNK_SIZE": CHUNK_SIZE,
         "ENABLE_CHUNKED_UPLOADS": ENABLE_CHUNKED_UPLOADS,
+        "BODY_TIMEOUT": BODY_TIMEOUT,
+        "UPLOAD_TIMING_ENABLED": UPLOAD_TIMING_ENABLED,
+        "UPLOAD_CHUNKS_IN_MEMORY": UPLOAD_CHUNKS_IN_MEMORY,
         "MAX_CONTENT_LENGTH": MAX_CONTENT_LENGTH,
         "PERMANENT_SESSION_LIFETIME": PERMANENT_SESSION_LIFETIME,
         # ── Feature toggles ───────────────────────────────────────────────
@@ -1017,9 +1035,19 @@ def save_server_config():
         print(f"❌ Error saving configuration: {e}")
 
 
+def _non_negative_number(value, default):
+    """`value` when it is a number (not a bool) of at least 0, else `default`: a hand-edited
+    server_config.json with "BODY_TIMEOUT": "soon" must not stop the server from starting.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return value if value >= 0 else default
+
+
 def load_server_config():
     """Load server configuration from server_config.json (next to this file)."""
     global PORT, CHUNK_SIZE, ENABLE_CHUNKED_UPLOADS
+    global BODY_TIMEOUT, UPLOAD_TIMING_ENABLED, UPLOAD_CHUNKS_IN_MEMORY
     global HOST, MAX_CONTENT_LENGTH, PERMANENT_SESSION_LIFETIME
     global HLS_MIN_SIZE, HLS_FORCE_FORMATS
     global IMG_COMPRESS_MIN_SIZE, IMG_WEBP_QUALITY
@@ -1052,6 +1080,15 @@ def load_server_config():
             CHUNK_SIZE = config.get("CHUNK_SIZE", CHUNK_SIZE)
             ENABLE_CHUNKED_UPLOADS = config.get(
                 "ENABLE_CHUNKED_UPLOADS", ENABLE_CHUNKED_UPLOADS
+            )
+            BODY_TIMEOUT = _non_negative_number(
+                config.get("BODY_TIMEOUT", BODY_TIMEOUT), BODY_TIMEOUT
+            )
+            UPLOAD_TIMING_ENABLED = bool(
+                config.get("UPLOAD_TIMING_ENABLED", UPLOAD_TIMING_ENABLED)
+            )
+            UPLOAD_CHUNKS_IN_MEMORY = bool(
+                config.get("UPLOAD_CHUNKS_IN_MEMORY", UPLOAD_CHUNKS_IN_MEMORY)
             )
             MAX_CONTENT_LENGTH = config.get("MAX_CONTENT_LENGTH", MAX_CONTENT_LENGTH)
             PERMANENT_SESSION_LIFETIME = config.get(
@@ -2203,6 +2240,11 @@ def view_current_settings():
     print(f"   Host: {HOST}")
     print(f"   Chunk Size: {format_bytes(CHUNK_SIZE)}")
     print(f"   Chunked Uploads: {'Enabled' if ENABLE_CHUNKED_UPLOADS else 'Disabled'}")
+    print(
+        f"   Upload body timeout: {f'{BODY_TIMEOUT} s' if BODY_TIMEOUT else 'no limit'}"
+    )
+    print(f"   Upload timing log: {'On' if UPLOAD_TIMING_ENABLED else 'Off'}")
+    print(f"   Upload chunks in RAM: {'On' if UPLOAD_CHUNKS_IN_MEMORY else 'Off'}")
     print(f"   Max File Size: {format_bytes(MAX_CONTENT_LENGTH)}")
     print(f"   Session Timeout: {PERMANENT_SESSION_LIFETIME//60} minutes")
     print(f"   Session Secret: Managed in db/session.secret")
@@ -2247,7 +2289,10 @@ def view_current_settings():
     print(f"\n🕓 Version History:")
     print(f"   Version Engine:     {_yon(VERSION_ENGINE_ENABLED)}")
     try:
-        import version_engine as _ve
+        # A lookup at call time, not an import statement: version_engine.py imports THIS module
+        # at its top, and a static import here closed the cycle CodeQL alert #612 reports. By now
+        # this module is fully loaded, so nothing depends on the order of the two imports.
+        _ve = importlib.import_module("version_engine")
 
         st = _ve.status()
         pid_str = st.get("pid") or "—"

@@ -140,6 +140,7 @@ from config import (
     ROOT_DIR,
     CHUNK_SIZE,
     ENABLE_CHUNKED_UPLOADS,
+    BODY_TIMEOUT,
     MAX_CONTENT_LENGTH,
     ALLOWED_EXTENSIONS,
     PERMANENT_SESSION_LIFETIME,
@@ -925,6 +926,12 @@ app.config.update(
     # download that takes longer than a minute end to end (a big file through the Cloudflare
     # tunnel) was cut off mid-stream. None = no cap, as with Waitress before the Quart migration.
     RESPONSE_TIMEOUT=None,
+    # The request-side twin (5.41): Quart's default BODY_TIMEOUT is also 60 s for the WHOLE request
+    # body (the time to receive AND parse it, not an idle limit), so an upload chunk of 10 MB that
+    # needed more than a minute (slow link through the tunnel, a busy disk, an event loop that was
+    # blocked) was answered with "408 Request Timeout" and the browser gave up the whole upload.
+    # config.BODY_TIMEOUT (default 600 s); 0 = no limit.
+    BODY_TIMEOUT=BODY_TIMEOUT or None,
 )
 
 # ---------------------------------------------------------------------------

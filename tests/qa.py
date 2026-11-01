@@ -20,16 +20,24 @@ this one file, so "green locally" and "green in CI" mean the same commands ran.
                                            quick / ci; data, coverage.xml and htmlcov/ go to ./artifacts
                                            (or --out DIR); --fail-under N makes a total below N% a FAIL
 
+    python tests/qa.py lint                Ruff on the whole project with the rules of pyproject.toml
+                                           [tool.ruff] (needs `python -m pip install -r requirements-dev.txt`);
+                                           REPORT ONLY like lint.yml: the findings are listed and counted per
+                                           rule and the step passes; --strict makes any finding a FAIL;
+                                           NOT part of quick / ci
+
     --skip-packages   pass to check.py (use where requirements.txt is not installed, like CI static job)
     --out DIR         write JUnit XML for the pytest steps into DIR
     --fail-fast       stop at the first failing step
     --fail-under N    coverage mode only: the report fails when the total is below N percent
+    --strict          lint mode only: any Ruff finding fails the step (the default is report only)
 
 Exit code: 0 = every step passed or was skipped, 1 = at least one step failed, 130 = Ctrl-C.
 A SKIP never hides a failure: tools that are not installed (node, pip-audit) or files that do not
 exist (tools/sri_validator.py) are reported as SKIP with the reason.
 
-`audit` stays out of quick / ci on purpose: new advisories appear without any code change and an
+`lint` stays out of quick / ci until its findings are triaged (then Ruff becomes a required step of
+`smoke + check`, see docs/TESTING_STRATEGY.md); `audit` stays out of quick / ci on purpose: new advisories appear without any code change and an
 offline machine cannot run it, so it must never turn the everyday run (or a pull request) red.
 Known, accepted findings go into tests/audit_ignore.txt (one advisory ID per line, then a reason).
 
@@ -47,7 +55,7 @@ import time
 from pathlib import Path
 
 QA_VERSION = (
-    "5.34"  # `python tests/qa.py --version`: tells you which copy of this file you run
+    "5.41"  # `python tests/qa.py --version`: tells you which copy of this file you run
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -204,6 +212,32 @@ def _audit_step(path=None):
     )
 
 
+def _lint_step(strict=False):
+    """Ruff over the whole project, with the rules of pyproject.toml [tool.ruff] (5.41).
+
+    Report only by default, exactly like .github/workflows/lint.yml (`--exit-zero`): the findings
+    are listed, then counted per rule, and the step passes. `strict` drops `--exit-zero`, so any
+    finding fails the step: the mode to use once the findings are triaged.
+    """
+    if importlib.util.find_spec("ruff") is None:
+        return Step(
+            "lint",
+            skip="ruff is not installed: python -m pip install -r requirements-dev.txt",
+        )
+    ruff = [PY, "-m", "ruff", "check", "."]
+    exit_zero = [] if strict else ["--exit-zero"]
+    return Step(
+        "lint",
+        [
+            ruff + exit_zero + ["--output-format", "concise"],
+            ruff + ["--exit-zero", "--statistics", "--quiet"],
+        ],
+        # the per-rule counts are printed even when the listing failed (strict mode)
+        keep_going=True,
+        hint="fix the findings, or ignore a rule in pyproject.toml [tool.ruff] with a reason",
+    )
+
+
 def _coverage_data_file(out):
     """Absolute path of the coverage data file: inherited by every subprocess the tests start
     (the servers run in scratch copies elsewhere), so all their data lands in ONE place.
@@ -273,7 +307,13 @@ def _with_layout(steps):
 
 
 def build_plan(
-    mode, layer=None, skip_packages=False, out=None, path=None, fail_under=None
+    mode,
+    layer=None,
+    skip_packages=False,
+    out=None,
+    path=None,
+    fail_under=None,
+    strict=False,
 ):
     """Return the list of Steps for a mode. Raises ValueError for unknown input."""
     if mode == "static":
@@ -287,6 +327,8 @@ def build_plan(
         )
     if mode == "audit":
         return [_audit_step(path)]
+    if mode == "lint":
+        return [_lint_step(strict)]
     if mode == "coverage":
         return _with_layout(
             [_coverage_step(_existing_layers(), out or "artifacts", fail_under)]
@@ -356,7 +398,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="CloudinatorFTP QA runner")
     ap.add_argument("--version", action="version", version=f"qa.py {QA_VERSION}")
     ap.add_argument(
-        "mode", choices=["static", "tests", "quick", "layer", "ci", "audit", "coverage"]
+        "mode",
+        # `lint` is appended on its own: tests/unit/test_qa_audit.py and test_qa_coverage.py read
+        # this literal list as TEXT (audit and coverage must stay among its first characters).
+        choices=["static", "tests", "quick", "layer", "ci", "audit", "coverage"]
+        + ["lint"],
     )
     ap.add_argument("layer", nargs="?", help="layer name (mode 'layer' only)")
     ap.add_argument("--skip-packages", action="store_true")
@@ -365,6 +411,11 @@ def main(argv=None):
     ap.add_argument("--fail-under", type=float, metavar="N", help="coverage mode only")
     ap.add_argument(
         "--path", metavar="DIR", help="site-packages to audit (mode 'audit' only)"
+    )
+    ap.add_argument(
+        "--strict",
+        action="store_true",
+        help="lint mode only: any Ruff finding fails the step",
     )
     args = ap.parse_args(argv)
 
@@ -390,7 +441,13 @@ def main(argv=None):
         Path(out).mkdir(parents=True, exist_ok=True)
     try:
         steps = build_plan(
-            args.mode, args.layer, args.skip_packages, out, args.path, args.fail_under
+            args.mode,
+            args.layer,
+            args.skip_packages,
+            out,
+            args.path,
+            args.fail_under,
+            args.strict,
         )
     except ValueError as e:
         print(f"qa: {e}", file=sys.stderr)

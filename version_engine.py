@@ -78,6 +78,17 @@ _SCRIPT_PATH = os.path.join(_PROJECT_DIR, "version_engine.py")
 _ENGINE_VERSION = "1.0.0"
 _SCHEMA_VERSION = 1
 
+# Folder names that are never tracked, whatever VERSION_EXCLUDE_DIRECTORIES says (5.41). `.chunks`
+# is where the web server keeps the pieces of an upload that is still arriving (<root>/.chunks/):
+# a version of a half-finished 10 MB piece is useless, and when the tracked scope includes the
+# storage root the watcher would hash and copy every piece, doubling the disk traffic of an upload.
+_ALWAYS_EXCLUDED_DIR_NAMES = (".chunks",)
+
+# A watcher / scanner pass that takes at least this many seconds is logged (at most once a
+# minute): on a slow disk a pass over a big tracked folder competes with everything else on it.
+_SLOW_PASS_SECONDS = 2.0
+_SLOW_PASS_LOG_EVERY = 60.0
+
 # How often the (optional) watcher polls tracked paths for changes. Not a
 # config.py setting — this is an internal implementation constant for the
 # stat-polling loop, distinct from config.VERSION_SCAN_INTERVAL (the full
@@ -738,6 +749,8 @@ class Engine:
 
     def _is_excluded_dir(self, dirpath: str) -> bool:
         base = os.path.basename(dirpath)
+        if base in _ALWAYS_EXCLUDED_DIR_NAMES:
+            return True
         for pat in config.VERSION_EXCLUDE_DIRECTORIES:
             if base == pat or dirpath == os.path.abspath(os.path.expanduser(pat)):
                 return True
@@ -1792,6 +1805,22 @@ class Engine:
             for norm_key in vanished:
                 self._known_state.pop(norm_key, None)
 
+    def _note_slow_pass(self, label: str, seconds: float):
+        """Log a pass that took long, rate-limited; says what to try (5.41)."""
+        if seconds < _SLOW_PASS_SECONDS:
+            return
+        now = time.monotonic()
+        if now - getattr(self, "_slow_pass_logged_at", -_SLOW_PASS_LOG_EVERY) < (
+            _SLOW_PASS_LOG_EVERY
+        ):
+            return
+        self._slow_pass_logged_at = now
+        self.log.warning(
+            f"{label} pass took {seconds:.1f}s: the tracked folders are big or the disk is "
+            "busy. Track fewer folders, or switch the watcher off (VERSION_WATCH_ENABLED) and "
+            "let the scanner find changes."
+        )
+
     def _watcher_loop(self):
         self._watcher_running = True
         self._set_meta("watcher_running", "1")
@@ -1799,7 +1828,9 @@ class Engine:
         while not self._shutdown_event.is_set():
             if not self._stop_scheduling.is_set():
                 try:
+                    started = time.monotonic()
                     self._reconcile_once()
+                    self._note_slow_pass("Watcher", time.monotonic() - started)
                 except Exception as e:
                     if _is_lock_error(e):
                         self.log.warning(f"Watcher pass hit a locked database: {e}")
@@ -1817,7 +1848,9 @@ class Engine:
         while not self._shutdown_event.is_set():
             if not self._stop_scheduling.is_set():
                 try:
+                    started = time.monotonic()
                     self._reconcile_once()
+                    self._note_slow_pass("Scanner", time.monotonic() - started)
                     self._retry_locked(self.run_gc, delays=(2, 4, 8))
                     self._retry_locked(
                         self._set_meta,

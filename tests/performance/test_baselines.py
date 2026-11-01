@@ -13,8 +13,14 @@ OPT-IN (CLOUDINATOR_SLOW_TESTS=1, set by the nightly workflow):
 
     CLOUDINATOR_SLOW_TESTS=1 python -m pytest tests/performance/test_baselines.py -q -s
 
+5.41 adds the numbers the upload-speed investigation needed: chunks of the PRODUCTION size (10 MB,
+one client and four at once) and a download of a 32 MB file. The bounds stay loose on purpose; the
+numbers are what matters. Compare them with `python quart_upload_reference.py` on the same machine
+(docs/TESTING_STRATEGY.md, section 16).
+
 Not covered: large files (the 85 s throttled download is test_slow_download.py), many thousands of
-files in one folder, and HTTP/2 or HTTP/3 (the scratch server is plain HTTP/1.1).
+files in one folder, a browser (parallel files, the source file read from the same disk), the
+Version Engine, and HTTP/2 or HTTP/3 (the scratch server is plain HTTP/1.1).
 """
 
 import hashlib
@@ -98,6 +104,98 @@ def test_a_chunked_upload_of_24_mb_is_assembled_in_reasonable_time(
     assert (
         total < 120
     ), f"24 MB took {total:.1f} s from the first chunk to the published file"
+
+
+MB = 1024 * 1024
+
+
+def _wait_for_file(server, name, expected_sha256, size, seconds=240):
+    """Bounded poll until the published file has the expected size and content."""
+    target = server.storage / name
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if target.exists() and target.stat().st_size == size:
+            if hashlib.sha256(target.read_bytes()).hexdigest() == expected_sha256:
+                return
+        time.sleep(0.25)
+    pytest.fail(
+        f"{name} was not published correctly within {seconds} s\n{server.log_tail()}"
+    )
+
+
+def _upload_parts(client, name, parts):
+    """Send the chunks one after the other (what the browser does for ONE file)."""
+    file_id = f"fid_{uuid.uuid4().hex[:8]}_perf"
+    for number, data in enumerate(parts):
+        reply = _chunk(client, file_id, number, len(parts), name, data)
+        assert reply.status == 200, (name, number, reply.status)
+
+
+def test_a_chunked_upload_with_production_size_chunks_one_client(
+    server, record_property
+):
+    client = server.login_as("qa_writer")
+    name = f"baseline10_{uuid.uuid4().hex[:8]}.bin"
+    parts = [os.urandom(10 * MB) for _ in range(3)]  # 30 MB in 3 chunks of 10 MB
+    expected = hashlib.sha256(b"".join(parts)).hexdigest()
+
+    started = time.monotonic()
+    _upload_parts(client, name, parts)
+    sent = time.monotonic() - started
+    _wait_for_file(server, name, expected, 30 * MB)
+    total = time.monotonic() - started
+
+    _report(record_property, "upload10_send_seconds", sent, "s")
+    _report(record_property, "upload10_until_published_seconds", total, "s")
+    _report(record_property, "upload10_send_mb_per_second", 30 / sent, "MB/s")
+    assert total < 180, f"30 MB in 10 MB chunks took {total:.1f} s"
+
+
+def test_four_clients_upload_production_size_chunks_at_the_same_time(
+    server, record_property
+):
+    """Four browsers (or four files of one browser) at once: 4 x 20 MB in chunks of 10 MB."""
+    jobs = []
+    for _ in range(4):
+        parts = [os.urandom(10 * MB) for _ in range(2)]
+        jobs.append(
+            (
+                server.login_as("qa_writer"),
+                f"baseline10x4_{uuid.uuid4().hex[:8]}.bin",
+                parts,
+                hashlib.sha256(b"".join(parts)).hexdigest(),
+            )
+        )
+
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda job: _upload_parts(job[0], job[1], job[2]), jobs))
+    sent = time.monotonic() - started
+    for _client, name, _parts, digest in jobs:
+        _wait_for_file(server, name, digest, 20 * MB)
+    total = time.monotonic() - started
+
+    _report(record_property, "upload10x4_send_seconds", sent, "s")
+    _report(record_property, "upload10x4_until_published_seconds", total, "s")
+    _report(record_property, "upload10x4_send_mb_per_second", 80 / sent, "MB/s")
+    assert total < 300, f"4 x 20 MB in 10 MB chunks took {total:.1f} s"
+
+
+def test_a_download_of_32_mb_arrives_intact_in_reasonable_time(server, record_property):
+    name = f"baseline_download_{uuid.uuid4().hex[:8]}.bin"
+    data = os.urandom(32 * MB)
+    (server.storage / name).write_bytes(data)
+    client = server.login_as("qa_reader")
+
+    started = time.monotonic()
+    reply = client.get(f"/download/{name}")
+    elapsed = time.monotonic() - started
+
+    assert reply.status == 200, reply.status
+    assert hashlib.sha256(reply.body).hexdigest() == hashlib.sha256(data).hexdigest()
+    _report(record_property, "download_32mb_seconds", elapsed, "s")
+    _report(record_property, "download_mb_per_second", 32 / elapsed, "MB/s")
+    assert elapsed < 120, f"32 MB took {elapsed:.1f} s to download"
 
 
 def test_a_login_takes_well_under_two_seconds(server, record_property):

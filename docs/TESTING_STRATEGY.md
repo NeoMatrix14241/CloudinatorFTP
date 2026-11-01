@@ -2,7 +2,7 @@
 
 > **Status: tracked in git for now.** It becomes `.gitignored` (a local planning document) only after ALL the phases below are 100% implemented; see `CLAUDE.md` READ HERE FIRST and `CODING_GUIDELINES.md` section 18. Until then update it with every testing change; after that do not link to it from a committed document. The facts it holds are repeated in `CLAUDE.md` and `CODING_GUIDELINES.md`.
 
-**Status (2026-10-29, Version 5.40):** Phases 0, 1 and 2 are DONE. Phase 3 is DONE except that Ruff is report-only until its findings are triaged. Phase 4: the protocol tests are done and in the pull-request tier; `nightly.yml` and the fault / concurrency / restart, live-worker, performance and browser tests are WRITTEN (5.40) but have not run on the real application or on GitHub yet. Phase 5: required checks and CODEOWNERS are done; the coverage floor waits for the first Linux total. Section 14 has the detail.
+**Status (2026-11-01, Version 5.41):** 5.41 adds `qa lint` (Ruff, report only; menu 30), unit tests for the upload-path changes (`test_upload_perf.py`, `test_upload_body_paths.py`, `test_upload_settings.py`, `test_version_engine_scope.py`), the application test `test_upload_tuning.py`, the opt-in `test_version_chunks_excluded.py`, 10 MB-chunk and download baselines in `test_baselines.py`, and section 16, the procedure for measuring upload speed. None of the new application, performance or reliability tests has run on the real application yet. **As of 5.40:** Phases 0, 1 and 2 are DONE. Phase 3 is DONE except that Ruff is report-only until its findings are triaged. Phase 4: the protocol tests are done and in the pull-request tier; `nightly.yml` and the fault / concurrency / restart, live-worker, performance and browser tests are WRITTEN (5.40) but have not run on the real application or on GitHub yet. Phase 5: required checks and CODEOWNERS are done; the coverage floor waits for the first Linux total. Section 14 has the detail.
 **It is committed with every testing change (see the banner above).** The permanent record is `CLAUDE.md` (sync notes) and `CODING_GUIDELINES.md`.
 **Scope:** Quart HTTP routes, SQLite behavior, storage and file index, upload pipeline, version history, sharing, FTP/SFTP/WebDAV, the front-end contracts that break silently (SRI, CSP), and the `manage.sh` Quality Assurance section.
 **Read with:** [CLAUDE.md](CLAUDE.md) (history, rules) and [CODING_GUIDELINES.md](CODING_GUIDELINES.md) (how to change things).
@@ -19,7 +19,7 @@ The first draft proposed an in-process Quart test client. Reading the code (Phas
 | `pytest.ini` | `pyproject.toml` (`[tool.pytest.ini_options]`, the owner's choice). A leftover `pytest.ini` would silently win, so there must be none |
 | `requirements-dev.txt` with many tools | `pytest>=9.1.1`, `pytest-timeout>=2.4`, `pip-audit>=2.10.1`, `coverage>=7.17.0`, `hypothesis>=6.170` and `ruff==0.17.3` (pinned exactly; 5.40). `mutmut` was dropped (it rewrites functions into trampolines the `ast`-based unit tests cannot read; `tests/mutation_trial.py` replaces it) and `playwright` is installed by the nightly job only |
 | `qa.py` modes `static / quick / layer / coverage / mutation / ci / full` | `static`, `tests`, `quick`, `layer <name>`, `ci`, `audit` (5.32), `coverage` (5.34), plus `--version`, `--skip-packages`, `--out DIR`, `--fail-fast`. Steps: `smoke`, `check`, `sri`, `js-syntax`, `layout`, `pytest`. `mutation`, `full` do not exist |
-| `manage.sh` QA entries 21-26 (with coverage and mutation) | 21-25: `qa quick`, `qa static`, `qa tests`, `qa layer`, `qa ci`; 26-29 are the separate Developer Tools section (`dir-tree`, `smoke --save`, `qa audit` (5.32), `qa coverage` (5.34)). The menu has 29 entries |
+| `manage.sh` QA entries 21-26 (with coverage and mutation) | 21-25: `qa quick`, `qa static`, `qa tests`, `qa layer`, `qa ci`; 26-30 are the separate Developer Tools section (`dir-tree`, `smoke --save`, `qa audit` (5.32), `qa coverage` (5.34), `qa lint` (5.41)). The menu has 30 entries |
 | CI: Python 3.12, only pyflakes, SRI "not yet in CI" | `tests.yml` uses Python **3.14.7** and `@v7` actions; job `smoke + check` and job `behavioral tests` (`needs` the first; both jobs are required checks through the rulesets; runs `python tests/qa.py ci`, uploads `artifacts/`). SRI and `node --check` run inside `qa.py` (so in CI through `qa ci`), not as separate steps of the static job |
 | `tests/integration/`, `protocols/`, `property/`, `reliability/`, `frontend/` | `tests/unit/`, `application/`, `protocols/` (5.26-5.31), `property/`, `reliability/`, `frontend/` (5.40) and `performance/` exist; `tests/integration/` does not (that approach lives in `tests/application/`, see section 6) |
 | Version history, index and shares tested through the app | The scratch config sets `VERSION_ENGINE_ENABLED: false` (and every protocol off). Share tests work through HTTP; version history and the file index are tested by running the REAL modules inside a scratch copy (`run_in_scratch`, no server), see section 6. The HTTP routes `/api/versions/*` still need a scratch server with the engine on (Proposed) |
@@ -168,12 +168,14 @@ python tests/qa.py layer <name>      # unit | application | performance ...
 python tests/qa.py ci                # what the behavioral-tests job runs (writes JUnit XML to ./artifacts)
 python tests/qa.py audit             # pip-audit on the installed packages (network; NOT part of quick / ci)
 python tests/qa.py audit --path DIR  # the same for another environment's site-packages (what CI does)
-flags: --skip-packages, --out DIR, --fail-fast, --path DIR (audit only)
+python tests/qa.py lint             # Ruff on the whole project, REPORT ONLY (findings listed, counted per rule; NOT part of quick / ci)
+python tests/qa.py lint --strict    # any Ruff finding fails the step (for when the findings are triaged)
+flags: --skip-packages, --out DIR, --fail-fast, --path DIR (audit only), --strict (lint only)
 ```
 
 It prints one line per step with PASS / FAIL / SKIP and the elapsed time and exits non-zero on any failure; a stray `tests/test_*.py` is a FAIL (`layout`); the "pip install -r requirements-dev.txt" hint appears only when `pytest` cannot be imported. `audit` is kept out of `quick` / `ci` on purpose: advisories appear without any code change and an offline machine cannot run it. Accepted findings go into `tests/audit_ignore.txt` (advisory ID, then the reason and a review date); `tests/unit/test_qa_audit.py` covers the mode. `coverage` (5.34) runs every layer under coverage.py with subprocess measurement (`pyproject.toml` `[tool.coverage.run]`: `patch = subprocess`, `sigterm = true`, `relative_files`, and NO `source`: it would resolve to the repository, not to the scratch copy a subprocess runs in), writes `artifacts/.coverage`, `coverage.xml` and `htmlcov/`, and takes `--fail-under N`; it is not part of `quick` / `ci`. On Windows the harness stops servers with `TerminateProcess`, their data is lost and server code reads too low: use the Linux workflow. Not implemented: `mutation`, `full`.
 
-**`manage.sh`** stays thin: `cmd_qa()` is one `run_utility "tests/qa.py"` call. Menu 21-25 = `qa quick`, `qa static`, `qa tests`, `qa layer` (asks which layer, default `unit`), `qa ci`; menu 26-29 = Developer Tools (`dir-tree`, `smoke --save`, `qa audit` (pip-audit, network, 5.32), `qa coverage` (slow, 5.34), which asks y/N because it overwrites the route baseline). `tests/unit/test_manage_qa.py` fails when the menu, the `case` arms and the help map disagree, and its `LAST_ENTRY` must be raised whenever the menu grows. QA commands are safe while the production server runs: the pytest layers use a scratch copy and a free port and never import the real app.
+**`manage.sh`** stays thin: `cmd_qa()` is one `run_utility "tests/qa.py"` call. Menu 21-25 = `qa quick`, `qa static`, `qa tests`, `qa layer` (asks which layer, default `unit`), `qa ci`; menu 26-30 = Developer Tools (`dir-tree`, `smoke --save`, `qa audit` (pip-audit, network, 5.32), `qa coverage` (slow, 5.34), `qa lint` (Ruff, report only, 5.41), where `smoke --save` asks y/N because it overwrites the route baseline). `tests/unit/test_manage_qa.py` fails when the menu, the `case` arms and the help map disagree, and its `LAST_ENTRY` must be raised whenever the menu grows. QA commands are safe while the production server runs: the pytest layers use a scratch copy and a free port and never import the real app.
 
 ## 12. GitHub Actions
 
@@ -215,6 +217,8 @@ Done for a critical change: `./manage.sh qa quick` passes locally; relevant nega
 
 **What is open after 5.40, in order:** (1) run `nightly.yml` once from `dev` (Actions > Nightly > Run workflow), fix what the first run shows; (2) run the Coverage workflow, paste the Linux summary, choose the floor; (3) triage the Ruff findings, then make Ruff a required step; (4) `qa lint` mode and menu entry; (5) CodeQL alert #612 (cyclic import `version_engine` / `config`, needs `config.py`). **The `.gitignore` step is NOT due:** when phases 4 and 5 are 100 % done, add `docs/TESTING_STRATEGY.md` to `.gitignore` and run `git rm --cached docs/TESTING_STRATEGY.md` once so git stops tracking it (the file stays on disk); until then it stays committed.
 
+**Added in 5.41 (upload path):** `qa lint` (menu 30) is the local twin of `lint.yml`; the unit tests `test_upload_perf.py`, `test_upload_body_paths.py`, `test_upload_settings.py` and `test_version_engine_scope.py` run in the required check; `tests/application/test_upload_tuning.py` starts one extra scratch server (about as long as the first fixture of the run); `tests/reliability/test_version_chunks_excluded.py` and the new baselines are opt-in (`CLOUDINATOR_SLOW_TESTS=1`) and, like the rest of phase 4, have not run on the real application. Still open from the 5.40 turnover: the handler test that hundreds of `.chunks/...` creates must not arm `_pending_reconcile` (extends `tests/unit/test_monitor_handler.py`) and the latency bound in `tests/reliability/test_concurrency.py`; both files were not provided.
+
 ## 15. What is not realistic
 
 - A guarantee of zero regressions, or a high global mutation threshold.
@@ -223,7 +227,75 @@ Done for a critical change: `./manage.sh qa quick` passes locally; relevant nega
 - Importing the real app repeatedly in one process; singletons and import-time side effects make that fragile, which is why the scratch copy and subprocess exist.
 - Automating visual checks (CSS / layout); a Playwright smoke would only catch load errors.
 
-## 16. References
+## 16. Measuring upload speed (5.41)
+
+Why: "uploads got slow" was investigated twice with numbers that could not see the cause. The first measurements held the payload in RAM (a browser reads the source file from the same disk), wrote 270 MB in `%TEMP%` (on a hard disk Windows reports its write cache, 1500 MB/s, not the disk), ran each case once, and profiled the server right after its start (the post-start reconcile walk and the Version Engine's crash recovery were in the profile). Use these tools together; each one answers one question.
+
+| Tool | Answers | Cannot see |
+|---|---|---|
+| `quart_upload_reference.py` v2 (a throw-away script, kept OUTSIDE the repository) | what this machine, Python and the Quart / Werkzeug / Hypercorn versions can do with a 10-line endpoint: raw disk (`--fsync`), chunks read from a real file (`--source`), temp-file parser vs in-memory parser, 1 and 4 at once, N runs with min / median / max | the application, HTTP/2, TLS |
+| `tests/performance/test_baselines.py` (opt-in) | the real application in a scratch copy: 24 MB in 2 MB chunks, 30 MB and 4 x 20 MB in 10 MB chunks, a 32 MB download; MB/s printed and recorded in the JUnit XML | a browser, the source file being read, the Version Engine, HTTP/2 |
+| `UPLOAD_TIMING_ENABLED` in `server_config.json` | where the time of every REAL chunk goes: `role`, `receive+parse` (`(RAM)` when `UPLOAD_CHUNKS_IN_MEMORY` is on), `read+save` (with `read` and `save` measured in the worker thread), and how late the event loop wakes up (the probe starts with the first upload after a restart) | nothing: it is the application itself |
+| Windows disk counters | whether the disk is saturated during an upload | which program causes it |
+| `py-spy record --rate 20 --gil` | which Python code holds the interpreter | time spent waiting for the disk |
+
+**A. The machine (about 3 minutes; Git Bash, from anywhere).**
+
+```text
+python ~/quart_upload_reference.py --fsync --disk-mb 1500 --source "/c/path/to/the/big.mkv"
+```
+
+Read: `1.` is the real disk speed (a hard disk: roughly 80-200 MB/s sequential), `2.` is the upload speed of a bare endpoint WITH the source file being read, `quart` is what the application does today (temp file), `memory` is `UPLOAD_CHUNKS_IN_MEMORY`. A difference smaller than the min-max spread of the runs is noise.
+
+**B. One package at a time (about 2 minutes each).** Work in a throw-away virtual environment so the repository's own is never touched. `--no-deps` swaps exactly one package; if an old and a new package do not fit together the script fails to import, and that pair is simply not valid.
+
+```text
+python -m venv ~/ab_venv && source ~/ab_venv/Scripts/activate
+python -m pip install -r requirements.txt                       # from the repository root
+python ~/quart_upload_reference.py --quick --runs 5             # 0: the installed stack
+python -m pip install --no-deps --force-reinstall "werkzeug==3.0.6"
+python ~/quart_upload_reference.py --quick --runs 5             # 1: Werkzeug only
+python -m pip install --no-deps --force-reinstall "werkzeug==3.1.9"
+python -m pip install --no-deps --force-reinstall "quart==0.20.0"
+python ~/quart_upload_reference.py --quick --runs 5             # 2: Quart only
+python -m pip install --no-deps --force-reinstall "quart==0.23.1"
+python -m pip install --no-deps --force-reinstall "hypercorn==0.17.3"
+python ~/quart_upload_reference.py --quick --runs 5             # 3: Hypercorn only
+python -m pip install --no-deps --force-reinstall "hypercorn==0.18.0"
+deactivate
+```
+
+Use the versions `pip freeze` shows in the repository's environment for the "restore" lines. A package is the cause only if its median is clearly outside the spread of the other runs (a rule of thumb: more than 1.5 times different over 5 runs). Reading the sources (5.41) found no speed-relevant change between Hypercorn 0.17.3 and 0.18.0 on the HTTP/1.1 path, nor between Quart 0.20.0 and 0.22.0 (0.23.1 could not be read), and the Werkzeug multipart decoder parses at the same speed in 3.0.6 and 3.1.9; expect no difference.
+
+**C. The application, same machine.**
+
+```text
+CLOUDINATOR_SLOW_TESTS=1 python -m pytest tests/performance/test_baselines.py -q -s
+```
+
+**D. A real browser upload, with the stage timings.** Set `"UPLOAD_TIMING_ENABLED": true` in `server_config.json`, restart, upload the big file, and read the log lines `upload chunk N/M: role ... | receive+parse ... | read+save ... (in the worker thread: read ..., save ...)` and `event-loop lag, last 30s: median ... p95 ... max ...`. Then set `"UPLOAD_CHUNKS_IN_MEMORY": true`, restart, repeat, and compare `receive+parse (RAM)` and `read+save` with the first run.
+
+**E. Is the disk the limit?** In PowerShell, while the upload runs:
+
+```text
+typeperf "\PhysicalDisk(_Total)\% Disk Time" "\PhysicalDisk(_Total)\Avg. Disk Queue Length" -si 2 -sc 30
+```
+
+`% Disk Time` near 100 with a queue length above 2 means the disk is saturated.
+
+**F. A profile that means something.** Attach `py-spy` when the server has been up for at least 5 minutes (not during its start) and DURING the upload: `py-spy record --rate 20 --gil --duration 30 --format raw --subprocesses -o spy2.txt --pid <pid>`.
+
+| What you see | Meaning | Next step |
+|---|---|---|
+| `receive+parse` is most of the chunk time, and the bare endpoint is as slow | network, TLS or the disk under the temp file | compare `quart` and `memory` in A; try `UPLOAD_CHUNKS_IN_MEMORY`; a smaller `CHUNK_SIZE` |
+| `read+save` is most of it | the disk under `.chunks/` (a hard disk shared with the source file) | E; put `ROOT_DIR` on another disk, or SSD |
+| lag p95 above 100 ms during an upload | something else blocks the loop | the `--gil` profile (F); the reconcile walk, the search crawl |
+| one package clearly slower (B) | that package | pin it in `requirements.txt` on purpose (a deliberate change with its own version bump) |
+| a `408` in the browser | one chunk took longer than `BODY_TIMEOUT` | the stage timings show which stage; raise `BODY_TIMEOUT` only after that |
+
+Record the numbers you rely on in `CLAUDE.md`; never record a result that was not run.
+
+## 17. References
 
 - pytest: <https://docs.pytest.org/> - fixtures: <https://docs.pytest.org/en/stable/how-to/fixtures.html>
 - Coverage.py: <https://coverage.readthedocs.io/> - Hypothesis: <https://hypothesis.readthedocs.io/>

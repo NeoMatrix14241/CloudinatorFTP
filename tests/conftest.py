@@ -525,6 +525,10 @@ def start_scratch_server(root, port, real_hashes=None) -> "ScratchServer":
         {
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
+            # The server's stdout goes to a FILE (block-buffered), so a test that looks for a log
+            # line would wait for the buffer to fill. dev_server.py sets this itself, but only
+            # after its imports, which is too late for the lines printed during startup (5.41).
+            "PYTHONUNBUFFERED": "1",
             "CLOUDINATOR_BG": "1",  # no reloader (see dev_server.py)
             "CLOUDINATOR_FTP_ROOT": str(root / "data" / "storage"),
         }

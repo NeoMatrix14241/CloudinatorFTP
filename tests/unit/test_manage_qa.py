@@ -1,9 +1,10 @@
 """
 Tests for the Quality Assurance section of manage.sh (menu 21-25 and the `qa` command) and for
-its Developer Tools section (menu 26-29: `dir-tree`, `smoke --save`, `qa audit` and `qa coverage`).
+its Developer Tools section (menu 26-30: `dir-tree`, `smoke --save`, `qa audit`, `qa coverage` and,
+since 5.41, `qa lint`).
 
 They read the real manage.sh and only run side-effect-free commands (`help`, `qa --version`,
-`qa bogus`, `qa layer nope`; `qa audit` is only checked in the source, it would use the network); no server is started and nothing is written. The numbering test
+`qa bogus`, `qa layer nope`; `qa audit` and `qa lint` are only checked in the source: audit would use the network, lint would write Ruff's cache); no server is started and nothing is written. The numbering test
 guards against the menu drifting from its dispatch table and from `help` (CLAUDE.md records
 three earlier renumbering accidents). Raise LAST_ENTRY whenever the menu grows.
 """
@@ -23,7 +24,7 @@ pytestmark = pytest.mark.skipif(
     BASH is None or not SCRIPT.is_file(), reason="bash or manage.sh not found"
 )
 
-LAST_ENTRY = 29
+LAST_ENTRY = 30
 
 
 def _text():
@@ -81,6 +82,7 @@ def test_menu_arms_run_the_expected_qa_modes():
         25: "cmd_qa ci",
         28: "cmd_qa audit",
         29: "cmd_qa coverage",
+        30: "cmd_qa lint",
     }.items():
         assert re.search(
             rf"^\t\t{num}\) _menu_run {re.escape(call)} ;;$", body, re.M
@@ -137,17 +139,19 @@ def test_help_documents_every_qa_mode():
         "qa ci",
         "qa audit",
         "qa coverage",
+        "qa lint",
         "qa --version",
     ):
         assert text in out, text
 
 
-def test_qa_audit_and_coverage_are_accepted_modes_and_stay_out_of_quick():
+def test_qa_audit_coverage_and_lint_are_accepted_modes_and_stay_out_of_quick():
     body = _function("cmd_qa")
     assert re.search(
-        r"quick \| static \| tests \| ci \| layer \| audit \| coverage \|", body
+        r"quick \| static \| tests \| ci \| layer \| audit \| coverage \| lint \|",
+        body,
     )
-    assert "| audit | coverage)" in body  # the error message lists them
+    assert "| audit | coverage | lint)" in body  # the error message lists them
 
 
 def test_unknown_qa_mode_exits_2():
