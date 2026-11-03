@@ -1,10 +1,11 @@
 """
-Tests of the three 5.41 upload settings, read from the source with `ast` (config.py and core.py
-cannot be imported in the test process):
+Tests of the 5.41 upload settings and the 5.42 download setting, read from the source with `ast`
+(config.py and core.py cannot be imported in the test process):
 
   BODY_TIMEOUT             seconds Quart gives one request body; default 600, 0 = no limit
   UPLOAD_TIMING_ENABLED    stage timings + event-loop lag probe; default OFF
   UPLOAD_CHUNKS_IN_MEMORY  chunk-sized bodies parsed in RAM; default OFF
+  DOWNLOAD_BUFFER_SIZE     bytes read per step when a file is sent; default 1 MiB (5.42)
 
 CODING_GUIDELINES.md 22.4: a setting that is not saved and loaded is lost on the next start, and
 a default that changes silently changes the server's behaviour.
@@ -18,7 +19,12 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG = ROOT / "config.py"
 CORE = ROOT / "core.py"
-KEYS = ("BODY_TIMEOUT", "UPLOAD_TIMING_ENABLED", "UPLOAD_CHUNKS_IN_MEMORY")
+KEYS = (
+    "BODY_TIMEOUT",
+    "UPLOAD_TIMING_ENABLED",
+    "UPLOAD_CHUNKS_IN_MEMORY",
+    "DOWNLOAD_BUFFER_SIZE",
+)
 
 
 def _tree(path):
@@ -35,10 +41,17 @@ def _module_literals():
 
 
 def _function(name):
-    for node in _tree(CONFIG).body:
-        if isinstance(node, ast.FunctionDef) and node.name == name:
-            return node
-    pytest.fail(f"{name}() not found in config.py")
+    found = next(
+        (
+            node
+            for node in _tree(CONFIG).body
+            if isinstance(node, ast.FunctionDef) and node.name == name
+        ),
+        None,
+    )
+    if found is None:
+        pytest.fail(f"{name}() not found in config.py")
+    return found
 
 
 def _string_constants(node):
@@ -55,6 +68,7 @@ def test_the_defaults_keep_the_new_behaviour_off_and_the_timeout_generous():
         "BODY_TIMEOUT": 600,
         "UPLOAD_TIMING_ENABLED": False,
         "UPLOAD_CHUNKS_IN_MEMORY": False,
+        "DOWNLOAD_BUFFER_SIZE": 1048576,
     }
 
 
@@ -134,3 +148,65 @@ def test_core_imports_the_setting_from_config():
         for alias in node.names
     }
     assert "BODY_TIMEOUT" in imported
+
+
+# ---------------------------------------------------------------------------- download buffer (5.42)
+def _buffer_validator():
+    node = _function("_buffer_size_or_default")
+    module = ast.Module(body=[node], type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {}
+    exec(compile(module, str(CONFIG), "exec"), namespace)
+    return namespace["_buffer_size_or_default"]
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (8192, 8192),
+        (65536, 65536),
+        (1048576, 1048576),
+        (16 * 1024 * 1024, 16 * 1024 * 1024),
+        (8191, 1048576),
+        (0, 1048576),
+        (-1, 1048576),
+        (16 * 1024 * 1024 + 1, 1048576),
+    ],
+)
+def test_a_buffer_size_inside_the_bounds_is_kept_else_the_default(value, expected):
+    assert _buffer_validator()(value, 1048576) == expected
+
+
+@pytest.mark.parametrize("value", ["1048576", None, True, False, 1.5e6, [], {}])
+def test_a_hand_edited_wrong_type_gets_the_default_buffer_size(value):
+    assert _buffer_validator()(value, 1048576) == 1048576
+
+
+def test_load_server_config_validates_the_buffer_size():
+    assert "_buffer_size_or_default(" in ast.unparse(_function("load_server_config"))
+
+
+def test_core_applies_the_download_buffer_to_the_app():
+    calls = [
+        n
+        for n in ast.walk(_tree(CORE))
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Name)
+        and n.func.id == "use_file_buffer"
+    ]
+    assert len(calls) == 1
+    assert [ast.unparse(a) for a in calls[0].args] == ["app", "DOWNLOAD_BUFFER_SIZE"]
+    imported = {
+        alias.name
+        for node in _tree(CORE).body
+        if isinstance(node, ast.ImportFrom) and node.module == "helpers.file_body"
+        for alias in node.names
+    }
+    assert imported == {"use_file_buffer"}
+    from_config = {
+        alias.name
+        for node in _tree(CORE).body
+        if isinstance(node, ast.ImportFrom) and node.module == "config"
+        for alias in node.names
+    }
+    assert "DOWNLOAD_BUFFER_SIZE" in from_config

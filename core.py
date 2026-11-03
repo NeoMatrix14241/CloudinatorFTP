@@ -61,6 +61,7 @@ import ipaddress
 # re-export it under its original name without self-recursion. See
 # helpers/net_utils.py's docstring and the wrapper function for why this split
 # exists.
+from helpers.file_body import use_file_buffer
 from helpers.net_utils import get_local_ip as _get_local_ip
 
 
@@ -141,6 +142,7 @@ from config import (
     CHUNK_SIZE,
     ENABLE_CHUNKED_UPLOADS,
     BODY_TIMEOUT,
+    DOWNLOAD_BUFFER_SIZE,
     MAX_CONTENT_LENGTH,
     ALLOWED_EXTENSIONS,
     PERMANENT_SESSION_LIFETIME,
@@ -933,6 +935,11 @@ app.config.update(
     # config.BODY_TIMEOUT (default 600 s); 0 = no limit.
     BODY_TIMEOUT=BODY_TIMEOUT or None,
 )
+
+# Files (/download, /view) are read in config.DOWNLOAD_BUFFER_SIZE pieces (default 1 MiB), not in
+# Quart's 8 KiB ones (5.42): every 8 KiB piece costs two thread hand-offs, which held a RAM-cached
+# 32 MB download to 2.6 MB/s on the owner's Windows PC. See helpers/file_body.py.
+use_file_buffer(app, DOWNLOAD_BUFFER_SIZE)
 
 # ---------------------------------------------------------------------------
 # CSRF protection for every state-changing request (POST/PUT/PATCH/DELETE).

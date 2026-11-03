@@ -6,6 +6,7 @@ __pycache__/
 *.bak
 *.log
 .venv/
+.venv-ft/
 constraints.txt
 .hintrc
 *.pid
@@ -19,3 +20,4 @@ uploads/
 htmlcov/
 artifacts/
 .hypothesis/
+.vscode/

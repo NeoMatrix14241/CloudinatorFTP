@@ -6,6 +6,7 @@ Standard library only, except `parse_form_in_memory`, which imports werkzeug ins
 tests/unit/test_upload_perf.py imports this file as it is.
 
   StageTimer, UploadTimingLog   wall-clock stages of one /upload request and a running average
+                                (parse_timing_lines averages those log lines again, for the tests)
   LagStats, watch_loop_lag,     how late the asyncio event loop wakes up (a loop that is blocked
   LagProbeStarter               by synchronous work shows up here as lag)
   IdleDeferral                  run an action once a "busy" condition is over, with a hard cap
@@ -19,6 +20,7 @@ False); `parse_form_in_memory` is used only when `config.UPLOAD_CHUNKS_IN_MEMORY
 """
 
 import asyncio
+import re
 import threading
 import time
 
@@ -110,6 +112,52 @@ class UploadTimingLog:
         self._log(line)
         if summary:
             self._log(summary)
+
+
+_RECEIVE_PARSE = re.compile(r"receive\+parse( \(RAM\))? ([0-9.]+)s")
+_READ_SAVE = re.compile(r"read\+save ([0-9.]+)s")
+_THREAD_PARTS = re.compile(r"read ([0-9.]+)s, save ([0-9.]+)s")
+_TOTAL = re.compile(r"total ([0-9.]+)s, ([0-9.]+) MB")
+
+
+def parse_timing_lines(text):
+    """Average the per-chunk lines `UploadTimingLog` wrote into a server log (5.42).
+
+    Returns None when `text` holds no such line (timing is off), else a dict of averages per chunk:
+    chunks, receive_parse, read_save, read, save, total (seconds), megabytes (per chunk) and ram
+    (True when the chunks were parsed in RAM). Used by tests/performance/test_baselines.py to show
+    WHERE the time of an upload goes without anybody reading the log by hand.
+    """
+    rows = []
+    for line in text.splitlines():
+        if "upload chunk " not in line:
+            continue
+        parse, save, total = (
+            _RECEIVE_PARSE.search(line),
+            _READ_SAVE.search(line),
+            _TOTAL.search(line),
+        )
+        if not (parse and save and total):
+            continue
+        parts = _THREAD_PARTS.search(line)
+        rows.append(
+            {
+                "receive_parse": float(parse.group(2)),
+                "read_save": float(save.group(1)),
+                "read": float(parts.group(1)) if parts else 0.0,
+                "save": float(parts.group(2)) if parts else 0.0,
+                "total": float(total.group(1)),
+                "megabytes": float(total.group(2)),
+                "ram": bool(parse.group(1)),
+            }
+        )
+    if not rows:
+        return None
+    count = len(rows)
+    result = {"chunks": count, "ram": any(r["ram"] for r in rows)}
+    for key in ("receive_parse", "read_save", "read", "save", "total", "megabytes"):
+        result[key] = sum(r[key] for r in rows) / count
+    return result
 
 
 # ---------------------------------------------------------------------------

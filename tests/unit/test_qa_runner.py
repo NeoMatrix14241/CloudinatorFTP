@@ -203,3 +203,42 @@ def test_the_strict_flag_reaches_the_plan(qa, monkeypatch):
     qa.main(["lint"])
     assert seen[0][0] == "lint" and seen[0][-1] is True
     assert seen[1][-1] is False
+
+
+# ---------------------------------------------------------------------------- build banner (5.42)
+def _fake_python(version, free_threaded, gil_enabled="absent"):
+    import types
+
+    sysconfig = types.SimpleNamespace(
+        get_config_var=lambda key: (
+            1 if (key == "Py_GIL_DISABLED" and free_threaded) else 0
+        )
+    )
+    sys_stub = types.SimpleNamespace(version_info=version)
+    if gil_enabled != "absent":
+        sys_stub._is_gil_enabled = lambda: gil_enabled
+    return sysconfig, sys_stub
+
+
+@pytest.mark.parametrize(
+    "free_threaded, gil, expected",
+    [
+        (False, True, "3.14.7 standard build, GIL on"),
+        (True, False, "3.14.7 free-threaded build, GIL off"),
+        (True, True, "3.14.7 free-threaded build, GIL on"),
+        (True, "absent", "3.14.7 free-threaded build, GIL state unknown"),
+    ],
+)
+def test_the_build_banner_names_the_build_and_the_gil_state(
+    qa, free_threaded, gil, expected
+):
+    sysconfig, sys_stub = _fake_python((3, 14, 7, "final", 0), free_threaded, gil)
+    assert qa.python_build_line(sysconfig, sys_stub) == expected
+
+
+def test_the_build_banner_of_this_interpreter_is_printed_by_every_mode(
+    qa, monkeypatch, capsys
+):
+    monkeypatch.setattr(qa, "build_plan", lambda *args, **kwargs: [])
+    qa.main(["static"])
+    assert f"python: {qa.python_build_line()}" in capsys.readouterr().out

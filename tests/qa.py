@@ -51,11 +51,12 @@ import os
 import shutil
 import subprocess
 import sys
+import sysconfig
 import time
 from pathlib import Path
 
 QA_VERSION = (
-    "5.41"  # `python tests/qa.py --version`: tells you which copy of this file you run
+    "5.42"  # `python tests/qa.py --version`: tells you which copy of this file you run
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -394,6 +395,19 @@ def run_steps(steps, fail_fast=False, cwd=ROOT):
     return (1 if failed else 0), results
 
 
+def python_build_line(sysconfig_module=sysconfig, sys_module=sys):
+    """Which interpreter this run uses, e.g. `3.14.7 standard build, GIL on` or
+    `3.14.7 free-threaded build, GIL off` (5.42). The suite has to give the same verdict on both
+    builds; this line says which one a pasted result came from."""
+    version = ".".join(str(part) for part in sys_module.version_info[:3])
+    if not sysconfig_module.get_config_var("Py_GIL_DISABLED"):
+        return f"{version} standard build, GIL on"
+    is_gil_enabled = getattr(sys_module, "_is_gil_enabled", None)
+    if is_gil_enabled is None:
+        return f"{version} free-threaded build, GIL state unknown"
+    return f"{version} free-threaded build, GIL {'on' if is_gil_enabled() else 'off'}"
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="CloudinatorFTP QA runner")
     ap.add_argument("--version", action="version", version=f"qa.py {QA_VERSION}")
@@ -418,6 +432,7 @@ def main(argv=None):
         help="lint mode only: any Ruff finding fails the step",
     )
     args = ap.parse_args(argv)
+    print(f"python: {python_build_line()}")
 
     if args.mode == "audit":
         # pip-audit warns "your local environment will not be audited" when the interpreter path

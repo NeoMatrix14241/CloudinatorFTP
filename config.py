@@ -27,6 +27,11 @@ UPLOAD_TIMING_ENABLED = False
 # in the system temp folder: one 10 MB write and one read less per chunk, at the price of up to
 # that much RAM per chunk being received at the same moment. Off by default.
 UPLOAD_CHUNKS_IN_MEMORY = False
+# Download read size (5.42): bytes read per step when a file is sent (/download, /view). Quart's own
+# 8 KiB costs two thread hand-offs per 8 KiB, which held a RAM-cached 32 MB file to 2.6 MB/s on the
+# owner's Windows PC (helpers/file_body.py has the numbers). 8192 to 16 MiB; the price is this much
+# RAM per download in flight. Saved in server_config.json, no menu entry (restart needed).
+DOWNLOAD_BUFFER_SIZE = 1048576
 HOST = "0.0.0.0"  # Listen on all interfaces
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024 * 1024  # 16GB max file size
 ALLOWED_EXTENSIONS = None  # None = allow all file types.
@@ -969,6 +974,7 @@ def save_server_config():
         "BODY_TIMEOUT": BODY_TIMEOUT,
         "UPLOAD_TIMING_ENABLED": UPLOAD_TIMING_ENABLED,
         "UPLOAD_CHUNKS_IN_MEMORY": UPLOAD_CHUNKS_IN_MEMORY,
+        "DOWNLOAD_BUFFER_SIZE": DOWNLOAD_BUFFER_SIZE,
         "MAX_CONTENT_LENGTH": MAX_CONTENT_LENGTH,
         "PERMANENT_SESSION_LIFETIME": PERMANENT_SESSION_LIFETIME,
         # ── Feature toggles ───────────────────────────────────────────────
@@ -1044,10 +1050,20 @@ def _non_negative_number(value, default):
     return value if value >= 0 else default
 
 
+def _buffer_size_or_default(value, default):
+    """`value` when it is a whole number (not a bool) from 8192 to 16 MiB, else `default`: a
+    hand-edited server_config.json must not be able to switch downloads off or ask for a
+    gigabyte per download."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    return value if 8192 <= value <= 16 * 1024 * 1024 else default
+
+
 def load_server_config():
     """Load server configuration from server_config.json (next to this file)."""
     global PORT, CHUNK_SIZE, ENABLE_CHUNKED_UPLOADS
     global BODY_TIMEOUT, UPLOAD_TIMING_ENABLED, UPLOAD_CHUNKS_IN_MEMORY
+    global DOWNLOAD_BUFFER_SIZE
     global HOST, MAX_CONTENT_LENGTH, PERMANENT_SESSION_LIFETIME
     global HLS_MIN_SIZE, HLS_FORCE_FORMATS
     global IMG_COMPRESS_MIN_SIZE, IMG_WEBP_QUALITY
@@ -1089,6 +1105,10 @@ def load_server_config():
             )
             UPLOAD_CHUNKS_IN_MEMORY = bool(
                 config.get("UPLOAD_CHUNKS_IN_MEMORY", UPLOAD_CHUNKS_IN_MEMORY)
+            )
+            DOWNLOAD_BUFFER_SIZE = _buffer_size_or_default(
+                config.get("DOWNLOAD_BUFFER_SIZE", DOWNLOAD_BUFFER_SIZE),
+                DOWNLOAD_BUFFER_SIZE,
             )
             MAX_CONTENT_LENGTH = config.get("MAX_CONTENT_LENGTH", MAX_CONTENT_LENGTH)
             PERMANENT_SESSION_LIFETIME = config.get(
@@ -2245,6 +2265,7 @@ def view_current_settings():
     )
     print(f"   Upload timing log: {'On' if UPLOAD_TIMING_ENABLED else 'Off'}")
     print(f"   Upload chunks in RAM: {'On' if UPLOAD_CHUNKS_IN_MEMORY else 'Off'}")
+    print(f"   Download read size: {format_bytes(DOWNLOAD_BUFFER_SIZE)}")
     print(f"   Max File Size: {format_bytes(MAX_CONTENT_LENGTH)}")
     print(f"   Session Timeout: {PERMANENT_SESSION_LIFETIME//60} minutes")
     print(f"   Session Secret: Managed in db/session.secret")

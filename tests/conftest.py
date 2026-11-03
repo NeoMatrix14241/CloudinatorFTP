@@ -24,6 +24,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import sysconfig
 import time
 import types
 import urllib.error
@@ -83,11 +84,58 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+def child_gil_environment() -> dict:
+    """The GIL setting a scratch server inherits from the test run (5.42).
+
+    On a free-threaded build (python3.14t) that is running WITHOUT the GIL the server must run the
+    same way, as the real launcher does (PYTHON_GIL=0), or a C extension that does not declare
+    itself safe would silently switch the GIL back on in the child only. On a standard build
+    nothing may be set: PYTHON_GIL=0 there is a startup error ("not supported by this build"). A
+    free-threaded build that is running WITH the GIL (PYTHON_GIL=1, or an extension re-enabled it)
+    also gets nothing, so the child behaves like its parent in every case.
+    """
+    if not sysconfig.get_config_var("Py_GIL_DISABLED"):
+        return {}
+    is_gil_enabled = getattr(sys, "_is_gil_enabled", None)
+    if is_gil_enabled is None or is_gil_enabled():
+        return {}
+    return {"PYTHON_GIL": "0"}
+
+
+def scratch_config_from_environment() -> dict:
+    """Extra server_config.json keys for EVERY scratch server of this run (5.42).
+
+        CLOUDINATOR_SCRATCH_CONFIG='{"UPLOAD_CHUNKS_IN_MEMORY": true}' python -m pytest ...
+
+    is an A/B switch for the performance baselines: the same measurement with one setting changed,
+    without editing code or restarting the real server. Unset or empty: nothing is added. Keys a
+    fixture passes explicitly still win (see build_scratch). The isolation check of the scratch
+    copy still runs, so a path that points outside it is refused.
+    """
+    raw = os.environ.get("CLOUDINATOR_SCRATCH_CONFIG", "").strip()
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except ValueError as exc:
+        pytest.fail(
+            f"CLOUDINATOR_SCRATCH_CONFIG is not valid JSON: {exc}", pytrace=False
+        )
+    if not isinstance(value, dict):
+        pytest.fail(
+            "CLOUDINATOR_SCRATCH_CONFIG must be a JSON object, e.g. "
+            "'{\"UPLOAD_TIMING_ENABLED\": true}'",
+            pytrace=False,
+        )
+    return value
+
+
 def build_scratch(dest, src_root=REPO_ROOT, port=0, config=None) -> Path:
     """Copy the source tree into `dest` and write config files that point inside it.
 
     `config` (5.40) is merged over the default server_config.json of the scratch copy, e.g. to
     switch the version engine on for one fixture; the defaults keep every optional service off.
+    CLOUDINATOR_SCRATCH_CONFIG (5.42, a JSON object) is merged first, `config` over it.
     """
     dest = Path(dest)
     src_root = Path(src_root)
@@ -127,6 +175,7 @@ def build_scratch(dest, src_root=REPO_ROOT, port=0, config=None) -> Path:
         "SMB_ENABLED": False,
         "VERSION_ENGINE_ENABLED": False,
     }
+    server_cfg.update(scratch_config_from_environment())
     server_cfg.update(config or {})
     (dest / "storage_config.json").write_text(
         json.dumps(storage_cfg, indent=2), "utf-8"
@@ -533,6 +582,7 @@ def start_scratch_server(root, port, real_hashes=None) -> "ScratchServer":
             "CLOUDINATOR_FTP_ROOT": str(root / "data" / "storage"),
         }
     )
+    env.update(child_gil_environment())
     env.pop("CLOUDINATOR_PUBLIC_DOMAIN", None)
 
     log = open(log_path, "ab")

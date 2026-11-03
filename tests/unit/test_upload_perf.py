@@ -405,3 +405,70 @@ def test_a_body_with_too_many_parts_is_refused(perf):
     body, ctype = _body({f"f{i}": "x" for i in range(1001)}, {})
     with pytest.raises(RequestEntityTooLarge):
         perf.parse_form_in_memory(body, ctype)
+
+
+# ---------------------------------------------------------------------------- parse_timing_lines
+REAL_LINE = (
+    "⏱️ upload chunk 1/1: role 0.002s | receive+parse (RAM) 0.004s | read+save 0.006s "
+    "(in the worker thread: read 0.000s, save 0.004s) | total 0.012s, 0.1 MB, 8.2 MB/s"
+)  # a line of the owner's own server log (5.41)
+
+
+def test_a_real_log_line_is_parsed(perf):
+    stats = perf.parse_timing_lines(REAL_LINE)
+    assert stats["chunks"] == 1 and stats["ram"] is True
+    assert stats["receive_parse"] == pytest.approx(0.004)
+    assert stats["read_save"] == pytest.approx(0.006)
+    assert stats["read"] == pytest.approx(0.0) and stats["save"] == pytest.approx(0.004)
+    assert stats["total"] == pytest.approx(0.012)
+    assert stats["megabytes"] == pytest.approx(0.1)
+
+
+def test_lines_are_averaged_and_noise_is_ignored(perf):
+    other = REAL_LINE.replace("(RAM) 0.004s", "0.008s").replace(
+        "save 0.004s", "save 0.010s"
+    )
+    text = "\n".join(
+        [
+            "📊 Tracking upload: abc",
+            REAL_LINE,
+            "⏱️ upload average of the last 2 chunks: role 0.002s | receive+parse 0.1s",
+            other,
+            "[2026-11-01] INFO POST /upload 200",
+        ]
+    )
+    stats = perf.parse_timing_lines(text)
+    assert stats["chunks"] == 2  # the average line is not a chunk line
+    assert stats["receive_parse"] == pytest.approx(0.006)
+    assert stats["save"] == pytest.approx(0.007)
+    assert stats["ram"] is True  # at least one chunk was parsed in RAM
+
+
+def test_without_timing_lines_there_is_nothing_to_show(perf):
+    assert perf.parse_timing_lines("") is None
+    assert (
+        perf.parse_timing_lines("INFO nothing here\nupload chunk without numbers")
+        is None
+    )
+
+
+def test_a_line_the_logger_produced_is_read_back(perf):
+    """The stage names are the ones routes/uploads.py gives its StageTimer."""
+    lines = []
+    log = perf.UploadTimingLog(log=lines.append, summary_every=99)
+    clock = FakeClock()
+    timer = perf.StageTimer(True, clock=clock)
+    clock.advance(0.01)
+    timer.mark("role")
+    clock.advance(1.5)
+    timer.mark("receive+parse")
+    clock.advance(2.5)
+    timer.mark("read+save")
+    log.report(
+        timer, 10 * 1024 * 1024, "chunk 4/9"
+    )  # the label routes/uploads.py passes
+    stats = perf.parse_timing_lines("\n".join(lines))
+    assert stats["chunks"] == 1 and stats["ram"] is False
+    assert stats["receive_parse"] == pytest.approx(1.5)
+    assert stats["read_save"] == pytest.approx(2.5)
+    assert stats["megabytes"] == pytest.approx(10.0)
