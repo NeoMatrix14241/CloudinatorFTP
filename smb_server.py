@@ -1001,7 +1001,8 @@ def _try_bind(port: int) -> bool:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        s.bind(("0.0.0.0", port))
+        # S104: an intentional all-interface bind (CLAUDE.md part 46).
+        s.bind(("0.0.0.0", port))  # noqa: S104
         return True
     except OSError:
         return False
@@ -1055,7 +1056,7 @@ def _select_port(preferred: int, fallback: int, state_path: str) -> int:
         print(
             f"   Map with:  net use X: \\\\{LOCAL_IP}\\SHARE /TCPPORT:{fallback}  (Windows 11 24H2+ / Server 2025+ only)"
         )
-        print(f"   Older Windows clients cannot map a non-445 SMB share natively.")
+        print("   Older Windows clients cannot map a non-445 SMB share natively.")
     return fallback
 
 
@@ -1232,7 +1233,8 @@ def start() -> bool:
     port = _select_port(SMB_PORT, SMB_FALLBACK_PORT, state_path)
 
     try:
-        server = SimpleSMBServer(listenAddress="0.0.0.0", listenPort=port)
+        # S104: an intentional all-interface bind (CLAUDE.md part 46).
+        server = SimpleSMBServer(listenAddress="0.0.0.0", listenPort=port)  # noqa: S104
         server.addShare(SMB_SHARE_NAME, ROOT_DIR, "CloudinatorFTP", readOnly="yes")
         server.setSMB2Support(True)
         server.setAuthCallback(_auth_callback)

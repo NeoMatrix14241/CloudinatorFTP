@@ -20,6 +20,7 @@ is a bounded poll for the expected content or log line.
 
 import contextlib
 import os
+import re
 import socket
 import time
 import uuid
@@ -98,14 +99,15 @@ def _wait_for_content(server, name, expected, seconds=60):
 
 def _wait_for_log(server, needle, seconds=20):
     deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        text = server.log_path.read_text("utf-8", errors="replace")
-        if needle in text:
-            return text
+    text = server.log_path.read_text("utf-8", errors="replace")
+    while needle not in text and time.monotonic() < deadline:
         time.sleep(0.25)
-    pytest.fail(
-        f"{needle!r} did not appear in the server log within {seconds} s\n{server.log_tail()}"
-    )
+        text = server.log_path.read_text("utf-8", errors="replace")
+    if needle not in text:
+        pytest.fail(
+            f"{needle!r} did not appear in the server log within {seconds} s\n{server.log_tail()}"
+        )
+    return text
 
 
 def test_chunks_parsed_in_memory_and_saved_by_the_worker_thread_assemble_exactly(
@@ -126,6 +128,8 @@ def test_the_timing_log_names_the_stages_and_the_ram_parse(tuned):
     for stage in ("role", "receive+parse (RAM)", "read+save"):
         assert stage in line, line
     assert "MB/s" in line, line
+    # 5.43: the RAM parse also says how that stage divides
+    assert re.search(r"\(body arrived [0-9.]+s, parse [0-9.]+s\)", line), line
 
 
 def test_the_event_loop_lag_probe_starts_with_the_first_upload(tuned):

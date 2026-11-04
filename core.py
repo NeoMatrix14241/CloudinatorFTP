@@ -1276,7 +1276,7 @@ class ChunkTracker:
                                 if current_time - timestamp > 2700:
                                     should_cleanup = True
                                     cleanup_reason = (
-                                        f"untracked >45min old (abandoned upload)"
+                                        "untracked >45min old (abandoned upload)"
                                     )
                             except (ValueError, OSError):
                                 should_cleanup = True

@@ -186,7 +186,8 @@ def _spawn_version_engine_process():
     env["CLOUDINATOR_PARENT_PID"] = str(os.getpid())
 
     try:
-        proc = subprocess.Popen(
+        # S603: fixed argv (sys.executable and a project script); no user input reaches it.
+        proc = subprocess.Popen(  # noqa: S603
             [sys.executable, _SCRIPT_PATH, "--worker"],
             cwd=_PROJECT_DIR,
             stdin=subprocess.DEVNULL,
@@ -1066,7 +1067,7 @@ class Engine:
         try:
             stat_before = os.stat(display_path)
         except OSError as e:
-            raise VersionEngineError(f"stat failed: {e}")
+            raise VersionEngineError(f"stat failed: {e}") from e
 
         small = stat_before.st_size <= config.VERSION_SMALL_FILE_THRESHOLD
         version_id = self._create_version_row(file_id, "full" if small else "chunked")
@@ -1099,7 +1100,7 @@ class Engine:
             stat_after = os.stat(display_path)
         except OSError as e:
             self._mark_version_failed(version_id, f"stat failed after capture: {e}")
-            raise VersionEngineError(str(e))
+            raise VersionEngineError(str(e)) from e
 
         if (
             stat_after.st_mtime != stat_before.st_mtime
@@ -1380,11 +1381,14 @@ class Engine:
 
         placeholders = ",".join("?" for _ in ids)  # structure only, values stay bound
         try:
+            # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
             conn.execute(
-                f"DELETE FROM version_objects WHERE version_id IN ({placeholders})", ids
+                f"DELETE FROM version_objects WHERE version_id IN ({placeholders})",  # noqa: S608
+                ids,
             )
+            # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
             conn.execute(
-                f"DELETE FROM versions WHERE version_id IN ({placeholders}) "
+                f"DELETE FROM versions WHERE version_id IN ({placeholders}) "  # noqa: S608
                 "AND status='failed'",
                 ids,
             )
@@ -1561,7 +1565,7 @@ class Engine:
             except OSError as e:
                 raise VersionEngineError(
                     f"object {row['sha256'][:12]}... unreadable: {e}"
-                )
+                ) from e
             if obj_h.hexdigest() != row["sha256"]:
                 raise VersionEngineError(
                     f"object {row['sha256'][:12]}... corrupted - download aborted"

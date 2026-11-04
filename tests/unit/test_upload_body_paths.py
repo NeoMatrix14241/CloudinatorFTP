@@ -94,7 +94,12 @@ def _multipart(fields, payload):
 
 
 def _post(
-    namespace, payload, csrf_header=True, extra_headers=None, content_length=True
+    namespace,
+    payload,
+    csrf_header=True,
+    extra_headers=None,
+    content_length=True,
+    timer=None,
 ):
     """Make the calls /upload makes inside a Quart request context built from a multipart POST;
     returns what they gave. No route is registered (tests/smoke.py scans tests for routes and
@@ -116,7 +121,7 @@ def _post(
             "/probe", method="POST", data=body, headers=headers
         ):
             wanted = namespace["_in_memory_parse_wanted"]()
-            form, files = await namespace["_upload_form_and_files"]()
+            form, files = await namespace["_upload_form_and_files"](timer=timer)
             chunk = files.get("chunk")
             data = chunk.read()
             return {
@@ -179,6 +184,44 @@ def test_a_body_bigger_than_one_chunk_keeps_quarts_parser():
     assert out["stream"] != "BytesIO"
 
 
+# ---------------------------------------------------------------------------- the split (5.43)
+class _Timer:
+    """Stands in for helpers.upload_perf.StageTimer: records the details it is told."""
+
+    def __init__(self):
+        self.details = []
+
+    def detail(self, name, seconds):
+        self.details.append((name, seconds))
+
+
+def test_the_ram_parse_tells_the_timer_how_long_the_body_took_and_how_long_the_parse():
+    timer = _Timer()
+    out = _post(_namespace(None, in_memory=True), PAYLOAD, timer=timer)
+    assert out["stream"] == "BytesIO" and out["same"] is True
+    assert [name for name, _ in timer.details] == ["body arrived", "parse"]
+    assert all(isinstance(sec, float) and sec >= 0 for _, sec in timer.details)
+
+
+def test_quarts_own_parser_cannot_be_divided_so_it_reports_nothing():
+    """It reads and parses the body piece by piece while it arrives."""
+    timer = _Timer()
+    out = _post(_namespace(None, in_memory=False), PAYLOAD, timer=timer)
+    assert out["wanted"] is False and out["same"] is True
+    assert timer.details == []
+
+
+def test_the_handler_gives_the_helper_its_stage_timer():
+    calls = [
+        n.value
+        for n in ast.walk(_upload_handler())
+        if isinstance(n, ast.Await)
+        and isinstance(n.value, ast.Call)
+        and _dotted(n.value.func) == "_upload_form_and_files"
+    ]
+    assert [ast.unparse(a) for a in calls[0].args] == ["in_memory", "timer"]
+
+
 # ---------------------------------------------------------------------------- read + save
 class FakeChunk:
     def __init__(self, data):
@@ -233,10 +276,17 @@ def test_a_piece_of_exactly_the_chunk_size_is_accepted():
 
 # ---------------------------------------------------------------------------- the handler itself
 def _upload_handler():
-    for node in _tree().body:
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "upload":
-            return node
-    pytest.fail("async def upload() not found in routes/uploads.py")
+    found = next(
+        (
+            node
+            for node in _tree().body
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "upload"
+        ),
+        None,
+    )
+    if found is None:
+        pytest.fail("async def upload() not found in routes/uploads.py")
+    return found
 
 
 def _dotted(node):

@@ -18,6 +18,7 @@ This document lists my recommended Visual Studio Code extensions and settings us
 | YAML | Red Hat |
 | Even Better TOML | tamasfe |
 | Requirements Formatter | MoritzB |
+| Ruff | Astral Software |
 
 ## VS Code Settings
 

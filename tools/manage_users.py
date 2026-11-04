@@ -136,7 +136,7 @@ def change_password():
     if db.update_password(username, password):
         print(f"  ✅ Password updated for '{username}'.")
     else:
-        print(f"  ❌ Failed to update password.")
+        print("  ❌ Failed to update password.")
 
 
 def change_role():
@@ -159,7 +159,7 @@ def change_role():
     if db.update_role(username, role):
         print(f"  ✅ Role for '{username}' changed to '{role}'.")
     else:
-        print(f"  ❌ Failed to update role.")
+        print("  ❌ Failed to update role.")
 
 
 def delete_user():
@@ -178,7 +178,7 @@ def delete_user():
     if db.delete_user(username):
         print(f"  ✅ User '{username}' deleted.")
     else:
-        print(f"  ❌ Failed to delete user.")
+        print("  ❌ Failed to delete user.")
 
 
 def delete_default_users():

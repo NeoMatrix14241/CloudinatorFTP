@@ -55,8 +55,9 @@ from routes.shares import _prune_expired_shares
 #    synchronous disk work on up to CHUNK_SIZE bytes and used to run on the event-loop thread.
 #  * config.UPLOAD_TIMING_ENABLED (default False) logs the time of each stage of every chunk and
 #    starts an event-loop lag probe with the first upload request (no startup hook: smoke check 5).
-#  * config.UPLOAD_CHUNKS_IN_MEMORY (default False) parses a chunk-sized body in RAM instead of
-#    in a temp file in the system temp folder (_upload_form_and_files).
+#  * config.UPLOAD_CHUNKS_IN_MEMORY (default True since 5.43) parses a chunk-sized body in RAM
+#    instead of in a temp file in the system temp folder (_upload_form_and_files); with the timing
+#    log on, that stage is also split into "body arrived" and "parse".
 #  * the reconcile walk that follows an assembly waits while another upload is still sending
 #    (_reconcile_after_uploads).
 # ---------------------------------------------------------------------------
@@ -103,16 +104,28 @@ def _in_memory_parse_wanted():
     )
 
 
-async def _upload_form_and_files(in_memory=None):
+async def _upload_form_and_files(in_memory=None, timer=None):
     """(form, files) of the current request: Quart's parser (a temp file per file part), or, with
     UPLOAD_CHUNKS_IN_MEMORY and a small enough body, the body read into RAM and parsed without
     one. Both give werkzeug MultiDicts of strings and FileStorage objects. `in_memory` is the
-    answer of _in_memory_parse_wanted() when the caller already has it."""
+    answer of _in_memory_parse_wanted() when the caller already has it.
+
+    5.43: given a StageTimer, the RAM path tells it how its stage divides: how long the body took
+    to ARRIVE (awaiting it) and how long the PARSE took (synchronous, on the event-loop thread).
+    Quart's own parser reads and parses the body piece by piece as it arrives, so that path cannot
+    be divided and reports nothing."""
     if in_memory is None:
         in_memory = _in_memory_parse_wanted()
     if in_memory:
+        started = time.perf_counter()
         body = await request.get_data(cache=False)  # Quart drops its copy at once
-        return parse_form_in_memory(body, request.content_type)
+        arrived = time.perf_counter() - started
+        started = time.perf_counter()
+        parsed = parse_form_in_memory(body, request.content_type)
+        if timer is not None:
+            timer.detail("body arrived", arrived)
+            timer.detail("parse", time.perf_counter() - started)
+        return parsed
     return await request.form, await request.files
 
 
@@ -198,7 +211,7 @@ async def upload():
         timer.mark("role")
 
         in_memory = _in_memory_parse_wanted()
-        form, files = await _upload_form_and_files(in_memory)
+        form, files = await _upload_form_and_files(in_memory, timer)
         timer.mark("receive+parse (RAM)" if in_memory else "receive+parse")
         file_id = form.get("file_id")
         chunk_num = form.get("chunk_num")
@@ -611,7 +624,7 @@ async def admin_cleanup_chunks():
         # Run enhanced manual cleanup
         manual_success = storage.manual_chunks_cleanup()
 
-        print(f"🧹 Comprehensive cleanup completed")
+        print("🧹 Comprehensive cleanup completed")
         print(
             f"   Sessions: {stats_before['active_sessions']} -> {stats_after['active_sessions']}"
         )

@@ -463,7 +463,7 @@ class _Database:
         if updated:
             print(f"🔐 Password updated: {username}")
             if _SMB_AVAILABLE:
-                print(f"   ✅ SMB credential updated too — takes effect within ~30s")
+                print("   ✅ SMB credential updated too — takes effect within ~30s")
         return updated
 
     def update_role(self, username: str, role: str) -> bool:
@@ -502,7 +502,7 @@ class _Database:
         for r in rows:
             try:
                 out.append((r["username"], _decrypt(r["nt_hash"])))
-            except Exception:
+            except Exception:  # noqa: S112
                 continue  # corrupt/undecryptable entry — skip rather than crash SMB startup
         return out
 
@@ -621,8 +621,9 @@ class _Database:
             return False
         params.append(token)
         with _write_lock, _connect() as conn:
+            # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
             cur = conn.execute(
-                f"UPDATE share_links SET {', '.join(sets)} WHERE token=? AND revoked=0",
+                f"UPDATE share_links SET {', '.join(sets)} WHERE token=? AND revoked=0",  # noqa: S608
                 params,
             )
         return cur.rowcount > 0
@@ -660,8 +661,9 @@ class _Database:
             return {}
         placeholders = ",".join("?" for _ in norm_paths)
         with _connect() as conn:
+            # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
             rows = conn.execute(
-                f"SELECT * FROM share_links WHERE revoked=0 AND file_path IN ({placeholders})",
+                f"SELECT * FROM share_links WHERE revoked=0 AND file_path IN ({placeholders})",  # noqa: S608
                 norm_paths,
             ).fetchall()
         return {r["file_path"]: dict(r) for r in rows}
@@ -692,8 +694,9 @@ class _Database:
             return 0
         placeholders = ",".join("?" for _ in norm_paths)
         with _write_lock, _connect() as conn:
+            # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
             cur = conn.execute(
-                f"UPDATE share_links SET revoked=1, revoked_at=unixepoch() "
+                f"UPDATE share_links SET revoked=1, revoked_at=unixepoch() "  # noqa: S608
                 f"WHERE revoked=0 AND file_path IN ({placeholders})",
                 norm_paths,
             )

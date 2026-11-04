@@ -4,8 +4,11 @@ Tests of the 5.41 upload settings and the 5.42 download setting, read from the s
 
   BODY_TIMEOUT             seconds Quart gives one request body; default 600, 0 = no limit
   UPLOAD_TIMING_ENABLED    stage timings + event-loop lag probe; default OFF
-  UPLOAD_CHUNKS_IN_MEMORY  chunk-sized bodies parsed in RAM; default OFF
+  UPLOAD_CHUNKS_IN_MEMORY  chunk-sized bodies parsed in RAM; default ON since 5.43 (was OFF)
   DOWNLOAD_BUFFER_SIZE     bytes read per step when a file is sent; default 1 MiB (5.42)
+
+5.43 adds the menu (Server Configuration > 14, configure_transfer_performance): the real menu
+functions are run with a scripted `input()`, and a loaded value still wins over the default.
 
 CODING_GUIDELINES.md 22.4: a setting that is not saved and loaded is lost on the next start, and
 a default that changes silently changes the server's behaviour.
@@ -63,13 +66,20 @@ def _string_constants(node):
 
 
 # ---------------------------------------------------------------------------- defaults
-def test_the_defaults_keep_the_new_behaviour_off_and_the_timeout_generous():
+def test_the_defaults_parse_chunks_in_ram_and_keep_the_timing_log_off():
     assert _module_literals() == {
         "BODY_TIMEOUT": 600,
         "UPLOAD_TIMING_ENABLED": False,
-        "UPLOAD_CHUNKS_IN_MEMORY": False,
+        "UPLOAD_CHUNKS_IN_MEMORY": True,
         "DOWNLOAD_BUFFER_SIZE": 1048576,
     }
+
+
+def test_a_value_saved_in_server_config_json_still_wins_over_the_new_default():
+    """An owner whose server_config.json holds UPLOAD_CHUNKS_IN_MEMORY: false keeps false: the
+    loader passes the module's own value only as the fallback of config.get()."""
+    source = ast.unparse(_function("load_server_config"))
+    assert "config.get('UPLOAD_CHUNKS_IN_MEMORY', UPLOAD_CHUNKS_IN_MEMORY)" in source
 
 
 # ---------------------------------------------------------------------------- persistence
@@ -210,3 +220,81 @@ def test_core_applies_the_download_buffer_to_the_app():
         for alias in node.names
     }
     assert "DOWNLOAD_BUFFER_SIZE" in from_config
+
+
+# ---------------------------------------------------------------------------- the menu (5.43)
+def test_the_server_menu_offers_the_performance_entry():
+    source = ast.unparse(_function("configure_server_settings"))
+    assert "choice == '14'" in source
+    assert "configure_transfer_performance()" in source
+    assert "(0-14)" in source, "the prompt must say the new range"
+
+
+def _run_menu(answers, buffer_size=1048576, in_ram=True, timing=False):
+    """configure_transfer_performance() with a scripted input(); returns (globals, printed)."""
+    names = (
+        "format_bytes",
+        "_buffer_size_or_default",
+        "configure_transfer_performance",
+        "_configure_download_buffer",
+    )
+    module = ast.Module(body=[_function(n) for n in names], type_ignores=[])
+    ast.fix_missing_locations(module)
+    script, printed = iter(answers), []
+    namespace = {
+        "input": lambda prompt="": next(script),
+        "print": lambda *a, **k: printed.append(" ".join(str(x) for x in a)),
+        "UPLOAD_CHUNKS_IN_MEMORY": in_ram,
+        "UPLOAD_TIMING_ENABLED": timing,
+        "DOWNLOAD_BUFFER_SIZE": buffer_size,
+    }
+    exec(compile(module, str(CONFIG), "exec"), namespace)
+    namespace["configure_transfer_performance"]()
+    return namespace, "\n".join(printed)
+
+
+def test_the_menu_toggles_the_ram_parse_and_back():
+    assert _run_menu(["1", "0"])[0]["UPLOAD_CHUNKS_IN_MEMORY"] is False
+    assert _run_menu(["1", "1", "0"])[0]["UPLOAD_CHUNKS_IN_MEMORY"] is True
+
+
+def test_the_menu_toggles_the_timing_log():
+    assert _run_menu(["2", "0"])[0]["UPLOAD_TIMING_ENABLED"] is True
+    assert _run_menu(["2", "0"], timing=True)[0]["UPLOAD_TIMING_ENABLED"] is False
+
+
+@pytest.mark.parametrize(
+    "preset, expected",
+    [("1", 64 * 1024), ("2", 256 * 1024), ("3", 1024 * 1024), ("4", 4 * 1024 * 1024)],
+)
+def test_the_menu_sets_a_download_read_size_preset(preset, expected):
+    namespace, _ = _run_menu(["3", preset, "0"], buffer_size=8192)
+    assert namespace["DOWNLOAD_BUFFER_SIZE"] == expected
+
+
+@pytest.mark.parametrize(
+    "typed, expected",
+    [
+        ("512", 512 * 1024),
+        ("8", 8192),  # the lower bound
+        ("16384", 16 * 1024 * 1024),  # the upper bound
+        ("7", 65536),  # below 8 KB: refused, nothing changes
+        ("16385", 65536),  # above 16 MB: refused
+        ("0", 65536),
+        ("-5", 65536),
+        ("1.5", 65536),
+        ("big", 65536),
+        ("", 65536),
+    ],
+)
+def test_a_custom_download_read_size_is_checked_against_the_bounds(typed, expected):
+    namespace, printed = _run_menu(["3", "5", typed, "0"], buffer_size=65536)
+    assert namespace["DOWNLOAD_BUFFER_SIZE"] == expected
+    if expected == 65536:
+        assert "Size must be" in printed
+
+
+def test_keeping_the_current_read_size_and_a_bad_choice_change_nothing():
+    namespace, printed = _run_menu(["3", "6", "3", "9", "x", "0"], buffer_size=65536)
+    assert namespace["DOWNLOAD_BUFFER_SIZE"] == 65536
+    assert "Invalid option" in printed

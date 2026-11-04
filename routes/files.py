@@ -326,7 +326,7 @@ async def bulk_download():
             for chunk in zf:
                 yield chunk
 
-            print(f"� ZIP stream download completed")
+            print("� ZIP stream download completed")
 
         # Create response with streaming optimized for large files
         response = Response(

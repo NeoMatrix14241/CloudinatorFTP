@@ -5,11 +5,25 @@ EXCLUDED_DIRS = {
     ".git",
     ".venv",
     "venv",
+    ".venv-ft",
     "env",
     ".pytest_cache",
     ".manage_pids",
     "logs",
     "artifacts",  # JUnit XML written by `./manage.sh qa ci` (not committed)
+    ".hypothesis",
+    "htmlcov",
+    ".vscode",
+    ".ruff_cache",
+}
+
+# Files to exclude from the directory tree.
+# Matched by filename at any directory depth.
+EXCLUDED_FILES = {
+    "Thumbs.db",
+    "desktop.ini",
+    "to-do.txt",  # personal notes, not part of the project
+    "constraints.txt",
 }
 
 # Show the directory, skip its contents, and optionally explain why.
@@ -50,15 +64,22 @@ def collect_entries(base_path: Path):
     files = []
 
     for child in sorted(base_path.iterdir(), key=lambda p: p.name.lower()):
+        # Prevent the generated directory tree from listing itself.
         if child.resolve() == OUTPUT_FILE.resolve():
             continue
 
-        if child.name in EXCLUDED_DIRS or child.name.startswith(".pytest_cache"):
-            continue
-
+        # Exclude directories.
         if child.is_dir():
+            if child.name in EXCLUDED_DIRS or child.name.startswith(".pytest_cache"):
+                continue
+
             dirs.append(child)
+
+        # Exclude individual files.
         else:
+            if child.name in EXCLUDED_FILES:
+                continue
+
             files.append(child)
 
     return dirs, files
@@ -87,11 +108,13 @@ def build_tree(base_path: Path, prefix: str = ""):
         if entry.is_dir():
             child_prefix = prefix + ("    " if is_last else "│   ")
 
+            # Show the directory but skip walking its contents.
             if entry.name in EXCLUDE_DIR_WALK:
                 comment = EXCLUDE_DIR_WALK[entry.name].strip()
                 suffix = f" ({comment})" if comment else ""
 
                 lines.append(child_prefix + "└── ..." + suffix)
+
             else:
                 lines.extend(build_tree(entry, child_prefix))
 
@@ -111,6 +134,6 @@ if __name__ == "__main__":
 
     # Save to docs/DIRECTORY_TREE.md, creating docs if necessary.
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_FILE.write_text(tree_text, encoding="utf-8")
+    OUTPUT_FILE.write_text(tree_text, encoding="utf-8", newline="\n")
 
     print(f"\nDirectory tree saved to: {OUTPUT_FILE}")

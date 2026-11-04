@@ -148,6 +148,7 @@ def lab(tmp_path):
         file_index=file_index,
         search=search_index,
         notified=notified,
+        burst=namespace["BURST_THRESHOLD"],
     )
 
 
@@ -456,6 +457,43 @@ def test_a_created_file_in_the_apps_own_folder_is_ignored(lab):
 def test_a_burst_of_created_files_arms_the_settle_walk(lab):
     for n in range(200):  # BURST_THRESHOLD
         lab.handler.on_created(_event(_make_file(lab.root / f"f{n}.txt", 1)))
+    assert lab.monitor._pending_reconcile is True
+
+
+def test_hundreds_of_upload_pieces_never_arm_the_settle_walk(lab):
+    """Every piece of an upload is a file created, modified and later deleted under
+    .chunks/<key>/ (5.41: the handlers return for any path containing `.chunks` BEFORE the burst
+    counter). A 1 GB upload is hundreds of pieces; if they counted, every big upload would arm the
+    settle walk and the handlers would stop updating the counters and both indexes until the walk
+    had run. The files are made first and the events fired afterwards in a tight loop, so a slow
+    disk (a phone's storage in Termux) cannot spread them over more than the burst window.
+    """
+    pieces = [
+        _make_file(
+            lab.root / ".chunks" / "0123456789abcdef_fid_1_6144" / f"chunk_{n}", 1
+        )
+        for n in range(2 * lab.burst)
+    ]
+    for piece in pieces:
+        lab.handler.on_created(_event(piece))
+        lab.handler.on_modified(_event(piece))
+    assert (
+        lab.monitor._pending_reconcile is False
+    ), "upload pieces were counted as a burst"
+    for piece in pieces:
+        piece.unlink()
+        lab.handler.on_deleted(_event(piece))
+    assert lab.monitor._pending_reconcile is False
+    assert lab.monitor.totals() == (0, 0, 0)
+    assert lab.monitor.dirty == []
+    assert lab.search.calls == [] and lab.file_index.calls == []
+
+
+def test_the_same_number_of_ordinary_files_does_arm_the_settle_walk(lab):
+    """The control of the test above: the burst counter works, it just never sees chunk paths."""
+    files = [_make_file(lab.root / f"control_{n}.txt", 1) for n in range(lab.burst)]
+    for path in files:
+        lab.handler.on_created(_event(path))
     assert lab.monitor._pending_reconcile is True
 
 

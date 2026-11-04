@@ -12,7 +12,7 @@ The file acts as the central configuration hub for:
 - Version Engine behavior
 - platform-aware storage defaults
 
-_Last checked against `config.py` on 2026-09-29._
+_Last checked against `config.py` on 2026-11-04 (version 5.43)._
 
 It is also closely tied to [../server_config.json](../server_config.json), which stores a persisted subset of these values when the app saves the server configuration.
 
@@ -98,6 +98,25 @@ These are the foundational runtime settings for the main web application.
 - To restrict uploads, assign a lowercase set/list such as `{"jpg", "jpeg", "png", "pdf"}` without leading dots.
 - `PERMANENT_SESSION_LIFETIME` is tied into the Flask session configuration in the app and is no longer just a dormant value.
 
+### Upload and download performance (5.41 to 5.43)
+
+Four settings control how the request body of an upload chunk is received and how a file is sent. All four are saved in `server_config.json`, loaded at start-up, shown in **View Current Settings**, and validated when loaded (a hand-edited wrong type falls back to the default). **A running server must be restarted** for a change to take effect.
+
+| Setting | Default | Allowed | Menu | Purpose |
+|---|---:|---|---|---|
+| `UPLOAD_CHUNKS_IN_MEMORY` | `True` (since 5.43; `False` before) | `True` / `False` | Server Settings > 14 > 1 | Parse a chunk-sized upload body in RAM instead of in a temp file in the system temp folder (one 10 MB write and one read less per chunk) |
+| `UPLOAD_TIMING_ENABLED` | `False` | `True` / `False` | Server Settings > 14 > 2 | Log the time of every upload stage per chunk and how late the event loop wakes up; off costs nothing |
+| `DOWNLOAD_BUFFER_SIZE` | `1048576` (1 MiB) | `8192` to `16777216` bytes | Server Settings > 14 > 3 | Bytes read per step when a file is sent (`/download`, `/view`); Quart's own default is 8 KiB |
+| `BODY_TIMEOUT` | `600` | `0` or more seconds; `0` = no limit | none: edit `server_config.json` | Seconds Quart gives ONE request body to arrive and be parsed (Quart's own default is 60) |
+
+Notes:
+
+- **A saved value wins over the new default.** `UPLOAD_CHUNKS_IN_MEMORY` became `True` in 5.43, but a `server_config.json` that already holds `"UPLOAD_CHUNKS_IN_MEMORY": false` (every file saved by 5.41 or 5.42 does) keeps `false` until you switch it in the menu (Server Settings > 14 > 1, then Save & Exit) or edit the file.
+- **RAM cost.** `UPLOAD_CHUNKS_IN_MEMORY` is used only when the request carries a CSRF header (`X-CSRFToken` or `X-CSRF-Token`) and a known `Content-Length` of at most `CHUNK_SIZE` plus 1 MiB; any other upload uses Quart's own parser, as before. Each chunk being received at that moment is held in RAM (about 10 MB with the default `CHUNK_SIZE`). The RAM parse runs on the event-loop thread; the timing log's `parse` figure (below) shows how long that takes.
+- **`DOWNLOAD_BUFFER_SIZE` costs RAM per download in flight** (1 MiB each by default). The menu offers 64 KB, 256 KB, 1 MB, 4 MB or a custom size from 8 KB to 16384 KB.
+- **Reading the timing log** (`UPLOAD_TIMING_ENABLED`): one line per chunk, `upload chunk 2/3: role .. | receive+parse (RAM) .. | read+save .. (in the worker thread: read .., save ..) (body arrived .., parse ..) | total .., N MB, X MB/s`. `body arrived` is how long the body took to reach the server (the client's speed and the network), `parse` is the CPU time of the RAM parse. The split exists only for a RAM-parsed chunk: Quart's own parser reads and parses while the body arrives, so a plain `receive+parse` stage cannot be divided.
+- On the owner's Windows PC (standard Python build, hard disk, scratch server) the RAM parse took one client from 9.9 to 15.7 MB/s and four clients from 14.2 to 16.7 MB/s in total; the root cause of the remaining upload speed is not proven. See CLAUDE.md part 93.
+
 ---
 
 ## 3. HLS / media streaming settings
@@ -170,7 +189,7 @@ The main menu is organized into a few practical categories:
 | Menu section | Purpose |
 |---|---|
 | Storage Path Configuration | Adjust file storage, database, cache, HLS cache, and image cache paths |
-| Server Settings Configuration | Change ports, session timeout, upload settings, and host binding |
+| Server Settings Configuration | Change ports, session timeout, upload settings, host binding and upload/download performance |
 | Version History / Version Engine | Version storage path, engine settings, and tracking scope (details below) |
 | View Current Settings | Review the active runtime values |
 
@@ -192,6 +211,7 @@ The main menu is organized into a few practical categories:
 | 11 | ffmpeg toggle |
 | 12 | libvips toggle |
 | 13 | Protocol servers (WebDAV / SFTP / FTP / SMB) |
+| 14 | Upload / Download Performance (5.43): 1 = parse chunks in RAM on/off, 2 = upload timing log on/off, 3 = download read size (presets or custom KB) |
 | 10 | Save & Exit (writes `server_config.json`) |
 | 0 | Exit without saving |
 
@@ -454,6 +474,7 @@ The save function includes entries like:
 - `VERSION_ENGINE_ENABLED`
 - `VERSION_TRACK_FILES`
 - `VERSION_FOLLOW_SYMLINKS`
+- `BODY_TIMEOUT`, `UPLOAD_TIMING_ENABLED`, `UPLOAD_CHUNKS_IN_MEMORY`, `DOWNLOAD_BUFFER_SIZE` (see section 2)
 
 ---
 
@@ -545,6 +566,12 @@ MAX_CONTENT_LENGTH = 4 * 1024 * 1024 * 1024
 CHUNK_SIZE = 5 * 1024 * 1024
 ENABLE_CHUNKED_UPLOADS = True
 ```
+
+### Measure where the time of an upload goes
+
+Turn the timing log on (Server Settings > 14 > 2, or `"UPLOAD_TIMING_ENABLED": true` in `server_config.json`), restart, upload a large file, and read the `upload chunk` lines in the server output. Compare `body arrived` with `parse` and `read+save`: the largest figure is where an upload's time goes. Turn the log off again afterwards.
+
+For the test suite the same switch needs no restart of anything: `CLOUDINATOR_SCRATCH_CONFIG='{"UPLOAD_TIMING_ENABLED": true}' CLOUDINATOR_SLOW_TESTS=1 python -m pytest tests/performance/test_baselines.py -q -s` (docs/TESTING_STRATEGY.md section 16).
 
 ### Limit uploaded types
 
@@ -720,6 +747,14 @@ python smb_setup.py
 If the platform requires it, run the OS-specific instructions and then re-enable SMB in the configuration.
 
 ---
+
+### Problem: uploads are slow
+
+1. Turn on the timing log (see "Measure where the time of an upload goes") and look at one large upload's `upload chunk` lines.
+2. A large `body arrived` figure means the bytes reach the server slowly: the client, the network or a tunnel, not the application.
+3. A large `parse` or `receive+parse` figure points at the server's own work per chunk. Check that `UPLOAD_CHUNKS_IN_MEMORY` is on (the line then says `(RAM)`; if it never does, the browser's upload request carries no CSRF header and Quart's own parser is used).
+4. A large `save` figure points at the disk; the storage folder and the system temp folder on the same hard disk compete with each other.
+5. The `[stage]` lines of `tests/performance/test_baselines.py` give the same numbers on a scratch server, so the application can be separated from the network.
 
 ### Problem: a setting works in code but not at runtime
 

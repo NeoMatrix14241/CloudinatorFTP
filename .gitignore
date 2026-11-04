@@ -21,3 +21,5 @@ htmlcov/
 artifacts/
 .hypothesis/
 .vscode/
+.ruff_cache/
+to-do.txt

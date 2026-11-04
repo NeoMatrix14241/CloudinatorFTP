@@ -12,3 +12,4 @@ hypothesis>=6.170
 # EXACTLY: a new release adds rules, and a linter must not change a green build by itself. The
 # "Ruff (report only)" workflow reads this line, so this is the one place to bump it.
 ruff==0.17.3
+playwright>=1.64.1

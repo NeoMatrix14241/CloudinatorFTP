@@ -279,7 +279,10 @@ def _walk_subtree(root_str: str, abs_root: str):
     (dir_info_for_the_subtree, latest_mtime); the sub-tree root's own record
     (key _rel(abs_root)) holds the recursive totals."""
     rel_root = _rel(abs_root, root_str)
-    zero = lambda: {"file_count": 0, "dir_count": 0, "total_size": 0}
+
+    def zero():
+        return {"file_count": 0, "dir_count": 0, "total_size": 0}
+
     info = {rel_root: zero()}
     latest = 0.0
     for root, dirs, files in os.walk(abs_root, topdown=True, onerror=lambda e: None):
@@ -1790,8 +1793,9 @@ class FileSystemMonitor:
     # ------------------------------------------------------------------
 
     def _build_snapshot(self) -> StorageSnapshot:
-        checksum = hashlib.md5(
-            f"{self._file_count}:{self._dir_count}:{self._total_size}".encode()
+        checksum = hashlib.md5(  # a change fingerprint of three counters, not security
+            f"{self._file_count}:{self._dir_count}:{self._total_size}".encode(),
+            usedforsecurity=False,
         ).hexdigest()
         return StorageSnapshot(
             file_count=self._file_count,

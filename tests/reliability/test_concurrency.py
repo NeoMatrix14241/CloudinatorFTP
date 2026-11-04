@@ -17,6 +17,7 @@ only for a file to exist; nothing is written outside the scratch copy.
 
 import hashlib
 import os
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -33,6 +34,16 @@ pytestmark = [
 
 USERS = 6
 CHUNKS = 12
+
+# 5.43: how long a plain read may take WHILE uploads are being received and assembled. Loose on
+# purpose (the idle p95 on the owner's PC is 0.07 s): the opt-in tier also runs on a phone in Termux
+# and on shared CI runners, and the test is there to catch a blocked event loop (seconds), not to
+# rank machines. The payloads are small for the same reason.
+LATENCY_UPLOADERS = 3
+LATENCY_CHUNKS = 6
+LATENCY_CHUNK_BYTES = 512 * 1024
+READ_P95_LIMIT_SECONDS = 2.0
+MIN_READ_SAMPLES = 5
 
 
 @pytest.fixture(scope="module")
@@ -173,3 +184,73 @@ def test_reads_keep_working_while_uploads_are_being_assembled(server):
     assert _wait_for_content(
         server.storage / filename, b"".join(parts)
     ), server.log_tail()
+
+
+def test_a_read_stays_fast_while_uploads_are_received_and_assembled(
+    server, record_property
+):
+    """The 95th percentile of the time a read request takes, measured from before the first chunk
+    until every file is published: the receive, the RAM parse and the assembly must not hold the
+    event loop for seconds (5.43 parses upload chunks in RAM by default, on the loop thread).
+    """
+    tag = uuid.uuid4().hex[:8]
+    reader = server.login_as("qa_reader")
+    jobs = []
+    for index in range(LATENCY_UPLOADERS):
+        parts = [
+            _payload(f"{tag}-{index}", n, size=LATENCY_CHUNK_BYTES)
+            for n in range(LATENCY_CHUNKS)
+        ]
+        jobs.append(
+            (server.login_as("qa_writer"), f"latency_{tag}_{index}.bin", parts, index)
+        )
+    stop = threading.Event()
+
+    def read_until_stopped():
+        timings, statuses = [], []
+        while not stop.is_set():
+            started = time.perf_counter()
+            reply = reader.get(
+                "/api/versions/list?path=latency_missing.txt",
+                headers={"Accept": "application/json"},
+            )
+            timings.append(time.perf_counter() - started)
+            statuses.append(reply.status)
+        return timings, statuses
+
+    def upload(job):
+        client, filename, parts, index = job
+        file_id = f"fid_{index}_{tag}_lat"
+        for number, data in enumerate(parts):
+            reply = _send_chunk(client, file_id, number, len(parts), filename, data)
+            assert reply.status == 200, (filename, number, reply.status)
+        return filename
+
+    with ThreadPoolExecutor(max_workers=LATENCY_UPLOADERS + 1) as pool:
+        watching = pool.submit(read_until_stopped)
+        try:
+            uploads = [pool.submit(upload, job) for job in jobs]
+            for future in uploads:
+                future.result(timeout=120)
+            for _client, filename, parts, _index in jobs:
+                assert _wait_for_content(
+                    server.storage / filename, b"".join(parts)
+                ), f"{filename} was not published\n{server.log_tail()}"
+        finally:
+            stop.set()
+        timings, statuses = watching.result(timeout=60)
+
+    assert set(statuses) == {200}, set(statuses)
+    assert len(timings) >= MIN_READ_SAMPLES, f"only {len(timings)} reads were measured"
+    ordered = sorted(timings)
+    p95 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))]
+    record_property("read_p95_during_uploads_seconds", f"{p95:.3f} s")
+    record_property("read_max_during_uploads_seconds", f"{ordered[-1]:.3f} s")
+    print(
+        f"[baseline] read_p95_during_uploads: {p95:.3f} s over {len(timings)} reads "
+        f"(max {ordered[-1]:.3f} s)"
+    )
+    assert p95 < READ_P95_LIMIT_SECONDS, (
+        f"p95 of a read was {p95:.2f} s while uploads ran "
+        f"(limit {READ_P95_LIMIT_SECONDS} s)\n{server.log_tail()}"
+    )

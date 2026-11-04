@@ -47,11 +47,16 @@ def browser():
     sync_api = pytest.importorskip("playwright.sync_api")
     with sync_api.sync_playwright() as playwright:
         channel = os.environ.get("CLOUDINATOR_BROWSER_CHANNEL") or None
+        # `instance` and `problem` are set before the try: pytest.skip never returns, but a static
+        # analyser (CodeQL) cannot know that and flags a variable that is only set inside the try.
+        instance, problem = None, ""
         try:
             instance = playwright.chromium.launch(headless=True, channel=channel)
         except Exception as exc:  # the browser binary is missing
+            problem = str(exc)
+        if instance is None:
             pytest.skip(
-                f"no browser available ({exc}); run: python -m playwright install chromium"
+                f"no browser available ({problem}); run: python -m playwright install chromium"
             )
         yield instance
         instance.close()

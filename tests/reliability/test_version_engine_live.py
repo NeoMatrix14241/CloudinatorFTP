@@ -67,12 +67,13 @@ def _completed(client, rel):
 def _wait_for(predicate, what, timeout=WAIT_SECONDS, interval=0.5):
     """Poll `predicate` until it returns something truthy; fail with `what` after `timeout`."""
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        result = predicate()
-        if result:
-            return result
+    result = predicate()
+    while not result and time.monotonic() < deadline:
         time.sleep(interval)
-    pytest.fail(f"timed out after {timeout}s waiting for: {what}")
+        result = predicate()
+    if not result:
+        pytest.fail(f"timed out after {timeout}s waiting for: {what}")
+    return result
 
 
 def test_a_new_file_is_captured_by_the_worker_without_any_request(server, rw):

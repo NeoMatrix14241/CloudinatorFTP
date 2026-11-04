@@ -6,7 +6,8 @@ Standard library only, except `parse_form_in_memory`, which imports werkzeug ins
 tests/unit/test_upload_perf.py imports this file as it is.
 
   StageTimer, UploadTimingLog   wall-clock stages of one /upload request and a running average
-                                (parse_timing_lines averages those log lines again, for the tests)
+                                (parse_timing_lines averages those log lines again, for the tests);
+                                5.43: `detail()` splits one stage in two without changing the total
   LagStats, watch_loop_lag,     how late the asyncio event loop wakes up (a loop that is blocked
   LagProbeStarter               by synchronous work shows up here as lag)
   IdleDeferral                  run an action once a "busy" condition is over, with a hard cap
@@ -33,7 +34,9 @@ class StageTimer:
 
     `mark(name)` closes the stage that started at the previous mark. `note(name, seconds)` records
     a sub-timing that was measured elsewhere (a worker thread); notes are shown but never added to
-    the total, because they overlap a stage.
+    the total, because they overlap a stage. `detail(name, seconds)` (5.43) records how ONE stage
+    divides (the body arriving vs parsing it); like a note it overlaps a stage and is never added
+    to the total, but it is shown in the request's own thread, not "in the worker thread".
     """
 
     def __init__(self, enabled, clock=time.perf_counter):
@@ -41,6 +44,7 @@ class StageTimer:
         self._clock = clock
         self.stages = []  # [(name, seconds)]
         self.notes = []  # [(name, seconds)]
+        self.details = []  # [(name, seconds)]
         if self.enabled:
             self._last = clock()
 
@@ -54,6 +58,10 @@ class StageTimer:
     def note(self, name, seconds):
         if self.enabled:
             self.notes.append((name, seconds))
+
+    def detail(self, name, seconds):
+        if self.enabled:
+            self.details.append((name, seconds))
 
     def total(self):
         return sum(seconds for _, seconds in self.stages)
@@ -86,6 +94,10 @@ class UploadTimingLog:
         line = f"⏱️ upload {label}: {stages}"
         if notes:
             line += f" (in the worker thread: {notes})"
+        if timer.details:
+            line += (
+                " (" + ", ".join(f"{n} {sec:.3f}s" for n, sec in timer.details) + ")"
+            )
         line += f" | total {total:.3f}s, {megabytes:.1f} MB, {rate:.1f} MB/s"
         summary = None
         with self._lock:
@@ -118,6 +130,9 @@ _RECEIVE_PARSE = re.compile(r"receive\+parse( \(RAM\))? ([0-9.]+)s")
 _READ_SAVE = re.compile(r"read\+save ([0-9.]+)s")
 _THREAD_PARTS = re.compile(r"read ([0-9.]+)s, save ([0-9.]+)s")
 _TOTAL = re.compile(r"total ([0-9.]+)s, ([0-9.]+) MB")
+_BODY_PARSE = re.compile(
+    r"body arrived ([0-9.]+)s, parse ([0-9.]+)s"
+)  # 5.43, RAM parse only
 
 
 def parse_timing_lines(text):
@@ -127,6 +142,10 @@ def parse_timing_lines(text):
     chunks, receive_parse, read_save, read, save, total (seconds), megabytes (per chunk) and ram
     (True when the chunks were parsed in RAM). Used by tests/performance/test_baselines.py to show
     WHERE the time of an upload goes without anybody reading the log by hand.
+
+    5.43: a RAM-parsed chunk also says how its "receive+parse (RAM)" divides ("body arrived X s,
+    parse Y s"); when at least one line has that, the dict also holds `body` and `parse` (averages
+    over the lines that have it). Without such a line the dict has exactly the keys it always had.
     """
     rows = []
     for line in text.splitlines():
@@ -140,6 +159,7 @@ def parse_timing_lines(text):
         if not (parse and save and total):
             continue
         parts = _THREAD_PARTS.search(line)
+        split = _BODY_PARSE.search(line)
         rows.append(
             {
                 "receive_parse": float(parse.group(2)),
@@ -149,6 +169,9 @@ def parse_timing_lines(text):
                 "total": float(total.group(1)),
                 "megabytes": float(total.group(2)),
                 "ram": bool(parse.group(1)),
+                "split": (
+                    (float(split.group(1)), float(split.group(2))) if split else None
+                ),
             }
         )
     if not rows:
@@ -157,6 +180,10 @@ def parse_timing_lines(text):
     result = {"chunks": count, "ram": any(r["ram"] for r in rows)}
     for key in ("receive_parse", "read_save", "read", "save", "total", "megabytes"):
         result[key] = sum(r[key] for r in rows) / count
+    splits = [r["split"] for r in rows if r["split"]]
+    if splits:
+        result["body"] = sum(arrived for arrived, _ in splits) / len(splits)
+        result["parse"] = sum(parsed for _, parsed in splits) / len(splits)
     return result
 
 

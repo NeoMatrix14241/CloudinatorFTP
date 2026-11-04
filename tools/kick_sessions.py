@@ -68,7 +68,7 @@ def rotate(username: str):
     temp_password = secrets.token_urlsafe(16)
     db.update_password(username, temp_password)
 
-    print(f"✅ Password rotated — old credentials no longer work anywhere.")
+    print("✅ Password rotated — old credentials no longer work anywhere.")
     print()
     print(f"   Temporary password (only if {username} should keep access):")
     print(f"   {temp_password}")
@@ -209,9 +209,9 @@ def logout_web():
     immediate, not subject to any of the timing caveats above.
     """
     new_token = db.rotate_server_token()
-    print(f"✅ Web UI: every session logged out instantly, everywhere.")
-    print(f"   Nobody's password changed — they can log back in immediately")
-    print(f"   with their existing credentials, they just have to log in again.")
+    print("✅ Web UI: every session logged out instantly, everywhere.")
+    print("   Nobody's password changed — they can log back in immediately")
+    print("   with their existing credentials, they just have to log in again.")
     return new_token
 
 

@@ -2,7 +2,7 @@
 
 > **Status: tracked in git for now.** It becomes `.gitignored` (a local planning document) only after ALL the phases below are 100% implemented; see `CLAUDE.md` READ HERE FIRST and `CODING_GUIDELINES.md` section 18. Until then update it with every testing change; after that do not link to it from a committed document. The facts it holds are repeated in `CLAUDE.md` and `CODING_GUIDELINES.md`.
 
-**Status (2026-11-03, Version 5.42):** 5.42 repairs the suite after the owner's free-threading experiment (`dev_server.py` had become a copy of the production server, so every scratch-server test failed; a guard test now names that), makes it respect the standard AND the free-threaded Python build (`qa.py` prints the build; scratch servers inherit the GIL mode), adds `CLOUDINATOR_SCRATCH_CONFIG` (an A/B switch for the baselines), `[stage]` lines in the baselines, and tests for the new download read size. **As of 5.41:** 5.41 adds `qa lint` (Ruff, report only; menu 30), unit tests for the upload-path changes (`test_upload_perf.py`, `test_upload_body_paths.py`, `test_upload_settings.py`, `test_version_engine_scope.py`), the application test `test_upload_tuning.py`, the opt-in `test_version_chunks_excluded.py`, 10 MB-chunk and download baselines in `test_baselines.py`, and section 16, the procedure for measuring upload speed. None of the new application, performance or reliability tests has run on the real application yet. **As of 5.40:** Phases 0, 1 and 2 are DONE. Phase 3 is DONE except that Ruff is report-only until its findings are triaged. Phase 4: the protocol tests are done and in the pull-request tier; `nightly.yml` and the fault / concurrency / restart, live-worker, performance and browser tests are WRITTEN (5.40) but have not run on the real application or on GitHub yet. Phase 5: required checks and CODEOWNERS are done; the coverage floor waits for the first Linux total. Section 14 has the detail.
+**Status (2026-11-04, Version 5.43, first delivery):** 5.43 parses upload chunks in RAM by default (the owner's A/B: 9.9 to 15.7 MB/s for one client, 14.2 to 16.7 MB/s in total for four), splits that stage into `body arrived` and `parse` in the timing log and the `[stage]` lines, adds menu entry 14 for the upload / download performance settings, fixes the CodeQL error and notices in the tests, adds two Part B tests (monitor: upload pieces never arm the settle walk; concurrency, opt-in: read latency during uploads) and starts the Ruff triage; the one-report script for a measuring session is in section 16, E. **As of 5.42:** 5.42 repairs the suite after the owner's free-threading experiment (`dev_server.py` had become a copy of the production server, so every scratch-server test failed; a guard test now names that), makes it respect the standard AND the free-threaded Python build (`qa.py` prints the build; scratch servers inherit the GIL mode), adds `CLOUDINATOR_SCRATCH_CONFIG` (an A/B switch for the baselines), `[stage]` lines in the baselines, and tests for the new download read size. **As of 5.41:** 5.41 adds `qa lint` (Ruff, report only; menu 30), unit tests for the upload-path changes (`test_upload_perf.py`, `test_upload_body_paths.py`, `test_upload_settings.py`, `test_version_engine_scope.py`), the application test `test_upload_tuning.py`, the opt-in `test_version_chunks_excluded.py`, 10 MB-chunk and download baselines in `test_baselines.py`, and section 16, the procedure for measuring upload speed. None of the new application, performance or reliability tests has run on the real application yet. **As of 5.40:** Phases 0, 1 and 2 are DONE. Phase 3 is DONE except that Ruff is report-only until its findings are triaged. Phase 4: the protocol tests are done and in the pull-request tier; `nightly.yml` and the fault / concurrency / restart, live-worker, performance and browser tests are WRITTEN (5.40) but have not run on the real application or on GitHub yet. Phase 5: required checks and CODEOWNERS are done; the coverage floor waits for the first Linux total. Section 14 has the detail.
 **It is committed with every testing change (see the banner above).** The permanent record is `CLAUDE.md` (sync notes) and `CODING_GUIDELINES.md`.
 **Scope:** Quart HTTP routes, SQLite behavior, storage and file index, upload pipeline, version history, sharing, FTP/SFTP/WebDAV, the front-end contracts that break silently (SRI, CSP), and the `manage.sh` Quality Assurance section.
 **Read with:** [CLAUDE.md](CLAUDE.md) (history, rules) and [CODING_GUIDELINES.md](CODING_GUIDELINES.md) (how to change things).
@@ -219,6 +219,8 @@ Done for a critical change: `./manage.sh qa quick` passes locally; relevant nega
 
 **Added in 5.41 (upload path):** `qa lint` (menu 30) is the local twin of `lint.yml`; the unit tests `test_upload_perf.py`, `test_upload_body_paths.py`, `test_upload_settings.py` and `test_version_engine_scope.py` run in the required check; `tests/application/test_upload_tuning.py` starts one extra scratch server (about as long as the first fixture of the run); `tests/reliability/test_version_chunks_excluded.py` and the new baselines are opt-in (`CLOUDINATOR_SLOW_TESTS=1`) and, like the rest of phase 4, have not run on the real application. Still open from the 5.40 turnover: the handler test that hundreds of `.chunks/...` creates must not arm `_pending_reconcile` (extends `tests/unit/test_monitor_handler.py`) and the latency bound in `tests/reliability/test_concurrency.py`; both files were not provided.
 
+**Added in 5.43 (first delivery):** `tests/unit/test_upload_perf_split.py` (the receive / parse split), the menu tests in `test_upload_settings.py` (the real menu functions with a scripted `input()`), two Part B tests (`test_monitor_handler.py`: upload pieces never arm the settle walk; `test_concurrency.py`, opt-in: read latency during uploads, p95 under 2 s, small payloads so it also runs in Termux), the CodeQL fixes in the tests, and Ruff triage (28 + 1 `F541`, 6 `E731`, ignores with reasons in `pyproject.toml`; 80 of 226 findings remain after the owner's safe `F541` fix and the second triage part (six files read), listed in CLAUDE.md part 94). Standard build: 986 passed, 25 skipped (the owner's `qa quick`, 2026-11-04).
+
 ## 15. What is not realistic
 
 - A guarantee of zero regressions, or a high global mutation threshold.
@@ -273,15 +275,42 @@ Use the versions `pip freeze` shows in the repository's environment for the "res
 CLOUDINATOR_SLOW_TESTS=1 python -m pytest tests/performance/test_baselines.py -q -s
 # where does the time of an upload go?
 CLOUDINATOR_SCRATCH_CONFIG='{"UPLOAD_TIMING_ENABLED": true}' CLOUDINATOR_SLOW_TESTS=1 python -m pytest tests/performance/test_baselines.py -q -s
-# the same with the chunk bodies parsed in RAM instead of a temp file
-CLOUDINATOR_SCRATCH_CONFIG='{"UPLOAD_TIMING_ENABLED": true, "UPLOAD_CHUNKS_IN_MEMORY": true}' CLOUDINATOR_SLOW_TESTS=1 python -m pytest tests/performance/test_baselines.py -q -s
+# the same with the chunk bodies parsed in a temp file (the default until 5.42; RAM is the default since 5.43)
+CLOUDINATOR_SCRATCH_CONFIG='{"UPLOAD_TIMING_ENABLED": true, "UPLOAD_CHUNKS_IN_MEMORY": false}' CLOUDINATOR_SLOW_TESTS=1 python -m pytest tests/performance/test_baselines.py -q -s
 # the old download behaviour (Quart's 8 KiB reads) against the 1 MiB default
 CLOUDINATOR_SCRATCH_CONFIG='{"DOWNLOAD_BUFFER_SIZE": 8192}' CLOUDINATOR_SLOW_TESTS=1 python -m pytest tests/performance/test_baselines.py -q -s -k download
 ```
 
-Reference (5.41, the owner's PC, hard disk, default settings): 2 MB chunks 8.0 MB/s until published; 10 MB chunks 12.3 MB/s sent; four clients 11.9 MB/s in total (no gain from parallelism); a 32 MB download 2.6 MB/s. The download number is the one 5.42 changes (Quart's 8 KiB file reads); the upload numbers are what the two A/B runs above explain.
+Reference (5.42, the owner's PC, Windows 11, hard disk, `ROOT_DIR` and `%TEMP%` on the same disk, standard build, GIL on; three runs): defaults (temp-file parse, 5.42): 2 MB chunks 7.9 MB/s until published, 10 MB chunks 11.3 MB/s sent, four clients 14.0 MB/s in total, a 32 MB download 114.9 MB/s (2.34 MB/s with `DOWNLOAD_BUFFER_SIZE` 8192 in the same session). `[stage]` per 10 MB chunk: temp-file parse `receive+parse` 0.749 s and `read+save` 0.049 s (four clients: 2.203 s); RAM parse `receive+parse (RAM)` 0.503 s and `read+save` 0.015 s (four clients: 1.807 s), which sent 15.7 MB/s (one client) and 16.7 MB/s (four). Read: the disk is not the limit here (`save` 7 to 41 ms per 10 MB, hidden by the write cache), one serial stage is (`receive+parse`), and a difference below about 15 percent between two runs is noise. 5.43 splits the RAM stage into `body arrived` and `parse`. Earlier reference (5.41, same PC, default settings): 2 MB chunks 8.0 MB/s until published; 10 MB chunks 12.3 MB/s sent; four clients 11.9 MB/s in total (no gain from parallelism); a 32 MB download 2.6 MB/s. The download number is the one 5.42 changes (Quart's 8 KiB file reads); the upload numbers are what the two A/B runs above explain.
 
-**D. A real browser upload, with the stage timings.** Set `"UPLOAD_TIMING_ENABLED": true` in `server_config.json`, restart, upload the big file, and read the log lines `upload chunk N/M: role ... | receive+parse ... | read+save ... (in the worker thread: read ..., save ...)` and `event-loop lag, last 30s: median ... p95 ... max ...`. Then set `"UPLOAD_CHUNKS_IN_MEMORY": true`, restart, repeat, and compare `receive+parse (RAM)` and `read+save` with the first run.
+**E. One report for a whole session (5.43).** Run from the repository root with the venv active (Git Bash; the file goes to your home folder, so nothing is left in the repository; works the same in Termux):
+
+```bash
+OUT=~/perf_report.txt
+run() {  # $1 label, $2 CLOUDINATOR_SCRATCH_CONFIG json (may be empty), $3 pytest extra args
+  B=~/perf_tmp_$1
+  echo "=== $1 | config: ${2:-none} ==="
+  CLOUDINATOR_SCRATCH_CONFIG="$2" CLOUDINATOR_SLOW_TESTS=1 \
+    python -m pytest tests/performance/test_baselines.py -q -s --basetemp="$B" $3 2>&1 \
+    | grep -E '\[baseline\]|\[stage\]| passed| failed| error'
+  grep -h -E 'upload chunk|upload average' "$B"/cloudinator_scratch*/app/scratch_server.log 2>/dev/null
+  echo
+}
+{
+  echo "date: $(date)"
+  python -c "import sys,sysconfig;print(sys.version);print('free-threaded build' if sysconfig.get_config_var('Py_GIL_DISABLED') else 'standard build', '| GIL off' if hasattr(sys,'_is_gil_enabled') and not sys._is_gil_enabled() else '| GIL on')"
+  echo
+  run A_default ''
+  run B_timing '{"UPLOAD_TIMING_ENABLED": true}'
+  run C_timing_tempfile '{"UPLOAD_TIMING_ENABLED": true, "UPLOAD_CHUNKS_IN_MEMORY": false}'
+  run D_old_download '{"DOWNLOAD_BUFFER_SIZE": 8192}' '-k download'
+} 2>&1 | tee "$OUT"
+rm -rf ~/perf_tmp_*
+```
+
+Four runs of about a minute each; A is the default (RAM parse since 5.43), B is A with the timing (its `[stage]` lines carry the `body arrived` / `parse` split), C is the temp-file parse for comparison, D is the old download read size in the same session. Also record which disk `ROOT_DIR` and `%TEMP%` are on (a hard disk or an SSD).
+
+**D. A real browser upload, with the stage timings.** Set `"UPLOAD_TIMING_ENABLED": true` in `server_config.json`, restart, upload the big file, and read the log lines `upload chunk N/M: role ... | receive+parse ... | read+save ... (in the worker thread: read ..., save ...)` and `event-loop lag, last 30s: median ... p95 ... max ...`. Then switch `UPLOAD_CHUNKS_IN_MEMORY` (Server Settings > 14 > 1 since 5.43, or the JSON), restart, repeat, and compare `receive+parse (RAM)` and `read+save` with the first run. With the RAM parse the line also says `(body arrived X s, parse Y s)`. If a real browser upload never shows `(RAM)`, the browser's request carries no CSRF header and the flag does nothing for it.
 
 **E. Is the disk the limit?** In PowerShell, while the upload runs:
 

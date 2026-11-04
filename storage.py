@@ -616,7 +616,7 @@ def cleanup_old_chunks(max_age_hours=24, protected_files=None):
                 f"🧹 Chunk cleanup completed: {cleaned_count} old chunk directories removed"
             )
         elif max_age_hours <= 1:  # Only log for aggressive cleanup
-            print(f"🧹 Aggressive cleanup completed: no stale chunks found")
+            print("🧹 Aggressive cleanup completed: no stale chunks found")
 
     except OSError:
         print("⚠️ Warning: Could not access chunks directory for cleanup")
@@ -1226,11 +1226,11 @@ def manual_chunks_cleanup():
         success = safe_rmtree(chunks_dir)
 
         if success:
-            print(f"✅ Manual cleanup completed successfully")
+            print("✅ Manual cleanup completed successfully")
             print(f"   • Removed {len(chunk_info)} chunk directories")
             print(f"   • Freed {total_size // (1024*1024)} MB of space")
         else:
-            print(f"⚠️  Manual cleanup completed with some errors")
+            print("⚠️  Manual cleanup completed with some errors")
             print(f"   • Attempted to remove {len(chunk_info)} chunk directories")
 
         return success

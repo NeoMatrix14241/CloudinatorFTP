@@ -155,7 +155,7 @@ def _generate(cert_path: str, key_path: str):
     ips_listed = ", ".join(str(e.value) for e in san if isinstance(e, x509.IPAddress))
     print(f"🔐 WebDAV TLS cert generated: {cert_path}")
     print(f"   SANs: localhost, {ips_listed}")
-    print(f"   Valid for 10 years")
+    print("   Valid for 10 years")
 
 
 # ── Public API ────────────────────────────────────────────────────────────

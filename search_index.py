@@ -408,8 +408,10 @@ class SearchIndexManager:
                 clauses.append("is_dir = 0")
             where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
             with _connect() as conn:
+                # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
                 row = conn.execute(
-                    f"SELECT COUNT(*) AS c FROM files_meta {where}", params
+                    f"SELECT COUNT(*) AS c FROM files_meta {where}",  # noqa: S608
+                    params,
                 ).fetchone()
             return row["c"] if row else 0
         except Exception as e:
@@ -477,8 +479,9 @@ class SearchIndexManager:
                     # Strategy A: MATCH + ext exact match via files_meta JOIN
                     safe = '"' + query_lower.replace('"', '""') + '"'
                     ext_ph = ",".join("?" for _ in ext_list)
+                    # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
                     rows = conn.execute(
-                        "SELECT f.name, f.rel_path, f.is_dir FROM files f "
+                        "SELECT f.name, f.rel_path, f.is_dir FROM files f "  # noqa: S608
                         "JOIN files_meta m ON m.rel_path = f.rel_path "
                         "WHERE f.files MATCH ? "
                         f"AND m.ext_lower IN ({ext_ph}) "
@@ -499,8 +502,9 @@ class SearchIndexManager:
                 else:
                     # Strategy C: ext-only via files_meta — always correct, indexed
                     ext_ph = ",".join("?" for _ in ext_list)
+                    # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
                     rows = conn.execute(
-                        "SELECT rel_path, is_dir FROM files_meta "
+                        "SELECT rel_path, is_dir FROM files_meta "  # noqa: S608
                         f"WHERE ext_lower IN ({ext_ph}) AND is_dir = 0 "
                         "LIMIT ? OFFSET ?",
                         ext_list + [fetch, offset],
@@ -520,8 +524,9 @@ class SearchIndexManager:
                     clauses.append("is_dir = 0")
                 where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
                 params += [fetch, offset]
+                # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
                 rows = conn.execute(
-                    f"SELECT rel_path, is_dir FROM files_meta {where} "
+                    f"SELECT rel_path, is_dir FROM files_meta {where} "  # noqa: S608
                     f"LIMIT ? OFFSET ?",
                     params,
                 ).fetchall()
@@ -908,14 +913,19 @@ class SearchIndexManager:
                 chunk = rowids[i : i + 500]
                 ph = ",".join("?" for _ in chunk)
                 with _write_lock, _connect() as conn:
-                    conn.execute(f"DELETE FROM files WHERE rowid IN ({ph})", chunk)
+                    # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
+                    conn.execute(
+                        f"DELETE FROM files WHERE rowid IN ({ph})", chunk  # noqa: S608
+                    )
                 time.sleep(0.01)
             for i in range(0, len(rem_paths), 500):
                 chunk = rem_paths[i : i + 500]
                 ph = ",".join("?" for _ in chunk)
                 with _write_lock, _connect() as conn:
+                    # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
                     conn.execute(
-                        f"DELETE FROM files_meta WHERE rel_path IN ({ph})", chunk
+                        f"DELETE FROM files_meta WHERE rel_path IN ({ph})",  # noqa: S608
+                        chunk,
                     )
                 removed += len(chunk)
                 time.sleep(0.01)

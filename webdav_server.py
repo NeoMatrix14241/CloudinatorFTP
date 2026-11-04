@@ -973,7 +973,7 @@ def start() -> bool:
     if http_port:
         tag = " (fallback — HTTPS unavailable)" if http_is_fallback else ""
         print(f"🌐 WebDAV HTTP:  http://{LOCAL_IP}:{http_port}/{tag}")
-        print(f"   ⚠️  plaintext Basic Auth — credentials are NOT encrypted here")
+        print("   ⚠️  plaintext Basic Auth — credentials are NOT encrypted here")
     if https_port:
         print(f"🔐 WebDAV HTTPS: https://{LOCAL_IP}:{https_port}/  (HTTP/1.1 only)")
         print(

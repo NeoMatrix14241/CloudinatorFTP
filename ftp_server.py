@@ -396,15 +396,15 @@ def start(port: int = None) -> bool:
     print(f"📁 FTP:     ftp://{LOCAL_IP}:{port}/")
     if _TLS_ACTIVE:
         print(
-            f"   🔒 FTPS active (explicit AUTH TLS) — control + data channels encrypted"
+            "   🔒 FTPS active (explicit AUTH TLS) — control + data channels encrypted"
         )
         print(
             f"   WinSCP → Protocol: FTP  Encryption: Explicit TLS  Host: {LOCAL_IP}  Port: {port}"
         )
     else:
-        print(f"   ⚠️  FTP sends credentials in plaintext — local network only")
+        print("   ⚠️  FTP sends credentials in plaintext — local network only")
         print(f"   WinSCP → Protocol: FTP  Host: {LOCAL_IP}  Port: {port}")
-    print(f"   Passive data ports: 60000–60100 (open these in your firewall)")
+    print("   Passive data ports: 60000–60100 (open these in your firewall)")
     return True
 
 

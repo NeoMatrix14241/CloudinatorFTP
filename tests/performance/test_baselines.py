@@ -13,6 +13,11 @@ OPT-IN (CLOUDINATOR_SLOW_TESTS=1, set by the nightly workflow):
 
     CLOUDINATOR_SLOW_TESTS=1 python -m pytest tests/performance/test_baselines.py -q -s
 
+5.43: UPLOAD_CHUNKS_IN_MEMORY is ON by default now, so a plain run measures the RAM parse and its
+[stage] lines say how receive+parse divides ("body arrived" vs "parse") when UPLOAD_TIMING_ENABLED is
+on. To measure the old temp-file parse set {"UPLOAD_CHUNKS_IN_MEMORY": false} (it cannot be divided:
+Quart reads and parses the body while it arrives).
+
 5.42: THE SAME RUN, ONE SETTING CHANGED. CLOUDINATOR_SCRATCH_CONFIG is a JSON object merged into the
 server_config.json of every scratch server of the run, so an A/B needs no code change and no restart
 of the real server (Git Bash; the baselines print MB/s, and where the time of an upload went when
@@ -21,8 +26,8 @@ UPLOAD_TIMING_ENABLED is on, as `[stage]` lines read back from the scratch serve
     # where does the time of an upload go?  (receive+parse vs read+save per chunk)
     CLOUDINATOR_SCRATCH_CONFIG='{"UPLOAD_TIMING_ENABLED": true}' \\
         CLOUDINATOR_SLOW_TESTS=1 python -m pytest tests/performance/test_baselines.py -q -s
-    # the same with the chunk bodies parsed in RAM instead of a temp file
-    CLOUDINATOR_SCRATCH_CONFIG='{"UPLOAD_TIMING_ENABLED": true, "UPLOAD_CHUNKS_IN_MEMORY": true}' ...
+    # the same with the chunk bodies parsed in a temp file (the pre-5.43 default)
+    CLOUDINATOR_SCRATCH_CONFIG='{"UPLOAD_TIMING_ENABLED": true, "UPLOAD_CHUNKS_IN_MEMORY": false}' ...
     # the OLD download behaviour (Quart's 8 KiB reads), to compare with the default 1 MiB
     CLOUDINATOR_SCRATCH_CONFIG='{"DOWNLOAD_BUFFER_SIZE": 8192}' ... -k download
 
@@ -85,10 +90,20 @@ def _stage_report(server, since, record_property, name):
     if stats is None:
         return
     parse = "receive+parse (RAM)" if stats["ram"] else "receive+parse"
+    # 5.43: a RAM-parsed chunk also says how receive+parse divides (body arriving vs the parse)
+    split = ""
+    if "body" in stats:
+        split = (
+            f" | of receive+parse: body arrived {stats['body']:.3f} s, "
+            f"parse {stats['parse']:.3f} s"
+        )
+        record_property(f"{name}_stage_body_arrived", f"{stats['body']:.3f} s")
+        record_property(f"{name}_stage_parse", f"{stats['parse']:.3f} s")
     print(
         f"[stage] {name}: {stats['chunks']} chunks of {stats['megabytes']:.1f} MB, per chunk: "
         f"{parse} {stats['receive_parse']:.3f} s | read+save {stats['read_save']:.3f} s "
         f"(read {stats['read']:.3f} s, save {stats['save']:.3f} s) | handler {stats['total']:.3f} s"
+        f"{split}"
     )
     record_property(f"{name}_stage_receive_parse", f"{stats['receive_parse']:.3f} s")
     record_property(f"{name}_stage_read_save", f"{stats['read_save']:.3f} s")

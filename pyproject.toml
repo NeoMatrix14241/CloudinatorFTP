@@ -74,6 +74,26 @@ ignore = ["E501"]
 "dev_server.py" = ["E402"]
 "prod_server.py" = ["E402"]
 "tools/**" = ["E402"]
+# 5.43 triage, first part (the 226 findings of the 5.42 run; only what was READ is ignored here,
+# the rest stays reported until its code has been looked at):
+# core.py puts each import next to the section that uses it (40 E402; `sys.stdout.reconfigure()`
+# runs before the later imports). Moving them is an import-order refactor of the module every other
+# one imports, which is not worth the risk for a style rule.
+"core.py" = ["E402"]
+# config.py: HOST defaults to "0.0.0.0" (listen on all interfaces) on purpose: a file server that
+# is reached through a tunnel or from the LAN; the menu offers 127.0.0.1 as the alternative (2 S104).
+"config.py" = ["S104"]
+# 5.43 triage, second part: `except Exception: pass` (S110). CLAUDE.md part 47 (4.97) settled how the
+# application handles these: the block stays and a comment says what is being skipped and why.
+# All 26 in the five files below were READ and every one has that comment (best-effort audit
+# logging, a closed pipe, a PID file, a keep-warm query, shutdown clean-up). The other files with
+# an S110 are NOT listed until they have been read. Tests are different (CODING_GUIDELINES.md 18.1:
+# `contextlib.suppress`, never an empty except) and stay checked.
+"file_monitor.py" = ["S110"]
+"protocol_manager.py" = ["S110"]
+"search_index.py" = ["S110"]
+"smb_server.py" = ["S110"]
+"version_engine.py" = ["S110"]
 # Tests assert (S101), use throw-away passwords and /tmp-style paths on purpose, read source files
 # with `ast` and run them with exec (S102: the point of the unit tests, see CODING_GUIDELINES.md
 # 18.1), talk to the scratch server on 127.0.0.1 with urllib (S310) and test FTP itself (S321).

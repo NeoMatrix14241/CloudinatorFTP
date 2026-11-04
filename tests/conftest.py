@@ -115,11 +115,14 @@ def scratch_config_from_environment() -> dict:
     raw = os.environ.get("CLOUDINATOR_SCRATCH_CONFIG", "").strip()
     if not raw:
         return {}
+    value, error = None, None  # set before the try: see test_browser_smoke.py (CodeQL)
     try:
         value = json.loads(raw)
     except ValueError as exc:
+        error = exc
+    if error is not None:
         pytest.fail(
-            f"CLOUDINATOR_SCRATCH_CONFIG is not valid JSON: {exc}", pytrace=False
+            f"CLOUDINATOR_SCRATCH_CONFIG is not valid JSON: {error}", pytrace=False
         )
     if not isinstance(value, dict):
         pytest.fail(
