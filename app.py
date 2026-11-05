@@ -46,15 +46,18 @@ _SIDE_EFFECT_MODULES = (
     routes.site_meta,
 )
 
-import os
-from config import (
+# E402 on the three imports below: they stay after the side-effect imports on purpose (the
+# docstring: `from core import` must stay the FIRST project import); core has loaded config
+# and storage already, so they only bind names here.
+import os  # noqa: E402
+from config import (  # noqa: E402
     PORT,
     HOST,
     ROOT_DIR,
     CHUNK_SIZE,
     ENABLE_CHUNKED_UPLOADS,
 )
-import storage
+import storage  # noqa: E402
 
 
 # Initialize cleanup on startup

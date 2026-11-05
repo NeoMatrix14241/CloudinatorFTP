@@ -581,8 +581,8 @@ class _CertMiddleware:
 def _build_app(root_dir: str):
     try:
         from wsgidav.wsgidav_app import WsgiDAVApp
-    except ImportError:
-        raise ImportError("wsgidav is not installed. Run: pip install wsgidav")
+    except ImportError as e:
+        raise ImportError("wsgidav is not installed. Run: pip install wsgidav") from e
 
     try:
         from wsgidav.fs_dav_provider import FilesystemProvider

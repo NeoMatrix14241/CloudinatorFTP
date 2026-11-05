@@ -424,7 +424,9 @@ class FileIndexManager:
                         for k, v in dirs_snapshot.items()
                     },
                 }
-                digest = hashlib.md5(json.dumps(view).encode("utf-8")).hexdigest()
+                digest = hashlib.md5(
+                    json.dumps(view).encode("utf-8"), usedforsecurity=False
+                ).hexdigest()
                 if digest == self._last_saved_digest and os.path.exists(
                     FILE_INDEX_PATH
                 ):

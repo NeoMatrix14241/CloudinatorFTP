@@ -37,6 +37,7 @@ import os
 import re
 import shutil
 import subprocess
+import contextlib
 import sys
 from pathlib import Path
 
@@ -210,7 +211,7 @@ def collect_routes(trees):
 
 def check_routes(routes, verbose):
     by_endpoint = {}
-    for file, func, endpoint, rule, methods, line in routes:
+    for file, func, endpoint, _rule, _methods, line in routes:
         by_endpoint.setdefault(endpoint, set()).add((file, func, line))
     dup_ep = [
         f"endpoint '{e}' defined {len(v)} times: "
@@ -219,7 +220,7 @@ def check_routes(routes, verbose):
         if len(v) > 1
     ]
     seen, dup_rule = {}, []
-    for file, func, endpoint, rule, methods, line in routes:
+    for file, func, _endpoint, rule, methods, line in routes:
         for m in methods:
             key = (rule, m)
             if key in seen and seen[key] != (file, func, line):
@@ -238,7 +239,7 @@ def check_routes(routes, verbose):
         dup_rule,
     )
     if verbose:
-        for file, func, endpoint, rule, methods, _line in sorted(
+        for file, _func, endpoint, rule, methods, _line in sorted(
             routes, key=lambda r: (r[3], r[2])
         ):
             print(f"      {','.join(methods):<22} {rule:<48} {endpoint}  [{file}]")
@@ -394,7 +395,7 @@ def check_imports(files, trees):
                 app_importers.append(
                     f"{rel(f)}:{line}: imports app (use `from core import ...`)"
                 )
-        for mod, star, line in imports_of(t, module_level_only=True):
+        for mod, _star, line in imports_of(t, module_level_only=True):
             if mod in mods and mod != me:
                 graph.setdefault(me, set()).add(mod)
             if (
@@ -553,8 +554,8 @@ def check_tools(files, trees):
             pre = next(
                 (
                     i + 1
-                    for i, l in enumerate(text.splitlines())
-                    if "sys.path.insert(0, _ROOT)" in l
+                    for i, ln in enumerate(text.splitlines())
+                    if "sys.path.insert(0, _ROOT)" in ln
                 ),
                 10**9,
             )
@@ -664,11 +665,9 @@ def main():
         "--files", action="store_true", help="list every .py file that was scanned"
     )
     args = ap.parse_args()
-    try:
+    # Best effort: not every stdout object supports reconfigure(); keep the default encoding.
+    with contextlib.suppress(Exception):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        # Best effort: not every stdout object supports reconfigure(); keep the default encoding.
-        pass
 
     files = py_files()
     trees = {f: parse(f) for f in files}

@@ -49,7 +49,8 @@ except ImportError as e:
 
 
 def clear_screen():
-    os.system("cls" if os.name == "nt" else "clear")
+    # S605: the command is one of two fixed words, nothing is interpolated.
+    os.system("cls" if os.name == "nt" else "clear")  # noqa: S605
 
 
 def print_banner():

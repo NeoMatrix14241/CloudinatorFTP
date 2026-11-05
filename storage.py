@@ -286,7 +286,7 @@ def verify_chunks_complete(file_id, expected_chunks=None):
                 test_file.read(1)  # Read one byte to verify access
 
         except (OSError, IOError) as e:
-            raise IOError(f"Cannot read chunk {i}: {e}")
+            raise IOError(f"Cannot read chunk {i}: {e}") from e
 
         chunk_map[i] = {"path": chunk_path, "size": chunk_size}
 
@@ -359,7 +359,7 @@ def assemble_chunks(file_id, filename, dest_path="", total_chunks=None):
                             )
                         outfile.write(chunk_data)
                 except Exception as e:
-                    raise IOError(f"Failed to read chunk {i}: {e}")
+                    raise IOError(f"Failed to read chunk {i}: {e}") from e
 
         # Step 4: Verify final file
         final_size = os.path.getsize(tmp_path)
@@ -687,7 +687,7 @@ def get_directory_size(path):
         if os.path.isfile(full_path):
             return os.path.getsize(full_path)
         elif os.path.isdir(full_path):
-            for dirpath, dirnames, filenames in os.walk(full_path):
+            for dirpath, _dirnames, filenames in os.walk(full_path):
                 for filename in filenames:
                     file_path = os.path.join(dirpath, filename)
                     try:
@@ -939,7 +939,7 @@ def get_storage_stats():
                 file_count += len(files)
 
                 # Process files in batches to check timeout more frequently
-                for i, file in enumerate(files):
+                for file in files:
                     try:
                         if files_checked >= max_files_to_check:
                             print(

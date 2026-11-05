@@ -55,6 +55,8 @@ _DB_DIR = get_db_dir(create=False)
 DB_PATH = os.path.join(_DB_DIR, "cloudinator.db")
 _KEY_PATH = os.path.join(_DB_DIR, "secret.key")
 _SECRET_PATH = os.path.join(_DB_DIR, "session.secret")
+# Users whose NT hash could not be decrypted and who were already reported (5.43).
+_SMB_SKIP_LOGGED: set = set()
 
 _write_lock = threading.Lock()
 
@@ -502,8 +504,16 @@ class _Database:
         for r in rows:
             try:
                 out.append((r["username"], _decrypt(r["nt_hash"])))
-            except Exception:  # noqa: S112
-                continue  # corrupt/undecryptable entry — skip rather than crash SMB startup
+            except Exception as e:
+                # Corrupt/undecryptable entry: skip it rather than crash SMB startup, but say so
+                # once per user (this runs on every credential refresh), without the hash.
+                if r["username"] not in _SMB_SKIP_LOGGED:
+                    _SMB_SKIP_LOGGED.add(r["username"])
+                    print(
+                        f"⚠️  SMB: skipping user '{r['username']}', the stored NT hash cannot be "
+                        f"decrypted ({type(e).__name__}); resetting the password stores a new one"
+                    )
+                continue
         return out
 
     def users_missing_nt_hash(self) -> list[str]:

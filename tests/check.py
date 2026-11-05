@@ -41,6 +41,7 @@ import json
 import os
 import re
 import subprocess
+import contextlib
 import sys
 from pathlib import Path
 
@@ -393,7 +394,7 @@ def try_import(p, force, explicit):
         return "FAIL", ["import took more than 30 s (it probably starts something)"]
     if r.returncode == 0:
         return "PASS", []
-    tail = [l for l in (r.stderr or "").strip().splitlines() if l.strip()][-3:]
+    tail = [ln for ln in (r.stderr or "").strip().splitlines() if ln.strip()][-3:]
     return "FAIL", tail or ["import failed"]
 
 
@@ -479,11 +480,9 @@ def main():
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--skip-packages", action="store_true")
     args = ap.parse_args()
-    try:
+    # Best effort: not every stdout object supports reconfigure(); keep the default encoding.
+    with contextlib.suppress(Exception):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        # Best effort: not every stdout object supports reconfigure(); keep the default encoding.
-        pass
 
     files, unknown = select(args.targets)
     if unknown:
@@ -538,11 +537,14 @@ def main():
         entries.append((f, checks))
 
     cfg = check_config() if args.config else []
-    worst = lambda cs: (
-        "FAIL"
-        if any(c[1] == "FAIL" for c in cs)
-        else ("WARN" if any(c[1] == "WARN" for c in cs) else "PASS")
-    )
+
+    def worst(cs):
+        return (
+            "FAIL"
+            if any(c[1] == "FAIL" for c in cs)
+            else ("WARN" if any(c[1] == "WARN" for c in cs) else "PASS")
+        )
+
     if args.json:
         out = {
             "modules": {

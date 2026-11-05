@@ -55,8 +55,9 @@ import sysconfig
 # ---------------------------------------------------------------------------
 if sysconfig.get_config_var("Py_GIL_DISABLED") and os.environ.get("PYTHON_GIL") != "0":
     signal.signal(signal.SIGINT, signal.SIG_IGN)  # child handles Ctrl+C
+    # S603: re-runs this very script with the interpreter that runs it; nothing comes from a request.
     sys.exit(
-        subprocess.call(
+        subprocess.call(  # noqa: S603
             [sys.executable, *sys.argv],
             env={**os.environ, "PYTHON_GIL": "0", "PYTHONUNBUFFERED": "1"},
         )

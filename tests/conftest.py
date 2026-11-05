@@ -62,11 +62,8 @@ COPY_SKIP = {
     "cmaps",
     "iccs",
     "images",
-    "locale",
     "standard_fonts",
     "wasm",
-    "webfonts",
-    "audio",
 }
 # Config files that are written fresh in the scratch tree, never copied.
 CONFIG_FILES = {"storage_config.json", "server_config.json"}

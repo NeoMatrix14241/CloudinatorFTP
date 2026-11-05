@@ -157,7 +157,7 @@ class DailyDatedFileHandler(logging.Handler):
             self._open_for_today()
             self._stream.write(line + "\n")
             self._stream.flush()
-        except Exception:
+        except Exception:  # noqa: S110
             # Logging must never raise into the caller; a failed log write is dropped.
             pass
 

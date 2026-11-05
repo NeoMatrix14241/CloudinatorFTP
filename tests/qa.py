@@ -7,7 +7,7 @@ this one file, so "green locally" and "green in CI" mean the same commands ran.
 
     python tests/qa.py static              smoke.py, check.py, SRI check, node --check on first-party JS
     python tests/qa.py tests               pytest on every tests/ layer folder that exists
-    python tests/qa.py quick               static + tests
+    python tests/qa.py quick               static + lint (Ruff, strict: any finding fails) + tests
     python tests/qa.py layer <name>        one layer: unit integration application protocols property
                                            reliability performance frontend
     python tests/qa.py ci                  quick, with JUnit XML written to ./artifacts (or --out DIR)
@@ -24,7 +24,7 @@ this one file, so "green locally" and "green in CI" mean the same commands ran.
                                            [tool.ruff] (needs `python -m pip install -r requirements-dev.txt`);
                                            REPORT ONLY like lint.yml: the findings are listed and counted per
                                            rule and the step passes; --strict makes any finding a FAIL;
-                                           NOT part of quick / ci
+                                           quick / ci run it with --strict (5.43)
 
     --skip-packages   pass to check.py (use where requirements.txt is not installed, like CI static job)
     --out DIR         write JUnit XML for the pytest steps into DIR
@@ -36,8 +36,8 @@ Exit code: 0 = every step passed or was skipped, 1 = at least one step failed, 1
 A SKIP never hides a failure: tools that are not installed (node, pip-audit) or files that do not
 exist (tools/sri_validator.py) are reported as SKIP with the reason.
 
-`lint` stays out of quick / ci until its findings are triaged (then Ruff becomes a required step of
-`smoke + check`, see docs/TESTING_STRATEGY.md); `audit` stays out of quick / ci on purpose: new advisories appear without any code change and an
+`lint` joined quick / ci in 5.43, strict, once its findings were triaged (to zero); the required
+`smoke + check` job runs the same Ruff, so "green locally" still means "green in CI". `audit` stays out of quick / ci on purpose: new advisories appear without any code change and an
 offline machine cannot run it, so it must never turn the everyday run (or a pull request) red.
 Known, accepted findings go into tests/audit_ignore.txt (one advisory ID per line, then a reason).
 
@@ -335,7 +335,11 @@ def build_plan(
             [_coverage_step(_existing_layers(), out or "artifacts", fail_under)]
         )
     if mode in ("quick", "ci"):
-        return _static_steps(skip_packages) + build_plan("tests", out=out)
+        return (
+            _static_steps(skip_packages)
+            + [_lint_step(strict=True)]
+            + build_plan("tests", out=out)
+        )
     if mode == "layer":
         if layer not in LAYERS:
             raise ValueError(

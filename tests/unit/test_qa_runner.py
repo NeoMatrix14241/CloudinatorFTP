@@ -91,10 +91,13 @@ def test_check_gets_skip_packages_only_when_asked(qa):
     assert "--force" not in plain + skipping
 
 
-def test_quick_is_static_plus_tests(qa):
+def test_quick_is_static_plus_strict_lint_plus_tests(qa, monkeypatch):
+    _pretend_ruff(qa, monkeypatch)
     quick = [s for s in qa.build_plan("quick") if s.name != "layout"]
-    assert [s.name for s in quick][:4] == ["smoke", "check", "sri", "js-syntax"]
-    assert len(quick) == len(qa.build_plan("static")) + 1
+    assert [s.name for s in quick][:5] == ["smoke", "check", "sri", "js-syntax", "lint"]
+    assert len(quick) == len(qa.build_plan("static")) + 2
+    # strict: the plain Ruff listing has no --exit-zero, so a finding fails the step
+    assert "--exit-zero" not in quick[4].cmds[0]
 
 
 def test_unknown_layer_and_mode_are_rejected(qa):
@@ -188,10 +191,17 @@ def test_lint_skips_with_the_install_hint_when_ruff_is_missing(qa, monkeypatch):
     assert code == 0 and results[0][1] == "SKIP"
 
 
-@pytest.mark.parametrize("mode", ["quick", "static", "tests", "ci"])
-def test_lint_is_not_part_of_the_other_modes(qa, monkeypatch, mode):
+@pytest.mark.parametrize("mode", ["static", "tests"])
+def test_lint_is_not_part_of_static_or_tests(qa, monkeypatch, mode):
     _pretend_ruff(qa, monkeypatch)
     assert "lint" not in [s.name for s in qa.build_plan(mode)]
+
+
+@pytest.mark.parametrize("mode", ["quick", "ci"])
+def test_quick_and_ci_run_lint_strict_since_543(qa, monkeypatch, mode):
+    _pretend_ruff(qa, monkeypatch)
+    (lint,) = [s for s in qa.build_plan(mode) if s.name == "lint"]
+    assert all("--exit-zero" not in cmd for cmd in lint.cmds[:1])
 
 
 def test_the_strict_flag_reaches_the_plan(qa, monkeypatch):

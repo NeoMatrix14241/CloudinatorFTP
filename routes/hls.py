@@ -80,7 +80,7 @@ _HLS_SEG_DURATION = 6  # seconds per HLS segment
 _SUBPROCESS_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 # HLS cache root lives in the configured cache dir, not inside ROOT_DIR
-from paths import get_hls_cache_dir as _get_hls_cache_dir
+from paths import get_hls_cache_dir as _get_hls_cache_dir  # noqa: E402
 
 
 def _hls_cache_root() -> str:
@@ -505,7 +505,7 @@ def _run_hls_transcode(file_path: str, cache_key: str):
         # 30-fps streams are correctly limited.  HFR profiles get no fps filter.
         splits = "".join(f"[vsp{i}]" for i in range(n))
         filter_parts = [f"[0:v]split={n}{splits}"]
-        for i, (name, h, fps_cap, *_) in enumerate(profiles):
+        for i, (_name, h, fps_cap, *_) in enumerate(profiles):
             fps_filter = (
                 f",fps=fps={fps_cap}" if (fps_cap is not None and is_hfr) else ""
             )
@@ -539,7 +539,7 @@ def _run_hls_transcode(file_path: str, cache_key: str):
         # -crf 18 targets perceptual near-lossless quality; -maxrate/-bufsize
         # cap the bitrate ceiling so complex scenes don't explode, identical
         # to how YouTube's encoder pipeline works.
-        for i, (name, h, fps_cap, maxr, bufs, abr) in enumerate(profiles):
+        for i, (_name, _h, fps_cap, maxr, bufs, _abr) in enumerate(profiles):
             eff_fps = (fps_cap if fps_cap is not None else src_fps) or 30
             gop = max(48, int(round(eff_fps * 2)))
             cmd += [
@@ -564,11 +564,11 @@ def _run_hls_transcode(file_path: str, cache_key: str):
         # ── Audio encoder options ─────────────────────────────────────────────
         if use_multi_audio:
             # Separate audio renditions: use best-quality AAC for all tracks
-            for i, aud in enumerate(audio_streams):
+            for i, _aud in enumerate(audio_streams):
                 cmd += [f"-c:a:{i}", "aac", f"-b:a:{i}", "192k", f"-ar:a:{i}", "48000"]
         elif has_audio:
             # Muxed single-audio: per-profile bitrate (lower for low-quality rungs)
-            for i, (name, h, fps_cap, maxr, bufs, abr) in enumerate(profiles):
+            for i, (_name, _h, _fps_cap, _maxr, _bufs, abr) in enumerate(profiles):
                 cmd += [f"-c:a:{i}", "aac", f"-b:a:{i}", abr, "-ar", "48000"]
 
         # ── var_stream_map ────────────────────────────────────────────────────
@@ -831,7 +831,7 @@ def _patch_master_m3u8_subtitles(master_path: str, extracted_subs: list) -> None
 
         # Build EXT-X-MEDIA subtitle declarations
         media_lines = []
-        for i, sub in enumerate(extracted_subs):
+        for sub in extracted_subs:
             media_lines.append(
                 f'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",'
                 f'LANGUAGE="{sub["lang"]}",NAME="{sub["label"]}",'

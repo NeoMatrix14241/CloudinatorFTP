@@ -129,7 +129,6 @@ def get_local_ip() -> str:
 # Ensure ffmpeg and thread prints appear immediately in terminal
 sys.stdout.reconfigure(line_buffering=True)
 import zipfile
-import io
 import re
 import subprocess
 import hashlib
@@ -1054,7 +1053,6 @@ def _trigger_reconcile(settle=False):
     """
     import threading
     from file_monitor import get_file_monitor
-    from realtime_stats import trigger_storage_update
 
     with _reconcile_gate:
         if _reconcile_state["running"]:
@@ -1317,7 +1315,7 @@ class ChunkTracker:
 
                         # Remove from tracking if it was tracked
                         if file_id in all_tracked_files:
-                            for session_id, file_set in self.active_uploads.items():
+                            for file_set in self.active_uploads.values():
                                 file_set.discard(file_id)
                             self.upload_timestamps.pop(file_id, None)
 

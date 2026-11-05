@@ -754,6 +754,9 @@ class SearchIndexManager:
 
             dir_count = 0
             file_count = 0
+            skipped_count = (
+                0  # entries even the one-by-one retry could not index (5.43)
+            )
 
             for root, dirs, files in os.walk(ROOT_DIR):
                 if self._stop_crawler:
@@ -798,7 +801,9 @@ class SearchIndexManager:
                                 with _write_lock, _connect() as conn:
                                     self._batch_insert(conn, [entry])
                             except Exception:
-                                pass  # skip truly unindexable entries
+                                skipped_count += (
+                                    1  # truly unindexable: counted, reported below
+                                )
 
                 # Progress log every 5 000 directories
                 if dir_count > 0 and dir_count % 5000 == 0:
@@ -815,6 +820,12 @@ class SearchIndexManager:
                 f"{dir_count:,} dirs + {file_count:,} files "
                 f"indexed in {elapsed:.1f}s"
             )
+            if skipped_count:
+                print(
+                    f"⚠️  Search index: {skipped_count:,} entries could not be indexed and were "
+                    f"skipped (the files themselves are untouched; the first batch error above "
+                    f"names the folder)"
+                )
             try:
                 with _write_lock, _connect() as conn:
                     conn.execute(

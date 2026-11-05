@@ -43,6 +43,7 @@ import csv
 import fnmatch
 import json
 import re
+import contextlib
 import sys
 import zipfile
 from collections import Counter
@@ -311,11 +312,9 @@ def main(argv=None):
     ap.add_argument("--no-combined", action="store_true")
     ap.add_argument("-q", "--quiet", action="store_true")
     args = ap.parse_args(argv)
-    try:
+    # Best effort: not every stdout object supports reconfigure(); keep the default encoding.
+    with contextlib.suppress(Exception):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        # Best effort: not every stdout object supports reconfigure(); keep the default encoding.
-        pass
 
     patterns = VENDORED + args.exclude
     inputs = args.paths or [str(here)]
@@ -334,7 +333,7 @@ def main(argv=None):
         )
         return 2
 
-    all_rows, kept_all, skipped_vendor = [], [], 0
+    all_rows, skipped_vendor = [], 0
     for lang in sorted(per_lang):
         rows = per_lang[lang]
         skipped_vendor += sum(1 for r in rows if r["Vendored"])

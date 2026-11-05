@@ -751,7 +751,8 @@ def _accept_loop(host_key, port: int, sftp_class, ssh_class, ready_event, bind_e
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, True)
     try:
-        sock.bind(("0.0.0.0", port))
+        # S104: an intentional all-interface bind (CLAUDE.md part 46).
+        sock.bind(("0.0.0.0", port))  # noqa: S104
         sock.listen(50)
         sock.settimeout(1.0)
     except OSError as e:

@@ -344,7 +344,8 @@ def _make_server(port: int):
 
     _TLS_ACTIVE = use_tls
 
-    server = FTPServer(("0.0.0.0", port), CloudinatorFTPHandler)
+    # S104: an intentional all-interface bind (CLAUDE.md part 46).
+    server = FTPServer(("0.0.0.0", port), CloudinatorFTPHandler)  # noqa: S104
     server.max_cons = 256
     server.max_cons_per_ip = 10
     return server
@@ -414,7 +415,7 @@ def stop():
     if _server:
         try:
             _server.close_all()
-        except Exception:
+        except Exception:  # noqa: S110
             # Server already stopped or a connection was abandoned; shutdown continues.
             pass
         _server = None

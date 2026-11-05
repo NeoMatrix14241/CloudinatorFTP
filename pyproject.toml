@@ -72,7 +72,7 @@ ignore = ["E501"]
 [tool.ruff.lint.per-file-ignores]
 # Stand-alone scripts put the project root on sys.path first, so their imports follow code.
 "dev_server.py" = ["E402"]
-"prod_server.py" = ["E402"]
+"prod_server.py" = ["E402", "S110"]  # S110: see the 5.43 third-part note below
 "tools/**" = ["E402"]
 # 5.43 triage, first part (the 226 findings of the 5.42 run; only what was READ is ignored here,
 # the rest stays reported until its code has been looked at):
@@ -94,6 +94,21 @@ ignore = ["E501"]
 "search_index.py" = ["S110"]
 "smb_server.py" = ["S110"]
 "version_engine.py" = ["S110"]
+# 5.43 triage, third part: the same convention in six more files with two or more S110 each
+# (prod_server.py is listed at the top with its E402, since a key can appear only once). Every
+# one of these 19 was READ and carries a comment that says what is skipped (a closed stdout pipe,
+# an offline address probe, a force-quit step, a count that only feeds a hint, an already-closed
+# socket, a best-effort audit line). The four files with a single S110 (ftp_server.py,
+# logging_setup.py, paths.py, routes/files.py) use a per-line `# noqa: S110` instead.
+"helpers/parent_watch.py" = ["S110"]
+"helpers/ssl_cert.py" = ["S110"]
+"routes/previews.py" = ["S110"]
+"sftp_server.py" = ["S110"]
+"webdav_server.py" = ["S110"]
+# routes/hls.py: five subprocess calls (ffprobe, ffmpeg) with a list argv and no shell; the only
+# item that comes from a request is the video path, which `storage.is_safe_path()` checked and
+# `os.path.join(ROOT_DIR, ...)` made absolute, so it cannot start with "-" (S603).
+"routes/hls.py" = ["S603"]
 # Tests assert (S101), use throw-away passwords and /tmp-style paths on purpose, read source files
 # with `ast` and run them with exec (S102: the point of the unit tests, see CODING_GUIDELINES.md
 # 18.1), talk to the scratch server on 127.0.0.1 with urllib (S310) and test FTP itself (S321).
