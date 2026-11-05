@@ -2,7 +2,7 @@ Quart<1
 bcrypt<6
 zipstream-new<2
 Werkzeug<4
-watchdog<7
+watchdog<8
 hypercorn[h3]<1
 cryptography<51
 mammoth<2
