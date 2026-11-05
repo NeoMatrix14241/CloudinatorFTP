@@ -34,11 +34,116 @@ from config import (
     CHUNK_SIZE,
     ENABLE_CHUNKED_UPLOADS,
     ALLOWED_EXTENSIONS,
+    UPLOAD_CHUNKS_IN_MEMORY,
+    UPLOAD_TIMING_ENABLED,
 )
 from database import db
 from auth import current_user, get_role
 import storage
+from helpers.upload_perf import (
+    IdleDeferral,
+    LagProbeStarter,
+    StageTimer,
+    UploadTimingLog,
+    parse_form_in_memory,
+)
 from routes.shares import _prune_expired_shares
+
+# ---------------------------------------------------------------------------
+# Upload performance (CLAUDE.md 5.41); the helpers live in helpers/upload_perf.py.
+#  * /upload reads and writes the piece in a worker thread (_read_and_save_chunk): both are
+#    synchronous disk work on up to CHUNK_SIZE bytes and used to run on the event-loop thread.
+#  * config.UPLOAD_TIMING_ENABLED (default False) logs the time of each stage of every chunk and
+#    starts an event-loop lag probe with the first upload request (no startup hook: smoke check 5).
+#  * config.UPLOAD_CHUNKS_IN_MEMORY (default True since 5.43) parses a chunk-sized body in RAM
+#    instead of in a temp file in the system temp folder (_upload_form_and_files); with the timing
+#    log on, that stage is also split into "body arrived" and "parse".
+#  * the reconcile walk that follows an assembly waits while another upload is still sending
+#    (_reconcile_after_uploads).
+# ---------------------------------------------------------------------------
+_IN_MEMORY_BODY_MARGIN = 1024 * 1024  # multipart framing and the small text fields
+_CSRF_HEADER_NAMES = ("X-CSRFToken", "X-CSRF-Token")
+
+_upload_timing_log = UploadTimingLog()
+_lag_probe = LagProbeStarter()
+
+
+def _uploads_in_flight():
+    """True while an upload still has chunks to send: an assembled upload is already untracked
+    (AssemblyQueue.complete_job), and an abandoned one stays tracked until the interrupted-upload
+    cleanup, which is why _reconcile_after_uploads has a cap."""
+    with chunk_tracker.lock:
+        return bool(chunk_tracker.active_uploads)
+
+
+# The count-correcting walk after the assembly queue drains costs one stat per file. While another
+# upload is still sending chunks it competes with the chunk writes for the disk, so it waits (it
+# re-checks every 5 s) and runs once the last upload is done, or after 10 minutes at the latest.
+_reconcile_after_uploads = IdleDeferral(
+    action=_trigger_reconcile,
+    busy=_uploads_in_flight,
+    interval=5.0,
+    max_wait=600.0,
+)
+
+
+def _in_memory_parse_wanted():
+    """True when THIS request's body should be parsed in RAM (config.UPLOAD_CHUNKS_IN_MEMORY):
+    a multipart body of known size up to one chunk plus framing. Only when the CSRF token came in
+    a header: otherwise the CSRF hook has already read the form with Quart's parser and the body
+    is gone."""
+    if not UPLOAD_CHUNKS_IN_MEMORY:
+        return False
+    if not any(request.headers.get(name) for name in _CSRF_HEADER_NAMES):
+        return False
+    length = request.content_length
+    return (
+        length is not None
+        and 0 < length <= CHUNK_SIZE + _IN_MEMORY_BODY_MARGIN
+        and (request.mimetype or "").startswith("multipart/form-data")
+    )
+
+
+async def _upload_form_and_files(in_memory=None, timer=None):
+    """(form, files) of the current request: Quart's parser (a temp file per file part), or, with
+    UPLOAD_CHUNKS_IN_MEMORY and a small enough body, the body read into RAM and parsed without
+    one. Both give werkzeug MultiDicts of strings and FileStorage objects. `in_memory` is the
+    answer of _in_memory_parse_wanted() when the caller already has it.
+
+    5.43: given a StageTimer, the RAM path tells it how its stage divides: how long the body took
+    to ARRIVE (awaiting it) and how long the PARSE took (synchronous, on the event-loop thread).
+    Quart's own parser reads and parses the body piece by piece as it arrives, so that path cannot
+    be divided and reports nothing."""
+    if in_memory is None:
+        in_memory = _in_memory_parse_wanted()
+    if in_memory:
+        started = time.perf_counter()
+        body = await request.get_data(cache=False)  # Quart drops its copy at once
+        arrived = time.perf_counter() - started
+        started = time.perf_counter()
+        parsed = parse_form_in_memory(body, request.content_type)
+        if timer is not None:
+            timer.detail("body arrived", arrived)
+            timer.detail("parse", time.perf_counter() - started)
+        return parsed
+    return await request.form, await request.files
+
+
+def _read_and_save_chunk(chunk, chunk_key, chunk_num):
+    """Runs in a worker thread (asyncio.to_thread): read the uploaded piece and write it under
+    .chunks/. Returns (outcome, read_seconds, save_seconds, size); outcome is "saved",
+    "too_large" or "failed"."""
+    started = time.perf_counter()
+    chunk_data = chunk.read()
+    read_seconds = time.perf_counter() - started
+    size = len(chunk_data)
+    if size > CHUNK_SIZE:
+        return "too_large", read_seconds, 0.0, size
+    started = time.perf_counter()
+    saved = storage.save_chunk(chunk_key, chunk_num, chunk_data)
+    save_seconds = time.perf_counter() - started
+    return ("saved" if saved else "failed"), read_seconds, save_seconds, size
+
 
 # ---------------------------------------------------------------------------
 # Upload ids (CLAUDE.md 5.16). The browser sends an id per file (index.js,
@@ -95,17 +200,24 @@ async def upload():
         None  # server-side id (session + client id), set once file_id is validated
     )
     filename = None
+    timer = StageTimer(UPLOAD_TIMING_ENABLED)
+    if UPLOAD_TIMING_ENABLED:
+        _lag_probe.start_once(app)
 
     try:
         role = get_role(current_user())
         if role != "readwrite":
             return "Permission denied", 403
+        timer.mark("role")
 
-        file_id = (await request.form).get("file_id")
-        chunk_num = (await request.form).get("chunk_num")
-        total_chunks = (await request.form).get("total_chunks")
-        filename = (await request.form).get("filename", "")
-        dest_path = (await request.form).get("dest_path", "")
+        in_memory = _in_memory_parse_wanted()
+        form, files = await _upload_form_and_files(in_memory, timer)
+        timer.mark("receive+parse (RAM)" if in_memory else "receive+parse")
+        file_id = form.get("file_id")
+        chunk_num = form.get("chunk_num")
+        total_chunks = form.get("total_chunks")
+        filename = form.get("filename", "")
+        dest_path = form.get("dest_path", "")
 
         # Validate filename (must not be empty)
         if not filename:
@@ -153,20 +265,30 @@ async def upload():
             # Track this upload
             chunk_tracker.track_upload(session_id, chunk_key)
 
-            chunk = (await request.files).get("chunk")
+            chunk = files.get("chunk")
             if not chunk:
                 return "No chunk data received", 400
 
-            chunk_data = chunk.read()
-            if len(chunk_data) > CHUNK_SIZE:
+            # Read the piece and save it in a worker thread: on the event-loop thread this
+            # synchronous disk work stops every other request (and the receiving of other
+            # uploads) for as long as the disk takes.
+            outcome, read_seconds, save_seconds, chunk_size = await asyncio.to_thread(
+                _read_and_save_chunk, chunk, chunk_key, chunk_num
+            )
+            timer.mark("read+save")
+            timer.note("read", read_seconds)
+            timer.note("save", save_seconds)
+            if outcome == "too_large":
                 return f"Chunk too large (max {CHUNK_SIZE} bytes)", 413
 
-            # Save chunk
-            if not storage.save_chunk(chunk_key, chunk_num, chunk_data):
+            if outcome != "saved":
                 # Cleanup on failure
                 chunk_tracker.untrack_upload(session_id, chunk_key)
                 storage.cleanup_chunks(chunk_key)
                 return "Failed to save chunk", 500
+            _upload_timing_log.report(
+                timer, chunk_size, f"chunk {chunk_num + 1}/{total_chunks}"
+            )
 
             print(
                 f"📦 Saved chunk {chunk_num + 1}/{total_chunks} for {filename} (ID: {file_id})"
@@ -233,7 +355,7 @@ async def upload():
 
         else:
             # Whole file upload handling
-            uploaded_file = (await request.files).get("file")
+            uploaded_file = files.get("file")
             if not uploaded_file or uploaded_file.filename == "":
                 return "No file selected", 400
 
@@ -250,7 +372,7 @@ async def upload():
             os.makedirs(target_dir, exist_ok=True)
 
             # Conflict check: return 409 if file exists and overwrite not explicitly requested
-            overwrite = (await request.form).get("overwrite", "0")
+            overwrite = form.get("overwrite", "0")
             if (
                 os.path.exists(target_path)
                 and os.path.isfile(target_path)
@@ -502,7 +624,7 @@ async def admin_cleanup_chunks():
         # Run enhanced manual cleanup
         manual_success = storage.manual_chunks_cleanup()
 
-        print(f"🧹 Comprehensive cleanup completed")
+        print("🧹 Comprehensive cleanup completed")
         print(
             f"   Sessions: {stats_before['active_sessions']} -> {stats_after['active_sessions']}"
         )
@@ -840,9 +962,10 @@ def assembly_worker():
             # When the assembly queue drains to zero, trigger an immediate reconcile
             # so the file count corrects itself right away. Use _trigger_reconcile (not
             # reconcile_async) so the SSE force-push fires even if watchdog already
-            # updated the counters and _reconcile sees no drift.
+            # updated the counters and _reconcile sees no drift. 5.41: while ANOTHER upload
+            # is still sending chunks the walk waits for it (_reconcile_after_uploads).
             if assembly_queue.job_queue.empty() and not assembly_queue.active_jobs:
-                _trigger_reconcile()
+                _reconcile_after_uploads.request()
 
         except queue.Empty:
             # Timeout - cleanup old jobs periodically

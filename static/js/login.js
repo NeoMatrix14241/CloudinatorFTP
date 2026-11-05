@@ -26,20 +26,25 @@ function isComingFromLogout() {
 
 async function checkAuthenticationStatus() {
     try {
+        // redirect: 'manual' stops the browser from following the redirect to /login, so an
+        // anonymous visitor does not trigger a second request just for this check.
         const response = await fetch('/', {
             method: 'GET',
             cache: 'no-cache',
+            redirect: 'manual',
             headers: {
                 'Cache-Control': 'no-cache'
             }
         });
 
-        if (response.url.includes('/login')) {
+        if (response.type === 'opaqueredirect' || response.url.includes('/login')) {
             console.log('User not logged in, staying on login page');
             return;
         }
 
-        if (response.ok && !response.url.includes('/login')) {
+        if (response.ok) {
+            // Only the status was needed; don't download the whole file manager page.
+            response.body?.cancel();
             console.log('User already logged in, redirecting...');
             window.history.replaceState(null, '', '/');
             window.location.replace('/');
@@ -109,8 +114,13 @@ document.addEventListener('visibilitychange', function () {
 
 async function checkAndRedirectIfLoggedIn() {
     try {
-        const response = await fetch('/admin/upload_status');
+        // redirect: 'manual': a logged-out visitor is answered with a redirect to /login. fetch
+        // would follow it and report the login page itself as ok, so this page would replace
+        // itself with '/' (which redirects back here) and wipe what the visitor had typed.
+        const response = await fetch('/admin/upload_status', { redirect: 'manual' });
         if (response.ok) {
+            // Only the status was needed; don't download the whole answer.
+            response.body?.cancel();
             window.location.replace('/');
         }
     } catch (error) {

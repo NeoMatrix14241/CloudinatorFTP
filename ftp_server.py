@@ -199,8 +199,6 @@ def _make_server(port: int):
 
     certfile = keyfile = None
     if use_tls:
-        from pyftpdlib.handlers import TLS_FTPHandler as BaseHandler
-
         try:
             certfile, keyfile = _resolve_tls_cert_paths()
         except Exception as e:
@@ -209,7 +207,12 @@ def _make_server(port: int):
                 "falling back to PLAINTEXT FTP."
             )
             use_tls = False
-            from pyftpdlib.handlers import FTPHandler as BaseHandler
+
+    # BaseHandler is bound in exactly one branch (5.40; before, the cert-failure fallback imported
+    # it a second time inside the TLS branch, which pyflakes reports as a redefinition). The TLS
+    # class only exists when pyOpenSSL is installed, so it is imported only when use_tls is set.
+    if use_tls:
+        from pyftpdlib.handlers import TLS_FTPHandler as BaseHandler
     else:
         from pyftpdlib.handlers import FTPHandler as BaseHandler
 
@@ -341,7 +344,8 @@ def _make_server(port: int):
 
     _TLS_ACTIVE = use_tls
 
-    server = FTPServer(("0.0.0.0", port), CloudinatorFTPHandler)
+    # S104: an intentional all-interface bind (CLAUDE.md part 46).
+    server = FTPServer(("0.0.0.0", port), CloudinatorFTPHandler)  # noqa: S104
     server.max_cons = 256
     server.max_cons_per_ip = 10
     return server
@@ -393,15 +397,15 @@ def start(port: int = None) -> bool:
     print(f"📁 FTP:     ftp://{LOCAL_IP}:{port}/")
     if _TLS_ACTIVE:
         print(
-            f"   🔒 FTPS active (explicit AUTH TLS) — control + data channels encrypted"
+            "   🔒 FTPS active (explicit AUTH TLS) — control + data channels encrypted"
         )
         print(
             f"   WinSCP → Protocol: FTP  Encryption: Explicit TLS  Host: {LOCAL_IP}  Port: {port}"
         )
     else:
-        print(f"   ⚠️  FTP sends credentials in plaintext — local network only")
+        print("   ⚠️  FTP sends credentials in plaintext — local network only")
         print(f"   WinSCP → Protocol: FTP  Host: {LOCAL_IP}  Port: {port}")
-    print(f"   Passive data ports: 60000–60100 (open these in your firewall)")
+    print("   Passive data ports: 60000–60100 (open these in your firewall)")
     return True
 
 
@@ -411,7 +415,7 @@ def stop():
     if _server:
         try:
             _server.close_all()
-        except Exception:
+        except Exception:  # noqa: S110
             # Server already stopped or a connection was abandoned; shutdown continues.
             pass
         _server = None

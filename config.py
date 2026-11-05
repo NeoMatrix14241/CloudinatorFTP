@@ -1,3 +1,4 @@
+import importlib
 import os
 import platform
 import json
@@ -12,6 +13,31 @@ _SERVER_CONFIG_FILE = os.path.join(_HERE, "server_config.json")
 PORT = 5000
 CHUNK_SIZE = 10 * 1024 * 1024  # 10 MB adjustable chunk size
 ENABLE_CHUNKED_UPLOADS = True
+# Upload performance (5.41) and download performance (5.42). All four are saved in
+# server_config.json like CHUNK_SIZE and are shown in the settings view; the last three have a menu
+# entry (Server Configuration > 14, 5.43). A running server needs a restart for a change.
+# BODY_TIMEOUT: seconds Quart gives ONE request body (a 10 MB upload chunk) to arrive and be
+# parsed. Quart's own default is 60 and it covers the WHOLE body, not each piece of data, so a
+# chunk that needed more than a minute (slow link, busy disk, a stalled event loop) failed with
+# "408 Request Timeout" and the browser stopped the whole upload. 0 = no limit. (core.py already
+# sets RESPONSE_TIMEOUT = None for the same reason on downloads.)
+BODY_TIMEOUT = 600
+# Log the time of every upload stage per chunk and how late the event loop wakes up. Off = no cost.
+# With UPLOAD_CHUNKS_IN_MEMORY on, the line also splits "receive+parse (RAM)" into the time the
+# body took to arrive and the time the parse itself took (5.43).
+UPLOAD_TIMING_ENABLED = False
+# Parse an upload chunk (a request body up to CHUNK_SIZE + 1 MiB) in RAM instead of in a temp file
+# in the system temp folder: one 10 MB write and one read less per chunk, at the price of up to
+# that much RAM per chunk being received at the same moment. ON by default since 5.43: on the
+# owner's Windows PC (hard disk, scratch server) it took one client from 9.9 to 15.7 MB/s and four
+# clients from 14.2 to 16.7 MB/s in total. A server_config.json that already holds a saved value
+# keeps it: switch it with the menu (Server Configuration > 14) or by editing the JSON.
+UPLOAD_CHUNKS_IN_MEMORY = True
+# Download read size (5.42): bytes read per step when a file is sent (/download, /view). Quart's own
+# 8 KiB costs two thread hand-offs per 8 KiB, which held a RAM-cached 32 MB file to 2.6 MB/s on the
+# owner's Windows PC (helpers/file_body.py has the numbers). 8192 to 16 MiB; the price is this much
+# RAM per download in flight.
+DOWNLOAD_BUFFER_SIZE = 1048576
 HOST = "0.0.0.0"  # Listen on all interfaces
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024 * 1024  # 16GB max file size
 ALLOWED_EXTENSIONS = None  # None = allow all file types.
@@ -96,7 +122,7 @@ SMB_FALLBACK_PORT = 8445  # used automatically when 445 can't be bound
 SMB_SHARE_NAME = "SharedFolder"  # the name clients see, e.g. \\HOST\SharedFolder
 
 # Path exports — create=False so importing config never creates directories.
-from paths import (
+from paths import (  # noqa: E402  (kept next to the path settings it re-exports)
     get_db_dir,
     get_cache_dir,
     get_hls_cache_dir,
@@ -558,13 +584,11 @@ def list_available_presets():
         print(f"❌ No presets available for {platform_type}")
 
     print(f"\n🔧 Current location: {ROOT_DIR}")
-    print(f"\n💡 To change storage location:")
+    print("\n💡 To change storage location:")
+    print("   Python: from config import set_preset_path; set_preset_path('documents')")
+    print("   Env Var: set CLOUDINATOR_FTP_ROOT=C:\\path\\to\\your\\folder")
     print(
-        f"   Python: from config import set_preset_path; set_preset_path('documents')"
-    )
-    print(f"   Env Var: set CLOUDINATOR_FTP_ROOT=C:\\path\\to\\your\\folder")
-    print(
-        f"   Direct: from config import set_custom_storage_path; set_custom_storage_path('C:\\path\\to\\folder')"
+        "   Direct: from config import set_custom_storage_path; set_custom_storage_path('C:\\path\\to\\folder')"
     )
 
 
@@ -578,7 +602,7 @@ def configure_server_settings():
     print("=" * 50)
 
     while True:
-        print(f"\nCurrent Settings:")
+        print("\nCurrent Settings:")
         print(f"1. Port: {PORT}")
         print(f"2. Chunk Size: {format_bytes(CHUNK_SIZE)}")
         print(
@@ -596,11 +620,16 @@ def configure_server_settings():
         )
         print(f"11. ffmpeg (HLS):  {'✅ Enabled' if ENABLE_FFMPEG else '🚫 Disabled'}")
         print(f"12. libvips (img): {'✅ Enabled' if ENABLE_LIBVIPS else '🚫 Disabled'}")
-        print(f"13. Protocol Servers (WebDAV / SFTP / FTP)")
+        print("13. Protocol Servers (WebDAV / SFTP / FTP)")
+        print(
+            f"14. Upload / Download Performance (chunks in RAM: "
+            f"{'On' if UPLOAD_CHUNKS_IN_MEMORY else 'Off'}, "
+            f"download read size: {format_bytes(DOWNLOAD_BUFFER_SIZE)})"
+        )
         print("10. Save & Exit")
         print("0. Exit Without Saving")
 
-        choice = input("\nSelect option to configure (0-13): ").strip()
+        choice = input("\nSelect option to configure (0-14): ").strip()
 
         if choice == "1":
             configure_port()
@@ -626,6 +655,8 @@ def configure_server_settings():
             _toggle_libvips()
         elif choice == "13":
             configure_protocol_settings()
+        elif choice == "14":
+            configure_transfer_performance()
         elif choice == "10":
             save_server_config()
             print("✅ Server configuration saved!")
@@ -634,7 +665,7 @@ def configure_server_settings():
             print("❌ Configuration cancelled")
             break
         else:
-            print("❌ Invalid option. Please choose 0-12.")
+            print("❌ Invalid option. Please choose 0-14.")
 
 
 def configure_port():
@@ -733,6 +764,81 @@ def configure_chunked_uploads():
         print("✅ Chunked uploads disabled")
     else:
         print("✅ Keeping current setting")
+
+
+def configure_transfer_performance():
+    """Upload / download performance (5.43): chunks parsed in RAM, the timing log and the download
+    read size. A change is kept in memory; "Save & Exit" of the server menu writes it to
+    server_config.json, and a running server needs a restart to use it."""
+    global UPLOAD_CHUNKS_IN_MEMORY, UPLOAD_TIMING_ENABLED
+
+    while True:
+        print("\n⚡ Upload / Download Performance")
+        print("=" * 50)
+        print(
+            f"1. Parse upload chunks in RAM: {'On' if UPLOAD_CHUNKS_IN_MEMORY else 'Off'}"
+        )
+        print(
+            f"2. Upload timing log:          {'On' if UPLOAD_TIMING_ENABLED else 'Off'}"
+        )
+        print(f"3. Download read size:         {format_bytes(DOWNLOAD_BUFFER_SIZE)}")
+        print("0. Back")
+
+        choice = input("\nSelect option (0-3): ").strip()
+        if choice == "1":
+            UPLOAD_CHUNKS_IN_MEMORY = not UPLOAD_CHUNKS_IN_MEMORY
+            state = "On" if UPLOAD_CHUNKS_IN_MEMORY else "Off"
+            print(
+                f"✅ Parse upload chunks in RAM: {state} (up to one chunk of RAM each)"
+            )
+        elif choice == "2":
+            UPLOAD_TIMING_ENABLED = not UPLOAD_TIMING_ENABLED
+            state = "On" if UPLOAD_TIMING_ENABLED else "Off"
+            print(f"✅ Upload timing log: {state}")
+        elif choice == "3":
+            _configure_download_buffer()
+        elif choice == "0":
+            break
+        else:
+            print("❌ Invalid option. Please choose 0-3.")
+
+
+def _configure_download_buffer():
+    """Choose how many bytes are read per step when a file is sent (8 KB to 16 MB)."""
+    global DOWNLOAD_BUFFER_SIZE
+    presets = {
+        "1": 64 * 1024,
+        "2": 256 * 1024,
+        "3": 1024 * 1024,
+        "4": 4 * 1024 * 1024,
+    }
+    print(f"\nCurrent download read size: {format_bytes(DOWNLOAD_BUFFER_SIZE)}")
+    print(
+        "Quart's own 8 KB per step is slow; each download in flight uses this much RAM."
+    )
+    for key, value in presets.items():
+        print(f"{key}. {format_bytes(value)}")
+    print("5. Custom size (KB)")
+    print("6. Keep current")
+
+    choice = input("\nSelect option (1-6): ").strip()
+    if choice in presets:
+        DOWNLOAD_BUFFER_SIZE = presets[choice]
+        print(f"✅ Download read size set to {format_bytes(DOWNLOAD_BUFFER_SIZE)}")
+    elif choice == "5":
+        raw = input("Enter size in KB (8 to 16384): ").strip()
+        accepted = None
+        if raw.isdigit():
+            accepted = _buffer_size_or_default(int(raw) * 1024, None)
+        if accepted is None:
+            print("❌ Size must be a whole number from 8 to 16384 KB")
+        else:
+            DOWNLOAD_BUFFER_SIZE = accepted
+            print(f"✅ Download read size set to {format_bytes(DOWNLOAD_BUFFER_SIZE)}")
+    elif choice == "6":
+        print("✅ Keeping current download read size")
+    else:
+        print("❌ Invalid option")
 
 
 def configure_max_file_size():
@@ -951,6 +1057,10 @@ def save_server_config():
         "HOST": HOST,
         "CHUNK_SIZE": CHUNK_SIZE,
         "ENABLE_CHUNKED_UPLOADS": ENABLE_CHUNKED_UPLOADS,
+        "BODY_TIMEOUT": BODY_TIMEOUT,
+        "UPLOAD_TIMING_ENABLED": UPLOAD_TIMING_ENABLED,
+        "UPLOAD_CHUNKS_IN_MEMORY": UPLOAD_CHUNKS_IN_MEMORY,
+        "DOWNLOAD_BUFFER_SIZE": DOWNLOAD_BUFFER_SIZE,
         "MAX_CONTENT_LENGTH": MAX_CONTENT_LENGTH,
         "PERMANENT_SESSION_LIFETIME": PERMANENT_SESSION_LIFETIME,
         # ── Feature toggles ───────────────────────────────────────────────
@@ -1017,9 +1127,29 @@ def save_server_config():
         print(f"❌ Error saving configuration: {e}")
 
 
+def _non_negative_number(value, default):
+    """`value` when it is a number (not a bool) of at least 0, else `default`: a hand-edited
+    server_config.json with "BODY_TIMEOUT": "soon" must not stop the server from starting.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return value if value >= 0 else default
+
+
+def _buffer_size_or_default(value, default):
+    """`value` when it is a whole number (not a bool) from 8192 to 16 MiB, else `default`: a
+    hand-edited server_config.json must not be able to switch downloads off or ask for a
+    gigabyte per download."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    return value if 8192 <= value <= 16 * 1024 * 1024 else default
+
+
 def load_server_config():
     """Load server configuration from server_config.json (next to this file)."""
     global PORT, CHUNK_SIZE, ENABLE_CHUNKED_UPLOADS
+    global BODY_TIMEOUT, UPLOAD_TIMING_ENABLED, UPLOAD_CHUNKS_IN_MEMORY
+    global DOWNLOAD_BUFFER_SIZE
     global HOST, MAX_CONTENT_LENGTH, PERMANENT_SESSION_LIFETIME
     global HLS_MIN_SIZE, HLS_FORCE_FORMATS
     global IMG_COMPRESS_MIN_SIZE, IMG_WEBP_QUALITY
@@ -1052,6 +1182,19 @@ def load_server_config():
             CHUNK_SIZE = config.get("CHUNK_SIZE", CHUNK_SIZE)
             ENABLE_CHUNKED_UPLOADS = config.get(
                 "ENABLE_CHUNKED_UPLOADS", ENABLE_CHUNKED_UPLOADS
+            )
+            BODY_TIMEOUT = _non_negative_number(
+                config.get("BODY_TIMEOUT", BODY_TIMEOUT), BODY_TIMEOUT
+            )
+            UPLOAD_TIMING_ENABLED = bool(
+                config.get("UPLOAD_TIMING_ENABLED", UPLOAD_TIMING_ENABLED)
+            )
+            UPLOAD_CHUNKS_IN_MEMORY = bool(
+                config.get("UPLOAD_CHUNKS_IN_MEMORY", UPLOAD_CHUNKS_IN_MEMORY)
+            )
+            DOWNLOAD_BUFFER_SIZE = _buffer_size_or_default(
+                config.get("DOWNLOAD_BUFFER_SIZE", DOWNLOAD_BUFFER_SIZE),
+                DOWNLOAD_BUFFER_SIZE,
             )
             MAX_CONTENT_LENGTH = config.get("MAX_CONTENT_LENGTH", MAX_CONTENT_LENGTH)
             PERMANENT_SESSION_LIFETIME = config.get(
@@ -1533,7 +1676,10 @@ def configure_version_engine_settings():
     print("=" * 50)
 
     while True:
-        _yon = lambda v: "✅ Enabled" if v else "🚫 Disabled"
+
+        def _yon(v):
+            return "✅ Enabled" if v else "🚫 Disabled"
+
         print("\nCurrent Settings:")
         print(f" 1. Version Engine:        {_yon(VERSION_ENGINE_ENABLED)}")
         print(
@@ -1674,7 +1820,10 @@ def configure_version_tracking():
 
     while True:
         global VERSION_TRACK_ALL_FILES
-        _yon = lambda v: "✅ Enabled" if v else "🚫 Disabled"
+
+        def _yon(v):
+            return "✅ Enabled" if v else "🚫 Disabled"
+
         print("\n1. Tracked files            (VERSION_TRACK_FILES)")
         print("2. Tracked directories       (VERSION_TRACK_DIRECTORIES)")
         print("3. Tracking roots            (VERSION_TRACK_ROOTS)")
@@ -1900,11 +2049,11 @@ def configure_hls_settings():
     print("=" * 50)
 
     while True:
-        print(f"\nCurrent Settings:")
+        print("\nCurrent Settings:")
         print(f"1. Min size for HLS:    {format_bytes(HLS_MIN_SIZE)}")
-        print(f"   (web-native files smaller than this play raw instead)")
+        print("   (web-native files smaller than this play raw instead)")
         print(f"2. Always-HLS formats:  {', '.join(sorted(HLS_FORCE_FORMATS))}")
-        print(f"   (these always get HLS regardless of size)")
+        print("   (these always get HLS regardless of size)")
         print("3. Save & Exit")
         print("4. Exit Without Saving")
         print()
@@ -2046,13 +2195,13 @@ def configure_image_settings():
             if IMG_COMPRESS_MIN_SIZE
             else "Always compress"
         )
-        print(f"\nCurrent Settings:")
+        print("\nCurrent Settings:")
         print(f"1. Compress threshold: {thresh}")
-        print(f"   (native images above this size are compressed to lossy WebP)")
+        print("   (native images above this size are compressed to lossy WebP)")
         print(
             f"2. Lossy WebP quality: {IMG_WEBP_QUALITY}  (1–100, lower = smaller file)"
         )
-        print(f"   (non-native formats always convert to lossless WebP regardless)")
+        print("   (non-native formats always convert to lossless WebP regardless)")
         print("3. Save & Exit")
         print("4. Exit Without Saving")
         print()
@@ -2191,30 +2340,36 @@ def view_current_settings():
     print("\n📋 Current Configuration")
     print("=" * 50)
 
-    print(f"\n🗂️ Storage Settings:")
+    print("\n🗂️ Storage Settings:")
     print(f"   Files  (ROOT_DIR)   : {ROOT_DIR}")
     print(f"   Database (DB_DIR)   : {get_db_dir()}")
     print(f"   Cache (CACHE_DIR)   : {get_cache_dir()}")
     print(f"   HLS Cache           : {get_hls_cache_dir()}")
     print(f"   Image Cache         : {get_img_cache_dir()}")
 
-    print(f"\n🔧 Server Settings:")
+    print("\n🔧 Server Settings:")
     print(f"   Port: {PORT}")
     print(f"   Host: {HOST}")
     print(f"   Chunk Size: {format_bytes(CHUNK_SIZE)}")
     print(f"   Chunked Uploads: {'Enabled' if ENABLE_CHUNKED_UPLOADS else 'Disabled'}")
+    print(
+        f"   Upload body timeout: {f'{BODY_TIMEOUT} s' if BODY_TIMEOUT else 'no limit'}"
+    )
+    print(f"   Upload timing log: {'On' if UPLOAD_TIMING_ENABLED else 'Off'}")
+    print(f"   Upload chunks in RAM: {'On' if UPLOAD_CHUNKS_IN_MEMORY else 'Off'}")
+    print(f"   Download read size: {format_bytes(DOWNLOAD_BUFFER_SIZE)}")
     print(f"   Max File Size: {format_bytes(MAX_CONTENT_LENGTH)}")
     print(f"   Session Timeout: {PERMANENT_SESSION_LIFETIME//60} minutes")
-    print(f"   Session Secret: Managed in db/session.secret")
+    print("   Session Secret: Managed in db/session.secret")
 
-    print(f"\n🎬 HLS / Video Settings:")
+    print("\n🎬 HLS / Video Settings:")
     print(f"   ffmpeg (HLS):       {'✅ Enabled' if ENABLE_FFMPEG else '🚫 Disabled'}")
     print(
         f"   Min size for HLS: {format_bytes(HLS_MIN_SIZE) if HLS_MIN_SIZE else 'Always HLS'}"
     )
     print(f"   Always-HLS formats: {', '.join(sorted(HLS_FORCE_FORMATS))}")
 
-    print(f"\n🖼️  Image Settings:")
+    print("\n🖼️  Image Settings:")
     print(f"   libvips (convert):  {'✅ Enabled' if ENABLE_LIBVIPS else '🚫 Disabled'}")
     print(
         f"   Compress threshold: {format_bytes(IMG_COMPRESS_MIN_SIZE) if IMG_COMPRESS_MIN_SIZE else 'Always compress'}"
@@ -2222,8 +2377,11 @@ def view_current_settings():
     print(f"   Lossy WebP quality: {IMG_WEBP_QUALITY}  (1–100, lower = smaller file)")
     print(f"   Image Cache         : {get_img_cache_dir()}")
 
-    print(f"\n🌐 Protocol Servers:")
-    _yon = lambda v: "✅ Enabled" if v else "🚫 Disabled"
+    print("\n🌐 Protocol Servers:")
+
+    def _yon(v):
+        return "✅ Enabled" if v else "🚫 Disabled"
+
     print(
         f"   WebDAV : {_yon(WEBDAV_ENABLED)}  →  http://HOST:{WEBDAV_PORT}/"
         + ("  ⚠️  plaintext" if WEBDAV_ENABLED else "")
@@ -2244,10 +2402,13 @@ def view_current_settings():
         f"   SMB    : {_yon(SMB_ENABLED)}  →  \\\\HOST\\{SMB_SHARE_NAME}  (port {SMB_PORT}, fallback {SMB_FALLBACK_PORT})"
     )
 
-    print(f"\n🕓 Version History:")
+    print("\n🕓 Version History:")
     print(f"   Version Engine:     {_yon(VERSION_ENGINE_ENABLED)}")
     try:
-        import version_engine as _ve
+        # A lookup at call time, not an import statement: version_engine.py imports THIS module
+        # at its top, and a static import here closed the cycle CodeQL alert #612 reports. By now
+        # this module is fully loaded, so nothing depends on the order of the two imports.
+        _ve = importlib.import_module("version_engine")
 
         st = _ve.status()
         pid_str = st.get("pid") or "—"
@@ -2294,20 +2455,23 @@ def configure_protocol_settings():
     print("=" * 50)
 
     while True:
-        _yon = lambda v: "✅ Enabled" if v else "🚫 Disabled"
-        print(f"\nCurrent Settings:")
+
+        def _yon(v):
+            return "✅ Enabled" if v else "🚫 Disabled"
+
+        print("\nCurrent Settings:")
         print(f"1. WebDAV  : {_yon(WEBDAV_ENABLED)}   Port: {WEBDAV_PORT}")
         print(
-            f"   → native drive mapping on Windows / macOS / Linux  ⚠️  plaintext Basic Auth"
+            "   → native drive mapping on Windows / macOS / Linux  ⚠️  plaintext Basic Auth"
         )
         print(
             f"   → HTTPS runs separately on port {WEBDAV_HTTPS_PORT} ({_yon(WEBDAV_HTTPS_ENABLED)}) — that's the one to use"
         )
         print(f"2. SFTP    : {_yon(SFTP_ENABLED)}   Port: {SFTP_PORT}")
-        print(f"   → WinSCP, FileZilla, sshfs")
+        print("   → WinSCP, FileZilla, sshfs")
         print(f"3. FTP     : {_yon(FTP_ENABLED)}   Port: {FTP_PORT}")
         print(
-            f"   → legacy FTP clients  "
+            "   → legacy FTP clients  "
             + (
                 f"🔒 FTPS enabled ({'TLS on data+control' if FTP_TLS_REQUIRE_DATA else 'TLS on control only'})"
                 if FTP_TLS_ENABLED
@@ -2318,8 +2482,8 @@ def configure_protocol_settings():
             f"4. SMB     : {_yon(SMB_ENABLED)}   Port: {SMB_PORT} (fallback {SMB_FALLBACK_PORT})"
         )
         print(f"   → native network drive, share name: {SMB_SHARE_NAME}")
-        print(f"5. Save & Exit")
-        print(f"6. Exit Without Saving")
+        print("5. Save & Exit")
+        print("6. Exit Without Saving")
 
         choice = input("\nSelect option (1-6): ").strip()
 
@@ -2347,13 +2511,16 @@ def _configure_ftp():
     global FTP_ENABLED, FTP_PORT, FTP_TLS_ENABLED, FTP_TLS_REQUIRE_DATA
 
     while True:
-        _yon = lambda v: "✅ Enabled" if v else "🚫 Disabled"
+
+        def _yon(v):
+            return "✅ Enabled" if v else "🚫 Disabled"
+
         print(f"\nFTP — currently {_yon(FTP_ENABLED)}  (port {FTP_PORT})")
         print(f"1. Enable / Disable         (currently {_yon(FTP_ENABLED)})")
         print(f"2. Change port              (currently {FTP_PORT})")
         print(f"3. FTPS (TLS)               (currently {_yon(FTP_TLS_ENABLED)})")
         print(f"4. Require TLS on data too  (currently {_yon(FTP_TLS_REQUIRE_DATA)})")
-        print(f"5. Back")
+        print("5. Back")
         print()
         print("💡 FTPS reuses the same cert as WebDAV HTTPS (db/webdav.crt) — ")
         print(
@@ -2392,18 +2559,21 @@ def _configure_smb():
     global SMB_ENABLED, SMB_PORT, SMB_FALLBACK_PORT, SMB_SHARE_NAME
 
     while True:
-        _yon = lambda v: "✅ Enabled" if v else "🚫 Disabled"
+
+        def _yon(v):
+            return "✅ Enabled" if v else "🚫 Disabled"
+
         print(f"\nSMB — currently {_yon(SMB_ENABLED)}")
         print(f"1. Enable / Disable    (currently {_yon(SMB_ENABLED)})")
         print(f"2. Preferred port       (currently {SMB_PORT})")
         print(f"3. Fallback port        (currently {SMB_FALLBACK_PORT})")
         print(f"4. Share name           (currently {SMB_SHARE_NAME!r})")
-        print(f"5. Back")
+        print("5. Back")
         print()
         print(
             f"💡 Port {SMB_PORT} needs a one-time machine setup before it'll actually"
         )
-        print(f"   bind — run `python tools/smb_setup.py` or `./manage.sh setup-smb`.")
+        print("   bind — run `python tools/smb_setup.py` or `./manage.sh setup-smb`.")
         print(
             f"   Until then, SMB automatically falls back to port {SMB_FALLBACK_PORT}."
         )

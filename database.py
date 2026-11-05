@@ -55,6 +55,8 @@ _DB_DIR = get_db_dir(create=False)
 DB_PATH = os.path.join(_DB_DIR, "cloudinator.db")
 _KEY_PATH = os.path.join(_DB_DIR, "secret.key")
 _SECRET_PATH = os.path.join(_DB_DIR, "session.secret")
+# Users whose NT hash could not be decrypted and who were already reported (5.43).
+_SMB_SKIP_LOGGED: set = set()
 
 _write_lock = threading.Lock()
 
@@ -463,7 +465,7 @@ class _Database:
         if updated:
             print(f"🔐 Password updated: {username}")
             if _SMB_AVAILABLE:
-                print(f"   ✅ SMB credential updated too — takes effect within ~30s")
+                print("   ✅ SMB credential updated too — takes effect within ~30s")
         return updated
 
     def update_role(self, username: str, role: str) -> bool:
@@ -502,8 +504,16 @@ class _Database:
         for r in rows:
             try:
                 out.append((r["username"], _decrypt(r["nt_hash"])))
-            except Exception:
-                continue  # corrupt/undecryptable entry — skip rather than crash SMB startup
+            except Exception as e:
+                # Corrupt/undecryptable entry: skip it rather than crash SMB startup, but say so
+                # once per user (this runs on every credential refresh), without the hash.
+                if r["username"] not in _SMB_SKIP_LOGGED:
+                    _SMB_SKIP_LOGGED.add(r["username"])
+                    print(
+                        f"⚠️  SMB: skipping user '{r['username']}', the stored NT hash cannot be "
+                        f"decrypted ({type(e).__name__}); resetting the password stores a new one"
+                    )
+                continue
         return out
 
     def users_missing_nt_hash(self) -> list[str]:
@@ -621,8 +631,9 @@ class _Database:
             return False
         params.append(token)
         with _write_lock, _connect() as conn:
+            # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
             cur = conn.execute(
-                f"UPDATE share_links SET {', '.join(sets)} WHERE token=? AND revoked=0",
+                f"UPDATE share_links SET {', '.join(sets)} WHERE token=? AND revoked=0",  # noqa: S608
                 params,
             )
         return cur.rowcount > 0
@@ -660,8 +671,9 @@ class _Database:
             return {}
         placeholders = ",".join("?" for _ in norm_paths)
         with _connect() as conn:
+            # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
             rows = conn.execute(
-                f"SELECT * FROM share_links WHERE revoked=0 AND file_path IN ({placeholders})",
+                f"SELECT * FROM share_links WHERE revoked=0 AND file_path IN ({placeholders})",  # noqa: S608
                 norm_paths,
             ).fetchall()
         return {r["file_path"]: dict(r) for r in rows}
@@ -692,8 +704,9 @@ class _Database:
             return 0
         placeholders = ",".join("?" for _ in norm_paths)
         with _write_lock, _connect() as conn:
+            # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
             cur = conn.execute(
-                f"UPDATE share_links SET revoked=1, revoked_at=unixepoch() "
+                f"UPDATE share_links SET revoked=1, revoked_at=unixepoch() "  # noqa: S608
                 f"WHERE revoked=0 AND file_path IN ({placeholders})",
                 norm_paths,
             )

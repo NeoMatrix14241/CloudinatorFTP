@@ -48,7 +48,8 @@ class FakeSession(dict):
 
 
 class FakeDb:
-    def __init__(self, token="t1", roles=None, revoked=()):
+    # S107: a fake database's server-token default, not a credential.
+    def __init__(self, token="t1", roles=None, revoked=()):  # noqa: S107
         self.token = token
         self.roles = {"alice": "readwrite"} if roles is None else roles
         self.revoked = set(revoked)

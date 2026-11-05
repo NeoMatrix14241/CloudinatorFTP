@@ -245,7 +245,9 @@ def test_an_anonymous_login_is_refused_and_cannot_read_the_share(smb):
     with pytest.raises(SessionError) as err:
         anonymous.login("", "")
     assert status_of(err) == LOGON_FAILURE
-    with pytest.raises(Exception):
+    # B017: which exception impacket raises for a call without a session is its own business; what
+    # matters is that the call does not return the share.
+    with pytest.raises(Exception):  # noqa: B017
         anonymous.listShares()  # no session: nothing is served
 
 

@@ -45,3 +45,84 @@ sigterm = true
 [tool.coverage.report]
 skip_empty = true
 exclude_also = ["if __name__ == .__main__.:", "raise NotImplementedError"]
+
+# Ruff (CLAUDE.md 5.40). REPORT-ONLY for now: the "Ruff (report only)" workflow runs it with
+# --exit-zero and prints the findings as annotations; nothing fails. Once the findings have been
+# triaged (fixed, or ignored below WITH a reason) it becomes a required check inside `smoke + check`.
+# The version is pinned in requirements-dev.txt (a new Ruff release adds rules and must not turn a
+# green build red). Formatting stays with Black; Ruff only lints, so E501 (line length) is off.
+# Run it locally:  python -m ruff check .
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+extend-exclude = [
+    "static",
+    "templates",
+    "docs",
+    "data",
+    "artifacts",
+    ".hypothesis",
+]
+
+[tool.ruff.lint]
+# E/F = pycodestyle errors + pyflakes, B = bugbear (likely bugs), S = bandit (security).
+select = ["E", "F", "B", "S"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Stand-alone scripts put the project root on sys.path first, so their imports follow code.
+"dev_server.py" = ["E402"]
+"prod_server.py" = ["E402", "S110"]  # S110: see the 5.43 third-part note below
+"tools/**" = ["E402"]
+# 5.43 triage, first part (the 226 findings of the 5.42 run; only what was READ is ignored here,
+# the rest stays reported until its code has been looked at):
+# core.py puts each import next to the section that uses it (40 E402; `sys.stdout.reconfigure()`
+# runs before the later imports). Moving them is an import-order refactor of the module every other
+# one imports, which is not worth the risk for a style rule.
+"core.py" = ["E402"]
+# config.py: HOST defaults to "0.0.0.0" (listen on all interfaces) on purpose: a file server that
+# is reached through a tunnel or from the LAN; the menu offers 127.0.0.1 as the alternative (2 S104).
+"config.py" = ["S104"]
+# 5.43 triage, second part: `except Exception: pass` (S110). CLAUDE.md part 47 (4.97) settled how the
+# application handles these: the block stays and a comment says what is being skipped and why.
+# All 26 in the five files below were READ and every one has that comment (best-effort audit
+# logging, a closed pipe, a PID file, a keep-warm query, shutdown clean-up). The other files with
+# an S110 are NOT listed until they have been read. Tests are different (CODING_GUIDELINES.md 18.1:
+# `contextlib.suppress`, never an empty except) and stay checked.
+"file_monitor.py" = ["S110"]
+"protocol_manager.py" = ["S110"]
+"search_index.py" = ["S110"]
+"smb_server.py" = ["S110"]
+"version_engine.py" = ["S110"]
+# 5.43 triage, third part: the same convention in six more files with two or more S110 each
+# (prod_server.py is listed at the top with its E402, since a key can appear only once). Every
+# one of these 19 was READ and carries a comment that says what is skipped (a closed stdout pipe,
+# an offline address probe, a force-quit step, a count that only feeds a hint, an already-closed
+# socket, a best-effort audit line). The four files with a single S110 (ftp_server.py,
+# logging_setup.py, paths.py, routes/files.py) use a per-line `# noqa: S110` instead.
+"helpers/parent_watch.py" = ["S110"]
+"helpers/ssl_cert.py" = ["S110"]
+"routes/previews.py" = ["S110"]
+"sftp_server.py" = ["S110"]
+"webdav_server.py" = ["S110"]
+# routes/hls.py: five subprocess calls (ffprobe, ffmpeg) with a list argv and no shell; the only
+# item that comes from a request is the video path, which `storage.is_safe_path()` checked and
+# `os.path.join(ROOT_DIR, ...)` made absolute, so it cannot start with "-" (S603).
+"routes/hls.py" = ["S603"]
+# Tests assert (S101), use throw-away passwords and /tmp-style paths on purpose, read source files
+# with `ast` and run them with exec (S102: the point of the unit tests, see CODING_GUIDELINES.md
+# 18.1), talk to the scratch server on 127.0.0.1 with urllib (S310) and test FTP itself (S321).
+"tests/**" = [
+    "S101",
+    "S102",
+    "S105",
+    "S106",
+    "S108",
+    "S310",
+    "S311",
+    "S321",
+    "S603",
+    "S607",
+    "B905",
+    "E402",
+]

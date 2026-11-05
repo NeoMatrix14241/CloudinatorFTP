@@ -407,7 +407,7 @@ def _dir_size(path, cap_entries=20000):
     shared folder can't hang the landing page on every load."""
     total = 0
     count = 0
-    for root, dirs, files in os.walk(path):
+    for root, _dirs, files in os.walk(path):
         for f in files:
             try:
                 total += os.path.getsize(os.path.join(root, f))

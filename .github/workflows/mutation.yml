@@ -1,0 +1,60 @@
+# Mutation trial for CloudinatorFTP (CLAUDE.md 5.40): MANUAL only (Actions > Mutation trial > Run
+# workflow). It makes one small deliberate mistake at a time in the chosen functions and reports the
+# mistakes that the chosen tests did NOT catch (see tests/mutation_trial.py). It never runs on a
+# schedule or a pull request and is not a check: a survivor is a hint for a missing test, not a
+# failure. Standard library plus pytest/hypothesis, so Linux is enough.
+# (mutmut was tried first and does not work here: its trampolines cannot be read by the unit tests
+# that take their functions out of the source files with `ast`.)
+name: Mutation trial
+
+on:
+    workflow_dispatch:
+        inputs:
+            file:
+                description: "Source file to mutate (relative to the project root)"
+                default: "storage.py"
+            functions:
+                description: "Comma-separated function names in that file"
+                default: "is_safe_chunk_id,is_safe_path,assemble_chunks"
+            tests:
+                description: "Space-separated pytest paths that cover them"
+                default: "tests/property tests/unit/test_assemble_atomic.py"
+
+permissions:
+    contents: read
+
+jobs:
+    trial:
+        name: mutation trial
+        runs-on: ubuntu-latest
+        timeout-minutes: 120
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v7
+
+            - name: Set up Python
+              uses: actions/setup-python@v7
+              with:
+                  python-version: "3.14.7"
+
+            - name: Install test dependencies
+              run: python -m pip install --upgrade pip -r requirements-dev.txt
+
+            # The inputs go through environment variables, never straight into the script text.
+            - name: Run the trial
+              env:
+                  TARGET_FILE: ${{ inputs.file }}
+                  TARGET_FUNCTIONS: ${{ inputs.functions }}
+                  TARGET_TESTS: ${{ inputs.tests }}
+              run: |
+                  # shellcheck disable=SC2086  # the test paths are meant to be split on spaces
+                  python tests/mutation_trial.py "$TARGET_FILE" --functions "$TARGET_FUNCTIONS" --tests $TARGET_TESTS --timeout 180 | tee mutation-report.txt
+                  { echo '### Mutation trial'; echo '```'; tail -n 40 mutation-report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+            - name: Upload report
+              if: always()
+              uses: actions/upload-artifact@v7
+              with:
+                  name: mutation-report
+                  path: mutation-report.txt
+                  if-no-files-found: ignore

@@ -34,7 +34,9 @@ def run_ps(cmd: str) -> str:
     # process termination, passing the true error back to Python instead of hiding it.
     hardened_cmd = f"$ErrorActionPreference = 'Stop'; {cmd}"
 
-    result = subprocess.run(
+    # S603: a fixed PowerShell command line; `cmd` comes from this project's own callers
+    # (get_lanman_state here, tools/smb_setup.py), never from a request.
+    result = subprocess.run(  # noqa: S603
         [
             ps_exe,
             "-NoProfile",
@@ -95,7 +97,8 @@ def can_bind_445() -> bool:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        s.bind(("0.0.0.0", 445))
+        # S104: the probe must test the address the SMB server really binds (CLAUDE.md parts 46, 88).
+        s.bind(("0.0.0.0", 445))  # noqa: S104
         return True
     except OSError:
         return False

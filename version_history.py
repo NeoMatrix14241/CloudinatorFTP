@@ -120,14 +120,14 @@ def _fail_message(prefix: str, exc: Exception) -> str:
 
 try:
     ROOT_DIR = config.ROOT_DIR
-except AttributeError:
+except AttributeError as e:
     # Should not happen in this codebase (app.py imports ROOT_DIR from
     # config the same way) — fail loudly rather than silently operating
     # against the wrong root if config.py's shape ever changes.
     raise RuntimeError(
         "version_history.py requires config.ROOT_DIR — check config.py's shape "
         "hasn't changed since this module was written (2026-09-26)."
-    )
+    ) from e
 
 RECOVERED_DIRNAME = getattr(config, "VERSION_RECOVERED_DIRNAME", ".recovered")
 RECOVERED_ROOT = os.path.join(ROOT_DIR, RECOVERED_DIRNAME)

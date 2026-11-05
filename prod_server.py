@@ -37,10 +37,34 @@ LAN-only clients that aren't on the tailnet — see helpers/ssl_cert.py directly
 """
 
 import os
+import subprocess
 import sys
+import signal
+import sysconfig
+
+# ---------------------------------------------------------------------------
+# Free-threaded (3.14t) build: relaunch with the GIL forced off.
+# aioquic is pure Python now, but pylsqpack (HTTP/3 QPACK) is still a C
+# extension that doesn't declare itself GIL-safe, so importing it would
+# silently turn the GIL back on for the whole process. PYTHON_GIL is only
+# read at interpreter startup, so the only in-code option is re-running
+# ourselves with it set. This MUST stay above every project import (the
+# logging_setup import would otherwise open the daily log file in this
+# throwaway parent too). Skipped entirely on a normal GIL build, and when
+# the launcher (manage.sh) already exports PYTHON_GIL=0.
+# ---------------------------------------------------------------------------
+if sysconfig.get_config_var("Py_GIL_DISABLED") and os.environ.get("PYTHON_GIL") != "0":
+    signal.signal(signal.SIGINT, signal.SIG_IGN)  # child handles Ctrl+C
+    # S603: re-runs this very script with the interpreter that runs it; nothing comes from a request.
+    sys.exit(
+        subprocess.call(  # noqa: S603
+            [sys.executable, *sys.argv],
+            env={**os.environ, "PYTHON_GIL": "0", "PYTHONUNBUFFERED": "1"},
+        )
+    )
+
 import json
 import shutil
-import signal
 import asyncio
 import logging
 import logging_setup
@@ -393,6 +417,15 @@ async def _run():
     print(
         "   • SSE streaming: enabled  |  Workers: 1 (see comments in this file for why)"
     )
+    # GIL status — checked here, after every import, because a C extension
+    # loaded later can silently switch the GIL back on.
+    if sysconfig.get_config_var("Py_GIL_DISABLED"):
+        if sys._is_gil_enabled():
+            print("   • GIL: ON ⚠️  free-threaded build, but a module re-enabled it")
+        else:
+            print("   • GIL: OFF (free-threaded)")
+    else:
+        print("   • GIL: ON (standard build)")
     if not _BG:
         print("📁 Press Ctrl+C to stop  (Ctrl+C twice to force quit)")
     print()

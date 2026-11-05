@@ -11,6 +11,11 @@ on:
     schedule:
         - cron: "41 3 * * 1"
     workflow_dispatch:
+        inputs:
+            fail_under:
+                description: "Optional floor: fail when the total coverage is below this percent (empty = report only)"
+                required: false
+                default: ""
 
 permissions:
     contents: read
@@ -35,8 +40,20 @@ jobs:
             - name: Install dependencies
               run: python -m pip install --upgrade pip pyflakes -r requirements.txt -r requirements-dev.txt "coverage>=7.10"
 
+            # 5.40: `qa.py coverage` has understood --fail-under since 5.34. The floor is NOT set yet
+            # (it needs the Linux total from a first run of this workflow). To try one without editing
+            # this file: Run workflow with fail_under, e.g. 60. Once a value is agreed, put it in the
+            # FAIL_UNDER line below. The input goes through an environment variable, never straight
+            # into the script text.
             - name: Tests under coverage (all layers)
-              run: python tests/qa.py coverage --out artifacts
+              env:
+                  FAIL_UNDER: ${{ inputs.fail_under }}
+              run: |
+                  if [ -n "$FAIL_UNDER" ]; then
+                    python tests/qa.py coverage --out artifacts --fail-under "$FAIL_UNDER"
+                  else
+                    python tests/qa.py coverage --out artifacts
+                  fi
 
             - name: Summary
               if: always()

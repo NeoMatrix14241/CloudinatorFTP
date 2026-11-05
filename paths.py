@@ -42,7 +42,7 @@ def _load() -> dict:
         if os.path.exists(_CONFIG_FILE):
             with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-    except Exception:
+    except Exception:  # noqa: S110
         # Unreadable or corrupt storage_config.json: fall back to the defaults.
         pass
     return {}

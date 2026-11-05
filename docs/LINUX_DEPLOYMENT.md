@@ -12,13 +12,15 @@ A comprehensive guide to deploy CloudinatorFTP on Linux systems, enabling lightw
 6. [Configuration](#configuration)
 7. [User Management](#user-management)
 8. [Launch Server](#launch-server)
-9. [Server Management Script (manage.sh)](#-server-management-script-managesh)
+9. [Server Management Script (manage.sh)](#️-server-management-script-managesh)
 10. [Updating Python Dependencies](#-updating-python-dependencies)
 11. [Systemd Service Setup](#systemd-service-setup)
-12. [Protocol Servers — WebDAV, SFTP, FTP, SMB](#protocol-servers--webdav-sftp-ftp)
+12. [Protocol Servers — WebDAV, SFTP, FTP, SMB](#protocol-servers--webdav-sftp-ftp-smb)
 13. [Network Exposure](#network-exposure)
-14. [Storage Configuration](#storage-configuration)
+14. [Storage Configuration](#storage-configuration-details)
 15. [Troubleshooting](#troubleshooting)
+16. [Performance Optimization](#performance-optimization)
+17. [Monitoring](#monitoring)
 
 ---
 
@@ -26,6 +28,7 @@ A comprehensive guide to deploy CloudinatorFTP on Linux systems, enabling lightw
 
 - **Linux Distribution**: Ubuntu 20.04+, Debian 11+, Fedora, CentOS, Arch, or similar
 - **Root or Sudo Access**: Required for system package installation
+- **Python 3.14.3+**, pip, git, libvips, and ffmpeg (optional)
 - **Internet Connection**
 - **Basic Command-Line Knowledge**
 
@@ -49,7 +52,7 @@ A comprehensive guide to deploy CloudinatorFTP on Linux systems, enabling lightw
 | **CPU** | 2 Cores | 4+ Cores |
 | **RAM** | 512 MB | 2 GB + |
 | **Storage** | 1 GB | 10 GB + |
-| **Python** | 3.10 | 3.10+ |
+| **Python** | 3.14.3 | 3.14.3+ |
 
 ### Disk Space Requirements
 
@@ -61,6 +64,19 @@ A comprehensive guide to deploy CloudinatorFTP on Linux systems, enabling lightw
 ---
 
 ## Dependency Installation
+
+### Tools and Versions
+
+| Tool | Version | Required? |
+|------|---------|-----------|
+| [Python](https://www.python.org/downloads/) | 3.14.3+ | ✅ Required |
+| [Git](https://git-scm.com/) | Latest version/build | ✅ Required |
+| [libvips](https://www.libvips.org/) | v8.18.1 (the version listed in the README; distro packages may be older) | ✅ Required |
+| [FFmpeg](https://www.ffmpeg.org/) | Your distro's package | Optional — adaptive bitrate video preview with [Video.js](https://videojs.org/) |
+| [Node.js](https://nodejs.org/en) | v24.22.0 LTS | Optional — only used by `./manage.sh qa` to syntax-check the JavaScript |
+| [cloudflared](https://github.com/cloudflare/cloudflared/releases) | Latest | Optional — exposing the server to the internet |
+
+The web UI also uses [Video.js](https://videojs.org/) v10, [PDF.js](https://mozilla.github.io/pdf.js/) v3.11.174 and [Font Awesome](https://fontawesome.com/) v7.2.0 — there is nothing to install for these.
 
 ### Step 1: Update System Packages
 
@@ -94,6 +110,10 @@ sudo yum install -y python3-pip python3-devel git gcc libvips-devel libvips ffmp
 sudo pacman -S python-pip git base-devel libvips ffmpeg --noconfirm
 ```
 
+> **Python 3.14.3+ is required.** Many distributions ship an older Python in their default repositories. If `python3 --version` reports something older, install 3.14.3+ from [python.org](https://www.python.org/downloads/) or with a version manager such as `pyenv` or `uv`, and use that interpreter to create the virtual environment below.
+>
+> **ffmpeg is optional** — it enables adaptive bitrate video preview with Video.js.
+
 ### Step 3: Upgrade pip
 
 ```bash
@@ -125,6 +145,14 @@ sudo dnf install cloudflared
 yay -S cloudflared
 ```
 
+### Step 4b: Install Node.js (Optional)
+
+Only needed if you modify the code and run the QA checks: `./manage.sh qa` runs `node --check` on the JavaScript when Node.js is installed. Install the **v24 LTS** release from [nodejs.org](https://nodejs.org/en) (or your package manager / a version manager) and verify:
+
+```bash
+node --version
+```
+
 ---
 
 ## Project Setup
@@ -154,16 +182,18 @@ cd CloudinatorFTP
 #### Create Virtual Environment
 
 ```bash
-python3 -m venv venv
+python3 -m venv .venv
 ```
 
 #### Activate Virtual Environment
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
-> **Note**: You'll see `(venv)` in your terminal prompt when activated.
+> **Note**: You'll see `(.venv)` in your terminal prompt when activated.
+
+> **Note**: The activation script must be **sourced** (`source ...`). Running `.venv/bin/activate` on its own starts a subshell and activates nothing. `bash setup_pymodules.sh` (or `./manage.sh update-modules`) creates and activates `.venv` for you when you answer `y`.
 
 #### Deactivate (When Done)
 
@@ -179,15 +209,18 @@ deactivate
 
 ```bash
 # Ensure virtual environment is activated
-source venv/bin/activate
+source .venv/bin/activate
 
-# Install requirements
+# Main requirements
 pip install -r requirements.txt
+
+# Dev only (optional) - if you will modify the code and run the tests
+pip install -r requirements-dev.txt
 ```
 
-### Step 7.1b: Install Protocol Server Dependencies
+### Step 7.1b: Install Protocol Server Dependencies (Optional)
 
-The WebDAV, SFTP, FTP, and SMB servers require additional libraries:
+The WebDAV, SFTP, FTP, and SMB servers use the libraries below. Most are already pulled in by `requirements.txt`; if a protocol server reports a missing package at startup, install it with:
 
 ```bash
 pip install wsgidav cheroot paramiko pyftpdlib impacket
@@ -195,13 +228,13 @@ pip install wsgidav cheroot paramiko pyftpdlib impacket
 
 | Package | Protocol | Purpose |
 |---------|----------|---------|
-| `wsgidav` | WebDAV | WebDAV WSGI server |
+| `wsgidav` | WebDAV | WebDAV WSGI server (HTTPS on port 8443 by default) |
 | `cheroot` | WebDAV HTTPS | WSGI server with TLS support |
-| `paramiko` | SFTP | SSH/SFTP implementation |
-| `pyftpdlib` | FTP | FTP server |
+| `paramiko` | SFTP | SSH/SFTP implementation (port 2222) |
+| `pyftpdlib` | FTP | FTP server (port 2121) |
 | `impacket` | SMB | SMB server (the only pure-Python option that exists) |
 
-> **Note**: Each is optional — if missing, that server skips with a warning. The main web UI is unaffected.
+> **Note**: Each is optional — if missing, only that protocol server is skipped, with a warning. The web UI always starts regardless.
 
 ### Step 7.2: Configure Storage Location
 
@@ -220,6 +253,7 @@ Follow the interactive prompts to configure:
 |-----------|------|-----|
 | **Files** | `~/CloudflareFTP` | Easy access, user-owned |
 | **Files** | `~/Documents/CloudflareFTP` | Organized, backed up |
+| **Files** | `~/Downloads/CloudflareFTP` | Share downloads |
 | **Database** | `/var/lib/cloudinator/db` | Out of web root, secure |
 | **Cache** | `/var/cache/cloudinator` | Temporary data, auto-cleanup |
 
@@ -237,18 +271,62 @@ Cache:     /var/cache/cloudinator
 python config.py
 ```
 
+Every setting is explained in the [Configuration Reference](./CONFIG_PY_REFERENCE.md).
+
 Customize:
 - Server port (default: 5000)
 - Chunk size (default: 10 MB)
-- Session lifetime (default: 1 hour)
+- Session lifetime (default: 365 days)
 - HLS/compression settings
 - **Protocol server ports and enable/disable** (option 13)
+
+#### Default Settings
+
+These are the built-in defaults in `config.py`. Values saved in `server_config.json` (written by `python config.py`) override them. See the [Configuration Reference](./CONFIG_PY_REFERENCE.md) for every setting.
+
+- **Port**: 5000 (configurable in `config.py`)
+- **Host**: 0.0.0.0 (listens on all interfaces)
+- **Chunk Size**: 10MB (`10485760` bytes, for large file uploads)
+- **Chunked Uploads**: Enabled
+- **Max Content Length**: 16GB (`17179869184` bytes)
+- **Session Lifetime**: 365 days (`31536000` seconds)
+- **HLS Minimum Size**: 50MB (`52428800` bytes)
+- **HLS Forced Formats**: 3gp, avi, flv, m2ts, mkv, mpeg, mpg, mts, ogv, wmv
+- **Image Compression Threshold**: 1.0 MB (`1048576` bytes)
+- **Lossy WebP Quality**: 50
+- **WebDAV HTTPS Port**: 8443 (enabled by default)
+- **WebDAV HTTP Port**: 8080 (off by default; only used if HTTPS is disabled or its certificate can't be prepared)
+- **SFTP Port**: 2222
+- **FTP Port**: 2121 (FTPS enabled by default)
+- **SMB Port**: 445, fallback 8445 (off by default; run `python tools/smb_setup.py` first)
+
+### Step 7.4: Update security.txt and robots.txt
+
+**Important if you expose the server through a tunnel; otherwise optional.**
+
+- `static/.well-known/security.txt` — use your own details (security contact, RFC 9116)
+- `static/robots.txt` — by default, everything is blocked politely
+
+You can create `security.txt` from the command line:
+
+```bash
+./manage.sh security-txt --contact you@example.com --expires 2030-09-03 --preferred-lang en,fil --canonical https://yourdomain.com/.well-known/security.txt
+```
+
+or from the interactive menu: `./manage.sh menu` → entry **18**.
 
 ---
 
 ## User Management
 
 ### Step 8: Setup Users
+
+#### User Roles
+
+- **`readwrite`**: Can upload, download, create folders, delete files
+- **`readonly`**: Can only download files and browse folders
+
+Both roles apply equally to the web UI, WebDAV, SFTP, and FTP.
 
 #### Default Users
 
@@ -267,12 +345,14 @@ When initialized, the system creates:
 python tools/manage_users.py
 ```
 
-**Available Options:**
-1. List all users
-2. Add new user
-3. Change password
-4. Change role
-5. Delete user
+**Menu Options:**
+1. **List users** - List all users (flags accounts that still have a default password)
+2. **Add user** - Create additional user accounts
+3. **Change password** - Change an existing user's password
+4. **Change role** - Change an existing user's role
+5. **Delete user** - Remove user accounts
+6. **Remove default users** - Delete `admin` and `guest` if they still have their default passwords
+7. **Exit**
 
 #### Example: Create Admin User
 
@@ -286,12 +366,19 @@ python tools/manage_users.py
 
 #### Check a Login
 
-The old `debug_passwords.py` tester was removed in 4.80. List the users or change a password with:
+The old `debug_passwords.py` tester was removed in 4.80. If you're having login issues, list the users and change the password if needed:
 
 ```bash
 python tools/manage_users.py
 # 1. List users   3. Change password
 ```
+
+This tool helps:
+- See which accounts exist, their role and last login (and which still use a default password)
+- Set a new password for an account you are locked out of
+- Fix a wrong role, or remove the default accounts
+
+> After 5 failed logins a client is locked out for 5 minutes, so wait for the lockout to end before trying again.
 
 #### Revoke Access Quickly (Security Incident)
 
@@ -299,7 +386,7 @@ python tools/manage_users.py
 python tools/kick_sessions.py
 ```
 
-Interactive tool for "lock this person out now" situations — rotate a password, delete a user, or instantly log everyone out of the web UI. See [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md) for the per-protocol timing breakdown.
+Interactive tool for "lock this person out now" situations — rotate a password, delete a user, or instantly log everyone out of the web UI. If the web UI is stuck in a looping refresh, run `python tools/kick_sessions.py logout-web`. See [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md) for the per-protocol timing breakdown.
 
 ---
 
@@ -307,25 +394,26 @@ Interactive tool for "lock this person out now" situations — rotate a password
 
 ### Step 9: Start the Server
 
-#### Production Server (Recommended)
+> 💡 **Recommended:** Use [`manage.sh`](#️-server-management-script-managesh) to run servers in the background while keeping your terminal free for utilities.
+
+#### Production Server — Hypercorn ASGI (Recommended: HTTP/1.1, HTTP/2 and HTTP/3)
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 python prod_server.py
 ```
 
 Expected output:
 ```
 🧪 Starting CloudinatorFTP Production Server...
-🌐 Server running on http://localhost:5000
+🌐 Server running on https://localhost:5000
 ```
 
-When the protocol servers also start successfully, you'll additionally see:
+Protocol servers (WebDAV, SFTP, FTP) start **automatically** alongside the web server — no extra command needed. When they start successfully, you'll additionally see:
 ```
 ────────────────────────────────────────────────────────
   CloudinatorFTP — Protocol servers
 ────────────────────────────────────────────────────────
-🌐 WebDAV HTTP:  http://HOST:8080/
 🔐 WebDAV HTTPS: https://HOST:8443/
 🔒 SFTP:         sftp://HOST:2222/
 📁 FTP:          ftp://HOST:2121/
@@ -336,10 +424,12 @@ When the protocol servers also start successfully, you'll additionally see:
 ────────────────────────────────────────────────────────
 ```
 
-#### Development Server (Testing)
+> A `🌐 WebDAV HTTP: http://HOST:8080/` line only appears when plain-HTTP WebDAV is enabled (HTTPS disabled, or the automatic fallback when the HTTPS certificate can't be prepared).
+
+#### Development Server — Quart (Development/Testing, HTTP/1.1)
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 python dev_server.py
 ```
 
@@ -348,7 +438,10 @@ python dev_server.py
 #### Run in Background
 
 ```bash
-# Using nohup
+# Recommended: manage.sh (see below)
+./manage.sh start server
+
+# Or using nohup
 nohup python prod_server.py > server.log 2>&1 &
 
 # Or using screen
@@ -361,7 +454,7 @@ python prod_server.py
 
 ## 🖥️ Server Management Script (`manage.sh`)
 
-> 💡 **Recommended:** Use `manage.sh` instead of `nohup`/`screen` — it manages background servers, log files, and utilities from a single command.
+> 💡 **Recommended:** Use `manage.sh` instead of `nohup`/`screen` — it manages background servers, log files, and utilities from a single command. Full reference: **[MANAGE_SCRIPT_GUIDE.md](./MANAGE_SCRIPT_GUIDE.md)**.
 
 ### ⚡ Setup
 
@@ -373,32 +466,36 @@ chmod +x manage.sh
 
 ### 🚦 Server Commands
 
-> ⚠️ Only one server can run at a time. Starting a second shows a clear status block instead.
+> ⚠️ Only one server can run at a time. Attempting to start a second will show a clear status block and stop.
 
 | Command | Description |
 |---------|-------------|
-| `./manage.sh start server` | Start `prod_server.py` (Waitress) in the background |
-| `./manage.sh start dev_server` | Start `dev_server.py` (Flask) in the background |
-| `./manage.sh stop` | Gracefully stop the running server |
+| `./manage.sh start server` | Start `prod_server.py` (Hypercorn) in the background |
+| `./manage.sh start dev_server` | Start `dev_server.py` (Quart) in the background |
+| `./manage.sh stop` | Gracefully stop whichever server is running |
 | `./manage.sh restart` | Restart the currently active server |
+| `./manage.sh restart-webdav` | Restart only WebDAV (recovers a stuck WebDAV without touching the web UI) |
 | `./manage.sh status` | Show server status, PID, uptime, and recent log tail |
 
 ### 📋 Log Commands
 
-Logs are saved to `logs/` with datetime stamps — each server start creates a new file (e.g. `logs/prod_server_2026-06-09_10-32-01.log`).
+Logs are always saved to `logs/` regardless of whether you're watching them. Each server start creates a new datetime-stamped file (e.g. `logs/prod_server_2026-06-09_10-32-01.log`).
 
 | Command | Description |
 |---------|-------------|
 | `./manage.sh logs` | Last 50 lines (auto-detects active server) |
+| `./manage.sh logs server` | Last 50 lines of production logs |
 | `./manage.sh logs server -f` | Follow live production logs |
 | `./manage.sh logs dev_server -f` | Follow live dev logs |
-| `./manage.sh clean-logs` | Delete old log files (with confirmation) |
+| `./manage.sh clean-logs` | List and delete old log files (asks for confirmation) |
 
 > 💡 **Ctrl-C while following logs detaches your terminal without stopping the server.**
 
+> ℹ️ **Background mode hides startup banners.** `start` discards the server's console output, so messages the code `print()`s at startup (such as the WebDAV certificate hint) only show when you run `python prod_server.py` in the foreground. The log files in `logs/` contain everything that goes through the app's logger.
+
 ### 🔧 Utility Commands
 
-Run any of these **while a server is running in the same terminal**:
+Run any utility **while a server is running in the same terminal**:
 
 | Command | Equivalent |
 |---------|------------|
@@ -406,7 +503,34 @@ Run any of these **while a server is running in the same terminal**:
 | `./manage.sh manage-users` | `python tools/manage_users.py` |
 | `./manage.sh reset-db` | `python tools/reset_db.py` |
 | `./manage.sh setup-storage` | `python tools/setup_storage.py` |
-| `./manage.sh update-modules` | `bash update_pymodules.sh` |
+| `./manage.sh version-manage` | `python tools/version_manage.py` (Version Engine: list, restore, delete file versions) |
+| `./manage.sh setup-smb` | `python tools/smb_setup.py` (one-time SMB setup) |
+| `./manage.sh kick-sessions` | `python tools/kick_sessions.py` (force logout of every session; the server must be running) |
+| `./manage.sh revoke-shares` | `python tools/revoke_sharing.py` (share link management) |
+| `./manage.sh security-txt` | Update `static/.well-known/security.txt` (RFC 9116) |
+| `./manage.sh validate-sri [--fix]` | `python tools/sri_validator.py` (check or repair the Subresource Integrity hashes) |
+| `./manage.sh update-modules [-y]` | `bash setup_pymodules.sh` (see [Updating Python Dependencies](#-updating-python-dependencies)) |
+
+### Quality Assurance Commands
+
+The automated checks (needs `pip install -r requirements-dev.txt` once). They run in the foreground and are safe while a server is running: the tests use a scratch copy of the project and never touch your data.
+
+| Command | What it runs |
+|---------|--------------|
+| `./manage.sh qa` or `qa quick` | `smoke.py`, `check.py`, the SRI check, `node --check` on the JavaScript (if Node.js is installed) and every pytest layer |
+| `./manage.sh qa static` | Only the static checks (no pytest) |
+| `./manage.sh qa tests` | Only pytest |
+| `./manage.sh qa layer unit` | One layer: `unit`, `application`, `performance`, ... |
+| `./manage.sh qa ci` | Same as `quick`, with JUnit XML in `./artifacts` (what GitHub runs) |
+
+### Developer Tools Commands
+
+Two helpers for people who change the code. They never touch your stored files and need no running server (`dir-tree` rewrites `docs/DIRECTORY_TREE.md`, `smoke --save` rewrites `tests/smoke_routes.json`).
+
+| Command | What it runs |
+|---------|--------------|
+| `./manage.sh dir-tree` | `python tests/dir_tree.py` (prints the project folder tree and saves it to `docs/DIRECTORY_TREE.md`) |
+| `./manage.sh smoke [options]` | `python tests/smoke.py` (fast static checks: syntax, pyflakes, routes, hooks, imports). `--save` writes the route snapshot `tests/smoke_routes.json` (the menu asks y/N first; the shell command does not), `-v` prints the route table, `--files` lists the scanned files |
 
 ### 🎛️ Interactive Menu
 
@@ -414,23 +538,25 @@ Run any of these **while a server is running in the same terminal**:
 ./manage.sh menu
 ```
 
+A numbered menu (27 entries: servers, utilities, quality assurance and developer tools) with live status shown at the top.
+
 ### 💡 Typical Workflow
 
 ```bash
-# Start production server in the background
+# 1. Start production server in the background
 ./manage.sh start server
 
-# Run utilities in the same terminal while the server is up
+# 2. Run utilities in the same terminal while the server is up
 ./manage.sh manage-users
 ./manage.sh config
 
-# Check server is still running (also shown on open with no args)
-./manage.sh
+# 3. Check server is still running
+./manage.sh status
 
-# View logs on demand — Ctrl-C detaches, server keeps running
+# 4. View logs on demand (Ctrl-C detaches, server keeps running)
 ./manage.sh logs server -f
 
-# Stop when done
+# 5. Stop when done
 ./manage.sh stop
 ```
 
@@ -438,24 +564,27 @@ Run any of these **while a server is running in the same terminal**:
 
 ## 🔄 Updating Python Dependencies
 
-To update all Python packages to their latest available versions on PyPI:
+Keep all packages current without manually editing `requirements.txt`:
 
 ```bash
-bash update_pymodules.sh
+bash setup_pymodules.sh   # or: ./manage.sh update-modules
 ```
 
-This script will:
-1. Check the latest available version of each package on PyPI
-2. Update `requirements.txt` with the latest versions
-3. Prompt you to install the updates immediately
-
-Or via `manage.sh`:
+Or via `manage.sh` (works on all platforms):
 
 ```bash
 ./manage.sh update-modules
 ```
 
-> **Note**: If using a virtual environment, activate it first: `source venv/bin/activate`
+The script will:
+1. Query PyPI for the latest available version of each package and set a ceiling below the next major version
+2. Update `requirements.txt` in place and rewrite `constraints.txt` (on Termux it locks the packages installed with `pkg`)
+3. Check with a dry run that the constraints can be resolved together
+4. Ask whether to install now: on `y` it creates and activates `.venv` (`.venv/bin` on Linux) and installs the packages there
+
+`requirements-dev.txt` (the test packages) is not touched by the script: install it yourself with `pip install -r requirements-dev.txt`.
+
+> **Linux**: No need to activate anything first, the script does it.
 
 ---
 
@@ -482,8 +611,8 @@ After=network.target
 Type=simple
 User=YOUR_USERNAME
 WorkingDirectory=/home/YOUR_USERNAME/CloudinatorFTP
-Environment="PATH=/home/YOUR_USERNAME/CloudinatorFTP/venv/bin"
-ExecStart=/home/YOUR_USERNAME/CloudinatorFTP/venv/bin/python prod_server.py
+Environment="PATH=/home/YOUR_USERNAME/CloudinatorFTP/.venv/bin"
+ExecStart=/home/YOUR_USERNAME/CloudinatorFTP/.venv/bin/python prod_server.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -534,26 +663,26 @@ sudo journalctl -u cloudinator.service -f
 
 ## Protocol Servers — WebDAV, SFTP, FTP, SMB
 
-Protocol servers start automatically alongside the main Flask server. They share the same user database and credentials.
+In addition to the web UI, CloudinatorFTP runs additional protocol servers. WebDAV, SFTP and FTP start **automatically** alongside the web server and share the same user database — all use the **same credentials** as the web UI. SMB is disabled until a one-time setup is run; see its own subsection below.
 
 ### Port Reference
 
 | Protocol | Port | Default State |
 |----------|------|--------------|
 | Web UI | 5000 | Always on |
-| WebDAV HTTP | 8080 | Enabled |
-| WebDAV HTTPS | 8443 | Enabled |
+| WebDAV HTTPS | 8443 | Enabled (secure, on by default) |
+| WebDAV HTTP | 8080 | Off by default — only listens if HTTPS is disabled (with `WEBDAV_ENABLED` on) or as the automatic fallback when the HTTPS certificate can't be prepared |
 | SFTP | 2222 | Enabled |
-| FTP | 2121 | Enabled |
+| FTP | 2121 | Enabled (FTPS enabled by default) |
 | FTP passive data | 60000–60100 | (used by FTP) |
-| SMB | 445 (8445 fallback) | Disabled until `python smb_setup.py` is run once |
+| SMB | 445 (8445 fallback) | Disabled until `python tools/smb_setup.py` is run once |
 
 ### Firewall Rules
 
 ```bash
 # UFW (Ubuntu/Debian)
 sudo ufw allow 5000/tcp comment "CloudinatorFTP Web UI"
-sudo ufw allow 8080/tcp comment "CloudinatorFTP WebDAV HTTP"
+sudo ufw allow 8080/tcp comment "CloudinatorFTP WebDAV HTTP (only if plain-HTTP WebDAV is enabled)"
 sudo ufw allow 8443/tcp comment "CloudinatorFTP WebDAV HTTPS"
 sudo ufw allow 2222/tcp comment "CloudinatorFTP SFTP"
 sudo ufw allow 2121/tcp comment "CloudinatorFTP FTP"
@@ -562,7 +691,8 @@ sudo ufw allow 445/tcp comment "CloudinatorFTP SMB"
 sudo ufw allow 8445/tcp comment "CloudinatorFTP SMB Fallback"
 
 # Firewalld (Fedora/CentOS)
-sudo firewall-cmd --add-port=8080/tcp --permanent
+sudo firewall-cmd --add-port=5000/tcp --permanent
+sudo firewall-cmd --add-port=8080/tcp --permanent   # only if plain-HTTP WebDAV is enabled
 sudo firewall-cmd --add-port=8443/tcp --permanent
 sudo firewall-cmd --add-port=2222/tcp --permanent
 sudo firewall-cmd --add-port=2121/tcp --permanent
@@ -574,7 +704,11 @@ sudo firewall-cmd --reload
 
 ### 🌐 WebDAV — Mount as Filesystem
 
-#### Option A: davfs2 (HTTP or HTTPS)
+No browser needed — the server appears as a volume in your file manager.
+
+> The examples below use **HTTPS on port 8443**, which is what runs by default. Plain HTTP on port 8080 is off by default and only listens if HTTPS is disabled (with `WEBDAV_ENABLED` on) or as the automatic fallback when the HTTPS certificate can't be prepared.
+
+#### Option A: davfs2
 
 ```bash
 # Install davfs2
@@ -582,13 +716,16 @@ sudo apt install davfs2   # Ubuntu/Debian
 sudo dnf install davfs2   # Fedora
 sudo pacman -S davfs2     # Arch
 
-# Mount HTTP
-sudo mount -t davfs http://SERVER-IP:8080/ /mnt/cloudinator
-
-# Mount HTTPS (import cert first)
-sudo cp db/webdav.crt /usr/local/share/ca-certificates/cloudinator.crt
+# Trust the server's certificate: copy db/webdav.crt from the server to this
+# machine yourself (USB, scp, shared folder...), then:
+sudo cp webdav.crt /usr/local/share/ca-certificates/cloudinator.crt
 sudo update-ca-certificates
+
+# Mount HTTPS (default)
 sudo mount -t davfs https://SERVER-IP:8443/ /mnt/cloudinator
+
+# Mount HTTP (only if plain-HTTP WebDAV is enabled)
+sudo mount -t davfs http://SERVER-IP:8080/ /mnt/cloudinator
 
 # Unmount
 sudo umount /mnt/cloudinator
@@ -596,21 +733,21 @@ sudo umount /mnt/cloudinator
 
 **Store credentials** (avoid interactive prompt):
 ```bash
-echo "SERVER-IP:8080 admin admin123" >> ~/.davfs2/secrets
+echo "SERVER-IP:8443 admin admin123" >> ~/.davfs2/secrets
 chmod 600 ~/.davfs2/secrets
 ```
 
 **Persistent mount** (`/etc/fstab`):
 ```
-http://SERVER-IP:8080/ /mnt/cloudinator davfs user,auto,_netdev 0 0
+https://SERVER-IP:8443/ /mnt/cloudinator davfs user,auto,_netdev 0 0
 ```
 
 #### Option B: GNOME Files / Nautilus
 
 Files → Other Locations → Connect to Server:
 ```
-davs://SERVER-IP:8443    (HTTPS)
-dav://SERVER-IP:8080     (HTTP)
+davs://SERVER-IP:8443    (HTTPS, default)
+dav://SERVER-IP:8080     (HTTP, only if plain-HTTP WebDAV is enabled)
 ```
 
 ### 🔒 SFTP — Command Line and sshfs
@@ -646,6 +783,8 @@ fusermount -u /mnt/cloudinator
 admin@SERVER-IP:/ /mnt/cloudinator fuse.sshfs port=2222,_netdev,allow_other 0 0
 ```
 
+> Accept the host key warning on first connect.
+
 ### 📁 FTP — Command Line
 
 ```bash
@@ -656,17 +795,17 @@ lftp -u admin,admin123 -p 2121 SERVER-IP
 ftp SERVER-IP 2121
 ```
 
-> ⚠️ FTP is plaintext. Use only on trusted networks.
+> ⚠️ FTP is plaintext — use on trusted local networks only.
 
 ### 📡 SMB — Native Network Drive
 
 Port 445 needs root (a privileged port), so it's disabled by default even with `impacket` installed. Unlike Windows, this is a one-time, **immediate, no-reboot** fix on Linux:
 
 ```bash
-python smb_setup.py
+python tools/smb_setup.py
 ```
 
-Detects it isn't root, prints the exact command to run:
+(or `./manage.sh setup-smb`). Detects it isn't root, prints the exact command to run:
 ```bash
 sudo setcap cap_net_bind_service=+ep $(readlink -f $(which python3))
 ```
@@ -685,6 +824,15 @@ sudo mount -t cifs //SERVER-IP/SharedFolder /mnt/cloudinator -o username=admin,p
 
 > ⚠️ **Existing users need a one-time password reset** before SMB accepts their login — SMB uses NTLM, which needs a hash of the password that can only be captured the moment it's set. Full details: [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md).
 
+### 🔄 rclone
+
+rclone can mount, sync, and copy via WebDAV, SFTP, or FTP. See [RCLONE_DEPLOYMENT.md](./RCLONE_DEPLOYMENT.md) for full setup.
+
+```bash
+# Quick WebDAV mount (no configuration needed)
+rclone mount :webdav,url=https://SERVER-IP:8443/,user=admin,pass=admin123,no_check_certificate=true: /mnt/cloudinator --vfs-cache-mode full
+```
+
 ### Configure Protocol Servers
 
 ```bash
@@ -701,7 +849,7 @@ Or edit `server_config.json`:
   "WEBDAV_HTTPS_PORT": 8443,
   "SFTP_ENABLED": true,
   "SFTP_PORT": 2222,
-  "FTP_ENABLED": false,
+  "FTP_ENABLED": true,
   "FTP_PORT": 2121,
   "SMB_ENABLED": false,
   "SMB_PORT": 445,
@@ -709,6 +857,8 @@ Or edit `server_config.json`:
   "SMB_SHARE_NAME": "SharedFolder"
 }
 ```
+
+> WebDAV over HTTPS (8443) is the default. The plain-HTTP server on 8080 only listens if HTTPS is disabled (with `WEBDAV_ENABLED` on) or as the automatic fallback when the HTTPS certificate can't be prepared.
 
 ---
 
@@ -718,34 +868,67 @@ Or edit `server_config.json`:
 
 #### Using Cloudflare Tunnel (Simple)
 
+Open a new terminal session and run — **choose what to tunnel**:
+
 ```bash
-cloudflared tunnel --url http://localhost:5000
+# Tunnel the web UI (most common)
+cloudflared tunnel --url https://localhost:5000
+
+# Or tunnel WebDAV (for remote network drive mapping)
+cloudflared tunnel --url https://localhost:8443
 ```
 
-Get your public URL:
+You'll receive a public URL like:
 ```
 https://random-words-12345.trycloudflare.com
 ```
 
-#### Tunnel a Specific Port (Choose What to Expose)
-
-```bash
-# Expose web UI only (default above)
-cloudflared tunnel --url http://localhost:5000
-
-# Expose WebDAV (for remote drive mapping)
-cloudflared tunnel --url http://localhost:8080
-
-# Expose WebDAV HTTPS
-cloudflared tunnel --url https://localhost:8443
-```
-
-> **Note**: SFTP (port 2222) and FTP (port 2121) are raw TCP protocols — they cannot be tunneled via Cloudflare Tunnel's standard `--url` method. Use them on your local network, or set up a VPN for remote access.
+> **What port should I tunnel?**
+> - `5000` → Web browser access (upload, download, preview via browser)
+> - `8443` → WebDAV drive mapping from remote Windows/macOS/Linux machines (HTTPS, the default — use with `--url https://localhost:8443`)
+> - `8080` → plain-HTTP WebDAV — **off by default**; it only listens if HTTPS is disabled (with `WEBDAV_ENABLED` on) or as the automatic fallback when the HTTPS certificate can't be prepared
+> - Only one port can be tunneled at once with the quick `--url` method. For multiple services, see the [Advanced Tunnel Setup](./SETUP_TUNNEL_ADVANCED.md).
+>
+> **Note**: SFTP (2222) and FTP (2121) are raw TCP — they work on your local network but cannot be exposed via standard Cloudflare Tunnel. Set up a VPN for remote SFTP/FTP access.
 
 #### Using Custom Domain (Advanced)
 
 For persistent domain setup, see:
 [Advanced Cloudflared Tunneling Setup](https://github.com/NeoMatrix14241/CloudinatorFTP/wiki/Advanced-Cloudflare-Tunnelling-Setup)
+
+Then use this configuration for the `config.yml` of cloudflared:
+
+```yaml
+tunnel: <tunnel id>
+credentials-file: /home/YOUR_USERNAME/.cloudflared/<tunnel id>.json
+protocol: quic
+ingress:
+  - hostname: yourowndomain.com
+    service: https://localhost:5000
+    originRequest:
+      connectTimeout: 0s
+      tlsTimeout: 0s
+      tcpKeepAlive: 0s
+      noTLSVerify: true
+      disableChunkedEncoding: false
+      keepAliveConnections: 100000000
+      keepAliveTimeout: 0s
+      proxyConnectTimeout: 0s
+      expectContinueTimeout: 0s
+  - hostname: files.yourowndomain.com
+    service: https://localhost:8443
+    originRequest:
+      connectTimeout: 0s
+      tlsTimeout: 0s
+      tcpKeepAlive: 0s
+      noTLSVerify: true
+      disableChunkedEncoding: false
+      keepAliveConnections: 100000000
+      keepAliveTimeout: 0s
+      proxyConnectTimeout: 0s
+      expectContinueTimeout: 0s
+  - service: http_status:404
+```
 
 #### Firewall Configuration
 
@@ -767,7 +950,7 @@ sudo firewall-cmd --reload
 ```bash
 # UFW (Ubuntu)
 sudo ufw allow 5000/tcp
-sudo ufw allow 8080/tcp
+sudo ufw allow 8080/tcp   # only if plain-HTTP WebDAV is enabled
 sudo ufw allow 8443/tcp
 sudo ufw allow 2222/tcp
 sudo ufw allow 2121/tcp
@@ -824,7 +1007,7 @@ sudo chmod 755 /srv/cloudinator/files
 
 | Issue | Solution |
 |-------|----------|
-| Python 3.10+ not found | Install: `sudo apt install python3.10 python3.10-venv` |
+| Python 3.14.3+ not found | Your distribution may ship an older Python — install 3.14.3+ from python.org or with `pyenv`/`uv`, then check `python3 --version` |
 | `pip` command not found | Install: `sudo apt install python3-pip` |
 | Permission denied | Use `sudo` or check file permissions |
 | libvips not found | Install development headers: `sudo apt install libvips-dev` |
@@ -840,7 +1023,8 @@ sudo chmod 755 /srv/cloudinator/files
 | sshfs connection refused | Verify port 2222 open: `nc -zv SERVER-IP 2222` |
 | FTP transfers stall | Open ports 60000-60100: `sudo ufw allow 60000:60100/tcp` |
 | Certificate errors (HTTPS WebDAV) | `sudo cp db/webdav.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates` |
-| SMB won't bind port 445 | Run `python smb_setup.py` once, then `sudo setcap cap_net_bind_service=+ep $(readlink -f $(which python3))` if it printed that command |
+| Nothing listens on port 8080 | Expected — plain-HTTP WebDAV is off by default. Use `https://SERVER-IP:8443/` instead |
+| SMB won't bind port 445 | Run `python tools/smb_setup.py` (or `./manage.sh setup-smb`) once, then `sudo setcap cap_net_bind_service=+ep $(readlink -f $(which python3))` if it printed that command |
 | SMB login fails for an existing user | Reset their password once — see [SMB_PROTOCOL_DEPLOYMENT.md](./SMB_PROTOCOL_DEPLOYMENT.md) |
 | `setcap` command not found | `sudo apt install libcap2-bin` |
 
@@ -848,10 +1032,10 @@ sudo chmod 755 /srv/cloudinator/files
 
 | Issue | Solution |
 |-------|----------|
-| `venv` not found | Run: `python3 -m venv venv` |
-| Can't activate venv | Run: `source venv/bin/activate` (exact path) |
-| Permission denied on venv | Check: `ls -la venv/bin/` |
-| Wrong Python version | Use: `python3 -m venv venv` explicitly |
+| `.venv` not found | Run: `python3 -m venv .venv` |
+| Can't activate venv | Run: `source .venv/bin/activate` (exact path) |
+| Permission denied on venv | Check: `ls -la .venv/bin/` |
+| Wrong Python version | Use: `python3 -m venv .venv` explicitly (needs 3.14.3+) |
 
 ### Dependency Installation
 
@@ -875,7 +1059,9 @@ sudo chmod 755 /srv/cloudinator/files
 | Issue | Solution |
 |-------|----------|
 | Login fails | Run: `python tools/manage_users.py` (list users / change password) |
-| Database corrupted | Run: `python tools/reset_db.py` |
+| Looping web refresh | Run: `python tools/kick_sessions.py logout-web` |
+| Locked out after failed logins | After 5 failed logins a client is locked out for 5 minutes — wait, then retry |
+| Database corrupted | Run: `python tools/reset_db.py` (destructive: recreates the default accounts) |
 | Users not found | Check DB path: `ls -la /var/lib/cloudinator/db/` |
 
 ### Cloudflare Tunnel Issues
@@ -924,7 +1110,7 @@ MemoryLimit=2G
 
 ### Enable Compression
 
-In `config.py`, adjust:
+Use `python config.py` (settings saved to `server_config.json` override the built-in defaults in `config.py`), or adjust:
 
 ```python
 IMG_COMPRESS_MIN_SIZE = 1 * 1024 * 1024  # 1 MB
@@ -941,8 +1127,8 @@ IMG_WEBP_QUALITY = 50  # 1-100
 # Using systemctl
 sudo systemctl status cloudinator.service
 
-# Using curl (if running locally)
-curl http://localhost:5000
+# Using curl (if running locally; -k accepts the local certificate)
+curl -k https://localhost:5000
 
 # Check port
 netstat -tlnp | grep 5000
@@ -979,10 +1165,10 @@ lsof -p $(pgrep -f "python prod_server.py")
 ## Next Steps
 
 1. ✅ Installation complete
-2. 🌐 WebDAV accessible at port 8080/8443
+2. 🌐 WebDAV accessible over HTTPS at port 8443 (8080 only if plain HTTP is enabled)
 3. 🔒 SFTP accessible at port 2222
 4. 📁 FTP accessible at port 2121
-5. 📡 SMB — run `python smb_setup.py` if you want native port 445 mapping (optional)
+5. 📡 SMB — run `python tools/smb_setup.py` if you want native port 445 mapping (optional)
 6. 📤 Get your Cloudflare tunnel URL
 7. 🔐 Change default passwords
 8. 👥 Add users for team members
@@ -1001,6 +1187,10 @@ lsof -p $(pgrep -f "python prod_server.py")
 - [Project GitHub](https://github.com/NeoMatrix14241/CloudinatorFTP)
 - [rclone Integration](./RCLONE_DEPLOYMENT.md)
 - [SMB Protocol Setup](./SMB_PROTOCOL_DEPLOYMENT.md)
+- [manage.sh Guide](./MANAGE_SCRIPT_GUIDE.md)
+- [Configuration Reference](./CONFIG_PY_REFERENCE.md)
+- [Advanced Tunnel Setup](./SETUP_TUNNEL_ADVANCED.md)
+- [User Guide](./USER_GUIDE.md)
 
 ---
 

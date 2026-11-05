@@ -78,6 +78,17 @@ _SCRIPT_PATH = os.path.join(_PROJECT_DIR, "version_engine.py")
 _ENGINE_VERSION = "1.0.0"
 _SCHEMA_VERSION = 1
 
+# Folder names that are never tracked, whatever VERSION_EXCLUDE_DIRECTORIES says (5.41). `.chunks`
+# is where the web server keeps the pieces of an upload that is still arriving (<root>/.chunks/):
+# a version of a half-finished 10 MB piece is useless, and when the tracked scope includes the
+# storage root the watcher would hash and copy every piece, doubling the disk traffic of an upload.
+_ALWAYS_EXCLUDED_DIR_NAMES = (".chunks",)
+
+# A watcher / scanner pass that takes at least this many seconds is logged (at most once a
+# minute): on a slow disk a pass over a big tracked folder competes with everything else on it.
+_SLOW_PASS_SECONDS = 2.0
+_SLOW_PASS_LOG_EVERY = 60.0
+
 # How often the (optional) watcher polls tracked paths for changes. Not a
 # config.py setting — this is an internal implementation constant for the
 # stat-polling loop, distinct from config.VERSION_SCAN_INTERVAL (the full
@@ -175,7 +186,8 @@ def _spawn_version_engine_process():
     env["CLOUDINATOR_PARENT_PID"] = str(os.getpid())
 
     try:
-        proc = subprocess.Popen(
+        # S603: fixed argv (sys.executable and a project script); no user input reaches it.
+        proc = subprocess.Popen(  # noqa: S603
             [sys.executable, _SCRIPT_PATH, "--worker"],
             cwd=_PROJECT_DIR,
             stdin=subprocess.DEVNULL,
@@ -738,6 +750,8 @@ class Engine:
 
     def _is_excluded_dir(self, dirpath: str) -> bool:
         base = os.path.basename(dirpath)
+        if base in _ALWAYS_EXCLUDED_DIR_NAMES:
+            return True
         for pat in config.VERSION_EXCLUDE_DIRECTORIES:
             if base == pat or dirpath == os.path.abspath(os.path.expanduser(pat)):
                 return True
@@ -1053,7 +1067,7 @@ class Engine:
         try:
             stat_before = os.stat(display_path)
         except OSError as e:
-            raise VersionEngineError(f"stat failed: {e}")
+            raise VersionEngineError(f"stat failed: {e}") from e
 
         small = stat_before.st_size <= config.VERSION_SMALL_FILE_THRESHOLD
         version_id = self._create_version_row(file_id, "full" if small else "chunked")
@@ -1086,7 +1100,7 @@ class Engine:
             stat_after = os.stat(display_path)
         except OSError as e:
             self._mark_version_failed(version_id, f"stat failed after capture: {e}")
-            raise VersionEngineError(str(e))
+            raise VersionEngineError(str(e)) from e
 
         if (
             stat_after.st_mtime != stat_before.st_mtime
@@ -1367,11 +1381,14 @@ class Engine:
 
         placeholders = ",".join("?" for _ in ids)  # structure only, values stay bound
         try:
+            # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
             conn.execute(
-                f"DELETE FROM version_objects WHERE version_id IN ({placeholders})", ids
+                f"DELETE FROM version_objects WHERE version_id IN ({placeholders})",  # noqa: S608
+                ids,
             )
+            # S608: only "?" placeholders or fixed fragments are interpolated; every value is bound.
             conn.execute(
-                f"DELETE FROM versions WHERE version_id IN ({placeholders}) "
+                f"DELETE FROM versions WHERE version_id IN ({placeholders}) "  # noqa: S608
                 "AND status='failed'",
                 ids,
             )
@@ -1548,7 +1565,7 @@ class Engine:
             except OSError as e:
                 raise VersionEngineError(
                     f"object {row['sha256'][:12]}... unreadable: {e}"
-                )
+                ) from e
             if obj_h.hexdigest() != row["sha256"]:
                 raise VersionEngineError(
                     f"object {row['sha256'][:12]}... corrupted - download aborted"
@@ -1792,6 +1809,22 @@ class Engine:
             for norm_key in vanished:
                 self._known_state.pop(norm_key, None)
 
+    def _note_slow_pass(self, label: str, seconds: float):
+        """Log a pass that took long, rate-limited; says what to try (5.41)."""
+        if seconds < _SLOW_PASS_SECONDS:
+            return
+        now = time.monotonic()
+        if now - getattr(self, "_slow_pass_logged_at", -_SLOW_PASS_LOG_EVERY) < (
+            _SLOW_PASS_LOG_EVERY
+        ):
+            return
+        self._slow_pass_logged_at = now
+        self.log.warning(
+            f"{label} pass took {seconds:.1f}s: the tracked folders are big or the disk is "
+            "busy. Track fewer folders, or switch the watcher off (VERSION_WATCH_ENABLED) and "
+            "let the scanner find changes."
+        )
+
     def _watcher_loop(self):
         self._watcher_running = True
         self._set_meta("watcher_running", "1")
@@ -1799,7 +1832,9 @@ class Engine:
         while not self._shutdown_event.is_set():
             if not self._stop_scheduling.is_set():
                 try:
+                    started = time.monotonic()
                     self._reconcile_once()
+                    self._note_slow_pass("Watcher", time.monotonic() - started)
                 except Exception as e:
                     if _is_lock_error(e):
                         self.log.warning(f"Watcher pass hit a locked database: {e}")
@@ -1817,7 +1852,9 @@ class Engine:
         while not self._shutdown_event.is_set():
             if not self._stop_scheduling.is_set():
                 try:
+                    started = time.monotonic()
                     self._reconcile_once()
+                    self._note_slow_pass("Scanner", time.monotonic() - started)
                     self._retry_locked(self.run_gc, delays=(2, 4, 8))
                     self._retry_locked(
                         self._set_meta,

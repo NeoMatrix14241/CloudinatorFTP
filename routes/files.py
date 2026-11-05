@@ -326,7 +326,7 @@ async def bulk_download():
             for chunk in zf:
                 yield chunk
 
-            print(f"� ZIP stream download completed")
+            print("� ZIP stream download completed")
 
         # Create response with streaming optimized for large files
         response = Response(
@@ -381,7 +381,7 @@ async def dir_info(path):
                         "total_size": info["total_size"],
                     }
                 print(f"📥 Stored live walk result for '{rel_path}' into index")
-        except Exception:
+        except Exception:  # noqa: S110
             # Writing the live-walk result into the index is best effort; the response is unaffected.
             pass
 

@@ -581,8 +581,8 @@ class _CertMiddleware:
 def _build_app(root_dir: str):
     try:
         from wsgidav.wsgidav_app import WsgiDAVApp
-    except ImportError:
-        raise ImportError("wsgidav is not installed. Run: pip install wsgidav")
+    except ImportError as e:
+        raise ImportError("wsgidav is not installed. Run: pip install wsgidav") from e
 
     try:
         from wsgidav.fs_dav_provider import FilesystemProvider
@@ -973,7 +973,7 @@ def start() -> bool:
     if http_port:
         tag = " (fallback — HTTPS unavailable)" if http_is_fallback else ""
         print(f"🌐 WebDAV HTTP:  http://{LOCAL_IP}:{http_port}/{tag}")
-        print(f"   ⚠️  plaintext Basic Auth — credentials are NOT encrypted here")
+        print("   ⚠️  plaintext Basic Auth — credentials are NOT encrypted here")
     if https_port:
         print(f"🔐 WebDAV HTTPS: https://{LOCAL_IP}:{https_port}/  (HTTP/1.1 only)")
         print(

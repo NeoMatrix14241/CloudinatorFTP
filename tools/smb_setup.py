@@ -372,6 +372,17 @@ def windows_status():
 # ── Linux ────────────────────────────────────────────────────────────────────
 
 
+def _resolved_python() -> str:
+    """This interpreter's path with symlinks resolved (`readlink -f`), or sys.executable itself."""
+    # S607: `readlink` is found through PATH on purpose (Linux and Termux keep it in different places).
+    result = subprocess.run(
+        ["readlink", "-f", sys.executable],  # noqa: S607
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() or sys.executable
+
+
 def linux_setup():
     print()
     print("This grants Python permission to bind port 445 without root,")
@@ -379,19 +390,17 @@ def linux_setup():
     print("immediately — no restart needed, unlike Windows.")
     print()
 
-    python_path = (
-        subprocess.run(
-            ["readlink", "-f", sys.executable], capture_output=True, text=True
-        ).stdout.strip()
-        or sys.executable
-    )
+    python_path = _resolved_python()
 
     cmd = ["setcap", "cap_net_bind_service=+ep", python_path]
 
     if os.geteuid() == 0:
         print(f"Running: {' '.join(cmd)}")
         try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            # S603: a fixed argv; `python_path` is this interpreter's own resolved path.
+            subprocess.run(  # noqa: S603
+                cmd, check=True, capture_output=True, text=True
+            )
             print(
                 f"✅ Done. Port 445 will work immediately for {python_path}, no root needed from now on."
             )
@@ -416,12 +425,7 @@ def linux_status():
         f"  Port 445: {'available' if bindable else 'not bindable (needs setcap or root)'}"
     )
     if not bindable:
-        python_path = (
-            subprocess.run(
-                ["readlink", "-f", sys.executable], capture_output=True, text=True
-            ).stdout.strip()
-            or sys.executable
-        )
+        python_path = _resolved_python()
         print(
             f"  Run option 1 (or: sudo setcap cap_net_bind_service=+ep {python_path})"
         )
@@ -432,8 +436,12 @@ def linux_status():
 
 def termux_is_rooted() -> bool:
     try:
+        # S607: `su` is found through PATH on purpose (Termux and rooted Android differ).
         result = subprocess.run(
-            ["su", "-c", "id"], capture_output=True, text=True, timeout=5
+            ["su", "-c", "id"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return result.returncode == 0 and "uid=0" in result.stdout
     except Exception:

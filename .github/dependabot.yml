@@ -1,0 +1,34 @@
+# Dependabot for CloudinatorFTP (CLAUDE.md 5.40). Version-update pull requests go to `dev` (never to
+# `main`: both branches are protected, and changes reach `main` only through a pull request from
+# `dev`). They run the same required checks as any other pull request, so a dependency that breaks
+# the tests is visible before it is merged. Security updates for known vulnerabilities are a separate
+# GitHub setting (Settings > Advanced Security > Dependabot security updates) and use the default
+# branch.
+#
+# requirements.txt / constraints.txt are generated and rewritten by setup_pymodules.sh: if you keep
+# using that script to pin versions, decide which of the two you trust and merge the other kind of
+# update by hand (or remove the pip block). The weekly Dependency audit workflow (audit.yml) is what
+# reports a vulnerable version either way.
+version: 2
+updates:
+    - package-ecosystem: "pip"
+      directory: "/"
+      target-branch: "dev"
+      schedule:
+          interval: "weekly"
+          day: "monday"
+      open-pull-requests-limit: 5
+      labels: ["dependencies"]
+      groups:
+          dev-tools:
+              patterns:
+                  ["pytest*", "hypothesis", "ruff", "coverage", "pip-audit"]
+
+    - package-ecosystem: "github-actions"
+      directory: "/"
+      target-branch: "dev"
+      schedule:
+          interval: "weekly"
+          day: "monday"
+      open-pull-requests-limit: 5
+      labels: ["dependencies"]

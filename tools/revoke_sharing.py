@@ -44,9 +44,9 @@ manage.sh) exactly like any single CLI command does.
 
 import argparse
 import getpass
-import random
 import os
 import re
+import secrets
 import sys
 import time
 
@@ -191,7 +191,7 @@ def cmd_revoke_all(args):
         print("Cancelled — nothing revoked.")
         return
 
-    code = "".join(random.choices("0123456789", k=10))
+    code = "".join(secrets.choice("0123456789") for _ in range(10))
     print(
         "\nType the code below exactly to confirm (a new code is generated every attempt):\n"
     )
@@ -215,7 +215,7 @@ def cmd_revoke_all(args):
 
 def _generate_passkey(length=8):
     alphabet = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
-    return "".join(random.choice(alphabet) for _ in range(length))
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 def _apply_edit(share, args):

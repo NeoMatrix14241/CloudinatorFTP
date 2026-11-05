@@ -1,0 +1,75 @@
+# Nightly run for CloudinatorFTP (CLAUDE.md 5.40): the WHOLE test suite including the opt-in tiers
+# that are too slow or too timing-sensitive for a pull request:
+#   - CLOUDINATOR_SLOW_TESTS=1  turns on tests/reliability (the real Version Engine worker, parallel
+#     uploads and logins, stop / crash / restart), tests/performance (loose speed baselines, the
+#     85 s throttled download) and tests/frontend (a real Chromium, Linux only).
+#   - CLOUDINATOR_NIGHTLY=1     makes the Hypothesis tests use fresh random inputs and ten times as
+#     many examples (a failing run prints the falsifying example; copy it into a normal test).
+# Linux AND Windows: production runs on Windows, and the Windows-only problems (a locked file, the
+# TerminateProcess stop that loses coverage data) are exactly what Linux alone would miss.
+# NOT a required check, never blocks a pull request. `schedule` runs on the default branch (main)
+# only, once this file is there; to test `dev` before a merge use Actions > Nightly > Run workflow
+# and pick the branch `dev`.
+# Results: the JUnit XML (with the measured baselines as properties) is the artifact
+# `nightly-results-<os>`. A failing test prints the tail of its scratch server's log in the job
+# output. If installing requirements.txt fails on the Windows runner, the package named in the
+# error has no wheel for this Python there: tell the maintainer, do not just drop the OS.
+name: Nightly
+
+on:
+    schedule:
+        - cron: "17 2 * * *"
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: nightly-${{ github.ref }}
+    cancel-in-progress: true
+
+env:
+    CLOUDINATOR_SLOW_TESTS: "1"
+    CLOUDINATOR_NIGHTLY: "1"
+    PYTHONUTF8: "1"
+
+jobs:
+    full-suite:
+        name: full suite (${{ matrix.os }})
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 75
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [ubuntu-latest, windows-latest]
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v7
+
+            - name: Set up Python
+              uses: actions/setup-python@v7
+              with:
+                  python-version: "3.14.7"
+
+            - name: Install dependencies
+              run: python -m pip install --upgrade pip pyflakes -r requirements.txt -r requirements-dev.txt
+
+            # The browser smoke test (tests/frontend) skips itself when Playwright is missing, so on
+            # Windows it is simply skipped; Chromium is installed on Linux only.
+            - name: Install Playwright and Chromium (Linux only)
+              if: runner.os == 'Linux'
+              run: |
+                  python -m pip install playwright
+                  python -m playwright install --with-deps chromium
+
+            # static checks + every pytest layer, slow tiers included, JUnit XML into ./artifacts
+            - name: QA runner (ci, slow tiers on)
+              run: python tests/qa.py ci
+
+            - name: Upload results
+              if: always()
+              uses: actions/upload-artifact@v7
+              with:
+                  name: nightly-results-${{ matrix.os }}
+                  path: artifacts/
+                  if-no-files-found: ignore

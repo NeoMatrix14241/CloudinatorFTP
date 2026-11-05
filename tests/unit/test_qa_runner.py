@@ -91,10 +91,13 @@ def test_check_gets_skip_packages_only_when_asked(qa):
     assert "--force" not in plain + skipping
 
 
-def test_quick_is_static_plus_tests(qa):
+def test_quick_is_static_plus_strict_lint_plus_tests(qa, monkeypatch):
+    _pretend_ruff(qa, monkeypatch)
     quick = [s for s in qa.build_plan("quick") if s.name != "layout"]
-    assert [s.name for s in quick][:4] == ["smoke", "check", "sri", "js-syntax"]
-    assert len(quick) == len(qa.build_plan("static")) + 1
+    assert [s.name for s in quick][:5] == ["smoke", "check", "sri", "js-syntax", "lint"]
+    assert len(quick) == len(qa.build_plan("static")) + 2
+    # strict: the plain Ruff listing has no --exit-zero, so a finding fails the step
+    assert "--exit-zero" not in quick[4].cmds[0]
 
 
 def test_unknown_layer_and_mode_are_rejected(qa):
@@ -151,3 +154,101 @@ def test_version_flag_prints_the_version(qa, capsys):
         qa.main(["--version"])
     assert exc.value.code == 0
     assert qa.QA_VERSION in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------- lint (5.41)
+def _pretend_ruff(qa, monkeypatch, installed=True):
+    monkeypatch.setattr(
+        qa.importlib.util,
+        "find_spec",
+        lambda name, *a, **k: object() if (installed and name == "ruff") else None,
+    )
+
+
+def test_lint_is_one_report_only_step_by_default(qa, monkeypatch):
+    _pretend_ruff(qa, monkeypatch)
+    plan = qa.build_plan("lint")
+    assert [s.name for s in plan] == ["lint"]
+    listing, counts = plan[0].cmds
+    assert listing[1:5] == ["-m", "ruff", "check", "."]
+    assert "--exit-zero" in listing and "concise" in listing
+    assert "--exit-zero" in counts and "--statistics" in counts
+    assert plan[0].keep_going is True and plan[0].skip is None
+
+
+def test_strict_lint_drops_exit_zero_from_the_listing_only(qa, monkeypatch):
+    _pretend_ruff(qa, monkeypatch)
+    listing, counts = qa.build_plan("lint", strict=True)[0].cmds
+    assert "--exit-zero" not in listing
+    assert "--exit-zero" in counts  # the per-rule counts are printed either way
+
+
+def test_lint_skips_with_the_install_hint_when_ruff_is_missing(qa, monkeypatch):
+    _pretend_ruff(qa, monkeypatch, installed=False)
+    step = qa.build_plan("lint")[0]
+    assert step.skip and "requirements-dev.txt" in step.skip
+    code, results = qa.run_steps([step])
+    assert code == 0 and results[0][1] == "SKIP"
+
+
+@pytest.mark.parametrize("mode", ["static", "tests"])
+def test_lint_is_not_part_of_static_or_tests(qa, monkeypatch, mode):
+    _pretend_ruff(qa, monkeypatch)
+    assert "lint" not in [s.name for s in qa.build_plan(mode)]
+
+
+@pytest.mark.parametrize("mode", ["quick", "ci"])
+def test_quick_and_ci_run_lint_strict_since_543(qa, monkeypatch, mode):
+    _pretend_ruff(qa, monkeypatch)
+    (lint,) = [s for s in qa.build_plan(mode) if s.name == "lint"]
+    assert all("--exit-zero" not in cmd for cmd in lint.cmds[:1])
+
+
+def test_the_strict_flag_reaches_the_plan(qa, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        qa, "build_plan", lambda *args, **kwargs: seen.append(args) or []
+    )
+    qa.main(["lint", "--strict"])
+    qa.main(["lint"])
+    assert seen[0][0] == "lint" and seen[0][-1] is True
+    assert seen[1][-1] is False
+
+
+# ---------------------------------------------------------------------------- build banner (5.42)
+def _fake_python(version, free_threaded, gil_enabled="absent"):
+    import types
+
+    sysconfig = types.SimpleNamespace(
+        get_config_var=lambda key: (
+            1 if (key == "Py_GIL_DISABLED" and free_threaded) else 0
+        )
+    )
+    sys_stub = types.SimpleNamespace(version_info=version)
+    if gil_enabled != "absent":
+        sys_stub._is_gil_enabled = lambda: gil_enabled
+    return sysconfig, sys_stub
+
+
+@pytest.mark.parametrize(
+    "free_threaded, gil, expected",
+    [
+        (False, True, "3.14.7 standard build, GIL on"),
+        (True, False, "3.14.7 free-threaded build, GIL off"),
+        (True, True, "3.14.7 free-threaded build, GIL on"),
+        (True, "absent", "3.14.7 free-threaded build, GIL state unknown"),
+    ],
+)
+def test_the_build_banner_names_the_build_and_the_gil_state(
+    qa, free_threaded, gil, expected
+):
+    sysconfig, sys_stub = _fake_python((3, 14, 7, "final", 0), free_threaded, gil)
+    assert qa.python_build_line(sysconfig, sys_stub) == expected
+
+
+def test_the_build_banner_of_this_interpreter_is_printed_by_every_mode(
+    qa, monkeypatch, capsys
+):
+    monkeypatch.setattr(qa, "build_plan", lambda *args, **kwargs: [])
+    qa.main(["static"])
+    assert f"python: {qa.python_build_line()}" in capsys.readouterr().out

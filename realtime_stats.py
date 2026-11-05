@@ -366,7 +366,7 @@ async def storage_stats_sse():
 
         finally:
             event_manager.remove_client(client_queue)
-            print(f"📡 SSE client cleanup completed")
+            print("📡 SSE client cleanup completed")
 
     response = Response(event_stream(), mimetype="text/event-stream", status=200)
 

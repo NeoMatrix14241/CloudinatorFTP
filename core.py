@@ -61,6 +61,7 @@ import ipaddress
 # re-export it under its original name without self-recursion. See
 # helpers/net_utils.py's docstring and the wrapper function for why this split
 # exists.
+from helpers.file_body import use_file_buffer
 from helpers.net_utils import get_local_ip as _get_local_ip
 
 
@@ -128,7 +129,6 @@ def get_local_ip() -> str:
 # Ensure ffmpeg and thread prints appear immediately in terminal
 sys.stdout.reconfigure(line_buffering=True)
 import zipfile
-import io
 import re
 import subprocess
 import hashlib
@@ -140,6 +140,8 @@ from config import (
     ROOT_DIR,
     CHUNK_SIZE,
     ENABLE_CHUNKED_UPLOADS,
+    BODY_TIMEOUT,
+    DOWNLOAD_BUFFER_SIZE,
     MAX_CONTENT_LENGTH,
     ALLOWED_EXTENSIONS,
     PERMANENT_SESSION_LIFETIME,
@@ -925,7 +927,18 @@ app.config.update(
     # download that takes longer than a minute end to end (a big file through the Cloudflare
     # tunnel) was cut off mid-stream. None = no cap, as with Waitress before the Quart migration.
     RESPONSE_TIMEOUT=None,
+    # The request-side twin (5.41): Quart's default BODY_TIMEOUT is also 60 s for the WHOLE request
+    # body (the time to receive AND parse it, not an idle limit), so an upload chunk of 10 MB that
+    # needed more than a minute (slow link through the tunnel, a busy disk, an event loop that was
+    # blocked) was answered with "408 Request Timeout" and the browser gave up the whole upload.
+    # config.BODY_TIMEOUT (default 600 s); 0 = no limit.
+    BODY_TIMEOUT=BODY_TIMEOUT or None,
 )
+
+# Files (/download, /view) are read in config.DOWNLOAD_BUFFER_SIZE pieces (default 1 MiB), not in
+# Quart's 8 KiB ones (5.42): every 8 KiB piece costs two thread hand-offs, which held a RAM-cached
+# 32 MB download to 2.6 MB/s on the owner's Windows PC. See helpers/file_body.py.
+use_file_buffer(app, DOWNLOAD_BUFFER_SIZE)
 
 # ---------------------------------------------------------------------------
 # CSRF protection for every state-changing request (POST/PUT/PATCH/DELETE).
@@ -1040,7 +1053,6 @@ def _trigger_reconcile(settle=False):
     """
     import threading
     from file_monitor import get_file_monitor
-    from realtime_stats import trigger_storage_update
 
     with _reconcile_gate:
         if _reconcile_state["running"]:
@@ -1262,7 +1274,7 @@ class ChunkTracker:
                                 if current_time - timestamp > 2700:
                                     should_cleanup = True
                                     cleanup_reason = (
-                                        f"untracked >45min old (abandoned upload)"
+                                        "untracked >45min old (abandoned upload)"
                                     )
                             except (ValueError, OSError):
                                 should_cleanup = True
@@ -1303,7 +1315,7 @@ class ChunkTracker:
 
                         # Remove from tracking if it was tracked
                         if file_id in all_tracked_files:
-                            for session_id, file_set in self.active_uploads.items():
+                            for file_set in self.active_uploads.values():
                                 file_set.discard(file_id)
                             self.upload_timestamps.pop(file_id, None)
 

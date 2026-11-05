@@ -35,8 +35,8 @@ jobs:
         with:
           python-version: "3.14.7"
 
-      - name: Install pyflakes
-        run: python -m pip install --upgrade pip pyflakes
+      - name: Install pyflakes and the pinned Ruff
+        run: python -m pip install --upgrade pip pyflakes "$(grep -i '^ruff==' requirements-dev.txt)"
 
       # syntax, pyflakes, route table + snapshot, import rules, hooks, tools/, helpers/, manage.sh
       - name: Smoke test
@@ -46,6 +46,11 @@ jobs:
       # --skip-packages: this runner does not install the server's requirements.txt.
       - name: Module checks
         run: python tests/check.py -q --skip-packages
+
+      # 5.43: required since the findings were triaged to zero (rules and reasons: pyproject.toml
+      # [tool.ruff]). The job name stays "smoke + check", so the rulesets do not change.
+      - name: Ruff
+        run: python -m ruff check . --output-format=github
 
   behavior:
     name: behavioral tests

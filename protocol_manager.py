@@ -364,7 +364,8 @@ def _spawn_webdav_process() -> "subprocess.Popen | None":
     # PIPE + explicit read-and-relay, entirely in Python code we control,
     # with no dependency on OS handle-inheritance semantics either way.
     try:
-        proc = subprocess.Popen(
+        # S603: fixed argv (sys.executable and a project script); no user input reaches it.
+        proc = subprocess.Popen(  # noqa: S603
             [sys.executable, script],
             cwd=_PROJECT_DIR,
             stdin=subprocess.DEVNULL,
@@ -608,7 +609,7 @@ def start_all():
     ]
     if needed:
         print()
-        print(f"  📦 Install missing libraries:")
+        print("  📦 Install missing libraries:")
         print(f"     pip install {' '.join(needed)}")
 
     print("─" * 56)
