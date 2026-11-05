@@ -26,11 +26,43 @@ pytestmark = pytest.mark.protocol
 
 RW, RO = "qa_writer", "qa_reader"
 
+# The passive range is NOT "a free port plus 40": pyftpdlib binds one RANDOM port of the range for
+# every PASV and only a port that is "already in use" (EADDRINUSE) is skipped; any other bind error
+# (Windows: a port in an excluded range or held with exclusive use, WSAEACCES) ends the handler,
+# and the client sees EOFError on PASV (5.43, 15 failures in one run). The launcher therefore
+# probes the block exactly like pyftpdlib binds it (SO_REUSEADDR, 127.0.0.1) and uses a block where
+# EVERY port binds; with none found it lets the kernel choose (passive_ports = None).
 FTP_LAUNCHER = """
+import random
+import socket
 import ftp_server
+
+PASSIVE_SIZE = 40
+
+
+def block_binds(first):
+    if first < 1024 or first + PASSIVE_SIZE > 65535:
+        return False
+    for number in range(first, first + PASSIVE_SIZE):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(("127.0.0.1", number))
+        except OSError as problem:
+            print(f"passive probe: {number} refused: {problem}", flush=True)
+            return False
+        finally:
+            probe.close()
+    return True
+
+
 port, passive = int(sys.argv[1]), int(sys.argv[2])
 assert ftp_server.start(port), "ftp_server.start() returned False"
-ftp_server._server.handler.passive_ports = range(passive, passive + 40)
+candidates = [passive] + random.sample(range(20000, 60000), 200)
+first = next((c for c in candidates if block_binds(c)), None)
+handler = ftp_server._server.handler
+handler.passive_ports = None if first is None else range(first, first + PASSIVE_SIZE)
+print(f"passive ports: {handler.passive_ports}", flush=True)
 print("READY", flush=True)
 while True:
     time.sleep(1)
