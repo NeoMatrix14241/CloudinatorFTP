@@ -5970,7 +5970,18 @@ function formatTimestamp(timestamp) {
 // ── Overwrite decision cache ──────────────────────────────────────────────────
 // Stores per-folder-upload user decisions so we don't re-prompt for every file.
 // 'overwrite' | 'skip' | 'ask' (default)
-const _overwriteDecisions = new Map(); // groupId → 'overwrite' | 'skip' | 'ask'
+const _overwriteDecisions = new Map(); // conflict key → 'overwrite' | 'skip' | 'rename' | 'ask'
+
+// Loose (non-folder) files have no _groupId, so they share ONE decision key for the
+// whole upload batch. Without it "Overwrite all conflicts" was remembered for nobody
+// and only the file shown in the dialog was overwritten.
+const _LOOSE_CONFLICT_KEY = '__loose__';
+
+// Per-key tail of the dialog queue. Uploads run in parallel, so several files can get
+// their 409 at the same moment; their dialogs are chained one after another so that an
+// "all" answer given to the first one is already in _overwriteDecisions when the next
+// one looks (and a second modal never stacks on top of the first).
+const _conflictPromptTail = new Map(); // conflict key → Promise
 
 // ── Conflict Dialog Helpers ──────────────────────────────────────────────────
 
@@ -6112,6 +6123,33 @@ async function _promptOverwrite(filename, destPath) {
             }
         ]
     });
+}
+
+/**
+ * Decide what to do with ONE file that got a 409 (already exists).
+ * Returns 'overwrite' | 'rename' | 'skip'.
+ * An "all" choice is stored under the file's group (folder upload) or under
+ * _LOOSE_CONFLICT_KEY (plain files) so every later conflict of the same batch is
+ * answered without a dialog. Concurrent callers are served one at a time.
+ */
+function _resolveFileConflict(item, filename, destPath) {
+    const key = item._groupId || _LOOSE_CONFLICT_KEY;
+    const tail = _conflictPromptTail.get(key) || Promise.resolve();
+    const result = tail.then(async () => {
+        const saved = _overwriteDecisions.get(key);
+        if (saved === 'overwrite' || saved === 'skip' || saved === 'rename') return saved;
+
+        const action = await _promptOverwrite(filename, destPath);
+        if (action === 'overwrite-all') _overwriteDecisions.set(key, 'overwrite');
+        if (action === 'skip-all') _overwriteDecisions.set(key, 'skip');
+        if (action === 'rename-all') _overwriteDecisions.set(key, 'rename');
+        if (action.startsWith('overwrite')) return 'overwrite';
+        if (action.startsWith('rename')) return 'rename';
+        return 'skip';
+    });
+    // Keep the chain alive even if a dialog or upload step throws.
+    _conflictPromptTail.set(key, result.catch(() => { }));
+    return result;
 }
 
 /**
@@ -6536,6 +6574,7 @@ async function startBatchUpload() {
     _activeFolderWorkers = 0;
     _activeFileWorkers = 0;
     _overwriteDecisions.clear();
+    _conflictPromptTail.clear();
     currentUploadIndex = 0;
     uploadStartTime = Date.now();
     _lastUploadActivity = Date.now(); // FIX: seed heartbeat so stall detector doesn't fire immediately
@@ -7000,21 +7039,10 @@ async function uploadSingleFile(item) {
             // Handle file-already-exists: ask user what to do
             if (response.status === 409) {
                 response.body?.cancel();
-                const groupDecision = item._groupId ? _overwriteDecisions.get(item._groupId) : 'ask';
-                let action = groupDecision || 'ask';
-
-                if (action === 'ask') {
-                    action = await _promptOverwrite(item.displayName || file.name, destPath);
-                    if (item._groupId) {
-                        if (action === 'overwrite-all') _overwriteDecisions.set(item._groupId, 'overwrite');
-                        if (action === 'skip-all') _overwriteDecisions.set(item._groupId, 'skip');
-                        if (action === 'rename-all') _overwriteDecisions.set(item._groupId, 'rename');
-                    }
-                }
-
-                const shouldSkip = action === 'skip-all' || action === 'skip-one' || groupDecision === 'skip';
-                const shouldOverwrite = action === 'overwrite-all' || action === 'overwrite-one' || groupDecision === 'overwrite';
-                const shouldRename = action === 'rename-all' || action === 'rename-one' || groupDecision === 'rename';
+                const resolution = await _resolveFileConflict(item, item.displayName || file.name, destPath);
+                const shouldSkip = resolution === 'skip';
+                const shouldOverwrite = resolution === 'overwrite';
+                const shouldRename = resolution === 'rename';
 
                 if (shouldSkip) {
                     updateItemProgress(item.id, 100, file.size);
