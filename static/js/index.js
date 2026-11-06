@@ -3268,9 +3268,53 @@ document.addEventListener('visibilitychange', function () {
 let isOnline = navigator.onLine;
 let connectionLostTime = null;
 
+// 5.43 seventh delivery: the browser's 'offline' event is only a HINT. Chromium /
+// Edge raise it on a tab that sits idle (adapter power saving, Wi-Fi or VPN
+// re-evaluation, sleep and wake) while the network works. So the event no longer
+// shows the toast by itself: after a short grace period the page asks the server
+// (_serverReachable) and only a failed answer counts as lost. A 'online' event in
+// the grace period cancels it; "restored" is shown only if "lost" was shown.
+const OFFLINE_CONFIRM_DELAY_MS = 2500;
+const OFFLINE_PROBE_TIMEOUT_MS = 5000;
+let _offlineConfirmTimer = null;
+let _offlineToastShown = false;
+
+// Any HTTP answer (even a redirect or 401) proves the network and the server are
+// reachable; only a rejected fetch (network error) or the timeout means "no".
+// redirect: 'manual' + body cancel: see CODING_GUIDELINES.md 14.2 (fetch rules).
+async function _serverReachable() {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), OFFLINE_PROBE_TIMEOUT_MS);
+    try {
+        const response = await fetch('/api/speedtest/ping', {
+            method: 'GET',
+            cache: 'no-store',
+            redirect: 'manual',
+            signal: ctl.signal
+        });
+        try { response.body?.cancel(); } catch (e) { }
+        return true;
+    } catch (e) {
+        return false;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 window.addEventListener('online', function () {
-    console.log('🌐 Connection restored');
+    if (_offlineConfirmTimer) {
+        clearTimeout(_offlineConfirmTimer);
+        _offlineConfirmTimer = null;
+    }
     isOnline = true;
+    if (!_offlineToastShown) {
+        // The "lost" toast never appeared, so there is nothing to restore.
+        console.log('🌐 Browser reports online again (no outage was shown)');
+        connectionLostTime = null;
+        return;
+    }
+    _offlineToastShown = false;
+    console.log('🌐 Connection restored');
     let restoredMsg = '🌐 Connection restored';
     if (connectionLostTime) {
         const outageTime = Math.round((Date.now() - connectionLostTime) / 1000);
@@ -3285,10 +3329,23 @@ window.addEventListener('online', function () {
 });
 
 window.addEventListener('offline', function () {
-    console.log('📡 Connection lost');
-    isOnline = false;
-    connectionLostTime = Date.now();
-    showUploadStatus('📡 Connection lost. Uploads will fail until connection is restored.', 'error');
+    console.log('📡 Browser reported offline - verifying with the server before telling the user');
+    if (_offlineConfirmTimer) return;   // one check at a time
+    _offlineConfirmTimer = setTimeout(async () => {
+        _offlineConfirmTimer = null;
+        if (await _serverReachable()) {
+            console.log('📡 False alarm: the server answered, connection is fine');
+            isOnline = true;
+            connectionLostTime = null;
+            return;
+        }
+        if (_offlineToastShown) return;
+        console.log('📡 Connection lost');
+        isOnline = false;
+        connectionLostTime = Date.now();
+        _offlineToastShown = true;
+        showUploadStatus('📡 Connection lost. Uploads will fail until connection is restored.', 'error');
+    }, OFFLINE_CONFIRM_DELAY_MS);
 });
 
 // File input handling
