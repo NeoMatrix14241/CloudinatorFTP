@@ -141,7 +141,9 @@ def test_an_exception_is_not_cached():
             try:
                 await stats()
             except OSError:
-                pass
+                # Expected: the fake walk raises every time. The point of the test is that the
+                # second call walks again instead of being served from a cached failure.
+                continue
 
     asyncio.run(go())
     assert storage.calls == 2

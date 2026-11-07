@@ -39,12 +39,35 @@ class FakeG:
         return self.__dict__.pop(name, default)
 
 
-class FakeSession(dict):
-    permanent = False
+class FakeSession:
+    """The part of Quart's session the auth functions use: a mapping with get / [] / in / pop /
+    clear, a `permanent` flag, and a record that clear() was called. A plain class around a dict
+    (not a dict subclass): a subclass that adds attributes without overriding __eq__ is a CodeQL
+    warning, and nothing here compares sessions."""
+
+    def __init__(self, data=None):
+        self.data = dict(data or {})
+        self.permanent = False
+        self.cleared = False
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+
+    def pop(self, key, default=None):
+        return self.data.pop(key, default)
+
+    def __getitem__(self, key):
+        return self.data[key]
+
+    def __setitem__(self, key, value):
+        self.data[key] = value
+
+    def __contains__(self, key):
+        return key in self.data
 
     def clear(self):
         self.cleared = True
-        super().clear()
+        self.data.clear()
 
 
 class CountingDb:
