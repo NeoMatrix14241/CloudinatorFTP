@@ -926,7 +926,10 @@ async def hls_start(video_path):
 
     # Spawn background daemon thread — survives frontend refresh
     threading.Thread(
-        target=_run_hls_transcode, args=(full_path, cache_key), daemon=True
+        target=_run_hls_transcode,
+        args=(full_path, cache_key),
+        daemon=True,
+        name="hls-transcode",
     ).start()
 
     _hls_write_status(cache_key, {"status": "processing", "progress": 0})

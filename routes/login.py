@@ -33,7 +33,7 @@ import uuid
 from auth import (
     check_login,
     login_user,
-    is_logged_in,
+    request_is_logged_in,
     get_role,
     revoke_current_session,
 )
@@ -61,7 +61,7 @@ async def get_csrf_token():
 
 @app.route("/check_session")
 async def check_session():
-    if not is_logged_in():
+    if not request_is_logged_in():
         return jsonify({"error": "Session expired"}), 401
     return jsonify({"status": "ok"}), 200
 
@@ -145,7 +145,9 @@ async def logout():
         # Clean up any upload chunks
         session_id = session.get("session_id")
         if session_id:
-            chunk_tracker.cleanup_session_chunks(session_id)
+            # An rmtree per tracked upload: worker thread since 5.44. session / request
+            # stay on the loop (the value is passed in as a plain string).
+            await asyncio.to_thread(chunk_tracker.cleanup_session_chunks, session_id)
 
         # End the session on the SERVER too (5.17): a copy of the cookie taken before this
         # logout is refused from now on. Must run before session.clear(); never raises.

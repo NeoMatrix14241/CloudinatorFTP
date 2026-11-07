@@ -17,7 +17,8 @@ import asyncio
 import threading
 import time
 from config import ROOT_DIR, ENABLE_SEARCH_INDEX
-from auth import current_user, is_logged_in
+from auth import current_user, request_is_logged_in
+from helpers.walk_executor import run_walk
 import storage
 from search_index import search_index_manager
 from realtime_stats import storage_stats_sse, get_event_manager
@@ -78,6 +79,41 @@ async def storage_stats_api():
         return jsonify({"error": f"Storage stats error: {str(e)}"}), 500
 
 
+# 5.44: storage.get_storage_stats() walks ROOT_DIR (up to 5 s / 10,000 files) and prints a lot.
+# Both handlers below used to run it straight on the event loop. It now runs in the walk pool
+# (helpers/walk_executor.py, 2 threads, so walks never queue up the default pool), behind a 30 s cache and an asyncio.Lock, so parallel callers (the debug route
+# included) share ONE walk. Consequence: "slow" and debug may show counts up to
+# 30 s old. Only the loop writes _stats_cache, so no thread lock is needed; a failed walk
+# (an exception, or the all-zero fallback dict) is never cached.
+_STATS_CACHE_TTL_SECS = 30.0
+_stats_cache = {"t": 0.0, "value": None}
+_stats_lock = asyncio.Lock()
+
+
+async def _cached_storage_stats():
+    """storage.get_storage_stats() off the loop, cached for _STATS_CACHE_TTL_SECS."""
+    value = _stats_cache["value"]
+    if (
+        value is not None
+        and time.monotonic() - _stats_cache["t"] < _STATS_CACHE_TTL_SECS
+    ):
+        return dict(value)
+    async with _stats_lock:
+        # Another caller may have filled the cache while this one waited for the lock.
+        value = _stats_cache["value"]
+        if (
+            value is None
+            or time.monotonic() - _stats_cache["t"] >= _STATS_CACHE_TTL_SECS
+        ):
+            value = await run_walk(storage.get_storage_stats)
+            # get_storage_stats() answers a failure with an all-zero dict instead of raising
+            # (total_space 0): hand that out once, but never keep it for 30 s.
+            if value.get("total_space"):
+                _stats_cache["value"] = value
+                _stats_cache["t"] = time.monotonic()
+        return dict(value)
+
+
 @app.route("/api/storage_stats_slow", methods=["GET"])
 @login_required
 async def storage_stats_slow_api():
@@ -86,7 +122,7 @@ async def storage_stats_slow_api():
         print(
             f"📊 SLOW Storage stats API called by user: {session.get('username', 'unknown')}"
         )
-        stats = storage.get_storage_stats()
+        stats = await _cached_storage_stats()
         print(f"📊 SLOW storage stats calculated: {stats}")
         return jsonify(stats), 200
 
@@ -103,7 +139,7 @@ async def storage_stats_debug():
     """Debug version of storage stats without authentication"""
     try:
         print("🔧 Debug storage stats API called (no auth required)")
-        stats = storage.get_storage_stats()
+        stats = await _cached_storage_stats()
         print(f"🔧 Debug storage stats calculated: {stats}")
         return (
             jsonify(
@@ -129,7 +165,7 @@ async def storage_stats_debug():
 @app.route("/api/storage_stats_stream", methods=["GET"])
 async def storage_stats_stream():
     """Server-Sent Events endpoint for real-time storage stats"""
-    if not is_logged_in():
+    if not request_is_logged_in():
         return jsonify({"error": "Authentication required"}), 401
 
     print(f"📡 SSE connection established for user: {current_user()}")
@@ -139,7 +175,7 @@ async def storage_stats_stream():
 @app.route("/api/storage_stats_poll", methods=["GET"])
 async def storage_stats_poll():
     """Polling endpoint for storage stats - fallback when SSE fails"""
-    if not is_logged_in():
+    if not request_is_logged_in():
         return jsonify({"error": "Authentication required"}), 401
 
     try:
@@ -326,7 +362,7 @@ async def storage_stats_poll():
 @app.route("/api/monitoring_status", methods=["GET"])
 async def monitoring_status():
     """Get current monitoring system status"""
-    if not is_logged_in():
+    if not request_is_logged_in():
         return jsonify({"error": "Authentication required"}), 401
 
     try:

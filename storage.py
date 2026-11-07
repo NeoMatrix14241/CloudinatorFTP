@@ -637,7 +637,9 @@ def start_cleanup_scheduler():
             except Exception as e:
                 print(f"❌ Error in cleanup worker: {e}")
 
-    cleanup_thread = threading.Thread(target=cleanup_worker, daemon=True)
+    cleanup_thread = threading.Thread(
+        target=cleanup_worker, daemon=True, name="basic-chunk-cleanup"
+    )
     cleanup_thread.start()
     print("📧 Started basic chunk cleanup scheduler (runs every hour)")
 
@@ -699,17 +701,16 @@ def get_directory_size(path):
         return 0
 
 
-def get_dir_info(path):
+def get_dir_info_indexed(path):
     """
-    Get shallow item count + recursive total size for a directory.
-    Checks file_monitor index first — instant if indexed.
-    Falls back to a live walk only if the path isn't in the index yet
-    (e.g. brand-new folder not yet reconciled).
+    In-memory half of get_dir_info (5.44): the file_monitor index lookup only, NO disk.
+    Returns {file_count, dir_count, total_size}, or None when the folder is not indexed
+    yet (or the lookup failed). Cheap enough to call on the event loop; the live walk of
+    get_dir_info is not (routes/files.py dir_info offloads only that part).
     """
     # Normalize to forward slashes, strip leading/trailing slashes
     rel_path = path.replace("\\", "/").strip("/")
 
-    # Try the in-memory index first — this is the fast path
     try:
         from file_monitor import get_file_monitor
 
@@ -723,6 +724,23 @@ def get_dir_info(path):
             }
     except Exception as e:
         print(f"⚠️ Cache lookup failed for '{rel_path}': {e}")
+    return None
+
+
+def get_dir_info(path):
+    """
+    Get shallow item count + recursive total size for a directory.
+    Checks file_monitor index first — instant if indexed.
+    Falls back to a live walk only if the path isn't in the index yet
+    (e.g. brand-new folder not yet reconciled).
+    """
+    # Normalize to forward slashes, strip leading/trailing slashes
+    rel_path = path.replace("\\", "/").strip("/")
+
+    # Try the in-memory index first — this is the fast path
+    indexed = get_dir_info_indexed(path)
+    if indexed is not None:
+        return indexed
 
     # Fallback — live walk for paths not yet indexed
     print(

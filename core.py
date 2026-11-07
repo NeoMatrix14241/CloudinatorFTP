@@ -77,29 +77,75 @@ async def _stream_from_thread(sync_generator):
     generator straight to Flask, which was fine under Waitress's
     thread-per-request model but would stall the whole server under
     Quart's single event loop).
+
+    Hand-over (5.44): at most 8 items are in flight between the worker and the loop. The
+    worker takes one of 8 semaphore slots before it hands an item over with a plain
+    `loop.call_soon_threadsafe(queue.put_nowait, item)`; the consumer gives the slot back
+    when it has taken the item. No coroutine or future is created in the worker thread (an
+    `asyncio.run_coroutine_threadsafe(queue.put(...))` left a "coroutine ... was never
+    awaited" warning behind whenever the loop closed with a put still scheduled).
+
+    Disconnect handling (5.44): when the consumer goes away (client closed the tab,
+    the response generator is closed or cancelled) the `finally` below sets `stop`.
+    The worker never waits for a slot without checking `stop` (it polls every 0.5 s), so it
+    ends, closes `sync_generator` (which releases the files zipstream holds open) and the
+    "zip-stream" thread is gone within about a second. Before 5.44 a worker blocked on a
+    full queue (maxsize 8) for ever once nobody read it.
     """
     loop = asyncio.get_running_loop()
-    out_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+    out_queue: asyncio.Queue = asyncio.Queue()  # never holds more than 8 items (slots)
+    slots = threading.Semaphore(8)
     _DONE = object()
+    stop = threading.Event()
+
+    def _put(item):
+        """Hand one item to the loop. False = the consumer is gone (or the loop is
+        closed): the caller must stop producing."""
+        while not stop.is_set():
+            if not slots.acquire(timeout=0.5):
+                continue  # all 8 slots busy: look at `stop` again
+            try:
+                loop.call_soon_threadsafe(out_queue.put_nowait, item)
+            except RuntimeError:  # loop already closed
+                return False
+            return True
+        return False
 
     def _worker():
         try:
             for chunk in sync_generator:
-                asyncio.run_coroutine_threadsafe(out_queue.put(chunk), loop).result()
+                if not _put(chunk):
+                    break
         except Exception as e:  # noqa: BLE001 — re-raised on the loop below
-            asyncio.run_coroutine_threadsafe(out_queue.put(e), loop).result()
+            _put(e)
         finally:
-            asyncio.run_coroutine_threadsafe(out_queue.put(_DONE), loop).result()
+            # Close the generator HERE, in the thread that ran it (a running generator
+            # cannot be closed from another thread), and before the end marker.
+            close = getattr(sync_generator, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception as close_error:
+                    # Logged only: the stream is already over, nothing to re-raise.
+                    print(f"⚠️ zip-stream: closing the generator failed: {close_error}")
+            if not stop.is_set():
+                _put(_DONE)
 
-    threading.Thread(target=_worker, daemon=True).start()
+    threading.Thread(target=_worker, daemon=True, name="zip-stream").start()
 
-    while True:
-        item = await out_queue.get()
-        if item is _DONE:
-            break
-        if isinstance(item, Exception):
-            raise item
-        yield item
+    try:
+        while True:
+            item = await out_queue.get()
+            slots.release()  # the slot is free again as soon as the item is taken
+            if item is _DONE:
+                break
+            if isinstance(item, Exception):
+                raise item
+            yield item
+    finally:
+        # Normal end, an error, a closed generator (GeneratorExit) or a cancelled
+        # request: in every case the worker must stop.
+        stop.set()
 
 
 def get_local_ip() -> str:
@@ -162,7 +208,7 @@ from auth import (
     login_user,
     logout_user,
     current_user,
-    is_logged_in,
+    request_is_logged_in,
     get_role,
 )
 import storage
@@ -1088,7 +1134,7 @@ def _trigger_reconcile(settle=False):
         except Exception as e:
             app_logger.error(f"Background reconcile error: {e}", exc_info=True)
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=_run, daemon=True, name="reconcile-trigger").start()
 
 
 storage.ensure_root()
@@ -1182,9 +1228,11 @@ def _unauthenticated_response():
 class ChunkTracker:
     def __init__(self):
         self.active_uploads = {}  # session_id -> set of file_ids
-        self.lock = threading.RLock()  # RLock: cleanup_interrupted_uploads() holds
-        # this lock and calls untrack_upload(), which re-acquires it on the same
-        # thread. A plain Lock() deadlocks there; RLock() allows re-entry.
+        # RLock kept from the time cleanup_interrupted_uploads() held this lock and called
+        # untrack_upload() on the same thread. 5.44: no cleanup method holds it across disk
+        # work any more, but re-entry stays harmless, so it stays an RLock rather than risk
+        # a deadlock in a method added later.
+        self.lock = threading.RLock()
         self.upload_timestamps = {}  # file_id -> timestamp
 
     def track_upload(self, session_id, file_id):
@@ -1204,22 +1252,61 @@ class ChunkTracker:
             self.upload_timestamps.pop(file_id, None)
             print(f"📊 Untracked upload: {file_id} for session {session_id}")
 
-    def cleanup_session_chunks(self, session_id):
-        """Clean up all chunks for a session"""
+    # ------------------------------------------------------------------
+    # 5.44 (async blocking refactor, plan T3b): the tracker lock is a threading.RLock that
+    # the EVENT LOOP also takes (track_upload on every chunk, get_stats, untrack_upload).
+    # The three cleanup methods used to hold it across os.listdir, timestamp-file reads and
+    # storage.cleanup_chunks (an rmtree), so during every orphan sweep an upload chunk
+    # handler could wait on the loop until the sweep ended. Rule now: the lock is taken
+    # ONLY for short in-memory steps; every disk call runs with it released. A chunk that
+    # becomes active between the decision and the delete is caught by a second look under
+    # the lock just before each delete (see _became_active); the thresholds (30 min / 45
+    # min / 1 h) and the assembly checks are unchanged.
+    # ------------------------------------------------------------------
+    def uploads_for_session(self, session_id):
+        """Copy of the file ids tracked for one session (safe to iterate off the lock)."""
         with self.lock:
-            if session_id in self.active_uploads:
-                file_ids = self.active_uploads[session_id].copy()
-                for file_id in file_ids:
-                    try:
-                        storage.cleanup_chunks(file_id)
-                        print(
-                            f"🧹 Cleaned up abandoned chunks for session {session_id}: {file_id}"
-                        )
-                    except Exception as e:
-                        print(f"❌ Error cleaning up chunks for {file_id}: {e}")
-                    self.upload_timestamps.pop(file_id, None)
-                del self.active_uploads[session_id]
-                print(f"🧹 Cleaned up all chunks for session: {session_id}")
+            return set(self.active_uploads.get(session_id, ()))
+
+    def upload_timestamp(self, file_id):
+        """Last activity timestamp of a tracked upload, or None."""
+        with self.lock:
+            return self.upload_timestamps.get(file_id)
+
+    def _became_active(self, file_id, was_tracked):
+        """Second look, under the lock, just before a delete: True when the upload that the
+        sweep judged abandoned has been used again since (the delete must be skipped).
+        """
+        with self.lock:
+            if not was_tracked:
+                # Judged untracked: any session that tracks it now has started using it.
+                return any(file_id in files for files in self.active_uploads.values())
+            # Judged tracked but stale (> 1 h): a fresh timestamp means a new chunk arrived.
+            timestamp = self.upload_timestamps.get(file_id)
+            return timestamp is not None and (time.time() - timestamp) <= 3600
+
+    def cleanup_session_chunks(self, session_id):
+        """Clean up all chunks for a session.
+
+        The session's entries leave the tracker under the lock; the chunk folders are
+        deleted afterwards without it."""
+        with self.lock:
+            tracked = self.active_uploads.pop(session_id, None)
+            if tracked is None:
+                return
+            file_ids = set(tracked)
+            for file_id in file_ids:
+                self.upload_timestamps.pop(file_id, None)
+
+        for file_id in file_ids:
+            try:
+                storage.cleanup_chunks(file_id)
+                print(
+                    f"🧹 Cleaned up abandoned chunks for session {session_id}: {file_id}"
+                )
+            except Exception as e:
+                print(f"❌ Error cleaning up chunks for {file_id}: {e}")
+        print(f"🧹 Cleaned up all chunks for session: {session_id}")
 
     def cleanup_orphaned_chunks(self):
         """Find and cleanup chunks that don't belong to any active session"""
@@ -1228,101 +1315,105 @@ class ChunkTracker:
             return
 
         try:
+            # Disk first, without the lock; then a short in-memory snapshot of the tracker.
+            listing = os.listdir(chunks_dir)
             with self.lock:
                 all_tracked_files = set()
                 for file_ids in self.active_uploads.values():
                     all_tracked_files.update(file_ids)
+                tracked_timestamps = dict(self.upload_timestamps)
 
-                current_time = time.time()
-                cleaned_count = 0
+            current_time = time.time()
+            cleaned_count = 0
 
-                # Find chunks that aren't tracked by any session
-                for file_id in os.listdir(chunks_dir):
-                    chunk_dir = os.path.join(chunks_dir, file_id)
-                    if not os.path.isdir(chunk_dir):
-                        continue
+            # Find chunks that aren't tracked by any session
+            for file_id in listing:
+                chunk_dir = os.path.join(chunks_dir, file_id)
+                if not os.path.isdir(chunk_dir):
+                    continue
 
-                    # CRITICAL: Never cleanup chunks for files currently being assembled
-                    if assembly_queue.get_job_status(file_id):
-                        print(
-                            f"🔐 Skipping cleanup for {file_id} - currently being assembled"
-                        )
-                        continue
+                # CRITICAL: Never cleanup chunks for files currently being assembled
+                if assembly_queue.get_job_status(file_id):
+                    print(
+                        f"🔐 Skipping cleanup for {file_id} - currently being assembled"
+                    )
+                    continue
 
-                    # Also check for assembly protection marker
-                    assembly_marker = os.path.join(chunk_dir, ".assembling")
-                    if os.path.exists(assembly_marker):
-                        print(
-                            f"🔐 Skipping cleanup for {file_id} - assembly marker present"
-                        )
-                        continue
+                # Also check for assembly protection marker
+                assembly_marker = os.path.join(chunk_dir, ".assembling")
+                if os.path.exists(assembly_marker):
+                    print(
+                        f"🔐 Skipping cleanup for {file_id} - assembly marker present"
+                    )
+                    continue
 
-                    should_cleanup = False
-                    cleanup_reason = ""
+                should_cleanup = False
+                cleanup_reason = ""
+                was_tracked = file_id in all_tracked_files
 
-                    if file_id not in all_tracked_files:
-                        # Check age before cleanup
-                        timestamp_file = os.path.join(chunk_dir, ".timestamp")
+                if not was_tracked:
+                    # Check age before cleanup
+                    timestamp_file = os.path.join(chunk_dir, ".timestamp")
 
-                        if os.path.exists(timestamp_file):
-                            try:
-                                with open(timestamp_file, "r") as f:
-                                    timestamp = float(f.read().strip())
-                                # Cleanup untracked chunks older than 45 minutes.
-                                # Must be > cleanup_interrupted_uploads timeout (30 min)
-                                # so we never delete chunks that are simply backgrounded.
-                                if current_time - timestamp > 2700:
-                                    should_cleanup = True
-                                    cleanup_reason = (
-                                        "untracked >45min old (abandoned upload)"
-                                    )
-                            except (ValueError, OSError):
-                                should_cleanup = True
-                                cleanup_reason = "corrupted timestamp file"
-                        else:
-                            # No timestamp, cleanup if dir is older than 45 minutes
-                            try:
-                                dir_mtime = os.path.getmtime(chunk_dir)
-                                if current_time - dir_mtime > 2700:
-                                    should_cleanup = True
-                                    cleanup_reason = "no timestamp >45min old"
-                            except OSError:
-                                should_cleanup = True
-                                cleanup_reason = "cannot read metadata"
-                    else:
-                        # Even tracked files - cleanup if very old (stale uploads)
-                        file_timestamp = self.upload_timestamps.get(
-                            file_id, current_time
-                        )
-                        if current_time - file_timestamp > 3600:  # 1 hour
-                            should_cleanup = True
-                            cleanup_reason = "tracked but stale >1hr"
-                            print(
-                                f"🧹 Cleaning up stale tracked chunks (>1hr): {file_id}"
-                            )
-
-                    if should_cleanup:
+                    if os.path.exists(timestamp_file):
                         try:
-                            storage.cleanup_chunks(file_id)
-                            cleaned_count += 1
-                            print(
-                                f"🧹 Cleaned up orphaned chunks: {file_id} ({cleanup_reason})"
-                            )
-                        except Exception as e:
-                            print(
-                                f"❌ Failed to cleanup orphaned chunks {file_id}: {e}"
-                            )
+                            with open(timestamp_file, "r") as f:
+                                timestamp = float(f.read().strip())
+                            # Cleanup untracked chunks older than 45 minutes.
+                            # Must be > cleanup_interrupted_uploads timeout (30 min)
+                            # so we never delete chunks that are simply backgrounded.
+                            if current_time - timestamp > 2700:
+                                should_cleanup = True
+                                cleanup_reason = (
+                                    "untracked >45min old (abandoned upload)"
+                                )
+                        except (ValueError, OSError):
+                            should_cleanup = True
+                            cleanup_reason = "corrupted timestamp file"
+                    else:
+                        # No timestamp, cleanup if dir is older than 45 minutes
+                        try:
+                            dir_mtime = os.path.getmtime(chunk_dir)
+                            if current_time - dir_mtime > 2700:
+                                should_cleanup = True
+                                cleanup_reason = "no timestamp >45min old"
+                        except OSError:
+                            should_cleanup = True
+                            cleanup_reason = "cannot read metadata"
+                else:
+                    # Even tracked files - cleanup if very old (stale uploads)
+                    file_timestamp = tracked_timestamps.get(file_id, current_time)
+                    if current_time - file_timestamp > 3600:  # 1 hour
+                        should_cleanup = True
+                        cleanup_reason = "tracked but stale >1hr"
+                        print(f"🧹 Cleaning up stale tracked chunks (>1hr): {file_id}")
 
-                        # Remove from tracking if it was tracked
-                        if file_id in all_tracked_files:
+                if should_cleanup:
+                    if self._became_active(file_id, was_tracked):
+                        print(
+                            f"🔐 Skipping cleanup for {file_id} - upload became active again"
+                        )
+                        continue
+                    try:
+                        storage.cleanup_chunks(file_id)
+                        cleaned_count += 1
+                        print(
+                            f"🧹 Cleaned up orphaned chunks: {file_id} ({cleanup_reason})"
+                        )
+                    except Exception as e:
+                        print(f"❌ Failed to cleanup orphaned chunks {file_id}: {e}")
+
+                    # Remove from tracking if it was tracked
+                    if was_tracked:
+                        with self.lock:
                             for file_set in self.active_uploads.values():
                                 file_set.discard(file_id)
                             self.upload_timestamps.pop(file_id, None)
 
-                if cleaned_count > 0:
-                    print(
-                        f"🧹 Orphaned chunk cleanup completed: {cleaned_count} directories removed"
-                    )
+            if cleaned_count > 0:
+                print(
+                    f"🧹 Orphaned chunk cleanup completed: {cleaned_count} directories removed"
+                )
 
         except Exception as e:
             print(f"❌ Error in orphaned chunk cleanup: {e}")
@@ -1338,6 +1429,7 @@ class ChunkTracker:
         """
         current_time = time.time()
         interrupted_uploads = []
+        cleaned_count = 0
 
         try:
             with self.lock:
@@ -1352,19 +1444,25 @@ class ChunkTracker:
                                 f"🧹 Detected interrupted upload: {file_id} (inactive for {int(current_time - timestamp)}s)"
                             )
 
-                # Clean up interrupted uploads
-                for session_id, file_id in interrupted_uploads:
-                    try:
-                        self.untrack_upload(session_id, file_id)
-                        storage.cleanup_chunks(file_id)
-                        print(f"🧹 Cleaned up interrupted upload: {file_id}")
-                    except Exception as e:
-                        print(f"❌ Failed to cleanup interrupted upload {file_id}: {e}")
+            # Clean up interrupted uploads: the lock is NOT held while the disk is busy.
+            for session_id, file_id in interrupted_uploads:
+                try:
+                    # Second look: a chunk may have arrived since the scan above.
+                    timestamp = self.upload_timestamp(file_id)
+                    if not timestamp or (time.time() - timestamp) <= 1800:
+                        print(f"🔐 Skipping {file_id} - upload became active again")
+                        continue
+                    self.untrack_upload(session_id, file_id)
+                    storage.cleanup_chunks(file_id)
+                    cleaned_count += 1
+                    print(f"🧹 Cleaned up interrupted upload: {file_id}")
+                except Exception as e:
+                    print(f"❌ Failed to cleanup interrupted upload {file_id}: {e}")
 
-                if interrupted_uploads:
-                    print(
-                        f"🧹 Interrupted upload cleanup completed: {len(interrupted_uploads)} uploads cleaned"
-                    )
+            if interrupted_uploads:
+                print(
+                    f"🧹 Interrupted upload cleanup completed: {cleaned_count} uploads cleaned"
+                )
 
         except Exception as e:
             print(f"❌ Error in interrupted upload cleanup: {e}")
@@ -1441,7 +1539,7 @@ def login_required(f):
 
     @wraps(f)
     async def decorated(*args, **kwargs):
-        if not is_logged_in():
+        if not request_is_logged_in():
             # API and XHR requests: return 401 JSON so the client can handle it
             # without breaking an in-progress upload with a page redirect.
             if (

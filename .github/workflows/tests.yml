@@ -33,7 +33,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.14.7"
+          python-version: "3.14.10"
 
       - name: Install pyflakes and the pinned Ruff
         run: python -m pip install --upgrade pip pyflakes "$(grep -i '^ruff==' requirements-dev.txt)"
@@ -63,7 +63,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.14.7"
+          python-version: "3.14.10"
 
       - name: Install dependencies
         run: python -m pip install --upgrade pip pyflakes -r requirements.txt -r requirements-dev.txt

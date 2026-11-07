@@ -34,13 +34,14 @@ from quart import (
     abort,
 )
 import os
+import asyncio
 import threading
 import time
 import logging
 import uuid
 from datetime import datetime
 from config import ROOT_DIR
-from auth import is_logged_in, get_role
+from auth import request_is_logged_in, get_role
 import storage
 import secrets as _secrets
 
@@ -227,11 +228,57 @@ def timestamp_to_date_filter(timestamp):
         return "--"
 
 
+def _cleanup_abandoned_uploads_sync(session_id):
+    """Worker-thread body of the page-load cleanup in before_request (5.44; it used to run
+    on the event loop, which stalled every request during an rmtree). Takes a plain session
+    id and reads the tracker only through its lock-safe helpers.
+    IMPORTANT: Check for assembly jobs FIRST before cleaning up chunks."""
+    try:
+        current_uploads = chunk_tracker.uploads_for_session(session_id)
+        if current_uploads:
+            print(
+                f"🧹 Detected {len(current_uploads)} potentially abandoned uploads on page refresh"
+            )
+            # Check if any of these uploads are actually in assembly queue
+            assembly_protected = set()
+            for file_id in current_uploads:
+                # Check if this file is in assembly queue
+                if assembly_queue.get_job_status(file_id):
+                    print(f"🔐 Upload {file_id} is protected by assembly queue")
+                    assembly_protected.add(file_id)
+                    continue
+
+                # Check for assembly protection marker
+                chunk_dir = os.path.join(ROOT_DIR, ".chunks", file_id)
+                assembly_marker = os.path.join(chunk_dir, ".assembling")
+                if os.path.exists(assembly_marker):
+                    print(f"🔐 Upload {file_id} is protected by assembly marker")
+                    assembly_protected.add(file_id)
+                    continue
+
+                # Give a grace period for genuine page refreshes during upload
+                timestamp = chunk_tracker.upload_timestamp(file_id)
+                if (
+                    timestamp and (time.time() - timestamp) > 30
+                ):  # 30 seconds grace period
+                    print(f"🧹 Cleaning up abandoned upload: {file_id}")
+                    chunk_tracker.untrack_upload(session_id, file_id)
+                    storage.cleanup_chunks(file_id)
+
+            # Keep assembly-protected uploads in tracker
+            if assembly_protected:
+                print(
+                    f"🔐 Keeping {len(assembly_protected)} assembly-protected uploads in tracker"
+                )
+    except Exception as e:
+        print(f"❌ Error in abandoned upload cleanup: {e}")
+
+
 @app.before_request
 async def before_request():
     """Run cleanup before certain requests and handle interrupted uploads"""
     # Ensure session ID exists for logged-in users
-    if is_logged_in() and "session_id" not in session:
+    if request_is_logged_in() and "session_id" not in session:
         session["session_id"] = str(uuid.uuid4())
 
     # Enhanced cleanup on page load/refresh - check for assembly jobs first
@@ -254,53 +301,15 @@ async def before_request():
         # Check for and cleanup any stale uploads from this session
         session_id = session.get("session_id")
         if session_id:
-            # This is a page load/refresh - check for abandoned uploads
-            # IMPORTANT: Check for assembly jobs FIRST before cleaning up chunks
-            try:
-                current_uploads = chunk_tracker.active_uploads.get(session_id, set())
-                if current_uploads:
-                    print(
-                        f"🧹 Detected {len(current_uploads)} potentially abandoned uploads on page refresh"
-                    )
-                    # Check if any of these uploads are actually in assembly queue
-                    assembly_protected = set()
-                    for file_id in current_uploads.copy():
-                        # Check if this file is in assembly queue
-                        if assembly_queue.get_job_status(file_id):
-                            print(f"🔐 Upload {file_id} is protected by assembly queue")
-                            assembly_protected.add(file_id)
-                            continue
-
-                        # Check for assembly protection marker
-                        chunk_dir = os.path.join(ROOT_DIR, ".chunks", file_id)
-                        assembly_marker = os.path.join(chunk_dir, ".assembling")
-                        if os.path.exists(assembly_marker):
-                            print(
-                                f"🔐 Upload {file_id} is protected by assembly marker"
-                            )
-                            assembly_protected.add(file_id)
-                            continue
-
-                        # Give a grace period for genuine page refreshes during upload
-                        timestamp = chunk_tracker.upload_timestamps.get(file_id)
-                        if (
-                            timestamp and (time.time() - timestamp) > 30
-                        ):  # 30 seconds grace period
-                            print(f"🧹 Cleaning up abandoned upload: {file_id}")
-                            chunk_tracker.untrack_upload(session_id, file_id)
-                            storage.cleanup_chunks(file_id)
-
-                    # Keep assembly-protected uploads in tracker
-                    if assembly_protected:
-                        print(
-                            f"🔐 Keeping {len(assembly_protected)} assembly-protected uploads in tracker"
-                        )
-            except Exception as e:
-                print(f"❌ Error in abandoned upload cleanup: {e}")
+            # This is a page load/refresh - check for abandoned uploads (one rmtree per
+            # abandoned upload: in a worker thread since 5.44, not on the event loop)
+            await asyncio.to_thread(_cleanup_abandoned_uploads_sync, session_id)
 
         # Run periodic cleanup in background thread to not slow down requests
         cleanup_thread = threading.Thread(
-            target=cleanup_stale_chunks_on_request, daemon=True
+            target=cleanup_stale_chunks_on_request,
+            daemon=True,
+            name="stale-chunk-cleanup",
         )
         cleanup_thread.start()
 
@@ -311,7 +320,7 @@ async def after_request(response):
     # Add cache control headers to authenticated pages
     if request.endpoint and request.endpoint not in ["static"]:
         # Check if this is an authenticated route
-        if is_logged_in() or request.endpoint in [
+        if request_is_logged_in() or request.endpoint in [
             "index",
             "download",
             "upload",

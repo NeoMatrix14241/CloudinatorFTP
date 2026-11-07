@@ -42,6 +42,7 @@ import secrets as _secrets
 from config import ROOT_DIR, CHUNK_SIZE
 from auth import current_user, get_role
 import storage
+from helpers.walk_executor import run_walk
 
 
 @app.route("/cancel_bulk_zip", methods=["POST"])
@@ -351,39 +352,54 @@ async def bulk_download():
         return jsonify({"error": "Failed to create download"}), 500
 
 
+def _dir_info_live_sync(path):
+    """Worker-thread half of dir_info (5.44): the live walk for a folder that is not in the
+    index yet, plus storing the result back into the monitor index so the next request for
+    this path is answered from memory. Takes a plain path string; touches no request state.
+    """
+    info = storage.get_dir_info(path)
+
+    # If this was a live walk fallback, store it back into the monitor index
+    # so the next request for this path is instant
+    try:
+        from file_monitor import get_file_monitor
+
+        monitor = get_file_monitor()
+        rel_path = path.replace("\\", "/").strip("/")
+        if monitor.get_dir_info(rel_path) is None:
+            with monitor.lock:
+                monitor._dir_info[rel_path] = {
+                    "file_count": info["file_count"],
+                    "dir_count": info["dir_count"],
+                    "total_size": info["total_size"],
+                }
+            print(f"📥 Stored live walk result for '{rel_path}' into index")
+    except Exception:  # noqa: S110
+        # Writing the live-walk result into the index is best effort; the response is unaffected.
+        pass
+
+    return info
+
+
 @app.route("/api/dir_info/", defaults={"path": ""})
 @app.route("/api/dir_info/<path:path>")
 @login_required
 async def dir_info(path):
     """
     Returns folder size and item count.
-    Hits the in-memory index instantly if indexed.
-    Falls back to live walk for brand-new folders not yet in the index,
-    then stores the result back so subsequent requests are instant.
+    Hits the in-memory index instantly if indexed (answered on the loop: a dict lookup,
+    no thread hop, because the file table asks once per visible folder row).
+    Falls back to live walk for brand-new folders not yet in the index (in the
+    walk pool since 5.44, helpers/walk_executor.py: the walk never stops the event loop and
+    never queues up the default thread pool), then stores the result back so subsequent
+    requests are instant.
     """
     if path and not storage.is_safe_path(path):
         return jsonify({"error": "Invalid path"}), 400
     try:
-        info = storage.get_dir_info(path)
-
-        # If this was a live walk fallback, store it back into the monitor index
-        # so the next request for this path is instant
-        try:
-            from file_monitor import get_file_monitor
-
-            monitor = get_file_monitor()
-            rel_path = path.replace("\\", "/").strip("/")
-            if monitor.get_dir_info(rel_path) is None:
-                with monitor.lock:
-                    monitor._dir_info[rel_path] = {
-                        "file_count": info["file_count"],
-                        "dir_count": info["dir_count"],
-                        "total_size": info["total_size"],
-                    }
-                print(f"📥 Stored live walk result for '{rel_path}' into index")
-        except Exception:  # noqa: S110
-            # Writing the live-walk result into the index is best effort; the response is unaffected.
-            pass
+        info = storage.get_dir_info_indexed(path)
+        if info is None:
+            info = await run_walk(_dir_info_live_sync, path)
 
         return jsonify(info), 200
     except Exception as e:
@@ -695,6 +711,40 @@ async def bulk_job_status(job_id):
     return jsonify(snap), 200
 
 
+def _bulk_delete_sync(paths):
+    """Worker-thread body of bulk_delete (5.44): the per-path delete loop, unchanged.
+    Returns (deleted_count, errors) with the exact error strings the route always sent.
+    NOTE: this loop uses a plain shutil.rmtree, storage.delete_path uses safe_rmtree
+    (Windows read-only files); the difference predates 5.44 and was kept on purpose."""
+    deleted_count = 0
+    errors = []
+
+    for target_path in paths:
+        try:
+            # Security check
+            if not storage.is_safe_path(target_path):
+                errors.append(f"Invalid path: {target_path}")
+                continue
+
+            full_path = os.path.join(ROOT_DIR, target_path)
+            if not os.path.exists(full_path):
+                errors.append(f"Path not found: {target_path}")
+                continue
+
+            # Perform the deletion
+            if os.path.isdir(full_path):
+                shutil.rmtree(full_path)
+            else:
+                os.remove(full_path)
+
+            deleted_count += 1
+
+        except Exception as e:
+            errors.append(f"Failed to delete {target_path}: {str(e)}")
+
+    return deleted_count, errors
+
+
 @app.route("/bulk_delete", methods=["POST"])
 @login_required
 async def bulk_delete():
@@ -713,31 +763,9 @@ async def bulk_delete():
         if not paths:
             return jsonify({"error": "No paths provided"}), 400
 
-        deleted_count = 0
-        errors = []
-
-        for target_path in paths:
-            try:
-                # Security check
-                if not storage.is_safe_path(target_path):
-                    errors.append(f"Invalid path: {target_path}")
-                    continue
-
-                full_path = os.path.join(ROOT_DIR, target_path)
-                if not os.path.exists(full_path):
-                    errors.append(f"Path not found: {target_path}")
-                    continue
-
-                # Perform the deletion
-                if os.path.isdir(full_path):
-                    shutil.rmtree(full_path)
-                else:
-                    os.remove(full_path)
-
-                deleted_count += 1
-
-            except Exception as e:
-                errors.append(f"Failed to delete {target_path}: {str(e)}")
+        # The whole delete loop runs in ONE worker thread (5.44): an rmtree of a big
+        # folder on a hard disk used to stop the event loop for its whole duration.
+        deleted_count, errors = await asyncio.to_thread(_bulk_delete_sync, paths)
 
         # Reconcile immediately so file/dir counts are corrected without waiting 15 min
         if deleted_count > 0:
@@ -855,7 +883,7 @@ async def mkdir():
         if path and not storage.is_safe_path(path):
             return jsonify({"error": "Invalid path"}), 400
 
-        created = storage.create_folder(path, foldername)
+        created = await asyncio.to_thread(storage.create_folder, path, foldername)
         if not created:
             return (
                 jsonify({"error": "Folder already exists or could not be created"}),
@@ -896,7 +924,7 @@ async def delete():
             await flash("Invalid target path")
             return redirect(url_for("index"))
 
-        if storage.delete_path(target_path):
+        if await asyncio.to_thread(storage.delete_path, target_path):
             await flash("Item deleted successfully")
             _trigger_reconcile()
         else:
@@ -909,6 +937,30 @@ async def delete():
     except Exception as e:
         await flash(f"Error deleting item: {str(e)}")
         return redirect(url_for("index"))
+
+
+def _find_conflicts_sync(paths, destination):
+    """Worker-thread body of api_check_conflicts (5.44): which of `paths` already exist at
+    `destination`. Plain values in, plain list out."""
+    conflicts = []
+    for source_path in paths:
+        if not storage.is_safe_path(source_path):
+            continue
+        filename = os.path.basename(source_path)
+        dest_full = (
+            os.path.join(ROOT_DIR, destination, filename)
+            if destination
+            else os.path.join(ROOT_DIR, filename)
+        )
+        if os.path.exists(dest_full):
+            conflicts.append(
+                {
+                    "source": source_path,
+                    "name": filename,
+                    "is_dir": os.path.isdir(dest_full),
+                }
+            )
+    return conflicts
 
 
 @app.route("/api/check_conflicts", methods=["POST"])
@@ -925,24 +977,9 @@ async def api_check_conflicts():
         if destination and not storage.is_safe_path(destination):
             return jsonify({"error": "Invalid destination path"}), 400
 
-        conflicts = []
-        for source_path in paths:
-            if not storage.is_safe_path(source_path):
-                continue
-            filename = os.path.basename(source_path)
-            dest_full = (
-                os.path.join(ROOT_DIR, destination, filename)
-                if destination
-                else os.path.join(ROOT_DIR, filename)
-            )
-            if os.path.exists(dest_full):
-                conflicts.append(
-                    {
-                        "source": source_path,
-                        "name": filename,
-                        "is_dir": os.path.isdir(dest_full),
-                    }
-                )
+        # One worker call for the whole list (5.44): a dropped folder of 2,000 files used to
+        # cost 2,000+ stats on the event loop.
+        conflicts = await asyncio.to_thread(_find_conflicts_sync, paths, destination)
         return jsonify({"conflicts": conflicts})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

@@ -64,6 +64,7 @@ COPY_SKIP = {
     "images",
     "standard_fonts",
     "wasm",
+    "build",
 }
 # Config files that are written fresh in the scratch tree, never copied.
 CONFIG_FILES = {"storage_config.json", "server_config.json"}
