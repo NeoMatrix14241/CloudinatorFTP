@@ -39,6 +39,7 @@ import zipstream
 from config import ROOT_DIR
 from database import db
 from auth import current_user, get_role
+from helpers.walk_executor import run_walk
 import storage
 import secrets as _secrets
 from itsdangerous import BadSignature, SignatureExpired
@@ -456,9 +457,11 @@ async def shared_download(token):
         return await render_template("shared.html", valid=False), 404
 
     is_dir = os.path.isdir(full_path)
-    size_bytes, size_truncated = (
-        _dir_size(full_path) if is_dir else (os.path.getsize(full_path), False)
-    )
+    if is_dir:
+        # Up to 20,000 stats: in the walk pool since 5.44 (a public page, no login).
+        size_bytes, size_truncated = await run_walk(_dir_size, full_path)
+    else:
+        size_bytes, size_truncated = os.path.getsize(full_path), False
 
     mode = share["security_mode"]
     ctx = dict(

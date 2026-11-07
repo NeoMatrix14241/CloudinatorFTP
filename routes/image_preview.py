@@ -135,6 +135,12 @@ _ALL_IMG_EXTS: frozenset = _IMG_NATIVE | _IMG_NON_NATIVE
 _img_status_lock = threading.Lock()
 _img_events_mutex = threading.Lock()
 _img_conv_events: dict = {}  # cache_key → threading.Event
+# 5.44 (plan T6 / R2): requests waiting for a conversion. cache_key → [(event loop, asyncio
+# future)], guarded by _img_events_mutex like _img_conv_events. The conversion thread resolves the
+# futures when it ends, so a waiting request no longer parks a worker of the default thread pool
+# (up to 60 s each) the way `to_thread(t.join, 60)` / `to_thread(event.wait, 60)` did; that pool
+# also serves logins (bcrypt), directory listings, chunk writes and every download.
+_img_conv_waiters: dict = {}
 
 
 # ── Cache directory helpers ────────────────────────────────────────────────────
@@ -370,13 +376,37 @@ def _convert_to_webp(full_path: str, cache_key: str, lossy: bool) -> bool:
         return False
 
 
+def _img_wake(waiter) -> None:
+    """Runs ON the event loop (through call_soon_threadsafe): resolve one waiting request."""
+    if not waiter.done():
+        waiter.set_result(None)
+
+
+def _img_notify_waiters(waiters) -> None:
+    """Called from the conversion thread: wake every request waiting for this conversion."""
+    for loop, waiter in waiters:
+        try:
+            loop.call_soon_threadsafe(_img_wake, waiter)
+        except RuntimeError:
+            # That loop is closed (the server is shutting down): nobody is waiting any more.
+            continue
+
+
 def _run_img_conversion(full_path: str, cache_key: str, lossy: bool) -> None:
-    """Threadable wrapper: convert then signal all waiters on this cache_key."""
-    _convert_to_webp(full_path, cache_key, lossy)
-    with _img_events_mutex:
-        event = _img_conv_events.pop(cache_key, None)
-    if event:
-        event.set()
+    """Threadable wrapper: convert, then signal every waiter on this cache_key.
+
+    The signalling is in a `finally` since 5.44: if the conversion ever raised, the event used
+    to stay registered for ever and every later request for the file waited the full 60 s.
+    """
+    try:
+        _convert_to_webp(full_path, cache_key, lossy)
+    finally:
+        with _img_events_mutex:
+            event = _img_conv_events.pop(cache_key, None)
+            waiters = _img_conv_waiters.pop(cache_key, [])
+        if event:
+            event.set()
+        _img_notify_waiters(waiters)
 
 
 # ── Flask routes ──────────────────────────────────────────────────────────────
@@ -477,6 +507,11 @@ async def image_preview(path):
     # If two requests arrive for the same file simultaneously, only the first
     # starts a conversion thread; the second waits on the shared Event and
     # then reads from cache once the first finishes.
+    # The waiter is registered in the SAME critical section that decides who converts, before the
+    # thread starts: the conversion thread pops the event and the waiters together, so a request
+    # either sees the event (and is woken) or finds it gone and becomes the converter itself.
+    loop = asyncio.get_running_loop()
+    waiter = loop.create_future()
     with _img_events_mutex:
         existing_event = _img_conv_events.get(cache_key)
         if existing_event is None:
@@ -485,30 +520,39 @@ async def image_preview(path):
             should_convert = True
         else:
             should_convert = False
+        _img_conv_waiters.setdefault(cache_key, []).append((loop, waiter))
 
     # lossy=True for >15 MB (any format), lossless for non-native under 15 MB
     lossy = needs_compress
 
     if should_convert:
-        # Spawn daemon thread so it survives a client disconnect, then join
-        # for up to 60 s.  Inline join keeps this request from returning a
-        # partial/missing image while the first bytes are still being written.
-        # The JOIN ITSELF must run off the event loop — Thread.join() is a
-        # blocking call, and calling it directly here would freeze Hypercorn's
-        # whole single event loop for up to 60s per conversion, stalling
-        # every other concurrent request (login, other page loads, video
-        # preview, everything) for that entire window.
+        # Spawn daemon thread so it survives a client disconnect, then wait for up to
+        # 60 s.  Waiting keeps this request from returning a partial/missing image while
+        # the first bytes are still being written.  The wait is an asyncio future that the
+        # conversion thread resolves when it ends (5.44): a blocking Thread.join() on the
+        # loop would freeze every other request for up to 60 s, and wrapping it in
+        # to_thread() parked a worker of the shared default pool for the same time.
         t = threading.Thread(
             target=_run_img_conversion,
             args=(full_path, cache_key, lossy),
             daemon=True,
+            name="image-conversion",
         )
         t.start()
-        await asyncio.to_thread(t.join, 60)
-    else:
-        # Another thread is handling this conversion; wait up to 60 s for it.
-        # Same reasoning as above — Event.wait() blocks, must run off-loop.
-        await asyncio.to_thread(existing_event.wait, 60)
+    # Otherwise another request's thread is handling this conversion: the same wait applies.
+    try:
+        await asyncio.wait_for(waiter, 60)
+    except TimeoutError:
+        # Still converting (or stuck) after 60 s: fall through to the cache lookup and the
+        # raw fallback below, exactly as the old join / wait timeout did.
+        pass
+    finally:
+        # Cancelled (client left) or timed out: stop being a waiter. A finished conversion
+        # has already removed the whole list, then there is nothing to do.
+        with _img_events_mutex:
+            pending = _img_conv_waiters.get(cache_key)
+            if pending is not None:
+                pending[:] = [w for w in pending if w[1] is not waiter]
 
     # ── Serve from cache (or fall back to raw if conversion timed out) ────
     cached_path, cached_mime = _img_find_cached(cache_key)

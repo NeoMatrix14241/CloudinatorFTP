@@ -11,6 +11,7 @@ import os
 import secrets
 import sqlite3
 import threading
+import time
 import uuid
 import bcrypt
 from cryptography.fernet import Fernet, InvalidToken
@@ -185,11 +186,25 @@ _bootstrap_state = {"done": False}  # schema created on first _connect() call
 _bootstrap_lock = threading.Lock()
 
 
+# 5.44 (T9 part A, kept as a permanent light probe): an open that takes this long is logged, so a
+# single slow open (disk, antivirus) can be told apart from many fast ones. `_connect()` is called
+# from the event-loop thread on most requests; the thread name in the line says which.
+_SLOW_OPEN_SECS = 0.1
+_slow_open_state = {"logged_at": 0.0}
+
+
 def _connect() -> sqlite3.Connection:
-    os.makedirs(_DB_DIR, exist_ok=True)
+    started = time.perf_counter()
+    # 5.44 (T9 part B item 2): the folder and `PRAGMA journal_mode=WAL` (stored IN the database
+    # file) were repeated on every one of the ~10 opens a request made. They are now done by the
+    # first open of the process, together with the bootstrap; `foreign_keys` is per connection
+    # and stays on every open.
+    if not _bootstrap_state["done"]:
+        os.makedirs(_DB_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    if not _bootstrap_state["done"]:
+        conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     if not _bootstrap_state["done"]:
         # Double-checked locking: file_monitor, search_index, and the
@@ -220,6 +235,16 @@ def _connect() -> sqlite3.Connection:
                 # moments later saw the seeded rows just fine.
                 conn.commit()
                 _bootstrap_state["done"] = True
+    elapsed = time.perf_counter() - started
+    if (
+        elapsed >= _SLOW_OPEN_SECS
+        and time.monotonic() - _slow_open_state["logged_at"] >= 1.0
+    ):
+        _slow_open_state["logged_at"] = time.monotonic()
+        print(
+            f"⚠️ Slow SQLite open: {elapsed * 1000:.0f} ms "
+            f"(thread {threading.current_thread().name})"
+        )
     return conn
 
 

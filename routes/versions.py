@@ -13,6 +13,7 @@ import os
 import asyncio
 import logging
 import mimetypes
+import threading
 from config import ROOT_DIR
 from auth import current_user, get_role
 import storage
@@ -92,6 +93,45 @@ async def api_versions_restore():
     )
 
 
+async def _stream_version_blocks(chunks):
+    """Pull the (blocking, disk-bound) sync generator `chunks` one 1 MB block at a time on a
+    worker thread so the event loop never stalls. Any integrity failure raises here, aborting
+    the response rather than delivering corrupt bytes.
+
+    5.44 (plan R8): when the client leaves while a worker is inside `next()`, the old `finally`
+    called `chunks.close()` on the event-loop thread, which raised "ValueError: generator already
+    executing" (it replaced the cancellation and was logged as an ASGI error). The generator is
+    now released by a short-lived thread that takes the same lock as the pulls, so it closes only
+    after the in-flight `next()` has returned and never blocks the loop."""
+    sentinel = object()
+    lock = threading.Lock()
+
+    def _pull():
+        with lock:
+            return next(chunks, sentinel)
+
+    def _release():
+        with lock:
+            chunks.close()
+
+    finished = False
+    try:
+        while True:
+            block = await asyncio.to_thread(_pull)
+            if block is sentinel:
+                finished = True
+                break
+            yield block
+    except Exception:
+        finished = True  # the generator itself raised: it is already closed
+        raise
+    finally:
+        if not finished:  # the consumer went away (cancelled, closed) mid-stream
+            threading.Thread(
+                target=_release, daemon=True, name="versions-download-close"
+            ).start()
+
+
 @app.route("/api/versions/download", methods=["GET"])
 @login_required
 async def api_versions_download():
@@ -113,23 +153,8 @@ async def api_versions_download():
     if not ok:
         return jsonify({"error": message}), 400
 
-    async def _stream():
-        # Pull the (blocking, disk-bound) sync generator one 1 MB block at a
-        # time on a worker thread so the event loop never stalls. Any
-        # integrity failure raises here, aborting the response rather than
-        # delivering corrupt bytes.
-        sentinel = object()
-        try:
-            while True:
-                block = await asyncio.to_thread(next, chunks, sentinel)
-                if block is sentinel:
-                    break
-                yield block
-        finally:
-            chunks.close()
-
     mimetype = mimetypes.guess_type(download_filename)[0] or "application/octet-stream"
-    response = Response(_stream(), mimetype=mimetype)
+    response = Response(_stream_version_blocks(chunks), mimetype=mimetype)
     response.headers["Content-Disposition"] = (
         f'attachment; filename="{download_filename}"'
     )

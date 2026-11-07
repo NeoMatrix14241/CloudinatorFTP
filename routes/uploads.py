@@ -284,7 +284,7 @@ async def upload():
             if outcome != "saved":
                 # Cleanup on failure
                 chunk_tracker.untrack_upload(session_id, chunk_key)
-                storage.cleanup_chunks(chunk_key)
+                await asyncio.to_thread(storage.cleanup_chunks, chunk_key)
                 return "Failed to save chunk", 500
             _upload_timing_log.report(
                 timer, chunk_size, f"chunk {chunk_num + 1}/{total_chunks}"
@@ -297,7 +297,11 @@ async def upload():
             # Queue the background assembly as soon as EVERY chunk 0..total-1 is on disk,
             # whatever order they arrived in (5.16; before, only the chunk numbered
             # total-1 could start it, so an early last chunk left the upload hanging).
-            if storage.chunks_complete(chunk_key, total_chunks):
+            # One worker call per chunk (5.44): this is up to total_chunks stats, and it runs
+            # after EVERY chunk of the upload.
+            if await asyncio.to_thread(
+                storage.chunks_complete, chunk_key, total_chunks
+            ):
                 existing_job = assembly_queue.get_job_status(chunk_key)
                 if existing_job and existing_job.status in ("pending", "processing"):
                     # A retry of a chunk after the job was queued: never assemble twice.
@@ -347,7 +351,7 @@ async def upload():
                 except Exception as e:
                     # Failed to queue assembly - cleanup
                     chunk_tracker.untrack_upload(session_id, chunk_key)
-                    storage.cleanup_chunks(chunk_key)
+                    await asyncio.to_thread(storage.cleanup_chunks, chunk_key)
                     print(f"❌ Failed to queue assembly for {filename}: {e}")
                     return f"Failed to queue file assembly: {str(e)}", 500
 
@@ -422,7 +426,10 @@ async def upload():
                     print(f"⚠️ Background disconnect cleanup error for {fid}: {ex}")
 
             threading.Thread(
-                target=_bg_disconnect_cleanup, args=(chunk_key,), daemon=True
+                target=_bg_disconnect_cleanup,
+                args=(chunk_key,),
+                daemon=True,
+                name="upload-disconnect-cleanup",
             ).start()
         return "", 499
 
@@ -431,8 +438,34 @@ async def upload():
         # If there was an error and we were tracking this upload, clean it up
         if chunk_key:
             chunk_tracker.untrack_upload(session_id, chunk_key)
-            storage.cleanup_chunks(chunk_key)
+            try:
+                await asyncio.to_thread(storage.cleanup_chunks, chunk_key)
+            except Exception as cleanup_error:
+                # Never let a failing cleanup replace the error text the browser shows.
+                print(
+                    f"⚠️ Chunk cleanup after the upload error failed: {cleanup_error}"
+                )
         return f"Upload error: {str(e)}", 500
+
+
+def _remove_chunk_folder_sync(chunk_key, file_id):
+    """Worker-thread body of the /cleanup_chunks route (5.44). True = the folder existed and
+    was removed, False = nothing to clean; an OSError from the delete is raised to the route
+    (which answers 500 as before). NOT storage.cleanup_chunks on purpose: the route has its
+    own messages and does not honour the `.assembling` marker."""
+    chunks_dir = os.path.join(ROOT_DIR, ".chunks", chunk_key)
+    removed = False
+    if os.path.exists(chunks_dir):
+        shutil.rmtree(chunks_dir)
+        print(f"🧹 Manual cleanup completed for: {file_id}")
+
+        # Try to remove parent chunks directory if empty
+        parent_chunks_dir = os.path.join(ROOT_DIR, ".chunks")
+        if os.path.exists(parent_chunks_dir) and not os.listdir(parent_chunks_dir):
+            os.rmdir(parent_chunks_dir)
+            print("🧹 Removed empty chunks directory")
+        removed = True
+    return removed
 
 
 @app.route("/cleanup_chunks", methods=["POST"])
@@ -462,32 +495,23 @@ async def cleanup_chunks():
         # Untrack and cleanup
         chunk_tracker.untrack_upload(session_id, chunk_key)
 
-        # Clean up chunks directory for this upload
-        chunks_dir = os.path.join(ROOT_DIR, ".chunks", chunk_key)
-        if os.path.exists(chunks_dir):
-            try:
-                shutil.rmtree(chunks_dir)
-                print(f"🧹 Manual cleanup completed for: {file_id}")
-
-                # Try to remove parent chunks directory if empty
-                parent_chunks_dir = os.path.join(ROOT_DIR, ".chunks")
-                if os.path.exists(parent_chunks_dir) and not os.listdir(
-                    parent_chunks_dir
-                ):
-                    os.rmdir(parent_chunks_dir)
-                    print("🧹 Removed empty chunks directory")
-
-                return (
-                    jsonify(
-                        {"success": True, "message": f"Cleaned up chunks for {file_id}"}
-                    ),
-                    200,
-                )
-            except Exception as e:
-                print(f"❌ Failed to cleanup chunks for {file_id}: {e}")
-                return jsonify({"error": f"Failed to cleanup chunks: {str(e)}"}), 500
-        else:
-            return jsonify({"success": True, "message": "No chunks to cleanup"}), 200
+        # Clean up chunks directory for this upload (rmtree of up to ~190 files of 10 MB:
+        # in a worker thread since 5.44)
+        try:
+            removed = await asyncio.to_thread(
+                _remove_chunk_folder_sync, chunk_key, file_id
+            )
+        except Exception as e:
+            print(f"❌ Failed to cleanup chunks for {file_id}: {e}")
+            return jsonify({"error": f"Failed to cleanup chunks: {str(e)}"}), 500
+        if removed:
+            return (
+                jsonify(
+                    {"success": True, "message": f"Cleaned up chunks for {file_id}"}
+                ),
+                200,
+            )
+        return jsonify({"success": True, "message": "No chunks to cleanup"}), 200
 
     except Exception as e:
         print(f"❌ Cleanup error: {e}")
@@ -547,7 +571,10 @@ async def cancel_upload():
                         print(f"⚠️ Background cleanup error for {fid}: {ex}")
 
                 threading.Thread(
-                    target=_bg_cleanup, args=(chunks_dir, chunk_key), daemon=True
+                    target=_bg_cleanup,
+                    args=(chunks_dir, chunk_key),
+                    daemon=True,
+                    name="upload-cancel-cleanup",
                 ).start()
                 print(f"🧹 Queued background cleanup for cancelled upload: {file_id}")
 
@@ -585,6 +612,37 @@ async def cancel_upload():
         return jsonify({"error": f"Cancel upload error: {str(e)}"}), 500
 
 
+def _admin_cleanup_sync():
+    """Worker-thread body of /admin/cleanup_chunks (5.44), same steps in the same order as
+    the handler had them inline. Returns (stats_before, stats_after, manual_success)."""
+    # Get stats before cleanup
+    stats_before = chunk_tracker.get_stats()
+
+    # Cleanup orphaned chunks
+    chunk_tracker.cleanup_orphaned_chunks()
+
+    # Cleanup interrupted uploads
+    chunk_tracker.cleanup_interrupted_uploads()
+
+    # Get active assembly jobs to protect them from cleanup
+    active_assembly_jobs = get_protected_files()
+
+    if active_assembly_jobs:
+        print(
+            f"🔐 Manual cleanup protecting {len(active_assembly_jobs)} files currently being assembled"
+        )
+
+    # Cleanup old chunks (aggressive - 30 minutes)
+    storage.cleanup_old_chunks(max_age_hours=0.5, protected_files=active_assembly_jobs)
+
+    # Get stats after cleanup
+    stats_after = chunk_tracker.get_stats()
+
+    # Run enhanced manual cleanup
+    manual_success = storage.manual_chunks_cleanup()
+    return stats_before, stats_after, manual_success
+
+
 @app.route("/admin/cleanup_chunks", methods=["POST"])
 @login_required
 async def admin_cleanup_chunks():
@@ -596,33 +654,10 @@ async def admin_cleanup_chunks():
 
         print("🧹 Starting comprehensive chunk cleanup...")
 
-        # Get stats before cleanup
-        stats_before = chunk_tracker.get_stats()
-
-        # Cleanup orphaned chunks
-        chunk_tracker.cleanup_orphaned_chunks()
-
-        # Cleanup interrupted uploads
-        chunk_tracker.cleanup_interrupted_uploads()
-
-        # Get active assembly jobs to protect them from cleanup
-        active_assembly_jobs = get_protected_files()
-
-        if active_assembly_jobs:
-            print(
-                f"🔐 Manual cleanup protecting {len(active_assembly_jobs)} files currently being assembled"
-            )
-
-        # Cleanup old chunks (aggressive - 30 minutes)
-        storage.cleanup_old_chunks(
-            max_age_hours=0.5, protected_files=active_assembly_jobs
+        # The whole sequence runs in ONE worker thread (5.44), in the original order.
+        stats_before, stats_after, manual_success = await asyncio.to_thread(
+            _admin_cleanup_sync
         )
-
-        # Get stats after cleanup
-        stats_after = chunk_tracker.get_stats()
-
-        # Run enhanced manual cleanup
-        manual_success = storage.manual_chunks_cleanup()
 
         print("🧹 Comprehensive cleanup completed")
         print(
@@ -653,7 +688,7 @@ async def admin_cleanup_chunks():
         print(f"❌ Error in comprehensive cleanup: {e}")
         # Try emergency cleanup as fallback
         try:
-            storage.emergency_cleanup_all()
+            await asyncio.to_thread(storage.emergency_cleanup_all)
             return (
                 jsonify(
                     {
@@ -675,6 +710,23 @@ async def admin_cleanup_chunks():
             )
 
 
+def _list_chunk_dirs_sync():
+    """Worker-thread body of chunk_stats (5.44): names of the folders under .chunks."""
+    chunks_dir = os.path.join(ROOT_DIR, ".chunks")
+    filesystem_chunks = []
+    if os.path.exists(chunks_dir):
+        try:
+            filesystem_chunks = [
+                d
+                for d in os.listdir(chunks_dir)
+                if os.path.isdir(os.path.join(chunks_dir, d))
+            ]
+        except OSError:
+            # Chunks folder missing or unreadable; the filesystem chunk count simply stays empty.
+            pass
+    return filesystem_chunks
+
+
 @app.route("/admin/chunk_stats", methods=["GET"])
 @login_required
 async def chunk_stats():
@@ -686,19 +738,8 @@ async def chunk_stats():
 
         stats = chunk_tracker.get_stats()
 
-        # Add filesystem stats
-        chunks_dir = os.path.join(ROOT_DIR, ".chunks")
-        filesystem_chunks = []
-        if os.path.exists(chunks_dir):
-            try:
-                filesystem_chunks = [
-                    d
-                    for d in os.listdir(chunks_dir)
-                    if os.path.isdir(os.path.join(chunks_dir, d))
-                ]
-            except OSError:
-                # Chunks folder missing or unreadable; the filesystem chunk count simply stays empty.
-                pass
+        # Add filesystem stats (a listdir plus one isdir per entry: worker thread, 5.44)
+        filesystem_chunks = await asyncio.to_thread(_list_chunk_dirs_sync)
 
         stats["filesystem_chunks"] = len(filesystem_chunks)
         stats["chunk_directories"] = filesystem_chunks
@@ -865,7 +906,9 @@ def start_enhanced_cleanup_scheduler():
             except Exception as e:
                 print(f"❌ Error in enhanced cleanup worker: {e}")
 
-    cleanup_thread = threading.Thread(target=cleanup_worker, daemon=True)
+    cleanup_thread = threading.Thread(
+        target=cleanup_worker, daemon=True, name="chunk-cleanup-scheduler"
+    )
     cleanup_thread.start()
     print("🧹 Started enhanced chunk cleanup scheduler (every 15 minutes)")
 
@@ -882,7 +925,9 @@ def start_orphan_cleanup_scheduler():
             except Exception as e:
                 print(f"❌ Error in orphan cleanup worker: {e}")
 
-    cleanup_thread = threading.Thread(target=orphan_cleanup_worker, daemon=True)
+    cleanup_thread = threading.Thread(
+        target=orphan_cleanup_worker, daemon=True, name="orphan-cleanup-scheduler"
+    )
     cleanup_thread.start()
     print("🗑️ Started enhanced orphaned chunk cleanup scheduler (every 5 minutes)")
 
@@ -911,7 +956,9 @@ def start_expired_share_cleanup_scheduler():
                 print(f"❌ Error in expired share cleanup worker: {e}")
             time.sleep(15)  # frequent enough to feel live, cheap enough to not matter
 
-    cleanup_thread = threading.Thread(target=expired_share_cleanup_worker, daemon=True)
+    cleanup_thread = threading.Thread(
+        target=expired_share_cleanup_worker, daemon=True, name="share-expiry-cleanup"
+    )
     cleanup_thread.start()
     print("🔗 Started expired share cleanup scheduler (every 15 seconds)")
 
@@ -978,7 +1025,9 @@ def assembly_worker():
 
 def start_assembly_worker():
     """Start the background assembly worker"""
-    worker_thread = threading.Thread(target=assembly_worker, daemon=True)
+    worker_thread = threading.Thread(
+        target=assembly_worker, daemon=True, name="assembly-worker"
+    )
     worker_thread.start()
     print("🚀 Started background assembly worker")
 
