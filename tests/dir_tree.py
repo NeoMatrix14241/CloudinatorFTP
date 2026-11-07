@@ -15,6 +15,7 @@ EXCLUDED_DIRS = {
     "htmlcov",
     ".vscode",
     ".ruff_cache",
+    "build",
 }
 
 # Files to exclude from the directory tree.
