@@ -51,18 +51,27 @@ def server(scratch_server):
     return scratch_server
 
 
-def _send_chunk(client, file_id, number, total, name, data):
-    return client.api(
+def _send_chunk(client, file_id, number, total, name, data, token=None):
+    """One chunk, the way the front end sends it. With token=None the client fetches a fresh CSRF
+    token first (HttpClient.api). A test that sends from SEVERAL THREADS through ONE client passes
+    the token it fetched once: a page holds one token, and twelve token fetches racing on one
+    session cookie are not what that test is about."""
+    fields = {
+        "file_id": file_id,
+        "chunk_num": str(number),
+        "total_chunks": str(total),
+        "filename": name,
+        "dest_path": "",
+    }
+    files = {"chunk": ("blob", data)}
+    if token is None:
+        return client.api("POST", "/upload", fields=fields, files=files)
+    return client.request(
         "POST",
         "/upload",
-        fields={
-            "file_id": file_id,
-            "chunk_num": str(number),
-            "total_chunks": str(total),
-            "filename": name,
-            "dest_path": "",
-        },
-        files={"chunk": ("blob", data)},
+        fields=fields,
+        files=files,
+        headers={"Accept": "application/json", "X-CSRFToken": token},
     )
 
 
@@ -122,16 +131,30 @@ def test_the_chunks_of_one_upload_arriving_at_the_same_moment_assemble_exactly_o
     filename = f"parallel_{tag}.bin"
     parts = [_payload(tag, n) for n in range(CHUNKS)]
 
+    # Like a browser that has loaded the page: the first authenticated request (it writes the
+    # session id into the session cookie) happens BEFORE the burst, and the token is fetched once.
+    # HttpClient.api() fetches a token inside every call; twelve threads doing that on one session
+    # cookie sometimes got "400 CSRF token missing or incorrect" (2026-11-09: the ubuntu nightly
+    # and 2 of 22 local runs, always on one of the first chunks). One fetch before the burst
+    # removes that variable; the upload race this test is about is unchanged.
+    client.csrf_token()
+    token = client.csrf_token()
+
     def send(number):
         return _send_chunk(
-            client, "fid_2_24576", number, CHUNKS, filename, parts[number]
+            client, "fid_2_24576", number, CHUNKS, filename, parts[number], token
         )
 
     with ThreadPoolExecutor(max_workers=CHUNKS) as pool:
         replies = list(pool.map(send, range(CHUNKS)))
-    assert [r.status for r in replies] == [200] * CHUNKS, [
-        r.text[:120] for r in replies
+    bad = [
+        (number, r.status, r.text)
+        for number, r in enumerate(replies)
+        if r.status != 200
     ]
+    assert (
+        not bad
+    ), f"chunks that were not accepted (number, status, full body): {bad}\n{server.log_tail()}"
 
     target = server.storage / filename
     assert _wait_for_content(target, b"".join(parts)), server.log_tail()
