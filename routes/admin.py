@@ -143,22 +143,37 @@ def _clear_media_preview_sync():
 # with "Unexpected token '<'" while the server finished the rebuild anyway.
 _rebuild_state = {
     "state": "idle",  # idle | running | done | error
+    "phase": "",  # 5.44.1: what a running rebuild is doing (shown next to the timer)
     "started_at": None,
     "finished_at": None,
     "message": "",
     "error": "",
+    "audit": "",  # 5.44.1: result of the index audit, filled in AFTER the state is "done"
 }
 _rebuild_state_lock = threading.Lock()
 
 
+def _set_rebuild_phase(phase):
+    with _rebuild_state_lock:
+        _rebuild_state["phase"] = phase
+
+
 def _rebuild_cache_worker():
-    """Delete both JSON caches, force a ground-truth walk, audit the file index,
-    then record the outcome in _rebuild_state (polled by the status route)."""
+    """Delete both JSON caches, force a ground-truth walk, then record the outcome in
+    _rebuild_state (polled by the status route). The audit of the file index against the disk
+    runs AFTER the outcome is recorded (5.44.1): it re-scans almost every folder once more, which
+    used to double the time the button stayed disabled for a check that, right after a walk,
+    should find nothing."""
     state, message, error = "error", "", ""
+    t0 = time.time()
+    audit_wanted = False
     try:
         import os
         from file_monitor import get_file_monitor, CACHE_FILE
         from file_index import file_index_manager, FILE_INDEX_PATH
+
+        print("🔧 Rebuild cache: started")
+        _set_rebuild_phase("deleting the old index files")
 
         # Delete storage_index.json
         if os.path.exists(CACHE_FILE):
@@ -177,18 +192,11 @@ def _rebuild_cache_worker():
 
         monitor = get_file_monitor()
         print("🚶 Rebuilding cache from scratch...")
+        _set_rebuild_phase("walking the storage")
         # force=True: an admin rebuild must be able to accept a genuinely
         # empty tree (the automatic walks reject a suspect-empty result once).
         applied = monitor._reconcile(force=True)
-
-        # 4.59: audit the freshly built file index against the disk
-        # (read-only, repair=False). Right after a walk this should report 0
-        # drifted; anything else means files changed during the rebuild.
-        audit = None
-        try:
-            audit = file_index_manager.verify_all(repair=False)
-        except Exception as _ve:
-            print(f"⚠️ file index verify failed: {_ve}")
+        print(f"🔧 Rebuild cache: walk step ended after {time.time() - t0:.1f}s")
 
         if not applied:
             error = (
@@ -196,6 +204,7 @@ def _rebuild_cache_worker():
                 "previous index kept; see the server log"
             )
         else:
+            _set_rebuild_phase("publishing the result")
             from realtime_stats import trigger_storage_update
 
             trigger_storage_update(None, monitor.get_current_snapshot())
@@ -204,15 +213,11 @@ def _rebuild_cache_worker():
                 f"Cache cleared and rebuilt: {monitor._file_count:,} files, "
                 f"{monitor._dir_count:,} dirs, {len(monitor._dir_info):,} folders indexed. "
                 f'File index: {fi_stats["indexed_folders"]:,} large folder(s) indexed '
-                f'({fi_stats["total_entries"]:,} entries, threshold={fi_stats["threshold"]})'
-                + (
-                    f'. Verified {audit["checked"]:,} indexed folder(s) against disk: '
-                    f'{audit["drifted"]:,} drifted, {audit["unreadable"]:,} unreadable'
-                    if audit
-                    else ""
-                )
+                f'({fi_stats["total_entries"]:,} entries, threshold={fi_stats["threshold"]}). '
+                f"Took {time.time() - t0:.0f}s."
             )
             state = "done"
+            audit_wanted = True
     except Exception as e:
         print(f"❌ Error during cache cleanup: {e}")
         error = str(e) or e.__class__.__name__
@@ -220,10 +225,32 @@ def _rebuild_cache_worker():
         with _rebuild_state_lock:
             _rebuild_state.update(
                 state=state,
+                phase="",
                 finished_at=time.time(),
                 message=message,
                 error=error,
             )
+
+    if audit_wanted:
+        # 4.59: audit the freshly built file index against the disk (read-only,
+        # repair=False). Right after a walk this should report 0 drifted; anything else
+        # means files changed during the rebuild. The result goes to the log and to the
+        # state's `audit` text; it can no longer turn a finished rebuild into an error.
+        try:
+            from file_index import file_index_manager
+
+            t_audit = time.time()
+            audit = file_index_manager.verify_all(repair=False)
+            text = (
+                f'Verified {audit["checked"]:,} indexed folder(s) against disk: '
+                f'{audit["drifted"]:,} drifted, {audit["unreadable"]:,} unreadable '
+                f"({time.time() - t_audit:.0f}s)"
+            )
+            print(f"🔎 {text}")
+            with _rebuild_state_lock:
+                _rebuild_state["audit"] = text
+        except Exception as _ve:
+            print(f"⚠️ file index verify failed: {_ve}")
 
 
 @app.route("/admin/rebuild_cache", methods=["POST"])
@@ -253,10 +280,12 @@ async def admin_rebuild_cache():
                 )
             _rebuild_state.update(
                 state="running",
+                phase="starting",
                 started_at=time.time(),
                 finished_at=None,
                 message="",
                 error="",
+                audit="",
             )
         threading.Thread(
             target=_rebuild_cache_worker, name="rebuild-cache", daemon=True
@@ -290,4 +319,12 @@ async def admin_rebuild_cache_status():
     # so a page opened/refreshed mid-rebuild can resume the timer where it is.
     if snap.get("state") == "running" and snap.get("started_at"):
         snap["elapsed"] = round(time.time() - snap["started_at"], 1)
+        # 5.44.1: what the walk itself is doing (waiting behind another walk, or how many files
+        # it has seen so far), so the page can show more than a timer.
+        try:
+            from file_monitor import get_file_monitor
+
+            snap["walk"] = get_file_monitor().walk_status()
+        except Exception as e:
+            print(f"⚠️ rebuild status: no walk status ({e})")
     return jsonify(snap), 200

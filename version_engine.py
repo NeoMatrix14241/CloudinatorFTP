@@ -95,6 +95,24 @@ _SLOW_PASS_LOG_EVERY = 60.0
 # reconciliation scanner's interval, which IS configurable).
 _WATCH_POLL_INTERVAL = 3  # seconds
 
+# 5.44.1: a watcher / scanner pass walks and stats EVERY tracked file. On a big tree a pass takes
+# longer than the 3 s wait between two passes, so the engine (its own process) was walking the
+# whole tree back to back, in two threads at once, and the server's own walks (Rebuild Cache) had
+# to share a hard disk with that. The wait after a pass is now proportional to how long the pass
+# took: the engine is busy at most 1 / (1 + _PASS_BUSY_FACTOR) of the time (25%), never longer
+# than _MAX_PASS_WAIT between passes. A small tree (a pass under 1 s) still polls every 3 s.
+_PASS_BUSY_FACTOR = 3
+_MAX_PASS_WAIT = 900.0  # seconds
+
+
+def _next_pass_wait(base: float, pass_seconds: float) -> float:
+    """Seconds to wait after a pass that took `pass_seconds`: never less than `base`, about
+    _PASS_BUSY_FACTOR times the pass otherwise, at most _MAX_PASS_WAIT (or `base` if larger).
+    """
+    wanted = max(float(base), float(pass_seconds) * _PASS_BUSY_FACTOR)
+    return min(wanted, max(float(base), _MAX_PASS_WAIT))
+
+
 # =============================================================================
 # A. PARENT-PROCESS API  (imported by dev_server.py / prod_server.py ONLY)
 # =============================================================================
@@ -544,6 +562,9 @@ class Engine:
         )  # norm_key -> (mtime, size) — watcher/scanner fast-path cache
         self._pending_norm_keys = set()  # debounce: don't double-enqueue
         self._pending_lock = threading.Lock()
+        # 5.44.1: the watcher and the scanner run the SAME full pass (_reconcile_once); one at a
+        # time is enough and halves the disk work when both fire together.
+        self._pass_lock = threading.Lock()
 
         self._conn_local = threading.local()
 
@@ -1821,8 +1842,10 @@ class Engine:
         self._slow_pass_logged_at = now
         self.log.warning(
             f"{label} pass took {seconds:.1f}s: the tracked folders are big or the disk is "
-            "busy. Track fewer folders, or switch the watcher off (VERSION_WATCH_ENABLED) and "
-            "let the scanner find changes."
+            "busy. The engine now waits about three times as long as a pass takes before the "
+            "next one, so it stays idle most of the time; track fewer folders, or switch the "
+            "watcher off (VERSION_WATCH_ENABLED) and let the scanner find changes, to cut "
+            "the disk work further."
         )
 
     def _watcher_loop(self):
@@ -1830,17 +1853,26 @@ class Engine:
         self._set_meta("watcher_running", "1")
         self.log.info(f"Watcher started (poll interval {_WATCH_POLL_INTERVAL}s).")
         while not self._shutdown_event.is_set():
+            wait = _WATCH_POLL_INTERVAL
             if not self._stop_scheduling.is_set():
-                try:
-                    started = time.monotonic()
-                    self._reconcile_once()
-                    self._note_slow_pass("Watcher", time.monotonic() - started)
-                except Exception as e:
-                    if _is_lock_error(e):
-                        self.log.warning(f"Watcher pass hit a locked database: {e}")
-                    else:
-                        self.log.error(f"Watcher reconcile error: {e}", exc_info=True)
-            self._shutdown_event.wait(_WATCH_POLL_INTERVAL)
+                # Skip this round when the scanner is in the middle of the same pass.
+                if self._pass_lock.acquire(blocking=False):
+                    try:
+                        started = time.monotonic()
+                        self._reconcile_once()
+                        took = time.monotonic() - started
+                        self._note_slow_pass("Watcher", took)
+                        wait = _next_pass_wait(_WATCH_POLL_INTERVAL, took)
+                    except Exception as e:
+                        if _is_lock_error(e):
+                            self.log.warning(f"Watcher pass hit a locked database: {e}")
+                        else:
+                            self.log.error(
+                                f"Watcher reconcile error: {e}", exc_info=True
+                            )
+                    finally:
+                        self._pass_lock.release()
+            self._shutdown_event.wait(wait)
         self._watcher_running = False
         self._set_meta("watcher_running", "0")
         self.log.info("Watcher stopped.")
@@ -1850,11 +1882,15 @@ class Engine:
         self._set_meta("scanner_running", "1")
         self.log.info(f"Scanner started (interval {config.VERSION_SCAN_INTERVAL}s).")
         while not self._shutdown_event.is_set():
+            wait = config.VERSION_SCAN_INTERVAL
             if not self._stop_scheduling.is_set():
                 try:
                     started = time.monotonic()
-                    self._reconcile_once()
-                    self._note_slow_pass("Scanner", time.monotonic() - started)
+                    with self._pass_lock:  # one full pass at a time (watcher / scanner)
+                        self._reconcile_once()
+                    took = time.monotonic() - started
+                    self._note_slow_pass("Scanner", took)
+                    wait = _next_pass_wait(config.VERSION_SCAN_INTERVAL, took)
                     self._retry_locked(self.run_gc, delays=(2, 4, 8))
                     self._retry_locked(
                         self._set_meta,
@@ -1869,7 +1905,7 @@ class Engine:
                         )
                     else:
                         self.log.error(f"Scanner error: {e}", exc_info=True)
-            self._shutdown_event.wait(config.VERSION_SCAN_INTERVAL)
+            self._shutdown_event.wait(wait)
         self._scanner_running = False
         self._set_meta("scanner_running", "0")
         self.log.info("Scanner stopped.")

@@ -43,7 +43,7 @@ PRELUDE = textwrap.dedent("""
             os.remove(_p)
     for _n in os.listdir(ROOT):
         _p = os.path.join(ROOT, _n)
-        shutil.rmtree(_p) if os.path.isdir(_p) else os.remove(_p)
+        shutil.rmtree(_p) if os.path.isdir(_p) and not os.path.islink(_p) else os.remove(_p)
     TAG = sys.argv[1]
     INDEX = fm.CACHE_FILE
 
@@ -115,6 +115,195 @@ def run(lab, scratch_tools):
         return result
 
     return _run
+
+
+# 5.44.1: the walk reads sizes and mtimes from the directory listing (os.scandir entries) and paces
+# its CPU handoff by time. A reference implementation of the OLD rules (os.walk + os.stat per file,
+# written out below from the 4.59 / 4.62 / 4.64 contract) must agree with it on awkward trees.
+WALK_ORACLE = """
+    def oracle(root):
+        zero = lambda: {"file_count": 0, "dir_count": 0, "total_size": 0}
+        info, files, dirs, size, errors = {}, 0, 0, 0, []
+        for cur, dnames, fnames in os.walk(root, topdown=True, onerror=errors.append):
+            if ".chunks" in dnames:
+                dnames.remove(".chunks")
+            for d in list(dnames):
+                if fm._is_junction(os.path.join(cur, d)):
+                    dnames.remove(d)
+            rr = os.path.relpath(cur, root).replace(os.sep, "/")
+            rr = "" if rr == "." else rr
+            info.setdefault(rr, zero())
+            for d in dnames:
+                if d.startswith("."):
+                    continue
+                sub = rr + "/" + d if rr else d
+                info.setdefault(sub, zero())
+                info[rr]["dir_count"] += 1
+                dirs += 1
+                for a in fm._parents(rr):
+                    info[a]["dir_count"] += 1
+            for f in fnames:
+                if f.startswith("."):
+                    continue
+                try:
+                    st = os.stat(os.path.join(cur, f))
+                except OSError:
+                    continue
+                files += 1
+                size += st.st_size
+                info[rr]["file_count"] += 1
+                info[rr]["total_size"] += st.st_size
+                for a in fm._parents(rr):
+                    info[a]["file_count"] += 1
+                    info[a]["total_size"] += st.st_size
+        return {"files": files, "dirs": dirs, "size": size, "info": info, "errors": len(errors)}
+
+    def awkward_tree():
+        put("a.txt", 3)
+        put("b.txt", 5)
+        put("d1/f1.txt", 10)
+        put("d1/sub/f2.txt", 20)
+        put("d1/sub/deeper/f3.txt", 40)
+        put("d1/.hiddendir/inner.txt", 11)   # a hidden folder is visited, not counted as a folder
+        put("d1/.chunks/part", 9)            # .chunks is skipped at any depth
+        put(".chunks/part", 9)
+        put(".hidden", 7)
+        os.makedirs(os.path.join(ROOT, "empty"), exist_ok=True)
+        try:  # symlinks need a privilege on Windows; the tree is still valid without them
+            os.symlink(os.path.join(ROOT, "d1"), os.path.join(ROOT, "link_to_d1"))
+            os.symlink(os.path.join(ROOT, "a.txt"), os.path.join(ROOT, "link_to_a.txt"))
+            os.symlink(os.path.join(ROOT, "nowhere"), os.path.join(ROOT, "broken_link"))
+        except (OSError, NotImplementedError, AttributeError):
+            pass
+    """
+
+# The snippets below are indented by 8 spaces; run() dedents the whole body, so the shared part has
+# to carry the same indent.
+WALK_ORACLE = textwrap.indent(textwrap.dedent(WALK_ORACLE), " " * 8)
+
+
+def test_the_scandir_walk_agrees_with_the_old_os_walk_rules_on_an_awkward_tree(run):
+    r = run(WALK_ORACLE + """
+        awkward_tree()
+        want = oracle(ROOT)
+        res = monitor()._full_walk(silent=True)
+        out(complete=res["complete"], errors=res["errors"], files=res["file_count"],
+            dirs=res["dir_count"], size=res["total_size"], info=res["dir_info"], want=want)
+        for _name in ("link_to_d1", "link_to_a.txt", "broken_link"):  # leave no symlink behind
+            _p = os.path.join(ROOT, _name)
+            if os.path.islink(_p):
+                os.unlink(_p)
+        """)
+    want = r["want"]
+    assert r["complete"] is True
+    assert (r["files"], r["dirs"], r["size"]) == (
+        want["files"],
+        want["dirs"],
+        want["size"],
+    )
+    assert r["info"] == want["info"]
+    assert r["errors"] == want["errors"] == 0
+    assert r["files"] >= 6 and r["dirs"] >= 4  # the tree really has something in it
+
+
+def test_a_folder_that_cannot_be_listed_is_reported_and_skipped_like_before(run):
+    r = run(WALK_ORACLE + """
+        put("ok/f1.txt", 10)
+        put("locked/f2.txt", 20)
+        put("locked/inner/f3.txt", 30)
+        real = os.scandir
+        def flaky(path="."):
+            if str(path).replace(os.sep, "/").endswith("/locked"):
+                raise PermissionError(13, "denied", str(path))
+            return real(path)
+        os.scandir = flaky
+        try:
+            want = oracle(ROOT)
+            res = monitor()._full_walk(silent=True)
+        finally:
+            os.scandir = real
+        out(complete=res["complete"], errors=res["errors"], files=res["file_count"],
+            dirs=res["dir_count"], size=res["total_size"], info=res["dir_info"], want=want)
+        """)
+    want = r["want"]
+    assert r["errors"] == want["errors"] == 1  # the folder is reported ...
+    assert r["complete"] is True  # ... the walk as a whole still counts as complete
+    assert (
+        (r["files"], r["size"]) == (want["files"], want["size"]) == (1, 10)
+    )  # its files are not
+    assert r["info"] == want["info"]
+
+
+def test_the_walk_does_not_sleep_once_per_folder_any_more(run):
+    r = run("""
+        for i in range(120):
+            put(f"d{i}/sub/f.txt", 1)
+        naps = []
+        real_sleep = fm.time.sleep
+        fm.time.sleep = lambda s: naps.append(s)
+        try:
+            res = monitor()._full_walk(silent=True)
+        finally:
+            fm.time.sleep = real_sleep
+        out(files=res["file_count"], dirs=res["dir_count"], naps=len(naps))
+        """)
+    assert (r["files"], r["dirs"]) == (120, 240)
+    # 361 folders used to mean 361 sleeps. The whole walk of this small tree takes far less than
+    # one pacing period (25 ms) or only a handful of them, never one per folder.
+    assert r["naps"] < 20
+
+
+# 5.44.1: a walk that has to wait for another one says so (log + walk_status), then runs.
+def test_a_walk_queued_behind_another_one_is_visible_and_then_runs(run):
+    r = run("""
+        build()
+        m = monitor()
+        import threading
+        m._walk_lock.acquire()  # another walk is "in progress"
+        result = {}
+        t = threading.Thread(target=lambda: result.update(applied=m._reconcile(force=True)))
+        t.start()
+        queued = False
+        for _ in range(500):
+            if m.walk_status()["waiters"] == 1:
+                queued = True
+                break
+            time.sleep(0.01)
+        during = m.walk_status()
+        m._walk_lock.release()
+        t.join(60)
+        out(queued=queued, during=during, after=m.walk_status(), alive=t.is_alive(),
+            applied=result.get("applied"), files=m._file_count)
+        """)
+    assert r["queued"] is True
+    assert r["during"]["waiters"] == 1 and r["during"]["phase"] == "idle"
+    assert r["alive"] is False and r["applied"] is True
+    assert r["after"]["waiters"] == 0 and r["after"]["phase"] == "idle"
+    assert r["files"] == 4  # the walk really ran after the lock was released
+
+
+def test_walk_status_reports_progress_while_the_walk_runs(run):
+    r = run("""
+        for i in range(30):
+            put(f"p{i}/f.txt", 1)
+        m = monitor()
+        fm.WALK_PROGRESS_INTERVAL = 5
+        seen = []
+        real = m._full_walk
+        def spy(silent=False, on_progress=None):
+            def tap(fc, dc, ts):
+                seen.append(dict(m.walk_status()))
+                if on_progress:
+                    on_progress(fc, dc, ts)
+            return real(silent=silent, on_progress=tap)
+        m._full_walk = spy
+        m._reconcile(force=True)
+        out(phases={s["phase"] for s in seen} and sorted({s["phase"] for s in seen}),
+            files=[s["files"] for s in seen], after=m.walk_status()["phase"])
+        """)
+    assert r["phases"] == ["walking"]
+    assert r["files"] and r["files"] == sorted(r["files"]) and r["files"][-1] > 0
+    assert r["after"] == "idle"
 
 
 # ---------------------------------------------------------------------------- the walk

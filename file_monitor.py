@@ -105,17 +105,19 @@ BURST_WINDOW = 5.0  # seconds (was 3.0)
 WALK_PROGRESS_INTERVAL = 1000  # print a log line every N files
 WALK_PROGRESS_MIN_INTERVAL = 1.0  # (unused — kept for reference only)
 
-# How often (in files) the walk thread voluntarily yields via time.sleep().
-# Under Hypercorn there's a single event-loop thread, so a tight stat()-in-
-# a-loop walk can starve it of GIL time (esp. on Windows). Use a REAL sleep
-# duration, not time.sleep(0): on Windows, time.sleep(0) maps to Win32
-# Sleep(0), which only yields to other threads that are already in the
-# READY state — it does not force an OS timer-based context switch the way
-# POSIX sched_yield() does, so it can return near-instantly without ever
-# actually handing control to the event loop thread. A small nonzero sleep
-# forces a real handoff. 50 files keeps this frequent even inside one huge
-# folder; 1ms per handoff is cheap next to the walk's own syscall cost.
-WALK_YIELD_INTERVAL = 50
+# The walk thread hands the CPU to the other threads (above all the event loop) with a REAL
+# sleep: on Windows time.sleep(0) maps to Sleep(0), which only yields to threads that are
+# already READY and can return at once without ever handing control over; a small nonzero
+# sleep forces a real handoff.
+#
+# 5.44.1: the handoff is now paced by TIME, not by count. It used to sleep after EVERY folder
+# and every 50 files: on a tree of 170,000 files in 6,000 folders that was 9,400 sleeps and
+# 10.3 s of a 13.1 s walk (79%, measured), and each sleep can cost a whole timer tick (up to
+# 15.6 ms) on Windows, so on a big tree the sleeping alone took longer than all the disk
+# work. Now: at most one WALK_YIELD_SECONDS nap per WALK_YIELD_EVERY_SECONDS of walking
+# (4% overhead at the defaults, whatever the tree looks like). CPython's own GIL switch
+# interval (5 ms) already hands the GIL to a waiting thread; the nap is the safety net.
+WALK_YIELD_EVERY_SECONDS = 0.025
 WALK_YIELD_SECONDS = 0.001
 
 # After a reconcile walk finishes, the OS watchdog event queue may still hold
@@ -235,6 +237,95 @@ def _is_junction(path: str) -> bool:
         return getattr(os.lstat(path), "st_reparse_tag", 0) == 0xA0000003
     except OSError:
         return False
+
+
+def _entry_is_junction(entry, path: str) -> bool:
+    """_is_junction() for an os.DirEntry. Python 3.12+ answers from the directory listing
+    (no extra syscall per folder); older versions fall back to _is_junction(path)."""
+    fn = getattr(entry, "is_junction", None)
+    if fn is not None:
+        try:
+            return bool(fn())
+        except OSError:
+            # The listing could not answer: use the path based check below.
+            pass
+    return _is_junction(path)
+
+
+def _scandir_walk(top: str, onerror=None):
+    """os.walk(top, topdown=True) look-alike (5.44.1) that also hands over the os.DirEntry
+    objects: yields (path, dirs, dir_entries, file_entries).
+
+    `dirs` is a list of sub-folder NAMES that the caller may prune in place (exactly as with
+    os.walk); `dir_entries` maps a name to its DirEntry, `file_entries` is a list of DirEntry.
+    Why: on Windows DirEntry.stat() answers size and mtime from the directory listing itself,
+    with no further system call, while the os.walk + os.stat(path) pair the walk used before
+    cost one extra CreateFile/GetFileInformation round trip per file and per folder. On Linux
+    it is one lstat either way, so nothing is lost.
+
+    Same rules as os.walk: sub-folders are classified with DirEntry.is_dir() (a symlink to a
+    folder is listed in `dirs` but not descended into), a folder that cannot be listed is
+    reported to `onerror` and skipped, and so is one whose listing fails half way."""
+    stack = [top]
+    while stack:
+        path = stack.pop()
+        try:
+            scandir_it = os.scandir(path)
+        except OSError as error:
+            if onerror is not None:
+                onerror(error)
+            continue
+        dirs, dir_entries, file_entries, walkable = [], {}, [], set()
+        failed = False
+        with scandir_it:
+            while True:
+                try:
+                    entry = next(scandir_it)
+                except StopIteration:
+                    break
+                except OSError as error:
+                    if onerror is not None:
+                        onerror(error)
+                    failed = True
+                    break
+                try:
+                    is_dir = entry.is_dir()
+                except OSError:
+                    is_dir = False
+                if is_dir:
+                    dirs.append(entry.name)
+                    dir_entries[entry.name] = entry
+                    try:
+                        if not entry.is_symlink():
+                            walkable.add(entry.name)
+                    except OSError:
+                        walkable.add(
+                            entry.name
+                        )  # os.walk: an error here means "walk into it"
+                else:
+                    file_entries.append(entry)
+        if failed:
+            continue
+        yield path, dirs, dir_entries, file_entries
+        for name in reversed(dirs):  # `dirs` may have been pruned by the caller
+            if name in walkable:
+                stack.append(os.path.join(path, name))
+
+
+class _WalkYielder:
+    """Time-paced CPU handoff for the walk thread (see WALK_YIELD_EVERY_SECONDS)."""
+
+    def __init__(self, every: float = None, nap: float = None):
+        self._every = WALK_YIELD_EVERY_SECONDS if every is None else every
+        self._nap = WALK_YIELD_SECONDS if nap is None else nap
+        self._last = time.monotonic()
+        self.naps = 0
+
+    def maybe_yield(self) -> None:
+        if time.monotonic() - self._last >= self._every:
+            time.sleep(self._nap)
+            self.naps += 1
+            self._last = time.monotonic()
 
 
 def _scan_direct(abs_dir: str):
@@ -868,6 +959,11 @@ class FileSystemMonitor:
             -1
         )  # log skipped junctions only when it changes
         self._walk_lock = threading.Lock()
+        # 5.44.1: what the walk is doing right now, for the admin "Rebuild Cache" status and the
+        # log. phase: idle | walking; `waiters` = callers blocked on _walk_lock behind the walk.
+        self._walk_status_lock = threading.Lock()
+        self._walk_status = {"phase": "idle", "files": 0, "dirs": 0, "since": None}
+        self._walk_waiters = 0
         self._walk_started_at: float = 0.0  # time.monotonic() of the last walk start
         self._walk_applied: bool = False  # that walk's result was applied
         # 4.62: generation of the post-walk drain timer; a stale timer must not
@@ -1336,11 +1432,10 @@ class FileSystemMonitor:
             complete = False
             print(f"❌ Walk aborted: root is not a readable directory: {root_str}")
 
+        yielder = _WalkYielder()
         try:
-            for root, dirs, files in (
-                os.walk(root_str, topdown=True, onerror=_on_walk_error)
-                if complete
-                else ()
+            for root, dirs, dir_entries, file_entries in (
+                _scandir_walk(root_str, onerror=_on_walk_error) if complete else ()
             ):
                 # Skip chunk temp directory
                 if ".chunks" in dirs:
@@ -1352,21 +1447,13 @@ class FileSystemMonitor:
                 # twice (here and at their real location).
                 for _d in list(dirs):
                     _jp = os.path.join(root, _d)
-                    if _is_junction(_jp):
+                    if _entry_is_junction(dir_entries[_d], _jp):
                         dirs.remove(_d)
                         skipped_junctions.append(_jp)
 
-                # Yield the GIL between directories. Under Hypercorn there is
-                # exactly ONE thread running the whole asyncio event loop, so
-                # a tight loop of thousands of back-to-back os.stat() calls in
-                # this thread can out-race the OS scheduler for the GIL and
-                # starve the event loop thread (worse on Windows than POSIX).
-                # A real (non-zero) sleep forces this thread to actually give
-                # up its turn instead of just offering to — see
-                # WALK_YIELD_SECONDS' comment above for why time.sleep(0)
-                # isn't reliable enough on Windows. The event loop gets a
-                # fair turn between directories.
-                time.sleep(WALK_YIELD_SECONDS)
+                # Hand the CPU to the event loop thread now and then (5.44.1: paced by time,
+                # see WALK_YIELD_EVERY_SECONDS; it used to sleep after every folder).
+                yielder.maybe_yield()
 
                 root_rel = _rel(root, str(self.root_path))
 
@@ -1379,6 +1466,10 @@ class FileSystemMonitor:
                     }
                 if root_rel not in direct_entries:
                     direct_entries[root_rel] = []
+
+                # The folders above this one, resolved once per folder (5.44.1: it was
+                # re-derived from the path string for every single file).
+                ancestors = list(_parents(root_rel))
 
                 # Register immediate subdirs and bubble dir_count up to all ancestors
                 for d in dirs:
@@ -1396,13 +1487,12 @@ class FileSystemMonitor:
                     dir_info[root_rel]["dir_count"] += 1
                     dir_count += 1
                     # Bubble dir count up to all ancestors
-                    for ancestor in _parents(root_rel):
+                    for ancestor in ancestors:
                         if ancestor in dir_info:
                             dir_info[ancestor]["dir_count"] += 1
                     # Record subdir as a direct entry of root_rel (for file index)
-                    d_path = os.path.join(root, d)
                     try:
-                        d_mtime = os.stat(d_path).st_mtime
+                        d_mtime = dir_entries[d].stat().st_mtime
                     except OSError:
                         d_mtime = None
                     direct_entries[root_rel].append(
@@ -1410,52 +1500,52 @@ class FileSystemMonitor:
                     )
 
                 # Count files in this directory
-                for fname in files:
+                dir_files = 0
+                dir_size = 0
+                for entry in file_entries:
+                    fname = entry.name
                     if fname.startswith("."):
                         continue
-                    fpath = os.path.join(root, fname)
                     try:
-                        st = os.stat(fpath)
+                        st = entry.stat()
                         fsize = st.st_size
                         fmtime = st.st_mtime
-
-                        file_count += 1
-                        total_size += fsize
-                        if fmtime > latest_mtime:
-                            latest_mtime = fmtime
-
-                        # Emit live progress every WALK_PROGRESS_INTERVAL files
-                        if on_progress and file_count % WALK_PROGRESS_INTERVAL == 0:
-                            on_progress(file_count, dir_count, total_size)
-
-                        # Yield the GIL every WALK_YIELD_INTERVAL files too —
-                        # the per-directory sleep above isn't enough if a
-                        # single folder holds tens of thousands of files.
-                        if file_count % WALK_YIELD_INTERVAL == 0:
-                            time.sleep(WALK_YIELD_SECONDS)
-
-                        # Add file to immediate parent
-                        dir_info[root_rel]["file_count"] += 1
-                        dir_info[root_rel]["total_size"] += fsize
-
-                        # Bubble file_count and size up to all ancestors
-                        for ancestor in _parents(root_rel):
-                            if ancestor in dir_info:
-                                dir_info[ancestor]["file_count"] += 1
-                                dir_info[ancestor]["total_size"] += fsize
-
-                        # Record as a direct entry of root_rel (for file index)
-                        direct_entries[root_rel].append(
-                            {
-                                "name": fname,
-                                "is_dir": False,
-                                "size": fsize,
-                                "modified": fmtime,
-                            }
-                        )
-
                     except (OSError, IOError):
                         continue
+
+                    file_count += 1
+                    total_size += fsize
+                    dir_files += 1
+                    dir_size += fsize
+                    if fmtime > latest_mtime:
+                        latest_mtime = fmtime
+
+                    # Emit live progress every WALK_PROGRESS_INTERVAL files
+                    if on_progress and file_count % WALK_PROGRESS_INTERVAL == 0:
+                        on_progress(file_count, dir_count, total_size)
+
+                    # A folder with tens of thousands of files must not hold the CPU either.
+                    yielder.maybe_yield()
+
+                    # Record as a direct entry of root_rel (for file index)
+                    direct_entries[root_rel].append(
+                        {
+                            "name": fname,
+                            "is_dir": False,
+                            "size": fsize,
+                            "modified": fmtime,
+                        }
+                    )
+
+                # Add this folder's files to it and bubble them up to all ancestors
+                # (once per folder; it used to be once per file).
+                if dir_files:
+                    dir_info[root_rel]["file_count"] += dir_files
+                    dir_info[root_rel]["total_size"] += dir_size
+                    for ancestor in ancestors:
+                        if ancestor in dir_info:
+                            dir_info[ancestor]["file_count"] += dir_files
+                            dir_info[ancestor]["total_size"] += dir_size
 
                 # Sort direct_entries for root_rel now that all children are known
                 direct_entries[root_rel].sort(
@@ -1585,6 +1675,15 @@ class FileSystemMonitor:
             with self._settle_lock:
                 self._settle_timer = None
 
+    def walk_status(self) -> dict:
+        """Snapshot of the running walk: {phase, files, dirs, since, elapsed, waiters}."""
+        with self._walk_status_lock:
+            status = dict(self._walk_status)
+            status["waiters"] = self._walk_waiters
+        if status.get("since"):
+            status["elapsed"] = round(time.time() - status["since"], 1)
+        return status
+
     def _reconcile(self, force: bool = False) -> bool:
         """Ground-truth walk, ONE AT A TIME (4.62). Returns True if the result was
         applied (or an equally fresh walk already was), False if it was rejected.
@@ -1599,7 +1698,27 @@ class FileSystemMonitor:
         saw every change made before the request). force=True always walks.
         """
         requested_at = time.monotonic()
-        with self._walk_lock:
+        # 5.44.1: say so when this caller has to queue behind another walk. A rebuild that waits
+        # for a walk that is itself slow (a big tree, a busy disk) used to look like "nothing
+        # happens": the log stayed silent until the walk in front of it was over.
+        queued = self._walk_lock.locked()
+        if queued:
+            with self._walk_status_lock:
+                self._walk_waiters += 1
+            print(
+                "⏳ Reconcile queued: another walk is running, this one starts when it ends"
+            )
+        try:
+            self._walk_lock.acquire()
+        finally:
+            if queued:
+                with self._walk_status_lock:
+                    self._walk_waiters -= 1
+        try:
+            if queued:
+                print(
+                    f"▶️ Reconcile got its turn after {time.monotonic() - requested_at:.0f}s"
+                )
             if (
                 not force
                 and self._walk_applied
@@ -1612,11 +1731,19 @@ class FileSystemMonitor:
             self._walk_started_at = time.monotonic()
             self._walk_applied = False
             applied = False
+            with self._walk_status_lock:
+                self._walk_status.update(
+                    phase="walking", files=0, dirs=0, since=time.time()
+                )
             try:
                 applied = self._reconcile_walk(force)
                 return applied
             finally:
                 self._walk_applied = applied
+                with self._walk_status_lock:
+                    self._walk_status.update(phase="idle")
+        finally:
+            self._walk_lock.release()
 
     def _reconcile_walk(self, force: bool = False) -> bool:
         """The actual ground-truth walk (callers must hold _walk_lock via
@@ -1665,9 +1792,15 @@ class FileSystemMonitor:
         #     → frontend displayed 51000
         # The single reconcile_complete push at the end is sufficient.
         def _on_progress(fc: int, dc: int, ts: int):
+            self._walk_status.update(files=fc, dirs=dc)
             print(f"📊 Walk progress: {fc:,} files, {ts / (1024**3):.2f} GB")
 
+        _walk_t0 = time.monotonic()
         result = self._full_walk(silent=True, on_progress=_on_progress)
+        print(
+            f"✅ Walk finished in {time.monotonic() - _walk_t0:.1f}s: "
+            f"{result['file_count']:,} files, {result['dir_count']:,} dirs"
+        )
 
         # ── Reject a walk that cannot be trusted ────────────────────────────
         # (4.59) An aborted walk (root unreadable / exception) or one that finds
