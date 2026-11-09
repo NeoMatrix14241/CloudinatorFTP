@@ -325,27 +325,62 @@ _follow_log() {
 	# Python reads from stdin (-), log path is argv[1].
 	# 'PYEOF' (quoted) prevents bash expanding anything inside the heredoc.
 	"$PYTHON" - "$log" <<'PYEOF'
-import sys, time, collections
+import collections, datetime, os, re, sys, time
 
 log_path   = sys.argv[1]
 TAIL_LINES = 20          # lines of history shown before following live output
+CHECK_EVERY = 1.0        # seconds between looks for the next day's file
+
+# 5.44.1: the server writes to logs/<type>_server_YYYY-MM-DD.log and starts a NEW file after
+# midnight. This follower used to stay on the file it was started on, so after midnight it kept
+# watching yesterday's file and showed nothing. It now looks for "the same server's file for
+# today" and moves over to it when it appears (everything left in the old file is shown first).
+_name = re.match(r"^(?P<prefix>.+)_(?P<day>\d{4}-\d{2}-\d{2})\.log$", os.path.basename(log_path))
+_dir = os.path.dirname(log_path)
+
+
+def _today():
+    return datetime.date.today().isoformat()
+
+
+def _path_for_today():
+    if not _name:
+        return None  # not a dated log name: follow the given file only
+    return os.path.join(_dir, f"{_name.group('prefix')}_{_today()}.log")
+
+
+def _open(path):
+    return open(path, "r", encoding="utf-8", errors="replace")
+
 
 try:
-    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-        # Replay the last TAIL_LINES lines without loading the whole file.
-        # deque(f, maxlen=N) reads line-by-line and keeps only the last N;
-        # the file pointer ends up at EOF, so readline() below picks up from there.
-        buf = collections.deque(f, maxlen=TAIL_LINES)
-        for line in buf:
-            print(line, end="", flush=True)
+    current = log_path
+    f = _open(current)
+    # Replay the last TAIL_LINES lines without loading the whole file.
+    # deque(f, maxlen=N) reads line-by-line and keeps only the last N;
+    # the file pointer ends up at EOF, so readline() below picks up from there.
+    for line in collections.deque(f, maxlen=TAIL_LINES):
+        print(line, end="", flush=True)
 
-        # Follow new content as it arrives
-        while True:
-            line = f.readline()
-            if line:
-                print(line, end="", flush=True)
-            else:
-                time.sleep(0.1)     # poll every 100 ms
+    last_check = time.monotonic()
+    # Follow new content as it arrives
+    while True:
+        line = f.readline()
+        if line:
+            print(line, end="", flush=True)
+            continue
+        if time.monotonic() - last_check >= CHECK_EVERY:
+            last_check = time.monotonic()
+            nxt = _path_for_today()
+            if nxt and nxt != current and os.path.exists(nxt):
+                for rest in f:  # whatever the old file still received
+                    print(rest, end="", flush=True)
+                f.close()
+                print(f"\n---- new day: continuing in {os.path.basename(nxt)} ----", flush=True)
+                current = nxt
+                f = _open(current)
+                continue
+        time.sleep(0.1)     # poll every 100 ms
 
 except KeyboardInterrupt:
     pass                            # clean exit, no traceback
@@ -913,6 +948,15 @@ cmd_logs() {
 
 	local log
 	log=$(current_log_for "$type")
+
+	# Just after midnight the server has not written its first line of the new day yet, so
+	# today's file does not exist. Use the newest file of this server instead; the follower
+	# moves to today's file by itself as soon as it appears (5.44.1).
+	if [[ ! -f "$log" ]]; then
+		local newest
+		newest=$(ls -t "${LOG_DIR}/${type}_server_"*.log 2>/dev/null | head -n 1 || true)
+		[[ -n "$newest" ]] && log="$newest"
+	fi
 
 	if [[ -z "$log" ]] || [[ ! -f "$log" ]]; then
 		warn "No log file found for $(display_name_for "$type")."

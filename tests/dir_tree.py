@@ -6,6 +6,7 @@ EXCLUDED_DIRS = {
     ".venv",
     "venv",
     ".venv-ft",
+    ".venv-build",
     "env",
     ".pytest_cache",
     ".manage_pids",

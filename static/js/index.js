@@ -5785,6 +5785,57 @@ setInterval(() => {
     if (isUploading) updateProgressSummary();
 }, 1000);
 
+// @@chunk-progress-begin
+// Upload progress that does not move in whole-chunk steps (5.44.1).
+//
+// xhr.upload 'progress' counts the bytes the browser has handed to its network stack, NOT the
+// bytes the other end has received. Over HTTP/3 (QUIC, which Cloudflare turns on by default) the
+// stack accepts a whole 10 MB chunk into its send buffer almost at once, so `loaded` runs to the
+// end of the chunk right away and then nothing moves until the server answers: 10, 20, 30 MB.
+// The only moment that is CONFIRMED is the server's answer to a chunk. So the number shown for
+// the chunk in flight is the smallest of
+//   - what the browser claims (`loaded`; it is never behind the truth, only sometimes ahead),
+//   - what the recent confirmed chunks say the link really does: rate x time since this chunk
+//     started (rate = chunk bytes / full round trip of the previous chunks, all uploads, EMA),
+//   - 97% of the chunk: 100% only comes with the server's answer.
+// If the browser's events are accurate they are the smallest and are shown as they are; if the
+// link stalls the browser's numbers stop and so does the bar after at most 97% of that chunk.
+// The value only ever grows: updateItemProgress adds positive deltas to the running total.
+const CHUNK_PROGRESS_CAP = 0.97;
+const CHUNK_RATE_MIN_BYTES = 1024 * 1024; // smaller requests measure latency, not throughput
+let _chunkRateEma = 0; // bytes/s of recent confirmed chunk round trips; 0 = nothing measured yet
+
+function _chunkShownBytes(reported, chunkBytes, elapsedMs, bytesPerSec) {
+    const claimed = Math.min(Math.max(reported || 0, 0), chunkBytes);
+    const cap = chunkBytes * CHUNK_PROGRESS_CAP;
+    if (!(bytesPerSec > 0)) return Math.floor(Math.min(claimed, cap));
+    const estimate = bytesPerSec * Math.max(elapsedMs, 0) / 1000;
+    return Math.floor(Math.min(claimed, estimate, cap));
+}
+
+function _noteChunkRate(chunkBytes, elapsedMs) {
+    if (chunkBytes < CHUNK_RATE_MIN_BYTES || !(elapsedMs > 0)) return;
+    const rate = chunkBytes / (elapsedMs / 1000);
+    _chunkRateEma = _chunkRateEma > 0 ? _chunkRateEma * 0.5 + rate * 0.5 : rate;
+}
+
+// One reporter per request (a whole small file or one chunk). baseBytes = bytes of the file that
+// are already confirmed before this request; chunkBytes = size of THIS request's payload.
+function _makeChunkProgress(item, baseBytes, chunkBytes, fileSize) {
+    const startedAt = performance.now();
+    let shown = 0;
+    const report = loaded => {
+        const next = _chunkShownBytes(loaded, chunkBytes, performance.now() - startedAt, _chunkRateEma);
+        shown = Math.max(shown, next); // never backwards (see above)
+        const cumulative = baseBytes + shown;
+        updateItemProgress(item.id, Math.round((cumulative / fileSize) * 100), cumulative);
+    };
+    // Call when the server has answered this request OK: that is the one confirmed measurement.
+    report.done = () => _noteChunkRate(chunkBytes, performance.now() - startedAt);
+    return report;
+}
+// @@chunk-progress-end
+
 const PROGRESS_DOM_THROTTLE_MS = 120;
 
 function updateItemProgress(fileId, progress, uploadedBytes = 0) {
@@ -6651,6 +6702,7 @@ async function startBatchUpload() {
     totalBytesToUpload = pendingFiles.reduce((sum, item) => sum + item.size, 0)
         + pendingLazyGroups.reduce((s, g) => s + (g.totalSize || 0), 0);
     totalBytesUploaded = 0;
+    _chunkRateEma = 0; // a new run: forget the rate of the previous one (5.44.1)
     _speedSamples.length = 0; // reset rolling speed window
     lazyBytesUploaded = 0;
 
@@ -7069,17 +7121,9 @@ async function uploadSingleFile(item) {
     const file = item.file;
     const destPath = item.destinationPath !== undefined ? item.destinationPath : (document.getElementById('destPath').value || '');
 
-    // Reports real, cumulative bytes-sent-so-far for this file as XHR confirms them.
-    const onFileProgress = (loaded, total) => {
-        updateItemProgress(item.id, Math.round((loaded / total) * 100), loaded);
-    };
-    // Reports real, cumulative bytes across a chunked file: bytes from fully-sent
-    // prior chunks (chunkStart) plus bytes actually confirmed sent within the
-    // chunk currently in flight (loaded).
-    const onChunkProgress = (chunkStart, fileSize) => (loaded) => {
-        const cumulative = chunkStart + loaded;
-        updateItemProgress(item.id, Math.round((cumulative / fileSize) * 100), cumulative);
-    };
+    // Progress reporters (5.44.1, see _makeChunkProgress): one per request, so the number shown
+    // for a request in flight is never ahead of what the link has recently proven it can carry.
+    const wholeFileProgress = () => _makeChunkProgress(item, 0, file.size, file.size);
 
     try {
         if (file.size <= CHUNK_SIZE) {
@@ -7088,9 +7132,10 @@ async function uploadSingleFile(item) {
             formData.append('dest_path', destPath);
             formData.append('file', file);
 
+            let progress = wholeFileProgress();
             let response = await xhrUpload(UPLOAD_URL, formData, {
                 signal: item._abortSignal || null,
-                onProgress: onFileProgress
+                onProgress: progress
             });
 
             // Handle file-already-exists: ask user what to do
@@ -7112,9 +7157,10 @@ async function uploadSingleFile(item) {
                     renameForm.append('filename', freeName);
                     renameForm.append('dest_path', destPath);
                     renameForm.append('file', file);
+                    progress = wholeFileProgress();
                     response = await xhrUpload(UPLOAD_URL, renameForm, {
                         signal: item._abortSignal || null,
-                        onProgress: onFileProgress
+                        onProgress: progress
                     });
                 } else if (shouldOverwrite) {
                     const retryForm = new FormData();
@@ -7122,9 +7168,10 @@ async function uploadSingleFile(item) {
                     retryForm.append('dest_path', destPath);
                     retryForm.append('file', file);
                     retryForm.append('overwrite', '1');
+                    progress = wholeFileProgress();
                     response = await xhrUpload(UPLOAD_URL, retryForm, {
                         signal: item._abortSignal || null,
-                        onProgress: onFileProgress
+                        onProgress: progress
                     });
                 }
             }
@@ -7134,6 +7181,7 @@ async function uploadSingleFile(item) {
                 throw new Error(errorText);
             }
 
+            progress.done();
             response.body?.cancel();
             updateItemProgress(item.id, 100, file.size);
 
@@ -7167,15 +7215,17 @@ async function uploadSingleFile(item) {
                     throw new Error('Upload cancelled by user');
                 }
 
+                const chunkProgress = _makeChunkProgress(item, start, end - start, file.size);
                 const response = await xhrUpload(UPLOAD_URL, formData, {
                     signal: item._abortSignal || null,
-                    onProgress: onChunkProgress(start, file.size)
+                    onProgress: chunkProgress
                 });
 
                 if (!response.ok) {
                     const errorText = await response.text();
                     throw new Error(`Chunk ${i + 1}/${totalChunks}: ${errorText}`);
                 }
+                chunkProgress.done();
 
                 if (i === totalChunks - 1) {
                     try {
@@ -8631,7 +8681,7 @@ async function updateManualCleanupButton() {
 // the label is repainted every second from a clock, so the timer counts 1,2,3...
 // ---------------------------------------------------------------------------
 const _REBUILD_IDLE_HTML = '<i class="fas fa-database"></i> Rebuild Cache';
-let _rebuildFollow = null;   // { t0 } while a rebuild is being followed
+let _rebuildFollow = null;   // { t0, detail } while a rebuild is being followed
 
 function _rebuildBtn() { return document.getElementById('cleanupCacheBtn'); }
 
@@ -8642,11 +8692,26 @@ function _paintRebuildBtn() {
         const secs = Math.max(0, Math.floor((Date.now() - _rebuildFollow.t0) / 1000));
         b.disabled = true;
         b.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Rebuilding... ' +
-            Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0');
+            Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0') +
+            (_rebuildFollow.detail ? ' - ' + _rebuildFollow.detail : '');
     } else {
         b.disabled = false;
         b.innerHTML = _REBUILD_IDLE_HTML;
     }
+}
+
+// 5.44.1: one short line on what a running rebuild is doing, from the status route:
+// "waiting for another walk to finish", "walking: 412,000 files", or the worker's phase.
+function _rebuildDetail(st) {
+    const w = st.walk || {};
+    if (st.phase === 'walking the storage') {
+        if (w.phase === 'walking') {
+            return 'walking: ' + Number(w.files || 0).toLocaleString() + ' files';
+        }
+        if (w.waiters > 0) return 'waiting for another walk to finish';
+        return 'starting the walk';
+    }
+    return st.phase || '';
 }
 
 async function _readJsonSafe(resp) {
@@ -8675,6 +8740,8 @@ async function _followRebuild(t0) {
                 }
                 continue;
             }
+            if (_rebuildFollow) _rebuildFollow.detail = _rebuildDetail(st);
+            _paintRebuildBtn();
             if (st.state === 'done') {
                 showUploadStatus('✅ ' + (st.message || 'Cache cleared and rebuilt successfully'), 'success');
                 break;
@@ -8686,7 +8753,9 @@ async function _followRebuild(t0) {
                 throw new Error('the server has no rebuild in progress (it may have restarted)');
             }
             if ((Date.now() - _rebuildFollow.t0) > 3600 * 1000) {
-                throw new Error('still running after 60 minutes; check the server log');
+                throw new Error('still running after 60 minutes' +
+                    (_rebuildFollow.detail ? ' (' + _rebuildFollow.detail + ')' : '') +
+                    '; check the server log');
             }
         }
     } catch (error) {
@@ -8782,7 +8851,7 @@ function addManualCleanupButton() {
         cacheBtn.id = 'cleanupCacheBtn';
         cacheBtn.className = 'btn btn-warning btn-sm manual-cleanup-btn';
         cacheBtn.innerHTML = '<i class="fas fa-database"></i> Rebuild Cache';
-        cacheBtn.title = 'Delete storage_index.json and rebuild the index from scratch';
+        cacheBtn.title = 'Delete storage_index.json and file_index.json and rebuild both from scratch (the search index is kept)';
 
         cacheBtn.onclick = async function () {
             if (!confirm('This will delete the storage index cache and rebuild it from scratch.\nThe server re-scans every file in the background - on a large tree this can take several minutes. You can keep using the page.\n\nContinue?')) {

@@ -256,3 +256,56 @@ def test_bulk_download_streams_a_valid_zip_larger_than_the_hand_over_queue(serve
 
     # the server is still healthy afterwards (no leaked state from the stream)
     assert client.api("GET", "/api/dir_info/").status == 200
+
+
+# ------------------------------------------------ Rebuild Cache (5.44.1, routes/admin.py)
+
+
+def test_rebuild_cache_runs_in_the_background_and_reports_the_outcome(server):
+    client = server.login_as("qa_writer")
+    for i in range(5):
+        (server.storage / f"rebuild_{i}.txt").write_text("x" * (i + 1))
+
+    started = client.api("POST", "/admin/rebuild_cache")
+    assert started.status == 202 and started.json()["started"] is True
+
+    # the status route answers while it runs and names what it is doing
+    deadline = time.monotonic() + 90
+    status = {}
+    while time.monotonic() < deadline:
+        status = client.api("GET", "/admin/rebuild_cache/status").json()
+        if status["state"] != "running":
+            break
+        assert "phase" in status and "elapsed" in status
+        time.sleep(0.2)
+    assert status["state"] == "done", status
+    assert status["phase"] == "" and status["error"] == ""
+    assert (
+        "Cache cleared and rebuilt" in status["message"] and "Took" in status["message"]
+    )
+
+    # the audit of the file index no longer holds the button: it arrives after "done"
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline and not status.get("audit"):
+        time.sleep(0.3)
+        status = client.api("GET", "/admin/rebuild_cache/status").json()
+    assert status["audit"].startswith("Verified"), status
+
+
+def test_a_second_rebuild_after_the_first_one_finished_is_accepted(server):
+    client = server.login_as("qa_writer")
+    first = client.api("POST", "/admin/rebuild_cache")
+    assert first.status in (
+        202,
+        409,
+    )  # 409 only if an earlier test's rebuild is still going
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        if (
+            client.api("GET", "/admin/rebuild_cache/status").json()["state"]
+            != "running"
+        ):
+            break
+        time.sleep(0.2)
+    again = client.api("POST", "/admin/rebuild_cache")
+    assert again.status == 202

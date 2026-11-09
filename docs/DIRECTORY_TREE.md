@@ -136,7 +136,6 @@ CloudinatorFTP
 │   │   ├── test_sftp_protocol.py
 │   │   ├── test_smb_protocol.py
 │   │   └── test_webdav_protocol.py
-│   ├── refactor
 │   ├── reliability
 │   │   ├── test_concurrency.py
 │   │   ├── test_restart.py
@@ -154,6 +153,7 @@ CloudinatorFTP
 │   │   ├── test_http_client.py
 │   │   ├── test_image_preview_waiters.py
 │   │   ├── test_login_js.py
+│   │   ├── test_manage_log_follow.py
 │   │   ├── test_manage_qa.py
 │   │   ├── test_monitor_cache.py
 │   │   ├── test_monitor_handler.py
@@ -172,7 +172,9 @@ CloudinatorFTP
 │   │   ├── test_upload_chunk_keys.py
 │   │   ├── test_upload_perf.py
 │   │   ├── test_upload_perf_split.py
+│   │   ├── test_upload_progress_js.py
 │   │   ├── test_upload_settings.py
+│   │   ├── test_version_engine_backoff.py
 │   │   ├── test_version_engine_scope.py
 │   │   ├── test_versions_stream_close.py
 │   │   ├── test_walk_executor.py

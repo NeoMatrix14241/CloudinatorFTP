@@ -25,3 +25,4 @@ artifacts/
 to-do.txt
 review_output.txt
 build/
+nuitka-crash-report.xml
