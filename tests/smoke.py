@@ -54,6 +54,10 @@ SKIP_DIRS = {
     "images",
     "uploads",
     "site-packages",
+    # 5.44.3: `build/` is in .gitignore: a LOCAL folder of build tooling (Nuitka build, entry and
+    # self-test scripts) that is not part of the application. Its own self-test defines a Quart
+    # app with an `index` route, which smoke reported as a duplicate of routes/files.py.
+    "build",
 }
 
 # routes/ modules that may import another routes/ module (documented in CLAUDE.md)

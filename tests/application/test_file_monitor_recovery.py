@@ -663,3 +663,105 @@ def test_the_apps_own_folders_inside_the_root_are_ignored_but_not_lookalikes(run
         """)
     assert r["got_ok"] is True and r["inside"] is True and r["the_folder"] is True
     assert r["lookalike"] is False and r["user_file"] is False and r["outside"] is False
+
+
+# ---------------------------------------------------------------------------- walk hand-over (5.44.3)
+# set_pending_reconcile() / _reconcile_walk() / _clear_pending_reconcile() decide WHO owns the
+# "suppress the watchdog counters" flag while a bulk operation or a walk runs. The timers are
+# replaced by a fake that only records, so nothing waits and nothing fires by itself: the test
+# fires the timers it wants, in the order it wants (4.62 drain generation, 4.64 dirty folders).
+FAKE_TIMER = """
+    class FakeTimer:
+        made = []
+        daemon = True
+
+        def __init__(self, interval, function, args=None, kwargs=None):
+            self.interval, self.function, self.args = interval, function, tuple(args or ())
+            self.started = self.cancelled = False
+            FakeTimer.made.append(self)
+
+        def start(self):
+            self.started = True
+
+        def cancel(self):
+            self.cancelled = True
+
+        def fire(self):
+            self.function(*self.args)
+
+    fm.threading.Timer = FakeTimer
+
+    def timers_for(m, name):
+        return [t for t in FakeTimer.made if t.function == getattr(m, name)]
+"""
+FAKE_TIMER = textwrap.indent(textwrap.dedent(FAKE_TIMER), " " * 8)
+
+
+def test_a_stale_drain_timer_cannot_lift_the_suppression_of_a_newer_owner(run):
+    r = run(FAKE_TIMER + """
+        build()
+        m = walked()
+        applied = m._reconcile_walk()
+        drains = timers_for(m, "_clear_pending_reconcile")
+        after_walk = m._pending_reconcile
+        gen_walk = m._drain_gen
+        m.set_pending_reconcile()          # a bulk operation starts: it owns the flag now
+        gen_settle = m._drain_gen
+        drains[-1].fire()                  # the OLD walk's drain timer fires late
+        still = m._pending_reconcile
+        m._clear_pending_reconcile(m._drain_gen)   # the current owner's own release
+        out(applied=applied, drain_timers=len(drains), drain_started=drains[-1].started,
+            after_walk=after_walk, still=still, released=not m._pending_reconcile,
+            newer=gen_settle > gen_walk)
+        """)
+    assert r["applied"] is True
+    assert r["drain_timers"] == 1 and r["drain_started"] is True
+    assert r["after_walk"] is True, "the counters stay suppressed until the drain ends"
+    assert r["newer"] is True
+    assert r["still"] is True, "a stale drain timer must not clear a newer owner's flag"
+    assert r["released"] is True
+
+
+def test_a_new_settle_cancels_the_previous_one_and_only_the_last_one_runs(run):
+    r = run(FAKE_TIMER + """
+        m = monitor()
+        gen0 = m._drain_gen
+        m.set_pending_reconcile()
+        m.set_pending_reconcile()
+        settles = timers_for(m, "_settle_reconcile")
+        out(count=len(settles), first_cancelled=settles[0].cancelled,
+            second_cancelled=settles[1].cancelled, second_started=settles[1].started,
+            pending=m._pending_reconcile, gens=m._drain_gen - gen0,
+            interval=settles[1].interval == fm.SETTLE_DELAY)
+        """)
+    assert r["count"] == 2
+    assert r["first_cancelled"] is True and r["second_cancelled"] is False
+    assert r["second_started"] is True and r["interval"] is True
+    assert r["pending"] is True
+    assert (
+        r["gens"] == 2
+    ), "every arming invalidates the drain timers of the earlier ones"
+
+
+def test_folders_marked_during_the_suppression_are_corrected_when_it_ends(run):
+    r = run(FAKE_TIMER + """
+        build()
+        m = walked()
+        calls = []
+        m._notify_and_save = lambda: calls.append("notify")
+        m.set_pending_reconcile()
+        m._dirty_folders["d1"] = os.path.join(ROOT, "d1")   # an event only marked its folder
+        stale = m._drain_gen - 1
+        m._clear_pending_reconcile(stale)                    # a stale timer: nothing happens
+        after_stale = [m._pending_reconcile, list(calls)]
+        m._clear_pending_reconcile(m._drain_gen)             # the real release
+        released = [m._pending_reconcile, list(calls)]
+        calls.clear()
+        m._dirty_folders.clear()
+        m.set_pending_reconcile()
+        m._clear_pending_reconcile(m._drain_gen)             # nothing dirty: no correction pass
+        out(after_stale=after_stale, released=released, clean=list(calls))
+        """)
+    assert r["after_stale"] == [True, []], "a stale timer neither releases nor corrects"
+    assert r["released"] == [False, ["notify"]], "dirty folders trigger one correction"
+    assert r["clean"] == [], "no dirty folder, no correction pass"

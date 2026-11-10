@@ -247,3 +247,19 @@ def test_only_a_sharing_violation_is_retried(lab):
     assert len(calls) == 1 and clock.sleeps == [], "any other error fails at once"
     assert _leftovers(root) == []
     assert events["cleaned"] == []
+
+
+# ---------------------------------------------------------------------------- 5.44.3: file mode
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits only")
+def test_the_published_file_has_the_default_mode_not_the_private_one(lab):
+    # The one surviving mutant of the 5.44.2 mutation trial that mattered on Linux: the
+    # `os.name == "nt"` chmod, inverted, would publish every upload as 0600 (the temp file's
+    # own mode is the umask default, 0666 & ~umask). Other OS users, a share mount or a backup
+    # job that reads the storage as a different account would then be refused.
+    root, _, _ = lab
+    umask = os.umask(0)
+    os.umask(umask)
+    assemble, _ = _run(lab)
+    assert assemble("fid", "movie.bin", "", 3) is True
+    mode = stat.S_IMODE(os.stat(root / "movie.bin").st_mode)
+    assert mode == 0o666 & ~umask, f"published mode is {oct(mode)}"
