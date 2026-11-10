@@ -97,6 +97,27 @@ import version_engine
 version_engine.start()
 
 
+def _save_coverage_data() -> None:
+    """Write this process's coverage.py data when (and only when) it is being measured.
+
+    `python tests/qa.py coverage` measures every scratch server through coverage.py's
+    `patch = subprocess`. Coverage saves its data from an `atexit` hook, and the stop request
+    below ends the process with `os._exit()`, which skips every `atexit` hook: the whole
+    server's data (core, storage, routes, middleware ...) was lost and the Linux report read
+    about 39 % for code the tests really run (5.44.3). `sys.modules` is only looked at, never
+    imported into: a normal start does not load coverage and nothing changes for it."""
+    cov_module = sys.modules.get("coverage")
+    if cov_module is None:
+        return
+    try:
+        cov = cov_module.Coverage.current()
+        if cov is not None:
+            cov.stop()
+            cov.save()
+    except Exception as e:
+        print(f"   ⚠️  Could not save coverage data: {e}", flush=True)
+
+
 def _stop_file_watcher():
     """Daemon thread: wait for manage.sh's stop request, clean up the child
     processes the same way the KeyboardInterrupt path below does, then exit
@@ -120,6 +141,7 @@ def _stop_file_watcher():
             print(f"   ⚠️  Error stopping {label}: {e}", flush=True)
     print("👋 Development server stopped.", flush=True)
     logging.shutdown()
+    _save_coverage_data()  # os._exit() below skips atexit, where coverage saves
     os._exit(0)
 
 

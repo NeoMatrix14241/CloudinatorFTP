@@ -137,3 +137,32 @@ def test_pyproject_keeps_the_settings_subprocess_measurement_needs():
     # `source` is resolved to the repository by the parent: a subprocess running in a scratch
     # copy would then measure nothing (found in 5.34).
     assert "source" not in run
+
+
+# ---------------------------------------------------------------------------- 5.44.3: the floor
+def test_the_default_floor_applies_on_linux_and_macos_but_not_on_windows(qa):
+    assert qa._coverage_floor(None, "linux") == qa.COVERAGE_FLOOR
+    assert qa._coverage_floor(None, "darwin") == qa.COVERAGE_FLOOR
+    assert qa._coverage_floor(None, "win32") is None, "informational on Windows"
+
+
+def test_an_explicit_floor_wins_everywhere_and_zero_switches_it_off(qa):
+    for platform in ("linux", "darwin", "win32"):
+        assert qa._coverage_floor(70, platform) == 70
+        assert qa._coverage_floor(0, platform) == 0
+
+
+def test_the_floor_is_a_sensible_percentage(qa):
+    # catches a typo (450, 4.5) and a floor that has crept up to the measured total
+    assert 30 <= qa.COVERAGE_FLOOR <= 60
+
+
+def test_the_coverage_plan_gives_the_report_the_default_floor(qa, monkeypatch):
+    _pretend_installed(qa, monkeypatch, True)
+    monkeypatch.setattr(qa.sys, "platform", "linux")
+    step = qa.build_plan("coverage")[-1]
+    assert step.cmds[-1][-2:] == ["--fail-under", str(qa.COVERAGE_FLOOR)]
+    step = qa.build_plan("coverage", fail_under=0)[-1]
+    assert step.cmds[-1][-2:] == ["--fail-under", "0"]
+    monkeypatch.setattr(qa.sys, "platform", "win32")
+    assert "--fail-under" not in qa.build_plan("coverage")[-1].cmds[-1]

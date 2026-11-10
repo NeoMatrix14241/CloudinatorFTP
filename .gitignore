@@ -26,3 +26,4 @@ to-do.txt
 review_output.txt
 build/
 nuitka-crash-report.xml
+docs/TESTING_STRATEGY.md

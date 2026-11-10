@@ -19,6 +19,8 @@ this one file, so "green locally" and "green in CI" mean the same commands ran.
                                            (needs `python -m pip install "coverage>=7.10"`); NOT part of
                                            quick / ci; data, coverage.xml and htmlcov/ go to ./artifacts
                                            (or --out DIR); --fail-under N makes a total below N% a FAIL
+                                           (default on Linux and macOS: COVERAGE_FLOOR, 5.44.3; on
+                                           Windows none, the report there reads too low; N=0 = no floor)
 
     python tests/qa.py lint                Ruff on the whole project with the rules of pyproject.toml
                                            [tool.ruff] (needs `python -m pip install -r requirements-dev.txt`);
@@ -55,9 +57,7 @@ import sysconfig
 import time
 from pathlib import Path
 
-QA_VERSION = (
-    "5.42"  # `python tests/qa.py --version`: tells you which copy of this file you run
-)
+QA_VERSION = "5.44.3"  # `python tests/qa.py --version`: tells you which copy of this file you run
 
 ROOT = Path(__file__).resolve().parent.parent
 PY = sys.executable
@@ -239,6 +239,27 @@ def _lint_step(strict=False):
     )
 
 
+# The floor of `coverage` mode (5.44.3), in percent of the combined total. Measured on Linux with
+# the everyday run (no CLOUDINATOR_SLOW_TESTS): 50 %, after the scratch server's data was no longer
+# lost (dev_server.py `_save_coverage_data`; before that the report read 39 % for code the tests
+# really run). The floor sits 5 points below it: it catches "a whole file stopped being measured"
+# or "a layer stopped running", not a single untested function. Raise it when the number has
+# grown for a while; lower it only with a reason in CLAUDE.md.
+COVERAGE_FLOOR = 45.0
+
+
+def _coverage_floor(requested, platform=None):
+    """The floor `coverage` mode applies: what --fail-under asked for (0 switches it off), else
+    COVERAGE_FLOOR on Linux and macOS, none on Windows, where the report is informational (the
+    harness cannot always stop a server there in a way that lets coverage.py save its data).
+    """
+    if requested is not None:
+        return requested
+    if (platform or sys.platform) == "win32":
+        return None
+    return COVERAGE_FLOOR
+
+
 def _coverage_data_file(out):
     """Absolute path of the coverage data file: inherited by every subprocess the tests start
     (the servers run in scratch copies elsewhere), so all their data lands in ONE place.
@@ -332,7 +353,11 @@ def build_plan(
         return [_lint_step(strict)]
     if mode == "coverage":
         return _with_layout(
-            [_coverage_step(_existing_layers(), out or "artifacts", fail_under)]
+            [
+                _coverage_step(
+                    _existing_layers(), out or "artifacts", _coverage_floor(fail_under)
+                )
+            ]
         )
     if mode in ("quick", "ci"):
         return (
@@ -449,10 +474,11 @@ def main(argv=None):
         os.environ["COVERAGE_FILE"] = _coverage_data_file(args.out)
         if sys.platform == "win32":
             print(
-                "qa: note: on Windows the test harness stops the servers it starts with "
-                "TerminateProcess, which gives coverage.py no chance to save: code that runs only "
-                "inside those server processes shows far too low here. Read those numbers from the "
-                "Linux workflow (.github/workflows/coverage.yml).",
+                "qa: note: on Windows a server that the test harness has to end with "
+                "TerminateProcess gives coverage.py no chance to save: code that runs only "
+                "inside such a process can show too low here, so no floor is applied. Read "
+                "the numbers (and the floor) from the Linux workflow "
+                "(.github/workflows/coverage.yml).",
                 file=sys.stderr,
             )
     out = args.out or ("artifacts" if args.mode in ("ci", "coverage") else None)

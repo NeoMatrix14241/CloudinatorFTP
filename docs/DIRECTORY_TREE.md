@@ -124,6 +124,7 @@ CloudinatorFTP
 │   │   ├── test_version_restore.py
 │   │   └── test_version_routes.py
 │   ├── frontend
+│   │   ├── test_browser_flows.py
 │   │   └── test_browser_smoke.py
 │   ├── performance
 │   │   ├── test_baselines.py
@@ -140,6 +141,7 @@ CloudinatorFTP
 │   │   ├── test_concurrency.py
 │   │   ├── test_restart.py
 │   │   ├── test_version_chunks_excluded.py
+│   │   ├── test_version_engine_crash.py
 │   │   └── test_version_engine_live.py
 │   ├── unit
 │   │   ├── test_abandoned_upload_cleanup.py
@@ -148,10 +150,12 @@ CloudinatorFTP
 │   │   ├── test_chunk_tracker_lock.py
 │   │   ├── test_client_ip_trust.py
 │   │   ├── test_database_connect.py
+│   │   ├── test_dev_server_coverage_save.py
 │   │   ├── test_dev_server_identity.py
 │   │   ├── test_file_body.py
 │   │   ├── test_http_client.py
 │   │   ├── test_image_preview_waiters.py
+│   │   ├── test_index_js_logic.py
 │   │   ├── test_login_js.py
 │   │   ├── test_manage_log_follow.py
 │   │   ├── test_manage_qa.py
@@ -166,6 +170,7 @@ CloudinatorFTP
 │   │   ├── test_scratch_copy.py
 │   │   ├── test_scratch_environment.py
 │   │   ├── test_setup_pymodules.py
+│   │   ├── test_static_check_skip_dirs.py
 │   │   ├── test_storage_stats_cache.py
 │   │   ├── test_stream_from_thread.py
 │   │   ├── test_upload_body_paths.py
