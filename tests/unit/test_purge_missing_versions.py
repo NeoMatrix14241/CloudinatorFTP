@@ -777,6 +777,22 @@ def test_an_error_in_the_worker_is_raised_to_the_caller():
         tool._with_progress("x", boom)
 
 
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_a_worker_that_ends_without_a_result_is_reported(capsys):
+    """SystemExit is not an Exception: the worker thread just ends. The caller must not take
+    that for a result of None."""
+
+    def quits():
+        raise SystemExit(3)
+
+    with pytest.raises(RuntimeError, match="ended without a result"):
+        tool._with_progress("deleting", quits)
+
+
+def test_a_step_that_returns_none_is_a_result(capsys):
+    assert tool._with_progress("x", lambda: None) is None
+
+
 def test_orphan_count_counts_only_chunks_marked_as_orphaned(world, tmp_path):
     folder, db = world
     db.add(folder / "a.txt", [("completed", 90, ["a", "b", "c"])])

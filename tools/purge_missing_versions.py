@@ -581,7 +581,7 @@ def _free_now(engine):
 def _with_progress(label, work, measure=None, interval=5.0):
     """Run work() in a worker thread and print a heartbeat line every `interval` seconds until
     it ends, so a long step does not look stuck: `label`, what measure() says (if given) and the
-    time spent. Returns work()'s result; an error in the worker is raised here. Ctrl-C stops the
+    time spent. Returns work()'s result; an Exception in the worker is raised here. Ctrl-C stops the
     waiting, not the worker (an engine garbage-collection pass cannot be interrupted); the
     engine finishes whatever is left on its own later."""
     box = {}
@@ -589,7 +589,7 @@ def _with_progress(label, work, measure=None, interval=5.0):
     def target():
         try:
             box["result"] = work()
-        except BaseException as e:  # handed to the caller below, not swallowed
+        except Exception as e:  # handed to the caller below, not swallowed
             box["error"] = e
 
     worker = threading.Thread(target=target, daemon=True)
@@ -610,7 +610,10 @@ def _with_progress(label, work, measure=None, interval=5.0):
         raise
     if "error" in box:
         raise box["error"]
-    return box.get("result")
+    # No result and no error: the worker ended without returning (for example SystemExit).
+    if "result" not in box:
+        raise RuntimeError(f"{label}: the step ended without a result")
+    return box["result"]
 
 
 @dataclass
