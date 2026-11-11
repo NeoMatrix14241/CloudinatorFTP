@@ -1,7 +1,7 @@
 """
 Tests for the Quality Assurance section of manage.sh (menu 21-25 and the `qa` command) and for
 its Developer Tools section (menu 26-30: `dir-tree`, `smoke --save`, `qa audit`, `qa coverage` and,
-since 5.41, `qa lint`).
+since 5.41, `qa lint`). Menu 31 / `purge-versions` (5.44.4) launches tools/purge_missing_versions.py.
 
 They read the real manage.sh and only run side-effect-free commands (`help`, `qa --version`,
 `qa bogus`, `qa layer nope`; `qa audit` and `qa lint` are only checked in the source: audit would use the network, lint would write Ruff's cache); no server is started and nothing is written. The numbering test
@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(
     BASH is None or not SCRIPT.is_file(), reason="bash or manage.sh not found"
 )
 
-LAST_ENTRY = 30
+LAST_ENTRY = 31
 
 
 def _text():
@@ -170,3 +170,20 @@ def test_runner_exit_code_is_passed_through():
     proc = _run("qa", "layer", "no_such_layer")
     assert proc.returncode == 2, (proc.stdout, proc.stderr)
     assert "unknown layer" in proc.stderr
+
+
+def test_purge_versions_is_menu_31_and_a_command():
+    assert re.search(
+        r'^\t\t31\) _menu_run run_utility "tools/purge_missing_versions.py" ;;$',
+        _function("cmd_menu"),
+        re.M,
+    )
+    assert re.search(
+        r'^\tpurge-versions\) run_utility "tools/purge_missing_versions.py" "\$@" ;;$',
+        _function("main"),
+        re.M,
+    )
+    assert (ROOT / "tools" / "purge_missing_versions.py").is_file()
+    out = _run("help").stdout
+    for text in ("purge-versions", "--report", "--undo <file>.json", "--force"):
+        assert text in out, text

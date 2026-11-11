@@ -122,6 +122,7 @@ Utilities run in the **foreground** and are safe to use while the server is up. 
 | Command | Runs | Purpose |
 |---|---|---|
 | `version-manage` | `tools/version_manage.py` | Version Engine: list, restore, delete file versions (no arguments opens its own menu) |
+| `purge-versions` | `tools/purge_missing_versions.py` | Version Engine: free the storage of versions whose file no longer exists on disk. No arguments: prints a report that reconciles database rows, files on disk and the tracked folder, then asks before changing anything. `--report` never asks, `--apply [--yes]`, `--free-now` (skip the 24 h grace), `--min-age-days N` (default 30), `--force` (also files on an unavailable drive, share or tracked folder), `--undo <file>.json` |
 | `setup-smb` | `tools/smb_setup.py` | One-time SMB setup (see `SMB_PROTOCOL_DEPLOYMENT.md`) |
 | `kick-sessions` | `tools/kick_sessions.py` | Force logout of every active session (server must be running) |
 | `config` | `config.py` | Interactive configuration (see `CONFIG_PY_REFERENCE.md`) |
@@ -339,6 +340,10 @@ Shows whether a server is running, then a numbered list. Every number is the sam
 | 25 | `qa ci` | Quality Assurance |
 | 26 | `dir-tree` | Developer Tools |
 | 27 | `smoke --save` (warns, then asks y/N) | Developer Tools |
+| 28 | `qa audit` (pip-audit; needs network) | Developer Tools |
+| 29 | `qa coverage` (slow) | Developer Tools |
+| 30 | `qa lint` (Ruff, report only) | Developer Tools |
+| 31 | `purge-versions` (report, then asks) | Utilities |
 
 Type `q` to quit. After each action it waits for Enter before redrawing.
 
