@@ -27,7 +27,6 @@ CloudinatorFTP
 │   ├── SERVER_MANAGEMENT_SCRIPT_GUIDE.md
 │   ├── SETUP_TUNNEL_ADVANCED.md
 │   ├── SMB_PROTOCOL_DEPLOYMENT.md
-│   ├── TESTING_STRATEGY.md
 │   ├── USER_GUIDE.md
 │   ├── VSCODE_SETUP.md
 │   └── WINDOWS_DEPLOYMENT.md
@@ -138,6 +137,7 @@ CloudinatorFTP
 │   │   ├── test_sftp_protocol.py
 │   │   ├── test_smb_protocol.py
 │   │   └── test_webdav_protocol.py
+│   ├── refactor
 │   ├── reliability
 │   │   ├── test_concurrency.py
 │   │   ├── test_restart.py
@@ -157,6 +157,7 @@ CloudinatorFTP
 │   │   ├── test_http_client.py
 │   │   ├── test_image_preview_waiters.py
 │   │   ├── test_index_js_logic.py
+│   │   ├── test_is_safe_path_error_branch.py
 │   │   ├── test_login_js.py
 │   │   ├── test_manage_log_follow.py
 │   │   ├── test_manage_qa.py
