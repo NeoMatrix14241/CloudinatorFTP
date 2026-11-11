@@ -162,6 +162,49 @@ def test_a_gone_file_lists_all_its_completed_versions_only(world):
     assert s.purge[0]["versions"] == 2
 
 
+def test_gone_files_are_summarised_by_extension_and_date(world):
+    folder, db = world
+    db.add(folder / "a.QBW", [("completed", 5, ["a"])])
+    db.add(folder / "b.qbw", [("completed", 9, ["b"])])
+    db.add(folder / "c.tlg", [("completed", 2, ["c"])])
+    db.add(folder / "noext", [("completed", 40, ["d"])])
+    s = _scan(db, folder)  # default 30 days: only "noext" is old enough to purge
+    assert s.gone_ext == {".qbw": 2, ".tlg": 1, "(none)": 1}
+    assert s.gone_newest_min < s.gone_newest_max
+    assert len(s.purge) == 1
+
+
+class _Args:
+    min_age_days = 30.0
+    show = 10
+
+
+def test_the_report_explains_why_recent_gone_files_are_not_purged(world, capsys):
+    """The state of a real database: every gone file is younger than --min-age-days, the old
+    tool printed "No longer on disk: 0" and said nothing else."""
+    folder, db = world
+    for i in range(3):
+        db.add(folder / f"gone_{i}.qbw", [("completed", 2, [f"g{i}"])])
+    s = _scan(db, folder)
+    tool._print_report(s, {}, 0, _Args)
+    out = capsys.readouterr().out
+    assert "3 gone file(s) are NOT in the purge list only because" in out
+    assert "younger than 30 day(s)" in out
+    assert "--min-age-days N" in out
+    assert ".qbw 3" in out
+    assert "Nothing to purge." in out
+
+
+def test_the_age_hint_is_absent_when_nothing_was_held_back(world, capsys):
+    folder, db = world
+    db.add(folder / "old.txt", [("completed", 90, ["a"])])
+    s = _scan(db, folder)
+    tool._print_report(s, {}, 100, _Args)
+    out = capsys.readouterr().out
+    assert "NOT in the purge list" not in out
+    assert "Would soft-delete 1 version(s) of 1 file(s)" in out
+
+
 # ------------------------------------------------------ the discrepancy this version fixes
 def test_a_cleanup_of_most_tracked_files_is_not_blocked(world):
     """100 rows, 24 files on disk, 76 gone: the old "over half looks gone" brake refused this

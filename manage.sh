@@ -485,7 +485,7 @@ cmd_start() {
 		echo ""
 		info "Logs saved to: ${DIM}${log}${NC}"
 		echo ""
-		info "Utilities:   ./manage.sh version-manage | config | manage-users | reset-db"
+		info "Utilities:   ./manage.sh version-manage | purge-versions | config | manage-users | reset-db"
 		info "Follow logs: ./manage.sh logs $(display_name_for "$type") -f"
 		info "Stop server: ./manage.sh stop"
 	else
@@ -1604,7 +1604,6 @@ cmd_menu() {
 			echo -e "  ${DIM}19) termux_setup.sh     — Termux initial setup (Android only — n/a on this system)${NC}"
 		fi
 		echo "  20) sri_validator.py    — Check SRI hashes in templates (offers to fix)"
-		echo "  31) purge_missing_versions.py — Version Engine: free the storage of deleted files (asks first)"
 		echo ""
 		echo -e "  ${BOLD}Quality Assurance${NC}  ${DIM}(runs tests/qa.py; safe while a server runs)${NC}"
 		echo "  21) qa quick            — smoke + check + SRI + JS syntax + all automated tests"
@@ -1619,6 +1618,9 @@ cmd_menu() {
 		echo "  28) qa audit            — pip-audit on the installed packages (needs network; not part of qa quick)"
 		echo "  29) qa coverage         — every test layer under coverage.py (slow; not part of qa quick)"
 		echo "  30) qa lint             — Ruff on the whole project (report only; not part of qa quick)"
+		echo ""
+		echo -e "  ${BOLD}Version Engine${NC}  ${DIM}(reads its database and the disk; asks before changing anything)${NC}"
+		echo "  31) purge_missing_versions.py — Free the storage of versions whose file no longer exists"
 		echo ""
 		echo "   q) Quit"
 		echo ""

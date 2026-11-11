@@ -65,6 +65,17 @@ def test_menu_listing_and_dispatch_cover_the_same_numbers():
     )
 
 
+def test_menu_lists_the_entries_in_numeric_order():
+    """31 once sat between 20 and 21 and was easy to miss; the listing must read 1, 2, 3, ...
+    (19 is printed by both branches of its if, hence the consecutive de-duplication)."""
+    shown = []
+    for line in _function("cmd_menu").splitlines():
+        m = re.match(r"\t+echo.*?\b(\d{1,2})\) ", line)
+        if m and (not shown or shown[-1] != int(m.group(1))):
+            shown.append(int(m.group(1)))
+    assert shown == list(range(1, LAST_ENTRY + 1)), shown
+
+
 def test_help_menu_map_lists_every_number():
     out = _run("help").stdout
     block = out.split("COMMAND MAP", 1)[1].split("EXAMPLES", 1)[0]

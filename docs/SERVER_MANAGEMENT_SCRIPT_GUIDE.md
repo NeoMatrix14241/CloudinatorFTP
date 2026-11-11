@@ -343,7 +343,7 @@ Shows whether a server is running, then a numbered list. Every number is the sam
 | 28 | `qa audit` (pip-audit; needs network) | Developer Tools |
 | 29 | `qa coverage` (slow) | Developer Tools |
 | 30 | `qa lint` (Ruff, report only) | Developer Tools |
-| 31 | `purge-versions` (report, then asks) | Utilities |
+| 31 | `purge-versions` (report, then asks) | Version Engine |
 
 Type `q` to quit. After each action it waits for Enter before redrawing.
 

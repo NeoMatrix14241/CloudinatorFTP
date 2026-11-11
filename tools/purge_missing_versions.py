@@ -198,6 +198,11 @@ class Scan:
     too_recent: int = 0  # gone, but the newest version is younger than --min-age-days
     purge: list = field(default_factory=list)  # gone and old enough: dicts, see _scan
     unsure: list = field(default_factory=list)  # (path, reason): place unavailable
+    gone_ext: dict = field(default_factory=dict)  # extension -> gone files (any age)
+    gone_newest_min: float | None = None  # oldest "newest version" among the gone files
+    gone_newest_max: float | None = (
+        None  # youngest "newest version" among the gone files
+    )
     scope_files: int | None = (
         None  # files the engine's walk finds now (None = not checked)
     )
@@ -253,6 +258,13 @@ def scan_tracked(
                 out.unsure.append((r["path"], why))
                 continue
             out.gone += 1
+            ext = os.path.splitext(r["path"])[1].lower() or "(none)"
+            out.gone_ext[ext] = out.gone_ext.get(ext, 0) + 1
+            newest = r["newest"]
+            if out.gone_newest_min is None or newest < out.gone_newest_min:
+                out.gone_newest_min = newest
+            if out.gone_newest_max is None or newest > out.gone_newest_max:
+                out.gone_newest_max = newest
             if r["newest"] > cutoff:
                 out.too_recent += 1
                 continue
@@ -457,6 +469,20 @@ def _print_report(scan: Scan, per_file, total, args):
         print(
             f"\n  {scan.gone / scan.files_total:.0%} of the files are gone from disk. "
             "Every tracked folder is reachable and not empty, so this is real deletion."
+        )
+    if scan.gone:
+        top = sorted(scan.gone_ext.items(), key=lambda kv: -kv[1])[:8]
+        print("\nThe gone files")
+        print("  by extension: " + "   ".join(f"{e} {n:,}" for e, n in top))
+        print(
+            f"  newest version of each: between {_fmt_time(scan.gone_newest_min)} "
+            f"and {_fmt_time(scan.gone_newest_max)}"
+        )
+    if scan.too_recent:
+        print(
+            f"\n  {scan.too_recent:,} gone file(s) are NOT in the purge list only because "
+            f"their newest version is younger than {args.min_age_days:g} day(s).\n"
+            "  Use --min-age-days N (0 = take them all) to include them."
         )
     if not scan.purge:
         print("\nNothing to purge.")
