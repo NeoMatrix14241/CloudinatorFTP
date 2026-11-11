@@ -485,7 +485,8 @@ cmd_start() {
 		echo ""
 		info "Logs saved to: ${DIM}${log}${NC}"
 		echo ""
-		info "Utilities:   ./manage.sh version-manage | config | manage-users | reset-db"
+		info "Versions:    ./manage.sh version-manage | purge-versions"
+		info "Utilities:   ./manage.sh config | manage-users | reset-db"
 		info "Follow logs: ./manage.sh logs $(display_name_for "$type") -f"
 		info "Stop server: ./manage.sh stop"
 	else
@@ -1585,8 +1586,11 @@ cmd_menu() {
 		echo "   7) Clean log files"
 		echo "   8) Restart WebDAV only  — recover a wedged WebDAV listener"
 		echo ""
+		echo -e "  ${BOLD}Version Engine${NC}  ${DIM}(file versions: browse, restore, clean up)${NC}"
+		echo "   9) version_manage.py    — List / restore / delete file versions"
+		echo "  31) purge_missing_versions.py — Free the storage of versions whose file no longer exists"
+		echo ""
 		echo -e "  ${BOLD}Utilities${NC}"
-		echo "   9) version_manage.py    — Version Engine: list / restore / delete file versions"
 		echo "  10) config.py           — Edit configuration"
 		echo "  11) smb_setup.py        — Configure SMB storage"
 		echo "  12) kick_sessions.py    — Force logout of all active sessions"
@@ -1596,7 +1600,7 @@ cmd_menu() {
 		echo "  16) setup_pymodules.sh  — Setup and Update Python packages"
 		echo "  17) revoke_sharing.py   — Share link management (links, passkeys, approvals)"
 		echo "  18) security.txt        — Update static/.well-known/security.txt"
-		# Always listed so the menu numbers match `./manage.sh help` (27 entries).
+		# Always listed so the menu numbers match `./manage.sh help` (31 entries).
 		# Off Termux, cmd_termux_setup just explains that it is Android-only.
 		if is_termux; then
 			echo "  19) termux_setup.sh     — Termux initial setup (Android only)"
@@ -1662,6 +1666,7 @@ cmd_menu() {
 		28) _menu_run cmd_qa audit ;;
 		29) _menu_run cmd_qa coverage ;;
 		30) _menu_run cmd_qa lint ;;
+		31) _menu_run run_utility "tools/purge_missing_versions.py" ;;
 		q | Q)
 			echo ""
 			success "Goodbye!"
@@ -1721,6 +1726,21 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
                           Ctrl-C at any prompt cancels that action and returns to
                           the menu (interactive mode) or exits cleanly (CLI mode) —
                           never leaves a partial restore/delete in place.
+  purge-versions        python tools/purge_missing_versions.py — Version Engine: free the
+                          storage that versions of files which NO LONGER EXIST on disk
+                          still use (the engine never ages those out). No args → its own
+                          interactive menu (report / soft-delete / soft-delete and free now /
+                          undo / settings; it asks before changing anything). With arguments
+                          it is a plain command line. Options:
+                          --menu (the menu, starting settings from the flags) |
+                          --report (never asks, never changes) | --apply [--yes] |
+                          --free-now (free chunks now, skip the 24 h grace) |
+                          --min-age-days N (default 30; skipped files are counted) |
+                          --force (also purge files on an unavailable drive/share/folder) |
+                          --show N | --no-scope-check | --undo <file>.json
+                          The report reconciles database rows, files on disk and the
+                          tracked folder's real file count. Files whose drive, share or
+                          tracked folder is missing/empty are never touched without --force.
   setup-smb             python tools/smb_setup.py — Configure SMB protocol storage (Windows/Linux)
   kick-sessions         python tools/kick_sessions.py — Force logout of all active
                           sessions (server must be running)
@@ -1817,6 +1837,7 @@ ${BOLD}MENU ↔ COMMAND MAP${NC}  (in ./manage.sh menu type the number; from the
   24  qa layer (asks)      25  qa ci                 26  dir-tree
   27  smoke --save (asks y/N first)                  28  qa audit (pip-audit; needs network)
   29  qa coverage (slow)                              30  qa lint (Ruff, report only)
+  31  purge-versions (Version Engine clean-up: interactive menu, or flags; asks before changing anything)
   q   quit
 
 ${BOLD}EXAMPLES${NC}
@@ -1842,6 +1863,10 @@ ${BOLD}EXAMPLES${NC}
     ./manage.sh version-manage restore <id> <dest>           # restore a version
     ./manage.sh version-manage restore <id> <dest> --overwrite  # ...replacing an existing file (asks to type a confirm phrase)
     ./manage.sh version-manage delete <id>       # permanently delete a version (asks to type a long confirm sentence)
+    ./manage.sh purge-versions                   # interactive menu: report, soft-delete, free now, undo
+    ./manage.sh purge-versions --report          # report only: nothing is asked or changed
+    ./manage.sh purge-versions --apply --free-now  # soft-delete and free the chunks now (asks y/N)
+    ./manage.sh purge-versions --undo <file>.json  # bring an earlier purge back (before the chunks are freed)
     ./manage.sh setup-smb                        # configure SMB storage
     ./manage.sh kick-sessions                    # force logout of every active session
     ./manage.sh config                           # edit configuration
@@ -1936,6 +1961,7 @@ main() {
 	kick-sessions) run_utility "tools/kick_sessions.py" "$@" ;;
 	config) run_utility "config.py" "$@" ;;
 	version-manage) run_utility "tools/version_manage.py" "$@" ;;
+	purge-versions) run_utility "tools/purge_missing_versions.py" "$@" ;;
 	manage-users) run_utility "tools/manage_users.py" "$@" ;;
 	reset-db) run_utility "tools/reset_db.py" "$@" ;;
 	setup-storage) run_utility "tools/setup_storage.py" "$@" ;;

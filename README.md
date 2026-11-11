@@ -385,6 +385,7 @@ Run any utility **while a server is running in the same terminal**:
 | `./manage.sh reset-db` | `python tools/reset_db.py` |
 | `./manage.sh setup-storage` | `python tools/setup_storage.py` |
 | `./manage.sh version-manage` | `python tools/version_manage.py` (Version Engine: list, restore, delete file versions) |
+| `./manage.sh purge-versions` | `python tools/purge_missing_versions.py` (Version Engine: free the storage that versions of files which no longer exist still use; no arguments opens an interactive menu, flags keep the plain command line; reports first, asks before changing anything, undo brings a purge back) |
 | `./manage.sh setup-smb` | `python tools/smb_setup.py` (one-time SMB setup) |
 | `./manage.sh kick-sessions` | `python tools/kick_sessions.py` (force logout of every session; the server must be running) |
 | `./manage.sh revoke-shares` | `python tools/revoke_sharing.py` (share link management) |
@@ -420,7 +421,7 @@ Two helpers for people who change the code. They never touch your stored files a
 ./manage.sh menu
 ```
 
-A numbered menu (27 entries: servers, utilities, quality assurance and developer tools) with live status shown at the top.
+A numbered menu (31 entries: servers, utilities, quality assurance and developer tools) with live status shown at the top.
 
 ### 💡 Typical Workflow
 

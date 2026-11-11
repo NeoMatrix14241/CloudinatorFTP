@@ -1,7 +1,7 @@
 """
 Tests for the Quality Assurance section of manage.sh (menu 21-25 and the `qa` command) and for
 its Developer Tools section (menu 26-30: `dir-tree`, `smoke --save`, `qa audit`, `qa coverage` and,
-since 5.41, `qa lint`).
+since 5.41, `qa lint`). Menu 31 / `purge-versions` (5.44.4) launches tools/purge_missing_versions.py.
 
 They read the real manage.sh and only run side-effect-free commands (`help`, `qa --version`,
 `qa bogus`, `qa layer nope`; `qa audit` and `qa lint` are only checked in the source: audit would use the network, lint would write Ruff's cache); no server is started and nothing is written. The numbering test
@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(
     BASH is None or not SCRIPT.is_file(), reason="bash or manage.sh not found"
 )
 
-LAST_ENTRY = 30
+LAST_ENTRY = 31
 
 
 def _text():
@@ -63,6 +63,37 @@ def test_menu_listing_and_dispatch_cover_the_same_numbers():
         sorted(listed),
         sorted(arms),
     )
+
+
+MENU_BLOCKS = {
+    "Servers": list(range(1, 9)),
+    "Version Engine": [9, 31],
+    "Utilities": list(range(10, 21)),
+    "Quality Assurance": list(range(21, 26)),
+    "Developer Tools": list(range(26, 31)),
+}
+
+
+def test_menu_blocks_hold_the_documented_entries_in_order():
+    """Which heading each number is printed under, in the order printed. 31 once sat under
+    Utilities between 20 and 21 and was overlooked; 9 (version_manage) and 31 (purge) are now
+    one "Version Engine" block next to the servers. 19 is printed by both branches of its
+    `if is_termux`, hence the consecutive de-duplication."""
+    blocks, current = {}, None
+    for line in _function("cmd_menu").splitlines():
+        heading = re.match(r'\t+echo -e "  \$\{BOLD\}([^$]+)\$\{NC\}', line)
+        if heading:
+            current = heading.group(1)
+            blocks[current] = []
+            continue
+        entry = re.match(r"\t+echo.*?\b(\d{1,2})\) ", line)
+        if (
+            entry
+            and current
+            and (not blocks[current] or blocks[current][-1] != int(entry.group(1)))
+        ):
+            blocks[current].append(int(entry.group(1)))
+    assert blocks == MENU_BLOCKS
 
 
 def test_help_menu_map_lists_every_number():
@@ -170,3 +201,20 @@ def test_runner_exit_code_is_passed_through():
     proc = _run("qa", "layer", "no_such_layer")
     assert proc.returncode == 2, (proc.stdout, proc.stderr)
     assert "unknown layer" in proc.stderr
+
+
+def test_purge_versions_is_menu_31_and_a_command():
+    assert re.search(
+        r'^\t\t31\) _menu_run run_utility "tools/purge_missing_versions.py" ;;$',
+        _function("cmd_menu"),
+        re.M,
+    )
+    assert re.search(
+        r'^\tpurge-versions\) run_utility "tools/purge_missing_versions.py" "\$@" ;;$',
+        _function("main"),
+        re.M,
+    )
+    assert (ROOT / "tools" / "purge_missing_versions.py").is_file()
+    out = _run("help").stdout
+    for text in ("purge-versions", "--report", "--undo <file>.json", "--force"):
+        assert text in out, text

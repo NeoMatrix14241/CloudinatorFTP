@@ -27,7 +27,6 @@ CloudinatorFTP
 │   ├── SERVER_MANAGEMENT_SCRIPT_GUIDE.md
 │   ├── SETUP_TUNNEL_ADVANCED.md
 │   ├── SMB_PROTOCOL_DEPLOYMENT.md
-│   ├── TESTING_STRATEGY.md
 │   ├── USER_GUIDE.md
 │   ├── VSCODE_SETUP.md
 │   └── WINDOWS_DEPLOYMENT.md
@@ -116,6 +115,7 @@ CloudinatorFTP
 │   │   ├── test_file_monitor_recovery.py
 │   │   ├── test_login.py
 │   │   ├── test_path_containment.py
+│   │   ├── test_purge_missing_versions.py
 │   │   ├── test_recover_uploads.py
 │   │   ├── test_revoke_code_generation.py
 │   │   ├── test_session_revocation.py
@@ -137,6 +137,7 @@ CloudinatorFTP
 │   │   ├── test_sftp_protocol.py
 │   │   ├── test_smb_protocol.py
 │   │   └── test_webdav_protocol.py
+│   ├── refactor
 │   ├── reliability
 │   │   ├── test_concurrency.py
 │   │   ├── test_restart.py
@@ -156,12 +157,14 @@ CloudinatorFTP
 │   │   ├── test_http_client.py
 │   │   ├── test_image_preview_waiters.py
 │   │   ├── test_index_js_logic.py
+│   │   ├── test_is_safe_path_error_branch.py
 │   │   ├── test_login_js.py
 │   │   ├── test_manage_log_follow.py
 │   │   ├── test_manage_qa.py
 │   │   ├── test_monitor_cache.py
 │   │   ├── test_monitor_handler.py
 │   │   ├── test_paths.py
+│   │   ├── test_purge_missing_versions.py
 │   │   ├── test_qa_audit.py
 │   │   ├── test_qa_coverage.py
 │   │   ├── test_qa_runner.py
@@ -196,6 +199,7 @@ CloudinatorFTP
 ├── tools
 │   ├── kick_sessions.py
 │   ├── manage_users.py
+│   ├── purge_missing_versions.py
 │   ├── reset_db.py
 │   ├── revoke_sharing.py
 │   ├── setup_storage.py

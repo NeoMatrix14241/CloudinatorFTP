@@ -619,7 +619,9 @@ def check_snapshot(routes, save):
     lines = snapshot_lines(routes)
     if save:
         SNAPSHOT.write_text(
-            json.dumps({"routes": lines}, indent=1) + "\n", encoding="utf-8"
+            json.dumps({"routes": lines}, indent=1) + "\n",
+            encoding="utf-8",
+            newline="\n",
         )
         report(
             "PASS",
