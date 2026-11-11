@@ -200,3 +200,69 @@ def test_a_missing_tracked_folder_is_never_purged_without_force(run):
     assert r["kept_without_force"] == 1
     assert "tracked folder" in r["text"] and "is missing" in r["text"]
     assert r["purged_with_force"] is True
+
+
+MENU_HELPER = """
+    import builtins
+
+    def drive_menu(*answers):
+        feed = iter(answers)
+
+        def fake_input(prompt=""):
+            if "Press Enter" in prompt:
+                return ""
+            try:
+                return next(feed)
+            except StopIteration:
+                raise EOFError from None
+
+        builtins.input = fake_input
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = tool.interactive_menu(tool._build_parser().parse_args([]))
+        return code, buf.getvalue()
+"""
+
+
+def _with_menu(body):
+    return textwrap.dedent(MENU_HELPER) + "\n" + textwrap.dedent(body)
+
+
+def test_the_menu_soft_deletes_and_undoes_against_the_real_engine(run):
+    r = run(_with_menu("""
+        put("sentinel.txt", b"keeps the tracked folder non-empty")
+        gone = put("gone.txt", b"bring me back")
+        snap(gone)
+        os.remove(gone)
+        # 5 = minimum age 0 (the version is milliseconds old), 2 = soft-delete (y),
+        # 4 = undo the newest purge (1, y), 8 = exit
+        code, text = drive_menu("5", "0", "2", "y", "4", "1", "y", "8")
+        version_id = completed(gone)[0]["version_id"]
+        ok, _msg, rel = vh.restore(gone, version_id)
+        out(code=code, text=text, restored=ok,
+            bytes=open(os.path.join(ROOT, rel), "rb").read().decode())
+        """))
+    assert r["code"] == 0 and r["restored"]
+    assert r["bytes"] == "bring me back"
+    assert "Soft-deleted 1 version(s)." in r["text"]
+    assert "Restored 1 version(s); skipped 0" in r["text"]
+
+
+def test_the_menu_can_free_the_disk_space_now_against_the_real_engine(run):
+    r = run(_with_menu("""
+        keep = put("keep.txt", b"keep me")
+        gone = put("gone.txt", b"delete me " * 1000)
+        snap(keep); snap(gone)
+        os.remove(gone)
+        before = eng._connect().execute("SELECT COUNT(*) FROM objects").fetchone()[0]
+        # 3 = soft-delete AND free now (y)
+        code, text = drive_menu("5", "0", "3", "y", "8")
+        after = eng._connect().execute("SELECT COUNT(*) FROM objects").fetchone()[0]
+        ok, _msg, rel = vh.restore(keep, completed(keep)[0]["version_id"])
+        out(code=code, text=text, before=before, after=after, gone=len(completed(gone)),
+            keep_restored=ok)
+        """))
+    assert r["code"] == 0 and r["keep_restored"]
+    assert r["gone"] == 0
+    assert r["after"] == r["before"] - 1
+    assert "Freed 1 chunk(s)" in r["text"]

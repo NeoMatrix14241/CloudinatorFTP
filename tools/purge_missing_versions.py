@@ -8,13 +8,22 @@ file gets a NEW snapshot, which a deleted file never does. With many deleted fil
 store only grows. This tool finds tracked files whose path no longer exists on disk,
 soft-deletes their versions, and optionally frees the chunks right away.
 
-    python tools/purge_missing_versions.py                 # report; on a terminal it then asks
+    python tools/purge_missing_versions.py                 # on a terminal: the interactive menu
+    python tools/purge_missing_versions.py --menu           # the menu, with starting settings from the flags
     python tools/purge_missing_versions.py --report         # report only, never asks, never changes
     python tools/purge_missing_versions.py --apply         # soft-delete (on a terminal it asks first; --yes skips)
     python tools/purge_missing_versions.py --apply --free-now   # ...and free the chunks now
     python tools/purge_missing_versions.py --undo <file>.json   # re-activate an earlier --apply
 
 Run via `./manage.sh purge-versions` (menu 31); extra arguments go straight to this script.
+
+The menu (no arguments on a terminal, or --menu): 1 report, 2 soft-delete, 3 soft-delete and free
+the disk space now, 4 undo an earlier purge (lists the undo files), 5 minimum age, 6 scope check
+on/off, 7 --force on/off, 8 exit. A report is reused by 2 and 3 when the settings did not change
+(its candidates are re-checked first, files that exist again drop out), so a 250,000-row scan is
+not repeated. Any argument keeps the plain command line below, and with no terminal (a script, a
+pipe) no arguments mean "report only", as before. With flags but without --apply on a terminal
+the command line prints the report and then asks y/N.
 
 Options:
     --min-age-days N   Only files whose NEWEST version is at least N days old (default 30).
@@ -501,6 +510,12 @@ def _print_report(scan: Scan, per_file, total, args):
         print(f"  ... and {len(top) - args.show:,} more")
 
 
+def _grace_hours() -> int:
+    import config
+
+    return config.VERSION_GC_GRACE_PERIOD // 3600
+
+
 def _object_totals(engine):
     row = (
         engine._connect()
@@ -535,27 +550,122 @@ def _free_now(engine):
     )
 
 
-def cmd_report_or_apply(args) -> int:
-    engine = _get_engine()
-    scope_dirs = _scope_dirs()
+@dataclass
+class Collected:
+    """One scan with everything the report needs, and the settings it was made with."""
+
+    scan: Scan
+    per_file: dict
+    total: int
+    key: tuple
+    when: float
+
+
+def _settings_key(s):
+    return (s.min_age_days, s.force, s.no_scope_check)
+
+
+def _collect(engine, scope_dirs, s) -> Collected:
+    """Read the engine's tracked files, check them on disk, and work out what a purge would
+    free. `s` needs min_age_days, force and no_scope_check (the parsed arguments, or the menu's
+    own settings)."""
     print("Reading the engine's tracked files and checking them on disk...")
     scope_keys = None
-    if not args.no_scope_check:
+    if not s.no_scope_check:
         try:
             scope_keys = set(engine.get_eligible_files())
         except OSError as e:
             print(f"(scope cross-check skipped: {e})")
     scan = scan_tracked(
         engine.db_path,
-        args.min_age_days,
+        s.min_age_days,
         scope_dirs,
         scope_keys=scope_keys,
-        force=args.force,
+        force=s.force,
         progress=lambda done, total: print(f"  checked {done:,} of {total:,}"),
     )
     per_file, total = reclaimable(engine.db_path, scan.purge) if scan.purge else ({}, 0)
-    _print_report(scan, per_file, total, args)
-    if not scan.purge:
+    return Collected(scan, per_file, total, _settings_key(s), time.time())
+
+
+def _drop_reappeared(scan, exists=os.path.lexists) -> int:
+    """Take files out of the purge list that exist again (a report can be minutes old).
+    Returns how many were dropped."""
+    keep = [g for g in scan.purge if not exists(g["path"])]
+    dropped = len(scan.purge) - len(keep)
+    scan.purge = keep
+    return dropped
+
+
+def _apply(engine, scan, free_now) -> None:
+    """Write the undo file, soft-delete, and (optionally) free the chunks now."""
+    ids = scan.purge_ids
+    undo = os.path.join(
+        engine.storage_dir, f"purge_undo_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    )
+    with open(undo, "w", encoding="utf-8") as f:
+        json.dump({"created": time.time(), "version_ids": ids}, f)
+    print(f"\nUndo file written: {undo}")
+    done = soft_delete(engine._connect(), ids)
+    print(f"Soft-deleted {done:,} version(s).")
+
+    if free_now:
+        print("Freeing chunks now (grace period skipped for this run)...")
+        _free_now(engine)
+    else:
+        print(
+            "Chunks are removed by the engine's garbage collector after "
+            f"{_grace_hours()} h (VERSION_GC_GRACE_PERIOD); "
+            "until then --undo can still bring them back."
+        )
+
+
+def _run_undo(engine, path) -> int:
+    with open(path, encoding="utf-8") as f:
+        ids = json.load(f)["version_ids"]
+    restored, skipped = undo_versions(engine._connect(), ids, engine._object_path)
+    print(
+        f"Restored {restored:,} version(s); skipped {skipped:,} "
+        "(chunks already freed or changed)."
+    )
+    return 0
+
+
+def _read_undo_file(path):
+    """(created, number of versions) of an undo file, or None when it cannot be read."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return float(data.get("created", 0)), len(data["version_ids"])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def list_undo_files(directory):
+    """[(path, created, versions)] of the undo files in `directory`, newest first."""
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return []
+    found = []
+    for name in names:
+        if name.startswith("purge_undo_") and name.endswith(".json"):
+            path = os.path.join(directory, name)
+            info = _read_undo_file(path)
+            if info is not None:
+                found.append((path, info[0], info[1]))
+    found.sort(key=lambda item: item[1], reverse=True)
+    return found
+
+
+# -- the command line ------------------------------------------------------------
+
+
+def cmd_report_or_apply(args) -> int:
+    engine = _get_engine()
+    c = _collect(engine, _scope_dirs(), args)
+    _print_report(c.scan, c.per_file, c.total, args)
+    if not c.scan.purge:
         return 0
 
     interactive = sys.stdin.isatty() and not args.yes
@@ -573,46 +683,190 @@ def cmd_report_or_apply(args) -> int:
     elif interactive and not _confirm("Soft-delete these versions now?"):
         print("Nothing was changed.")
         return 0
-
-    ids = scan.purge_ids
-    undo = os.path.join(
-        engine.storage_dir, f"purge_undo_{time.strftime('%Y%m%d_%H%M%S')}.json"
-    )
-    with open(undo, "w", encoding="utf-8") as f:
-        json.dump({"created": time.time(), "version_ids": ids}, f)
-    print(f"\nUndo file written: {undo}")
-    done = soft_delete(engine._connect(), ids)
-    print(f"Soft-deleted {done:,} version(s).")
-
-    if args.free_now:
-        print("Freeing chunks now (grace period skipped for this run)...")
-        _free_now(engine)
-    else:
-        import config
-
-        print(
-            "Chunks are removed by the engine's garbage collector after "
-            f"{config.VERSION_GC_GRACE_PERIOD // 3600} h (VERSION_GC_GRACE_PERIOD); "
-            "until then --undo can still bring them back."
-        )
+    _apply(engine, c.scan, args.free_now)
     return 0
 
 
 def cmd_undo(args) -> int:
-    engine = _get_engine()
-    with open(args.undo, encoding="utf-8") as f:
-        ids = json.load(f)["version_ids"]
-    restored, skipped = undo_versions(engine._connect(), ids, engine._object_path)
+    return _run_undo(_get_engine(), args.undo)
+
+
+# -- the interactive menu (no arguments on a terminal, or --menu) -----------------
+
+
+def _menu_report(engine, scope_dirs, s):
+    c = _collect(engine, scope_dirs, s)
+    _print_report(c.scan, c.per_file, c.total, s)
+    return c
+
+
+def _menu_apply(engine, scope_dirs, s, cache, free_now):
+    """Soft-delete (and optionally free) after a report. A report made with the same settings
+    a moment ago is reused instead of scanning again; its candidates are re-checked first.
+    Returns the cache to keep (None once something changed)."""
+    if cache is not None and cache.key == _settings_key(s):
+        age = int(time.time() - cache.when)
+        print(
+            f"Using the report from {age // 60} min {age % 60} s ago; checking that its "
+            f"{len(cache.scan.purge):,} candidate file(s) are still gone..."
+        )
+        back = _drop_reappeared(cache.scan)
+        if back:
+            print(f"  {back:,} file(s) exist again and were taken out of the list.")
+        c = cache
+    else:
+        c = _menu_report(engine, scope_dirs, s)
+    if not c.scan.purge:
+        print("\nNothing to purge.")
+        return c
     print(
-        f"Restored {restored:,} version(s); skipped {skipped:,} "
-        "(chunks already freed or changed)."
+        f"\nAbout to soft-delete {len(c.scan.purge_ids):,} version(s) "
+        f"of {len(c.scan.purge):,} file(s)."
     )
-    return 0
+    if free_now:
+        print(
+            "  The disk space is freed NOW: every orphaned chunk past a zero grace "
+            "period goes,\n  including chunks of versions you deleted by hand in the "
+            "last 24 hours."
+        )
+    if not _confirm("Continue? (an undo file is written first)"):
+        print("Nothing was changed.")
+        return c
+    _apply(engine, c.scan, free_now)
+    return None
+
+
+def _menu_undo(engine):
+    files = list_undo_files(engine.storage_dir)
+    if not files:
+        print("No undo files (purge_undo_*.json) in the engine's storage folder.")
+        return
+    print("\nEarlier purges (newest first):")
+    for n, (path, created, versions) in enumerate(files[:10], 1):
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(created))
+        print(f"  {n}) {when}  {versions:>9,} version(s)  {os.path.basename(path)}")
+    raw = _prompt("Which one to undo (number, Enter = cancel): ")
+    if raw is None or not raw.strip():
+        return
+    if not raw.strip().isdigit() or not 1 <= int(raw.strip()) <= min(len(files), 10):
+        print("Not a number from the list.")
+        return
+    path = files[int(raw.strip()) - 1][0]
+    if _confirm(f"Bring back the versions in {os.path.basename(path)}?"):
+        _run_undo(engine, path)
+    else:
+        print("Nothing was changed.")
+
+
+def _menu_set_age(s):
+    raw = _prompt(
+        f"Minimum age in days (now {s.min_age_days:g}; 0 = take every gone file): "
+    )
+    if raw is None or not raw.strip():
+        return
+    try:
+        days = float(raw.strip())
+    except ValueError:
+        days = -1.0
+    if days < 0:
+        print("Not a number of days (0 or more).")
+        return
+    s.min_age_days = days
+    print(f"Minimum age is now {days:g} day(s).")
+
+
+def _menu_toggle_force(s):
+    if s.force:
+        s.force = False
+        print("--force is off again.")
+        return
+    print(
+        "--force also purges files whose drive, share or tracked folder is missing, empty or\n"
+        "unreadable. That usually means the place is NOT MOUNTED right now, not that the\n"
+        "files were deleted. Only use it when that place is gone for good."
+    )
+    if _confirm("Turn --force on?"):
+        s.force = True
+
+
+def _on_off(flag) -> str:
+    return "on" if flag else "off"
+
+
+def interactive_menu(args, engine=None, scope_dirs=None) -> int:
+    """No arguments on a terminal: report, apply, apply and free now, undo, settings. Settings
+    start from the arguments given (--min-age-days, --force, --no-scope-check, --show).
+    """
+    engine = engine or _get_engine()
+    scope_dirs = _scope_dirs() if scope_dirs is None else scope_dirs
+    s = argparse.Namespace(
+        min_age_days=args.min_age_days,
+        force=args.force,
+        no_scope_check=args.no_scope_check,
+        show=args.show,
+    )
+    cache = None
+    print("\n🧹 Version Engine — purge versions of files that no longer exist")
+    print(
+        "   (Ctrl-C at this menu exits; Ctrl-C inside an action cancels that action.)"
+    )
+    while True:
+        print("\n" + "=" * 60)
+        print(
+            f"  Settings: minimum age {s.min_age_days:g} day(s) | "
+            f"force {_on_off(s.force)} | scope check {_on_off(not s.no_scope_check)}"
+        )
+        print("-" * 60)
+        print("  1) Report: what do the gone files still cost?  (read-only)")
+        print("  2) Soft-delete the versions of the gone files  (asks first)")
+        print("  3) Soft-delete AND free the disk space now     (asks first)")
+        print("  4) Undo an earlier purge")
+        print("  5) Change the minimum age (days)")
+        print("  6) Turn the scope check (walk of the tracked folders) on / off")
+        print("  7) Turn --force on / off")
+        print("  8) Exit")
+        print("=" * 60)
+
+        choice = _prompt("\nSelect option (1-8): ")
+        if choice is None:
+            print("👋 Goodbye!")
+            return 0
+        choice = choice.strip()
+        try:
+            if choice == "1":
+                cache = _menu_report(engine, scope_dirs, s)
+            elif choice in ("2", "3"):
+                cache = _menu_apply(engine, scope_dirs, s, cache, choice == "3")
+            elif choice == "4":
+                _menu_undo(engine)
+                cache = None  # the database changed
+            elif choice == "5":
+                _menu_set_age(s)
+            elif choice == "6":
+                s.no_scope_check = not s.no_scope_check
+                print(f"Scope check is now {_on_off(not s.no_scope_check)}.")
+            elif choice == "7":
+                _menu_toggle_force(s)
+            elif choice == "8":
+                print("👋 Goodbye!")
+                return 0
+            else:
+                print(f"❌ Invalid option: {choice}")
+        except KeyboardInterrupt:
+            print("\nCancelled. Back to the menu.")
+        _prompt("\nPress Enter to return to the menu…")
 
 
 def _build_parser():
     p = argparse.ArgumentParser(
-        description="Reclaim Version Engine storage for files that no longer exist."
+        description="Reclaim Version Engine storage for files that no longer exist. "
+        "With no arguments on a terminal it opens an interactive menu."
+    )
+    p.add_argument(
+        "--menu",
+        action="store_true",
+        help="open the interactive menu (the default with no arguments on a terminal); "
+        "--min-age-days, --force, --no-scope-check and --show set its starting settings",
     )
     p.add_argument(
         "--apply",
@@ -649,11 +903,25 @@ def _build_parser():
 
 
 def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
     args = _build_parser().parse_args(argv)
     if args.report and args.apply:
         print("--report and --apply cannot be combined.", file=sys.stderr)
         return 2
+    if args.menu and (args.apply or args.report or args.undo):
+        print(
+            "--menu cannot be combined with --apply, --report or --undo.",
+            file=sys.stderr,
+        )
+        return 2
+    if args.menu and not sys.stdin.isatty():
+        print(
+            "--menu needs a terminal; use --report or --apply instead.", file=sys.stderr
+        )
+        return 2
     try:
+        if args.menu or (not argv and sys.stdin.isatty()):
+            return interactive_menu(args)
         if args.undo:
             return cmd_undo(args)
         return cmd_report_or_apply(args)

@@ -1727,8 +1727,11 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
                           never leaves a partial restore/delete in place.
   purge-versions        python tools/purge_missing_versions.py — Version Engine: free the
                           storage that versions of files which NO LONGER EXIST on disk
-                          still use (the engine never ages those out). No args → report,
-                          then asks before changing anything. Options:
+                          still use (the engine never ages those out). No args → its own
+                          interactive menu (report / soft-delete / soft-delete and free now /
+                          undo / settings; it asks before changing anything). With arguments
+                          it is a plain command line. Options:
+                          --menu (the menu, starting settings from the flags) |
                           --report (never asks, never changes) | --apply [--yes] |
                           --free-now (free chunks now, skip the 24 h grace) |
                           --min-age-days N (default 30; skipped files are counted) |
@@ -1833,7 +1836,7 @@ ${BOLD}MENU ↔ COMMAND MAP${NC}  (in ./manage.sh menu type the number; from the
   24  qa layer (asks)      25  qa ci                 26  dir-tree
   27  smoke --save (asks y/N first)                  28  qa audit (pip-audit; needs network)
   29  qa coverage (slow)                              30  qa lint (Ruff, report only)
-  31  purge-versions (Version Engine clean-up; asks before changing anything)
+  31  purge-versions (Version Engine clean-up: interactive menu, or flags; asks before changing anything)
   q   quit
 
 ${BOLD}EXAMPLES${NC}
@@ -1859,7 +1862,7 @@ ${BOLD}EXAMPLES${NC}
     ./manage.sh version-manage restore <id> <dest>           # restore a version
     ./manage.sh version-manage restore <id> <dest> --overwrite  # ...replacing an existing file (asks to type a confirm phrase)
     ./manage.sh version-manage delete <id>       # permanently delete a version (asks to type a long confirm sentence)
-    ./manage.sh purge-versions                   # report what deleted files still cost, then ask
+    ./manage.sh purge-versions                   # interactive menu: report, soft-delete, free now, undo
     ./manage.sh purge-versions --report          # report only: nothing is asked or changed
     ./manage.sh purge-versions --apply --free-now  # soft-delete and free the chunks now (asks y/N)
     ./manage.sh purge-versions --undo <file>.json  # bring an earlier purge back (before the chunks are freed)

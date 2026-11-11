@@ -455,3 +455,262 @@ def test_byte_formatting():
     assert tool._fmt_bytes(0) == "0 B"
     assert tool._fmt_bytes(1536) == "1.50 KB"
     assert tool._fmt_bytes(5 * 1024**3) == "5.00 GB"
+
+
+# ============================================================ the interactive menu (5.44.5)
+class _Tty:
+    def __init__(self, tty):
+        self._tty = tty
+
+    def isatty(self):
+        return self._tty
+
+
+class FakeEngine:
+    """The few things the tool takes from the real Engine, on the throw-away database."""
+
+    def __init__(self, db, base):
+        self.db_path = db.path
+        self.storage_dir = str(base / "store")
+        self.objects = base / "objects"
+        Path(self.storage_dir).mkdir()
+        self.objects.mkdir()
+        self._conn = sqlite3.connect(db.path)
+        self._conn.row_factory = sqlite3.Row
+
+    def _connect(self):
+        return self._conn
+
+    def _object_path(self, sha):
+        return str(self.objects / sha)
+
+    def get_eligible_files(self):
+        return []
+
+
+def _script(monkeypatch, answers):
+    """input() answers in order; a callable runs first (to change the disk between prompts);
+    "Press Enter" pauses are answered by themselves; running out of answers is Ctrl-D.
+    """
+    it = iter(answers)
+
+    def fake_input(prompt=""):
+        if "Press Enter" in prompt:
+            return ""
+        try:
+            answer = next(it)
+        except StopIteration:
+            raise EOFError from None
+        return answer() if callable(answer) else answer
+
+    monkeypatch.setattr("builtins.input", fake_input)
+
+
+@pytest.fixture
+def menu(world, tmp_path, monkeypatch, capsys):
+    folder, db = world
+    engine = FakeEngine(db, tmp_path)
+    monkeypatch.setattr(tool, "_grace_hours", lambda: 24)
+    freed = []
+    monkeypatch.setattr(tool, "_free_now", lambda e: freed.append(e))
+    scans = []
+    real_scan = tool.scan_tracked
+
+    def counting_scan(*a, **kw):
+        scans.append(1)
+        return real_scan(*a, **kw)
+
+    monkeypatch.setattr(tool, "scan_tracked", counting_scan)
+
+    def run(answers, argv=("--no-scope-check",)):
+        _script(monkeypatch, answers)
+        args = tool._build_parser().parse_args(list(argv))
+        code = tool.interactive_menu(args, engine=engine, scope_dirs=[str(folder)])
+        return code, capsys.readouterr().out
+
+    run.folder, run.db, run.engine = folder, db, engine
+    run.freed, run.scans = freed, scans
+    return run
+
+
+def test_menu_report_changes_nothing(menu):
+    _fid, ids = menu.db.add(menu.folder / "gone.txt", [("completed", 90, ["a"])])
+    code, out = menu(["1", "8"])
+    assert code == 0
+    assert "Would soft-delete 1 version(s) of 1 file(s)" in out
+    assert menu.db.status_of(ids[0])[0] == "completed"
+    assert tool.list_undo_files(menu.engine.storage_dir) == []
+
+
+def test_menu_soft_delete_asks_first_then_deletes_and_writes_an_undo_file(menu):
+    _fid, ids = menu.db.add(menu.folder / "gone.txt", [("completed", 90, ["a"])])
+    code, out = menu(["2", "n", "8"])
+    assert "Nothing was changed." in out
+    assert menu.db.status_of(ids[0])[0] == "completed"
+
+    code, out = menu(["2", "y", "8"])
+    assert menu.db.status_of(ids[0]) == ("deleted", tool._MARK)
+    undo = tool.list_undo_files(menu.engine.storage_dir)
+    assert len(undo) == 1 and undo[0][2] == 1
+    assert "garbage collector after 24 h" in out
+
+
+def test_menu_free_now_runs_the_garbage_collector_only_after_confirmation(menu):
+    menu.db.add(menu.folder / "gone.txt", [("completed", 90, ["a"])])
+    menu(["3", "n", "8"])
+    assert menu.freed == []
+    code, out = menu(["3", "y", "8"])
+    assert len(menu.freed) == 1
+    assert "freed NOW" in out
+
+
+def test_menu_reuses_a_fresh_report_instead_of_scanning_again(menu):
+    menu.db.add(menu.folder / "gone.txt", [("completed", 90, ["a"])])
+    code, out = menu(["1", "2", "y", "8"])
+    assert len(menu.scans) == 1
+    assert "Using the report from" in out
+
+
+def test_menu_changing_the_settings_makes_the_next_apply_scan_again(menu):
+    menu.db.add(menu.folder / "recent.txt", [("completed", 2, ["a"])])
+    code, out = menu(["1", "5", "0", "2", "y", "8"])
+    assert len(menu.scans) == 2  # the first report is not reused for other settings
+    assert "Nothing to purge." in out  # at 30 days the recent file is held back
+    assert "Minimum age is now 0 day(s)." in out
+    assert "Soft-deleted 1 version(s)." in out
+
+
+def test_menu_files_that_exist_again_drop_out_before_the_apply(menu):
+    back = menu.folder / "back.txt"
+    _fid, ids = menu.db.add(back, [("completed", 90, ["a"])])
+    code, out = menu(["1", lambda: (back.write_text("again"), "2")[1], "8"])
+    assert "1 file(s) exist again and were taken out of the list." in out
+    assert "Nothing to purge." in out
+    assert menu.db.status_of(ids[0])[0] == "completed"
+
+
+def test_menu_undo_lists_the_purges_and_brings_one_back(menu):
+    _fid, ids = menu.db.add(menu.folder / "gone.txt", [("completed", 90, ["a"])])
+    (menu.engine.objects / "a").write_bytes(b"chunk")
+    code, out = menu(["2", "y", "4", "1", "y", "8"])
+    assert "Earlier purges (newest first):" in out
+    assert "Restored 1 version(s); skipped 0" in out
+    assert menu.db.status_of(ids[0]) == ("completed", None)
+
+
+def test_menu_undo_without_undo_files_says_so(menu):
+    code, out = menu(["4", "8"])
+    assert "No undo files" in out
+
+
+def test_menu_force_needs_a_confirmation_and_age_input_is_checked(menu):
+    code, out = menu(["7", "n", "8"])
+    assert "force on | scope check" not in out
+    code, out = menu(["7", "y", "8"])
+    assert "force on | scope check" in out
+    code, out = menu(["x", "5", "abc", "5", "-3", "8"])
+    assert "Invalid option: x" in out
+    assert out.count("Not a number of days") == 2
+
+
+def test_menu_settings_start_from_the_arguments(menu):
+    code, out = menu(["8"], argv=("--menu", "--min-age-days", "7", "--force"))
+    assert "minimum age 7 day(s) | force on | scope check on" in out
+
+
+def test_menu_scope_check_can_be_turned_on_and_off(menu):
+    code, out = menu(["6", "6", "8"])
+    assert "Scope check is now on." in out and "Scope check is now off." in out
+
+
+def test_ctrl_d_at_the_menu_exits_cleanly(menu):
+    code, out = menu([])
+    assert code == 0 and "Goodbye" in out
+
+
+def test_ctrl_c_inside_an_action_returns_to_the_menu(menu, monkeypatch):
+    def interrupted(*a, **kw):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(tool, "_collect", interrupted)
+    code, out = menu(["1", "8"])
+    assert code == 0 and "Cancelled. Back to the menu." in out
+
+
+# ----------------------------------------------- when main() opens the menu and when it does not
+def _dispatch(monkeypatch, tty):
+    calls = []
+    monkeypatch.setattr(tool.sys, "stdin", _Tty(tty))
+    monkeypatch.setattr(tool, "interactive_menu", lambda a: calls.append("menu") or 0)
+    monkeypatch.setattr(tool, "cmd_report_or_apply", lambda a: calls.append("cli") or 0)
+    monkeypatch.setattr(tool, "cmd_undo", lambda a: calls.append("undo") or 0)
+    return calls
+
+
+def test_no_arguments_on_a_terminal_open_the_menu(monkeypatch):
+    calls = _dispatch(monkeypatch, tty=True)
+    assert tool.main([]) == 0
+    assert calls == ["menu"]
+
+
+def test_no_arguments_without_a_terminal_stay_a_report(monkeypatch):
+    calls = _dispatch(monkeypatch, tty=False)
+    assert tool.main([]) == 0
+    assert calls == ["cli"]
+
+
+@pytest.mark.parametrize(
+    "argv, expected",
+    [
+        (["--report"], "cli"),
+        (["--min-age-days", "0"], "cli"),
+        (["--apply", "--yes"], "cli"),
+        (["--undo", "x.json"], "undo"),
+        (["--menu"], "menu"),
+        (["--menu", "--min-age-days", "7"], "menu"),
+    ],
+)
+def test_any_argument_keeps_the_command_line_and_menu_is_explicit(
+    monkeypatch, argv, expected
+):
+    calls = _dispatch(monkeypatch, tty=True)
+    assert tool.main(argv) == 0
+    assert calls == [expected]
+
+
+def test_menu_flag_needs_a_terminal_and_excludes_the_other_actions(monkeypatch, capsys):
+    calls = _dispatch(monkeypatch, tty=False)
+    assert tool.main(["--menu"]) == 2
+    assert "needs a terminal" in capsys.readouterr().err
+    _dispatch(monkeypatch, tty=True)
+    for other in (["--apply"], ["--report"], ["--undo", "x.json"]):
+        assert tool.main(["--menu", *other]) == 2
+    assert calls == []
+
+
+# ---------------------------------------------------------------------------- undo files
+def test_undo_files_are_listed_newest_first_and_broken_ones_are_skipped(tmp_path):
+    import json
+
+    def write(name, payload):
+        (tmp_path / name).write_text(payload, encoding="utf-8")
+
+    write(
+        "purge_undo_20261101_100000.json",
+        json.dumps({"created": 100.0, "version_ids": [1, 2]}),
+    )
+    write(
+        "purge_undo_20261102_100000.json",
+        json.dumps({"created": 200.0, "version_ids": [3]}),
+    )
+    write("purge_undo_broken.json", "{not json")
+    write("purge_undo_nokey.json", json.dumps({"created": 300.0}))
+    write("something_else.json", json.dumps({"created": 400.0, "version_ids": [9]}))
+
+    found = tool.list_undo_files(str(tmp_path))
+
+    assert [(Path(p).name, n) for p, _t, n in found] == [
+        ("purge_undo_20261102_100000.json", 1),
+        ("purge_undo_20261101_100000.json", 2),
+    ]
+    assert tool.list_undo_files(str(tmp_path / "missing")) == []
