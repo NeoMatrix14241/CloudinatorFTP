@@ -65,15 +65,35 @@ def test_menu_listing_and_dispatch_cover_the_same_numbers():
     )
 
 
-def test_menu_lists_the_entries_in_numeric_order():
-    """31 once sat between 20 and 21 and was easy to miss; the listing must read 1, 2, 3, ...
-    (19 is printed by both branches of its if, hence the consecutive de-duplication)."""
-    shown = []
+MENU_BLOCKS = {
+    "Servers": list(range(1, 9)),
+    "Version Engine": [9, 31],
+    "Utilities": list(range(10, 21)),
+    "Quality Assurance": list(range(21, 26)),
+    "Developer Tools": list(range(26, 31)),
+}
+
+
+def test_menu_blocks_hold_the_documented_entries_in_order():
+    """Which heading each number is printed under, in the order printed. 31 once sat under
+    Utilities between 20 and 21 and was overlooked; 9 (version_manage) and 31 (purge) are now
+    one "Version Engine" block next to the servers. 19 is printed by both branches of its
+    `if is_termux`, hence the consecutive de-duplication."""
+    blocks, current = {}, None
     for line in _function("cmd_menu").splitlines():
-        m = re.match(r"\t+echo.*?\b(\d{1,2})\) ", line)
-        if m and (not shown or shown[-1] != int(m.group(1))):
-            shown.append(int(m.group(1)))
-    assert shown == list(range(1, LAST_ENTRY + 1)), shown
+        heading = re.match(r'\t+echo -e "  \$\{BOLD\}([^$]+)\$\{NC\}', line)
+        if heading:
+            current = heading.group(1)
+            blocks[current] = []
+            continue
+        entry = re.match(r"\t+echo.*?\b(\d{1,2})\) ", line)
+        if (
+            entry
+            and current
+            and (not blocks[current] or blocks[current][-1] != int(entry.group(1)))
+        ):
+            blocks[current].append(int(entry.group(1)))
+    assert blocks == MENU_BLOCKS
 
 
 def test_help_menu_map_lists_every_number():

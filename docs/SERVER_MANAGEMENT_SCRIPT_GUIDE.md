@@ -321,7 +321,7 @@ Shows whether a server is running, then a numbered list. Every number is the sam
 | 6 | `logs` (asks which server and whether to follow) | Servers |
 | 7 | `clean-logs` | Servers |
 | 8 | `restart-webdav` | Servers |
-| 9 | `version-manage` | Utilities |
+| 9 | `version-manage` | Version Engine |
 | 10 | `config` | Utilities |
 | 11 | `setup-smb` | Utilities |
 | 12 | `kick-sessions` | Utilities |

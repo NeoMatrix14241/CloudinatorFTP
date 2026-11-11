@@ -12,6 +12,7 @@ unmounted drive), which is exactly the situation of a database that grew to 250,
 the folder holds 60,000 files.
 """
 
+import argparse
 import ast
 import importlib.util
 import ntpath
@@ -42,7 +43,7 @@ def _engine_schema():
             getattr(t, "id", None) == "_SCHEMA_SQL" for t in node.targets
         ):
             return ast.literal_eval(node.value)
-    pytest.fail("_SCHEMA_SQL not found in version_engine.py")
+    raise AssertionError("_SCHEMA_SQL not found in version_engine.py")
 
 
 tool = _load_tool()
@@ -714,3 +715,91 @@ def test_undo_files_are_listed_newest_first_and_broken_ones_are_skipped(tmp_path
         ("purge_undo_20261101_100000.json", 2),
     ]
     assert tool.list_undo_files(str(tmp_path / "missing")) == []
+
+
+# ==================================================================== progress output (5.44.6)
+def test_soft_delete_reports_progress_each_time_another_block_is_done(
+    world, monkeypatch
+):
+    folder, db = world
+    ids = []
+    for i in range(5):
+        _fid, version_ids = db.add(folder / f"g{i}.txt", [("completed", 90, [f"s{i}"])])
+        ids += version_ids
+    monkeypatch.setattr(tool, "_PROGRESS_EVERY", 2)
+    seen = []
+
+    tool.soft_delete(
+        db.conn, ids, batch=1, pause=0, progress=lambda d, t: seen.append((d, t))
+    )
+
+    assert seen == [(2, 5), (4, 5)]
+
+
+def test_soft_delete_of_a_small_run_prints_no_progress(world):
+    folder, db = world
+    _fid, ids = db.add(folder / "g.txt", [("completed", 90, ["a"])])
+    seen = []
+    tool.soft_delete(db.conn, ids, pause=0, progress=lambda d, t: seen.append(d))
+    assert seen == []
+
+
+def test_a_slow_step_prints_heartbeat_lines_and_returns_its_result(capsys):
+    def slow():
+        time.sleep(1.2)
+        return 42
+
+    result = tool._with_progress(
+        "deleting", slow, lambda: "3 of 9 deleted", interval=0.2
+    )
+
+    out = capsys.readouterr().out
+    assert result == 42
+    assert "  deleting: 3 of 9 deleted (" in out
+
+
+def test_a_heartbeat_without_a_measure_prints_only_the_label(capsys):
+    tool._with_progress("still working", lambda: time.sleep(0.8), interval=0.1)
+    out = capsys.readouterr().out
+    assert "  still working (" in out and ": " not in out
+
+
+def test_a_quick_step_prints_nothing(capsys):
+    assert tool._with_progress("x", lambda: 7, lambda: "never", interval=5.0) == 7
+    assert capsys.readouterr().out == ""
+
+
+def test_an_error_in_the_worker_is_raised_to_the_caller():
+    def boom():
+        raise ValueError("disk full")
+
+    with pytest.raises(ValueError, match="disk full"):
+        tool._with_progress("x", boom)
+
+
+def test_orphan_count_counts_only_chunks_marked_as_orphaned(world, tmp_path):
+    folder, db = world
+    db.add(folder / "a.txt", [("completed", 90, ["a", "b", "c"])])
+    db.conn.execute("UPDATE objects SET orphaned_since=1 WHERE sha256 IN ('a', 'b')")
+    db.conn.commit()
+    assert tool._orphan_count(FakeEngine(db, tmp_path)) == 2
+
+
+def test_collect_announces_the_slow_space_calculation(world, tmp_path, capsys):
+    folder, db = world
+    db.add(folder / "gone.txt", [("completed", 90, ["a"])])
+    settings = argparse.Namespace(min_age_days=30, force=False, no_scope_check=True)
+
+    got = tool._collect(FakeEngine(db, tmp_path), [str(folder)], settings)
+
+    assert "Working out how much space 1 file(s) would free" in capsys.readouterr().out
+    assert got.total == 100
+
+
+def test_collect_says_nothing_about_space_when_there_is_nothing_to_purge(
+    world, tmp_path, capsys
+):
+    folder, db = world
+    settings = argparse.Namespace(min_age_days=30, force=False, no_scope_check=True)
+    tool._collect(FakeEngine(db, tmp_path), [str(folder)], settings)
+    assert "Working out how much space" not in capsys.readouterr().out

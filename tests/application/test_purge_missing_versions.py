@@ -157,6 +157,8 @@ def test_apply_frees_the_chunks_of_gone_files_and_keeps_the_others(run):
     assert r["keep_bytes"] == "keep me"
     assert r["objects_after"] == r["objects_before"] - 1  # only the gone file's chunk
     assert "Freed 1 chunk(s)" in r["text"]
+    assert "step 1 of 2: marking" in r["text"]
+    assert "step 2 of 2: deleting 1 chunk file(s) from disk" in r["text"]
 
 
 def test_apply_without_free_now_can_be_undone(run):
@@ -266,3 +268,5 @@ def test_the_menu_can_free_the_disk_space_now_against_the_real_engine(run):
     assert r["gone"] == 0
     assert r["after"] == r["before"] - 1
     assert "Freed 1 chunk(s)" in r["text"]
+    assert "step 1 of 2: marking" in r["text"]
+    assert "step 2 of 2: deleting 1 chunk file(s) from disk" in r["text"]

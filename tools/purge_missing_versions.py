@@ -76,6 +76,7 @@ import json
 import os
 import sqlite3
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -342,9 +343,10 @@ def reclaimable(db_path, purge):
         db.close()
 
 
-def soft_delete(conn, ids, batch=_BATCH, pause=0.01) -> int:
+def soft_delete(conn, ids, batch=_BATCH, pause=0.01, progress=None) -> int:
     """status='completed' -> 'deleted' in short write transactions (the engine's own pattern);
-    returns how many rows really changed."""
+    returns how many rows really changed. progress(done, total) is called each time another
+    _PROGRESS_EVERY versions are done (never for small runs)."""
     changed = 0
     for start in range(0, len(ids), batch):
         chunk = ids[start : start + batch]
@@ -361,6 +363,9 @@ def soft_delete(conn, ids, batch=_BATCH, pause=0.01) -> int:
             conn.rollback()
             raise
         time.sleep(pause)  # let the engine's own writers in between batches
+        done = start + len(chunk)
+        if progress and done // _PROGRESS_EVERY > start // _PROGRESS_EVERY:
+            progress(done, len(ids))
     return changed
 
 
@@ -516,6 +521,16 @@ def _grace_hours() -> int:
     return config.VERSION_GC_GRACE_PERIOD // 3600
 
 
+def _orphan_count(engine) -> int:
+    """Chunks marked as orphaned and not deleted yet (read-only, safe while the GC runs)."""
+    row = (
+        engine._connect()
+        .execute("SELECT COUNT(*) FROM objects WHERE orphaned_since IS NOT NULL")
+        .fetchone()
+    )
+    return row[0]
+
+
 def _object_totals(engine):
     row = (
         engine._connect()
@@ -539,8 +554,21 @@ def _free_now(engine):
         0  # this process only; the engine keeps its own value
     )
     try:
-        engine.run_gc()  # marks the new orphans
-        engine.run_gc()  # deletes them (age >= 0), re-checking references under the write lock
+        print(
+            "  step 1 of 2: marking the orphaned chunks (and deleting any already due)..."
+        )
+        _with_progress(
+            "marking",
+            engine.run_gc,
+            lambda: f"{_orphan_count(engine):,} chunk(s) marked so far",
+        )
+        pending = _orphan_count(engine)
+        print(f"  step 2 of 2: deleting {pending:,} chunk file(s) from disk...")
+        _with_progress(
+            "deleting",
+            engine.run_gc,  # deletes them (age >= 0), re-checking references under the write lock
+            lambda: f"{max(pending - _orphan_count(engine), 0):,} of {pending:,} deleted",
+        )
     finally:
         config.VERSION_GC_GRACE_PERIOD = saved
     after = _object_totals(engine)
@@ -548,6 +576,41 @@ def _free_now(engine):
         f"Freed {before[0] - after[0]:,} chunk(s), {_fmt_bytes(before[1] - after[1])} "
         "(every orphaned chunk past a zero grace period, not only this run's)."
     )
+
+
+def _with_progress(label, work, measure=None, interval=5.0):
+    """Run work() in a worker thread and print a heartbeat line every `interval` seconds until
+    it ends, so a long step does not look stuck: `label`, what measure() says (if given) and the
+    time spent. Returns work()'s result; an error in the worker is raised here. Ctrl-C stops the
+    waiting, not the worker (an engine garbage-collection pass cannot be interrupted); the
+    engine finishes whatever is left on its own later."""
+    box = {}
+
+    def target():
+        try:
+            box["result"] = work()
+        except BaseException as e:  # handed to the caller below, not swallowed
+            box["error"] = e
+
+    worker = threading.Thread(target=target, daemon=True)
+    started = last = time.time()
+    worker.start()
+    try:
+        while worker.is_alive():
+            worker.join(0.5)  # short joins: Ctrl-C is delivered promptly on Windows too
+            if worker.is_alive() and time.time() - last >= interval:
+                last = time.time()
+                detail = f": {measure()}" if measure else ""
+                print(f"  {label}{detail} ({int(last - started)} s)")
+    except KeyboardInterrupt:
+        print(
+            f"\n  Stopped waiting for: {label}. It may still be running in this process; "
+            "the engine's own garbage collector finishes any chunk it did not reach."
+        )
+        raise
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
 
 
 @dataclass
@@ -584,7 +647,16 @@ def _collect(engine, scope_dirs, s) -> Collected:
         force=s.force,
         progress=lambda done, total: print(f"  checked {done:,} of {total:,}"),
     )
-    per_file, total = reclaimable(engine.db_path, scan.purge) if scan.purge else ({}, 0)
+    per_file, total = {}, 0
+    if scan.purge:
+        print(
+            f"Working out how much space {len(scan.purge):,} file(s) would free "
+            "(this can take a few minutes)..."
+        )
+        per_file, total = _with_progress(
+            "still working out the space",
+            lambda: reclaimable(engine.db_path, scan.purge),
+        )
     return Collected(scan, per_file, total, _settings_key(s), time.time())
 
 
@@ -606,7 +678,11 @@ def _apply(engine, scan, free_now) -> None:
     with open(undo, "w", encoding="utf-8") as f:
         json.dump({"created": time.time(), "version_ids": ids}, f)
     print(f"\nUndo file written: {undo}")
-    done = soft_delete(engine._connect(), ids)
+    done = soft_delete(
+        engine._connect(),
+        ids,
+        progress=lambda d, t: print(f"  soft-deleted {d:,} of {t:,}"),
+    )
     print(f"Soft-deleted {done:,} version(s).")
 
     if free_now:
