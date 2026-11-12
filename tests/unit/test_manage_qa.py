@@ -1,7 +1,9 @@
 """
-Tests for the Quality Assurance section of manage.sh (menu 21-25 and the `qa` command) and for
-its Developer Tools section (menu 26-30: `dir-tree`, `smoke --save`, `qa audit`, `qa coverage` and,
-since 5.41, `qa lint`). Menu 31 / `purge-versions` (5.44.4) launches tools/purge_missing_versions.py.
+Tests for the Quality Assurance section of manage.sh (menu 22-26 and the `qa` command) and for
+its Developer Tools section (menu 27-31: `dir-tree`, `smoke --save`, `qa audit`, `qa coverage` and,
+since 5.41, `qa lint`). Menu 10 / `purge-versions` (5.44.4) launches tools/purge_missing_versions.py.
+Since 5.44.7 the numbers 1..31 are contiguous in print order (a deliberate one-time renumbering: the
+entries after 9 moved, the named commands did not).
 
 They read the real manage.sh and only run side-effect-free commands (`help`, `qa --version`,
 `qa bogus`, `qa layer nope`; `qa audit` and `qa lint` are only checked in the source: audit would use the network, lint would write Ruff's cache); no server is started and nothing is written. The numbering test
@@ -65,20 +67,34 @@ def test_menu_listing_and_dispatch_cover_the_same_numbers():
     )
 
 
+def _printed_numbers():
+    """The entry numbers in the order cmd_menu prints them. 20 (termux_setup.sh) is printed by
+    both branches of its `if is_termux`, hence the consecutive de-duplication."""
+    printed = []
+    for line in _function("cmd_menu").splitlines():
+        entry = re.match(r"\t+echo.*?\b(\d{1,2})\) ", line)
+        if entry and (not printed or printed[-1] != int(entry.group(1))):
+            printed.append(int(entry.group(1)))
+    return printed
+
+
+def test_menu_numbers_are_printed_exactly_1_to_n_in_ascending_order():
+    """No jumps (the old 9, 31, 10), no repeats, no gaps: what the operator reads top to bottom
+    is 1, 2, 3 ... LAST_ENTRY."""
+    assert _printed_numbers() == list(range(1, LAST_ENTRY + 1))
+
+
 MENU_BLOCKS = {
     "Servers": list(range(1, 9)),
-    "Version Engine": [9, 31],
-    "Utilities": list(range(10, 21)),
-    "Quality Assurance": list(range(21, 26)),
-    "Developer Tools": list(range(26, 31)),
+    "Version Engine": [9, 10],
+    "Utilities": list(range(11, 22)),
+    "Quality Assurance": list(range(22, 27)),
+    "Developer Tools": list(range(27, 32)),
 }
 
 
-def test_menu_blocks_hold_the_documented_entries_in_order():
-    """Which heading each number is printed under, in the order printed. 31 once sat under
-    Utilities between 20 and 21 and was overlooked; 9 (version_manage) and 31 (purge) are now
-    one "Version Engine" block next to the servers. 19 is printed by both branches of its
-    `if is_termux`, hence the consecutive de-duplication."""
+def test_menu_blocks_hold_the_documented_entries():
+    """Which heading holds which numbers (the order is guarded by the test above)."""
     blocks, current = {}, None
     for line in _function("cmd_menu").splitlines():
         heading = re.match(r'\t+echo -e "  \$\{BOLD\}([^$]+)\$\{NC\}', line)
@@ -96,6 +112,20 @@ def test_menu_blocks_hold_the_documented_entries_in_order():
     assert blocks == MENU_BLOCKS
 
 
+def test_termux_setup_has_the_same_number_in_both_branches():
+    body = _function("cmd_menu")
+    assert len(re.findall(r"\b20\) termux_setup\.sh", body)) == 2
+
+
+def test_the_old_numbering_is_gone_from_manage_sh():
+    """The menu numbers of 5.44.x (31 = purge, 21-25 = QA, 26-30 = Developer Tools) must not
+    survive in comments or messages."""
+    text = _text()
+    for stale in ("menu #24", "menu #27", "menu 31"):
+        assert stale not in text, stale
+    assert "menu #21" in text and "menu #25" in text and "menu #28" in text
+
+
 def test_help_menu_map_lists_every_number():
     out = _run("help").stdout
     block = out.split("COMMAND MAP", 1)[1].split("EXAMPLES", 1)[0]
@@ -106,14 +136,14 @@ def test_help_menu_map_lists_every_number():
 def test_menu_arms_run_the_expected_qa_modes():
     body = _function("cmd_menu")
     for num, call in {
-        21: "cmd_qa quick",
-        22: "cmd_qa static",
-        23: "cmd_qa tests",
-        24: "_menu_qa_layer",
-        25: "cmd_qa ci",
-        28: "cmd_qa audit",
-        29: "cmd_qa coverage",
-        30: "cmd_qa lint",
+        22: "cmd_qa quick",
+        23: "cmd_qa static",
+        24: "cmd_qa tests",
+        25: "_menu_qa_layer",
+        26: "cmd_qa ci",
+        29: "cmd_qa audit",
+        30: "cmd_qa coverage",
+        31: "cmd_qa lint",
     }.items():
         assert re.search(
             rf"^\t\t{num}\) _menu_run {re.escape(call)} ;;$", body, re.M
@@ -123,8 +153,8 @@ def test_menu_arms_run_the_expected_qa_modes():
 def test_menu_arms_run_the_developer_tools():
     body = _function("cmd_menu")
     for num, call in {
-        26: 'run_utility "tests/dir_tree.py"',
-        27: "_menu_smoke_save",
+        27: 'run_utility "tests/dir_tree.py"',
+        28: "_menu_smoke_save",
     }.items():
         assert re.search(
             rf"^\t\t{num}\) _menu_run {re.escape(call)} ;;$", body, re.M
@@ -203,9 +233,9 @@ def test_runner_exit_code_is_passed_through():
     assert "unknown layer" in proc.stderr
 
 
-def test_purge_versions_is_menu_31_and_a_command():
+def test_purge_versions_is_menu_10_and_a_command():
     assert re.search(
-        r'^\t\t31\) _menu_run run_utility "tools/purge_missing_versions.py" ;;$',
+        r'^\t\t10\) _menu_run run_utility "tools/purge_missing_versions.py" ;;$',
         _function("cmd_menu"),
         re.M,
     )
