@@ -164,7 +164,7 @@ Every setting is explained in the [Configuration Reference](./docs/CONFIG_PY_REF
 **Update security.txt and robots.txt(Important for tunneling else optional up to you)**
 ```
 # use your own details
-# you can also use "bash manage.sh menu > 18 to create security.txt
+# you can also use "bash manage.sh menu > 19 to create security.txt
 # or run:
 # bash manage.sh security-txt --contact you@example.com --expires 2030-09-03 --preferred-lang en,fil --canonical https://yourdomain.com/.well-known/security.txt
 static\.well-known\security.txt
@@ -421,7 +421,7 @@ Two helpers for people who change the code. They never touch your stored files a
 ./manage.sh menu
 ```
 
-A numbered menu (31 entries: servers, utilities, quality assurance and developer tools) with live status shown at the top.
+A numbered menu (31 entries, numbered 1 to 31 in the order they are printed: servers, Version Engine, utilities, quality assurance and developer tools) with live status shown at the top.
 
 ### 💡 Typical Workflow
 

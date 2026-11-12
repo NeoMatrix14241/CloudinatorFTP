@@ -1373,7 +1373,7 @@ cmd_validate_sri() {
 	run_utility "tools/sri_validator.py" --templates "${SCRIPT_DIR}/templates" --static "${SCRIPT_DIR}/static" "$@"
 }
 
-# Menu flavour of validate-sri (menu #20): run the check, and if it found stale
+# Menu flavour of validate-sri (menu #21): run the check, and if it found stale
 # or missing hashes (validator exit code 1) offer to repair them right there, so
 # the menu user never has to quit and retype the command with --fix. Only exit
 # code 1 triggers the question: 130 (Ctrl-C) and 2 (templates/static folder not
@@ -1423,7 +1423,7 @@ cmd_qa() {
 	esac
 }
 
-# Menu flavour of `qa layer` (menu #24): asks which layer, default unit. An unknown name is
+# Menu flavour of `qa layer` (menu #25): asks which layer, default unit. An unknown name is
 # reported by qa.py itself (exit code 2 with the list of valid layers).
 _menu_qa_layer() {
 	local layer=""
@@ -1442,7 +1442,7 @@ cmd_smoke() {
 	run_utility "tests/smoke.py" "$@"
 }
 
-# Menu flavour of `smoke --save` (menu #27). The snapshot is the baseline that check 11
+# Menu flavour of `smoke --save` (menu #28). The snapshot is the baseline that check 11
 # compares against: saving it after a route was lost BY MISTAKE would hide the loss for good,
 # so ask first. Enter / n / Ctrl-D / Ctrl-C leave tests/smoke_routes.json untouched. (smoke.py
 # runs all its checks before it saves, so the report is on screen either way.)
@@ -1588,40 +1588,40 @@ cmd_menu() {
 		echo ""
 		echo -e "  ${BOLD}Version Engine${NC}  ${DIM}(file versions: browse, restore, clean up)${NC}"
 		echo "   9) version_manage.py    — List / restore / delete file versions"
-		echo "  31) purge_missing_versions.py — Free the storage of versions whose file no longer exists"
+		echo "  10) purge_missing_versions.py — Free the storage of versions whose file no longer exists"
 		echo ""
 		echo -e "  ${BOLD}Utilities${NC}"
-		echo "  10) config.py           — Edit configuration"
-		echo "  11) smb_setup.py        — Configure SMB storage"
-		echo "  12) kick_sessions.py    — Force logout of all active sessions"
-		echo "  13) manage_users.py     — Manage user credentials"
-		echo "  14) reset_db.py         — Reset database"
-		echo "  15) setup_storage.py    — Configure storage"
-		echo "  16) setup_pymodules.sh  — Setup and Update Python packages"
-		echo "  17) revoke_sharing.py   — Share link management (links, passkeys, approvals)"
-		echo "  18) security.txt        — Update static/.well-known/security.txt"
+		echo "  11) config.py           — Edit configuration"
+		echo "  12) smb_setup.py        — Configure SMB storage"
+		echo "  13) kick_sessions.py    — Force logout of all active sessions"
+		echo "  14) manage_users.py     — Manage user credentials"
+		echo "  15) reset_db.py         — Reset database"
+		echo "  16) setup_storage.py    — Configure storage"
+		echo "  17) setup_pymodules.sh  — Setup and Update Python packages"
+		echo "  18) revoke_sharing.py   — Share link management (links, passkeys, approvals)"
+		echo "  19) security.txt        — Update static/.well-known/security.txt"
 		# Always listed so the menu numbers match `./manage.sh help` (31 entries).
 		# Off Termux, cmd_termux_setup just explains that it is Android-only.
 		if is_termux; then
-			echo "  19) termux_setup.sh     — Termux initial setup (Android only)"
+			echo "  20) termux_setup.sh     — Termux initial setup (Android only)"
 		else
-			echo -e "  ${DIM}19) termux_setup.sh     — Termux initial setup (Android only — n/a on this system)${NC}"
+			echo -e "  ${DIM}20) termux_setup.sh     — Termux initial setup (Android only — n/a on this system)${NC}"
 		fi
-		echo "  20) sri_validator.py    — Check SRI hashes in templates (offers to fix)"
+		echo "  21) sri_validator.py    — Check SRI hashes in templates (offers to fix)"
 		echo ""
 		echo -e "  ${BOLD}Quality Assurance${NC}  ${DIM}(runs tests/qa.py; safe while a server runs)${NC}"
-		echo "  21) qa quick            — smoke + check + SRI + JS syntax + all automated tests"
-		echo "  22) qa static           — smoke + check + SRI + JS syntax only (no pytest)"
-		echo "  23) qa tests            — pytest on every layer folder (unit, application, ...)"
-		echo "  24) qa layer            — run ONE layer (asks which)"
-		echo "  25) qa ci               — quick + JUnit XML in ./artifacts (what GitHub runs)"
+		echo "  22) qa quick            — smoke + check + SRI + JS syntax + all automated tests"
+		echo "  23) qa static           — smoke + check + SRI + JS syntax only (no pytest)"
+		echo "  24) qa tests            — pytest on every layer folder (unit, application, ...)"
+		echo "  25) qa layer            — run ONE layer (asks which)"
+		echo "  26) qa ci               — quick + JUnit XML in ./artifacts (what GitHub runs)"
 		echo ""
 		echo -e "  ${BOLD}Developer Tools${NC}  ${DIM}(files in tests/; safe while a server runs)${NC}"
-		echo "  26) dir_tree.py         — Regenerate docs/DIRECTORY_TREE.md (project folder tree)"
-		echo "  27) smoke.py --save     — Save the route snapshot tests/smoke_routes.json (asks first)"
-		echo "  28) qa audit            — pip-audit on the installed packages (needs network; not part of qa quick)"
-		echo "  29) qa coverage         — every test layer under coverage.py (slow; not part of qa quick)"
-		echo "  30) qa lint             — Ruff on the whole project (report only; not part of qa quick)"
+		echo "  27) dir_tree.py         — Regenerate docs/DIRECTORY_TREE.md (project folder tree)"
+		echo "  28) smoke.py --save     — Save the route snapshot tests/smoke_routes.json (asks first)"
+		echo "  29) qa audit            — pip-audit on the installed packages (needs network; not part of qa quick)"
+		echo "  30) qa coverage         — every test layer under coverage.py (slow; not part of qa quick)"
+		echo "  31) qa lint             — Ruff on the whole project (report only; not part of qa quick)"
 		echo ""
 		echo "   q) Quit"
 		echo ""
@@ -1645,28 +1645,28 @@ cmd_menu() {
 		7) _menu_run cmd_clean_logs ;;
 		8) _menu_run cmd_restart_webdav ;;
 		9) _menu_run run_utility "tools/version_manage.py" ;;
-		10) _menu_run run_utility "config.py" ;;
-		11) _menu_run run_utility "tools/smb_setup.py" ;;
-		12) _menu_run run_utility "tools/kick_sessions.py" ;;
-		13) _menu_run run_utility "tools/manage_users.py" ;;
-		14) _menu_run run_utility "tools/reset_db.py" ;;
-		15) _menu_run run_utility "tools/setup_storage.py" ;;
-		16) _menu_run cmd_setup_modules ;;
-		17) _menu_run run_utility "tools/revoke_sharing.py" ;;
-		18) _menu_run cmd_security_txt ;;
-		19) _menu_run cmd_termux_setup ;;
-		20) _menu_run _menu_validate_sri ;;
-		21) _menu_run cmd_qa quick ;;
-		22) _menu_run cmd_qa static ;;
-		23) _menu_run cmd_qa tests ;;
-		24) _menu_run _menu_qa_layer ;;
-		25) _menu_run cmd_qa ci ;;
-		26) _menu_run run_utility "tests/dir_tree.py" ;;
-		27) _menu_run _menu_smoke_save ;;
-		28) _menu_run cmd_qa audit ;;
-		29) _menu_run cmd_qa coverage ;;
-		30) _menu_run cmd_qa lint ;;
-		31) _menu_run run_utility "tools/purge_missing_versions.py" ;;
+		10) _menu_run run_utility "tools/purge_missing_versions.py" ;;
+		11) _menu_run run_utility "config.py" ;;
+		12) _menu_run run_utility "tools/smb_setup.py" ;;
+		13) _menu_run run_utility "tools/kick_sessions.py" ;;
+		14) _menu_run run_utility "tools/manage_users.py" ;;
+		15) _menu_run run_utility "tools/reset_db.py" ;;
+		16) _menu_run run_utility "tools/setup_storage.py" ;;
+		17) _menu_run cmd_setup_modules ;;
+		18) _menu_run run_utility "tools/revoke_sharing.py" ;;
+		19) _menu_run cmd_security_txt ;;
+		20) _menu_run cmd_termux_setup ;;
+		21) _menu_run _menu_validate_sri ;;
+		22) _menu_run cmd_qa quick ;;
+		23) _menu_run cmd_qa static ;;
+		24) _menu_run cmd_qa tests ;;
+		25) _menu_run _menu_qa_layer ;;
+		26) _menu_run cmd_qa ci ;;
+		27) _menu_run run_utility "tests/dir_tree.py" ;;
+		28) _menu_run _menu_smoke_save ;;
+		29) _menu_run cmd_qa audit ;;
+		30) _menu_run cmd_qa coverage ;;
+		31) _menu_run cmd_qa lint ;;
 		q | Q)
 			echo ""
 			success "Goodbye!"
@@ -1778,7 +1778,7 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
   validate-sri [--fix]  python tools/sri_validator.py — check the SRI integrity hash of every
                           local <script src>/<link href> in templates/. No args = check
                           only (exit code 1 if any hash is stale or missing). --fix
-                          writes the correct hashes into the templates (menu #20 checks,
+                          writes the correct hashes into the templates (menu #21 checks,
                           then asks y/N before fixing). Other options:
                           --templates DIR, --static DIR. Run it after editing any JS/CSS
                           under static/, then reload each page once.
@@ -1813,7 +1813,7 @@ ${BOLD}DEVELOPER TOOLS COMMANDS${NC}  (foreground; safe while a server is up —
   smoke [options]       python tests/smoke.py — fast static safety net: syntax, pyflakes,
                           routes, hooks, imports, manage.sh. No options = run the checks
                           (exit code 1 if any check FAILs). Options go straight to smoke.py:
-                          --save    write the route snapshot tests/smoke_routes.json (menu #27
+                          --save    write the route snapshot tests/smoke_routes.json (menu #28
                                     asks y/N first). Use it after a green run when a route was
                                     added or removed ON PURPOSE.
                           -v        also print the route table
@@ -1827,17 +1827,19 @@ ${BOLD}OTHER${NC}
 ${BOLD}MENU ↔ COMMAND MAP${NC}  (in ./manage.sh menu type the number; from the shell type the command)
    1  start server          2  start dev_server      3  stop
    4  restart               5  status                6  logs [server|dev_server] [-f]
-   7  clean-logs            8  restart-webdav        9  version-manage
-  10  config                11  setup-smb            12  kick-sessions
-  13  manage-users          14  reset-db             15  setup-storage
-  16  update-modules        17  revoke-shares        18  security-txt
-  19  termux-setup (Android/Termux only; shown dimmed elsewhere)
-  20  validate-sri
-  21  qa quick             22  qa static             23  qa tests
-  24  qa layer (asks)      25  qa ci                 26  dir-tree
-  27  smoke --save (asks y/N first)                  28  qa audit (pip-audit; needs network)
-  29  qa coverage (slow)                              30  qa lint (Ruff, report only)
-  31  purge-versions (Version Engine clean-up: interactive menu, or flags; asks before changing anything)
+   7  clean-logs            8  restart-webdav
+   9  version-manage
+  10  purge-versions (Version Engine clean-up: interactive menu, or flags; asks before changing anything)
+  11  config                12  setup-smb            13  kick-sessions
+  14  manage-users          15  reset-db             16  setup-storage
+  17  update-modules        18  revoke-shares        19  security-txt
+  20  termux-setup (Android/Termux only; shown dimmed elsewhere)
+  21  validate-sri
+  22  qa quick              23  qa static            24  qa tests
+  25  qa layer (asks)       26  qa ci
+  27  dir-tree              28  smoke --save (asks y/N first)
+  29  qa audit (pip-audit; needs network)             30  qa coverage (slow)
+  31  qa lint (Ruff, report only)
   q   quit
 
 ${BOLD}EXAMPLES${NC}

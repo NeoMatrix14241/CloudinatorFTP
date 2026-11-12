@@ -183,7 +183,7 @@ Your HTML templates load scripts and stylesheets with an `integrity="sha384-..."
 - `--fix` only changes `integrity` values. Line endings and the rest of each template stay exactly as they were.
 - It always looks in the `templates/` and `static/` folders next to `manage.sh`, wherever you run it from. `--templates DIR` and `--static DIR` override that.
 - **When to run it:** after you edit any JS or CSS under `static/` (including `bg_audio.js`, whose hash is repeated in four templates), and after you change a third-party file such as pdf.js. Then open each page once and look for blocked-script errors in the browser console.
-- **From the interactive menu (`./manage.sh menu`, option 20)** it runs the check, and if any hash is stale or missing it asks `Fix the stale/missing hashes now? [y/N]`. `y` runs the same repair as `--fix`; Enter or `n` leaves everything unchanged (and reminds you of the shell command). The question appears only when the check found a fixable problem, not when everything is OK, when you press Ctrl-C, or when the `templates/` or `static/` folder is missing.
+- **From the interactive menu (`./manage.sh menu`, option 21)** it runs the check, and if any hash is stale or missing it asks `Fix the stale/missing hashes now? [y/N]`. `y` runs the same repair as `--fix`; Enter or `n` leaves everything unchanged (and reminds you of the shell command). The question appears only when the check found a fixable problem, not when everything is OK, when you press Ctrl-C, or when the `templates/` or `static/` folder is missing.
 - Because it exits with 1 when something is wrong, you can also use it in a script or git pre-commit hook: `./manage.sh validate-sri || exit 1`.
 
 Limits: browsers only enforce the hash on `<script>` tags and on stylesheet/preload links (icon and `locale.json` links accept the attribute but ignore it). Tags that JavaScript adds at runtime are not in any template, so they are not checked. The hash must match the bytes the **server** sends, so if git converts line endings on checkout, run the command on the server's copy.
@@ -276,7 +276,7 @@ Exit code `1` means at least one check **FAIL**ed. A `SKIP` is not a pass of tha
 **The route snapshot.** `tests/smoke_routes.json` lists every route (methods, URL and endpoint). Check 11 **fails** if a route in the snapshot has disappeared from the code (`LOST`), so a route cannot vanish unnoticed. Routes that are not in the snapshot yet only produce a warning (`11b`). Run `--save` after a green run when you added or removed a route **on purpose**, then commit the file. Before the first `--save`, check 11 is reported as `SKIP`.
 
 - `--save` runs **all** the checks first and then saves the snapshot **even if one of them failed**, so read the report before you commit the file.
-- **From the interactive menu (option 27)** it first warns, then asks `Save the route snapshot? [y/N]`. Saving after a route was lost by mistake would hide the loss, so Enter or `n` leaves the file unchanged and reminds you of the shell command. From the shell, `smoke --save` does not ask.
+- **From the interactive menu (option 28)** it first warns, then asks `Save the route snapshot? [y/N]`. Saving after a route was lost by mistake would hide the loss, so Enter or `n` leaves the file unchanged and reminds you of the shell command. From the shell, `smoke --save` does not ask.
 
 ---
 
@@ -309,7 +309,7 @@ Only the flags you pass are changed. Existing fields and any extra custom fields
 ./manage.sh menu
 ```
 
-Shows whether a server is running, then a numbered list. Every number is the same as a shell command.
+Shows whether a server is running, then a numbered list. Every number is the same as a shell command. The numbers run 1 to 31 in the order they are printed (since 5.44.7; before that the purge tool was 31 and everything after 9 was one lower, so typed numbers 10 to 31 changed; the shell commands did not).
 
 | # | Command | Group |
 |---|---|---|
@@ -322,28 +322,28 @@ Shows whether a server is running, then a numbered list. Every number is the sam
 | 7 | `clean-logs` | Servers |
 | 8 | `restart-webdav` | Servers |
 | 9 | `version-manage` | Version Engine |
-| 10 | `config` | Utilities |
-| 11 | `setup-smb` | Utilities |
-| 12 | `kick-sessions` | Utilities |
-| 13 | `manage-users` | Utilities |
-| 14 | `reset-db` | Utilities |
-| 15 | `setup-storage` | Utilities |
-| 16 | `update-modules` | Utilities |
-| 17 | `revoke-shares` | Utilities |
-| 18 | `security-txt` | Utilities |
-| 19 | `termux-setup` (shown dimmed when not on Termux) | Utilities |
-| 20 | `validate-sri` (checks, then asks y/N before fixing) | Utilities |
-| 21 | `qa quick` | Quality Assurance |
-| 22 | `qa static` | Quality Assurance |
-| 23 | `qa tests` | Quality Assurance |
-| 24 | `qa layer` (asks which layer, default unit) | Quality Assurance |
-| 25 | `qa ci` | Quality Assurance |
-| 26 | `dir-tree` | Developer Tools |
-| 27 | `smoke --save` (warns, then asks y/N) | Developer Tools |
-| 28 | `qa audit` (pip-audit; needs network) | Developer Tools |
-| 29 | `qa coverage` (slow) | Developer Tools |
-| 30 | `qa lint` (Ruff, report only) | Developer Tools |
-| 31 | `purge-versions` (interactive menu) | Version Engine |
+| 10 | `purge-versions` (interactive menu) | Version Engine |
+| 11 | `config` | Utilities |
+| 12 | `setup-smb` | Utilities |
+| 13 | `kick-sessions` | Utilities |
+| 14 | `manage-users` | Utilities |
+| 15 | `reset-db` | Utilities |
+| 16 | `setup-storage` | Utilities |
+| 17 | `update-modules` | Utilities |
+| 18 | `revoke-shares` | Utilities |
+| 19 | `security-txt` | Utilities |
+| 20 | `termux-setup` (shown dimmed when not on Termux) | Utilities |
+| 21 | `validate-sri` (checks, then asks y/N before fixing) | Utilities |
+| 22 | `qa quick` | Quality Assurance |
+| 23 | `qa static` | Quality Assurance |
+| 24 | `qa tests` | Quality Assurance |
+| 25 | `qa layer` (asks which layer, default unit) | Quality Assurance |
+| 26 | `qa ci` | Quality Assurance |
+| 27 | `dir-tree` | Developer Tools |
+| 28 | `smoke --save` (warns, then asks y/N) | Developer Tools |
+| 29 | `qa audit` (pip-audit; needs network) | Developer Tools |
+| 30 | `qa coverage` (slow) | Developer Tools |
+| 31 | `qa lint` (Ruff, report only) | Developer Tools |
 
 Type `q` to quit. After each action it waits for Enter before redrawing.
 

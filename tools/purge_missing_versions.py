@@ -15,7 +15,7 @@ soft-deletes their versions, and optionally frees the chunks right away.
     python tools/purge_missing_versions.py --apply --free-now   # ...and free the chunks now
     python tools/purge_missing_versions.py --undo <file>.json   # re-activate an earlier --apply
 
-Run via `./manage.sh purge-versions` (menu 31); extra arguments go straight to this script.
+Run via `./manage.sh purge-versions` (menu 10); extra arguments go straight to this script.
 
 The menu (no arguments on a terminal, or --menu): 1 report, 2 soft-delete, 3 soft-delete and free
 the disk space now, 4 undo an earlier purge (lists the undo files), 5 minimum age, 6 scope check
