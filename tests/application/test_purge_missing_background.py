@@ -219,7 +219,6 @@ def _scratch(tmp_path):
         scratch / "helpers",
         ignore=shutil.ignore_patterns("__pycache__"),
     )
-    (scratch / "driver.py").write_text(_DRIVER, encoding="utf-8")
     return scratch
 
 
@@ -230,7 +229,10 @@ def _run(tmp_path, scenario):
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     proc = subprocess.run(
-        [sys.executable, "driver.py", str(scratch), scenario],
+        # `-c`, not a driver.py file: under the coverage job a script file in the throw-away
+        # folder is recorded by a relative name and `coverage xml` then fails with "No source for
+        # code: 'driver.py'"; code run with -c is recorded as <string> and never reported.
+        [sys.executable, "-c", _DRIVER, str(scratch), scenario],
         cwd=str(scratch),
         env=env,
         capture_output=True,
