@@ -207,6 +207,24 @@ VERSION_FOLLOW_SYMLINKS = False
 VERSION_ALLOW_RESTORE_OVERWRITE = False
 VERSION_SHUTDOWN_TIMEOUT = 30  # seconds — graceful drain window before proc.kill()
 
+# Background purge of versions whose file no longer exists (5.45). ON by default (owner's decision; set it to false in server_config.json to switch it off). Runs in the
+# Version Engine's own `ve-purge` thread (never in the web server, never on its event loop or
+# thread pool), one bounded pass at a time; see docs/CONFIG_PY_REFERENCE.md. The engine does not
+# age out the versions of a deleted file by itself (retention only runs when the same file gets
+# a new snapshot); this does it slowly, with an undo file per pass, and the GC frees the chunks
+# after VERSION_GC_GRACE_PERIOD. Changes need a restart of the Version Engine.
+VERSION_PURGE_MISSING_ENABLED = True
+VERSION_PURGE_MISSING_MIN_AGE_DAYS = (
+    30  # newest version at least this old (0 = no margin)
+)
+VERSION_PURGE_MISSING_INTERVAL = 3600  # seconds between two passes (minimum 60)
+VERSION_PURGE_MISSING_MAX_FILES_PER_PASS = (
+    5000  # files looked at per pass (1 to 100000)
+)
+VERSION_PURGE_MISSING_BATCH_PAUSE = (
+    0.05  # seconds paused after each write batch (0 to 5)
+)
+
 
 def detect_platform():
     """Detect the current platform and return appropriate info"""
@@ -1115,6 +1133,11 @@ def save_server_config():
         "VERSION_FOLLOW_SYMLINKS": VERSION_FOLLOW_SYMLINKS,
         "VERSION_ALLOW_RESTORE_OVERWRITE": VERSION_ALLOW_RESTORE_OVERWRITE,
         "VERSION_SHUTDOWN_TIMEOUT": VERSION_SHUTDOWN_TIMEOUT,
+        "VERSION_PURGE_MISSING_ENABLED": VERSION_PURGE_MISSING_ENABLED,
+        "VERSION_PURGE_MISSING_MIN_AGE_DAYS": VERSION_PURGE_MISSING_MIN_AGE_DAYS,
+        "VERSION_PURGE_MISSING_INTERVAL": VERSION_PURGE_MISSING_INTERVAL,
+        "VERSION_PURGE_MISSING_MAX_FILES_PER_PASS": VERSION_PURGE_MISSING_MAX_FILES_PER_PASS,
+        "VERSION_PURGE_MISSING_BATCH_PAUSE": VERSION_PURGE_MISSING_BATCH_PAUSE,
         # ── Metadata ──────────────────────────────────────────────────────
         "configured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -1134,6 +1157,25 @@ def _non_negative_number(value, default):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return default
     return value if value >= 0 else default
+
+
+def _bounded_number(value, default, low, high):
+    """`value` when it is a number (not a bool) from `low` to `high`, else `default`: a
+    hand-edited server_config.json must not be able to turn a throttle into a busy loop.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return value if low <= value <= high else default
+
+
+def _bool_fail_safe(value, default):
+    """For a switch that is ON by default and destructive-ish: a key that is missing keeps
+    `default`; a real JSON true/false is taken as written; anything else (a string \"false\",
+    0, null, a typo) means OFF, so a hand-edited server_config.json can never leave the feature
+    running when the owner meant to switch it off."""
+    if value is None:
+        return default
+    return value if isinstance(value, bool) else False
 
 
 def _buffer_size_or_default(value, default):
@@ -1170,6 +1212,9 @@ def load_server_config():
     global VERSION_RETRY_COUNT, VERSION_RETRY_DELAY
     global VERSION_COMPRESSION_ENABLED, VERSION_FOLLOW_SYMLINKS
     global VERSION_ALLOW_RESTORE_OVERWRITE, VERSION_SHUTDOWN_TIMEOUT
+    global VERSION_PURGE_MISSING_ENABLED, VERSION_PURGE_MISSING_MIN_AGE_DAYS
+    global VERSION_PURGE_MISSING_INTERVAL, VERSION_PURGE_MISSING_MAX_FILES_PER_PASS
+    global VERSION_PURGE_MISSING_BATCH_PAUSE
 
     try:
         if os.path.exists(_SERVER_CONFIG_FILE):
@@ -1304,6 +1349,36 @@ def load_server_config():
             )
             VERSION_SHUTDOWN_TIMEOUT = config.get(
                 "VERSION_SHUTDOWN_TIMEOUT", VERSION_SHUTDOWN_TIMEOUT
+            )
+            VERSION_PURGE_MISSING_ENABLED = _bool_fail_safe(
+                config.get("VERSION_PURGE_MISSING_ENABLED"),
+                VERSION_PURGE_MISSING_ENABLED,
+            )
+            VERSION_PURGE_MISSING_MIN_AGE_DAYS = _bounded_number(
+                config.get("VERSION_PURGE_MISSING_MIN_AGE_DAYS"),
+                VERSION_PURGE_MISSING_MIN_AGE_DAYS,
+                0,
+                36500,
+            )
+            VERSION_PURGE_MISSING_INTERVAL = _bounded_number(
+                config.get("VERSION_PURGE_MISSING_INTERVAL"),
+                VERSION_PURGE_MISSING_INTERVAL,
+                60,
+                30 * 86400,
+            )
+            VERSION_PURGE_MISSING_MAX_FILES_PER_PASS = int(
+                _bounded_number(
+                    config.get("VERSION_PURGE_MISSING_MAX_FILES_PER_PASS"),
+                    VERSION_PURGE_MISSING_MAX_FILES_PER_PASS,
+                    1,
+                    100000,
+                )
+            )
+            VERSION_PURGE_MISSING_BATCH_PAUSE = _bounded_number(
+                config.get("VERSION_PURGE_MISSING_BATCH_PAUSE"),
+                VERSION_PURGE_MISSING_BATCH_PAUSE,
+                0,
+                5,
             )
 
             print(f"✅ Server configuration loaded from {_SERVER_CONFIG_FILE}")

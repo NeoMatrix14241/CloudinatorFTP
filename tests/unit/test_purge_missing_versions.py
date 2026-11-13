@@ -56,6 +56,11 @@ class Db:
         self.path = str(path)
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
+        # 5.45: a throw-away database needs no durability. Without a disk sync per commit the
+        # many small add() commits cannot stall on a busy or scanned disk (a run on Windows hung
+        # for minutes inside one of these commits, with the same test taking 0.06 s elsewhere).
+        self.conn.execute("PRAGMA synchronous=OFF")
+        self.conn.execute("PRAGMA journal_mode=MEMORY")
         self.conn.executescript(_engine_schema())
         self.conn.commit()
         self._objects = set()
@@ -726,7 +731,9 @@ def test_soft_delete_reports_progress_each_time_another_block_is_done(
     for i in range(5):
         _fid, version_ids = db.add(folder / f"g{i}.txt", [("completed", 90, [f"s{i}"])])
         ids += version_ids
-    monkeypatch.setattr(tool, "_PROGRESS_EVERY", 2)
+    # soft_delete lives in helpers/version_purge.py since 5.45 and reads PROGRESS_EVERY from
+    # its own module globals, so that is where the block size is lowered for this test.
+    monkeypatch.setitem(tool.soft_delete.__globals__, "PROGRESS_EVERY", 2)
     seen = []
 
     tool.soft_delete(

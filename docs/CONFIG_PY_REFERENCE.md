@@ -220,7 +220,7 @@ The numbering is out of order in the code (Save & Exit is 10 but is listed last)
 **Version Engine** (`_version_engine_menu()`): 1 = version storage path, 2 = engine settings, 3 = tracking scope.
 
 - *Engine settings* can toggle the master switch, watcher, scanner, retention, garbage collection, restore-overwrite and symlink following, and can set the small-file threshold (MB), chunk size (MB) and worker count.
-- Not editable from the menu (edit `server_config.json` instead): `VERSION_SCAN_INTERVAL`, `VERSION_MAX_VERSIONS`, `VERSION_GC_GRACE_PERIOD`, `VERSION_MAX_CONCURRENT_SNAPSHOTS`, `VERSION_RETRY_COUNT`, `VERSION_RETRY_DELAY`, `VERSION_COMPRESSION_ENABLED`, `VERSION_SHUTDOWN_TIMEOUT`, `VERSION_CHUNKING_ALGORITHM`, `VERSION_DB_FILENAME`. The menu shows some of these but does not change them.
+- Not editable from the menu (edit `server_config.json` instead): `VERSION_SCAN_INTERVAL`, `VERSION_MAX_VERSIONS`, `VERSION_GC_GRACE_PERIOD`, `VERSION_MAX_CONCURRENT_SNAPSHOTS`, `VERSION_RETRY_COUNT`, `VERSION_RETRY_DELAY`, `VERSION_COMPRESSION_ENABLED`, `VERSION_SHUTDOWN_TIMEOUT`, `VERSION_CHUNKING_ALGORITHM`, `VERSION_DB_FILENAME`, and the five `VERSION_PURGE_MISSING_*` settings (5.45). The menu shows some of these but does not change them.
 - *Tracking scope* (`configure_version_tracking()`): tracked files, tracked directories, tracking roots, a track-all-under-roots toggle, excluded directories and excluded patterns.
 
 ### Typical admin workflow
@@ -424,6 +424,20 @@ The Version Engine is a separate subsystem for tracking historical file versions
 | `VERSION_FOLLOW_SYMLINKS` | `False` | Whether symlinks are followed during version capture |
 | `VERSION_ALLOW_RESTORE_OVERWRITE` | `False` | Allows overwriting files during restore |
 | `VERSION_SHUTDOWN_TIMEOUT` | `30` | Grace period before process force-kill |
+
+### Background purge of deleted files' versions (5.45)
+
+The engine never ages out the versions of a file that no longer exists (retention only runs when the same file gets a new snapshot), so the version store only grows. With `VERSION_PURGE_MISSING_ENABLED` on (the default), the Version Engine does what `./manage.sh purge-versions` does by hand, slowly and by itself, in its own `ve-purge` thread (inside the engine process, started and stopped with the engine; nothing runs in the web server, no asyncio, no thread pool). It soft-deletes the versions of files that are gone (status `deleted`, undoable) and the engine's garbage collector frees the chunks after `VERSION_GC_GRACE_PERIOD`. All five settings are read from `server_config.json`, are **not** editable from the `config.py` menu, and need a **restart of the Version Engine** (restart the server) to take effect.
+
+| Setting | Default | Purpose |
+|---|---:|---|
+| `VERSION_PURGE_MISSING_ENABLED` | `True` | Master switch, ON by default. Off: no thread is started and nothing is ever purged. A missing key keeps the default; a real JSON `true` / `false` is taken as written; any other value (`"false"`, `0`, a typo) counts as OFF |
+| `VERSION_PURGE_MISSING_MIN_AGE_DAYS` | `30` | Only files whose NEWEST version is at least this old are looked at (0 = no margin; 0 to 36500) |
+| `VERSION_PURGE_MISSING_INTERVAL` | `3600` | Seconds between two passes (60 to 2592000). After a slow pass the engine waits about three times as long as the pass took if that is more |
+| `VERSION_PURGE_MISSING_MAX_FILES_PER_PASS` | `5000` | Files whose existence is checked per pass (1 to 100000). The next pass resumes where this one ended; a sweep of the whole table takes `files / this` passes |
+| `VERSION_PURGE_MISSING_BATCH_PAUSE` | `0.05` | Seconds paused after every write batch of 500 versions, and the least pause between two slices of 200 existence checks (0 to 5). The pause after a slice is three times the slice's own duration if that is longer, so the disk is busy at most a quarter of the time |
+
+Safety rules (not settings): nothing runs while ANY tracked folder, drive or share is missing, empty or unreadable (a missing file outside every tracked folder counts as gone only while its parent folder exists); the tracked folders are probed again right before the first write and every candidate is checked once more (a file that is back is dropped); an undo record `purge_undo_auto_<time>.json` is written to the version storage folder before any row changes and kept until the GC grace period plus one day (`./manage.sh purge-versions --undo <file>` reads it); the GC and the purge's write phase never overlap; every pass logs what it did (files looked at, gone, left alone, soft-deleted versions and bytes, undo file, duration).
 
 ### Important note
 

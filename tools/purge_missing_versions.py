@@ -74,11 +74,10 @@ batch: each batch is one transaction.
 import argparse
 import json
 import os
-import sqlite3
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # tools/ sits one level below the project root: put the root on sys.path so the root modules
 # (config, version_engine, ...) are importable from here. They are imported inside the
@@ -86,9 +85,40 @@ from dataclasses import dataclass, field
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
-_MARK = "purged: file no longer exists (purge_missing_versions.py)"
-_BATCH = 500
-_PROGRESS_EVERY = 50_000
+# The decision logic (_Probe, scan_tracked, reclaimable, soft_delete, undo_versions, the undo
+# file reader) lives in helpers/version_purge.py since 5.45, so the Version Engine's background
+# purge uses the very same code. The old names stay importable from here.
+from helpers.version_purge import (  # noqa: E402  (after the sys.path line above)
+    BATCH as _BATCH,
+    MARK as _MARK,
+    PROGRESS_EVERY as _PROGRESS_EVERY,
+    Probe as _Probe,
+    Scan,
+    list_undo_files,
+    read_undo_file as _read_undo_file,
+    reclaimable,
+    scan_tracked,
+    scope_dirs_from,
+    soft_delete,
+    undo_versions,
+    under as _under,
+)
+
+# Names that the unit tests (and anything else written before 5.45) take from this module.
+__all__ = [
+    "Scan",
+    "_BATCH",
+    "_MARK",
+    "_PROGRESS_EVERY",
+    "_Probe",
+    "_read_undo_file",
+    "_under",
+    "list_undo_files",
+    "reclaimable",
+    "scan_tracked",
+    "soft_delete",
+    "undo_versions",
+]
 
 
 # ── small helpers ────────────────────────────────────────────────────────────
@@ -125,300 +155,6 @@ def _confirm(msg: str) -> bool:
 # ── where a file belongs: tracked folders and unreachable locations ───────────
 
 
-def _under(path: str, root: str) -> bool:
-    p = os.path.normcase(os.path.abspath(path))
-    r = os.path.normcase(os.path.abspath(root))
-    return p == r or p.startswith(r.rstrip("\\/") + os.sep)
-
-
-class _Probe:
-    """Decides whether a path that is missing on disk can be called DELETED, or whether the
-    place it lived in is itself unavailable (drive or share not mounted, tracked folder
-    missing, empty or unreadable). Answers are cached per drive and per tracked folder, so
-    250,000 paths cost a handful of probes, not 250,000. The file system calls are
-    parameters so the logic can be tested without a real disk."""
-
-    def __init__(
-        self,
-        scope_dirs,
-        isdir=os.path.isdir,
-        scandir=os.scandir,
-        splitdrive=os.path.splitdrive,
-    ):
-        # Longest folder first: a file belongs to its most specific tracked folder.
-        self._dirs = sorted(
-            {os.path.abspath(os.path.expanduser(d)) for d in scope_dirs},
-            key=len,
-            reverse=True,
-        )
-        self._isdir = isdir
-        self._scandir = scandir
-        self._splitdrive = splitdrive
-        self._drive_cache = {}
-        self._dir_cache = {}
-
-    def _drive_problem(self, path: str):
-        drive, _rest = self._splitdrive(path)
-        if not drive:
-            return None  # POSIX: there is no drive letter to probe
-        if drive not in self._drive_cache:
-            self._drive_cache[drive] = self._isdir(drive + os.sep)
-        return None if self._drive_cache[drive] else f"{drive} is not reachable"
-
-    def _dir_problem(self, root: str):
-        if root not in self._dir_cache:
-            problem = None
-            if not self._isdir(root):
-                problem = f"tracked folder {root} is missing"
-            else:
-                try:
-                    with self._scandir(root) as it:
-                        if next(iter(it), None) is None:
-                            problem = (
-                                f"tracked folder {root} is empty (a share that is "
-                                "not mounted looks like this)"
-                            )
-                except OSError as e:
-                    problem = f"tracked folder {root} cannot be read ({e})"
-            self._dir_cache[root] = problem
-        return self._dir_cache[root]
-
-    def reason(self, path: str):
-        """None = the place is fine, so the missing file really is gone. Otherwise a text
-        saying why we cannot tell."""
-        problem = self._drive_problem(path)
-        if problem:
-            return problem
-        for root in self._dirs:
-            if _under(path, root):
-                return self._dir_problem(root)
-        return None  # not under any configured tracked folder: judged by the file alone
-
-
-# ── the scan ─────────────────────────────────────────────────────────────────
-
-
-@dataclass
-class Scan:
-    files_total: int = 0  # every row of the engine's `files` table
-    with_completed: int = 0  # rows that have at least one completed version
-    present: int = 0  # ...and are on disk
-    present_in_scope: int = 0  # ...and the engine's walk still sees them
-    gone: int = 0  # ...and are not on disk, place reachable (any age)
-    too_recent: int = 0  # gone, but the newest version is younger than --min-age-days
-    purge: list = field(default_factory=list)  # gone and old enough: dicts, see _scan
-    unsure: list = field(default_factory=list)  # (path, reason): place unavailable
-    gone_ext: dict = field(default_factory=dict)  # extension -> gone files (any age)
-    gone_newest_min: float | None = None  # oldest "newest version" among the gone files
-    gone_newest_max: float | None = (
-        None  # youngest "newest version" among the gone files
-    )
-    scope_files: int | None = (
-        None  # files the engine's walk finds now (None = not checked)
-    )
-
-    @property
-    def purge_ids(self):
-        return [i for g in self.purge for i in g["ids"]]
-
-    @property
-    def present_out_of_scope(self):
-        return self.present - self.present_in_scope
-
-
-def scan_tracked(
-    db_path,
-    min_age_days,
-    scope_dirs,
-    scope_keys=None,
-    force=False,
-    now=None,
-    exists=os.path.lexists,
-    probe=None,
-    progress=None,
-):
-    """Classify every file the engine knows. `scope_keys` is the set of normalized keys the
-    engine's own walk finds right now (None = skip that cross-check). `force` lets files
-    whose place is unavailable count as gone."""
-    cutoff = (time.time() if now is None else now) - min_age_days * 86400
-    probe = probe or _Probe(scope_dirs)
-    out = Scan(scope_files=None if scope_keys is None else len(scope_keys))
-    db = sqlite3.connect(db_path, timeout=30)
-    db.row_factory = sqlite3.Row
-    try:
-        out.files_total = db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-        rows = db.execute(
-            "SELECT f.file_id, f.path, f.norm_key, MAX(v.created_at) AS newest, "
-            "COUNT(*) AS n FROM files f "
-            "JOIN versions v ON v.file_id = f.file_id AND v.status='completed' "
-            "GROUP BY f.file_id"
-        ).fetchall()
-        out.with_completed = len(rows)
-        candidates = []
-        for i, r in enumerate(rows, 1):
-            if progress and i % _PROGRESS_EVERY == 0:
-                progress(i, len(rows))
-            if exists(r["path"]):
-                out.present += 1
-                if scope_keys is not None and r["norm_key"] in scope_keys:
-                    out.present_in_scope += 1
-                continue
-            why = probe.reason(r["path"])
-            if why and not force:
-                out.unsure.append((r["path"], why))
-                continue
-            out.gone += 1
-            ext = os.path.splitext(r["path"])[1].lower() or "(none)"
-            out.gone_ext[ext] = out.gone_ext.get(ext, 0) + 1
-            newest = r["newest"]
-            if out.gone_newest_min is None or newest < out.gone_newest_min:
-                out.gone_newest_min = newest
-            if out.gone_newest_max is None or newest > out.gone_newest_max:
-                out.gone_newest_max = newest
-            if r["newest"] > cutoff:
-                out.too_recent += 1
-                continue
-            candidates.append(r)
-        # One pass over the versions instead of one query per file.
-        wanted = {r["file_id"]: [] for r in candidates}
-        for vid_row in db.execute(
-            "SELECT file_id, version_id FROM versions WHERE status='completed'"
-        ):
-            ids = wanted.get(vid_row["file_id"])
-            if ids is not None:
-                ids.append(vid_row["version_id"])
-        out.purge = [
-            {
-                "file_id": r["file_id"],
-                "path": r["path"],
-                "newest": r["newest"],
-                "versions": r["n"],
-                "ids": wanted[r["file_id"]],
-            }
-            for r in candidates
-        ]
-        return out
-    finally:
-        db.close()
-
-
-def reclaimable(db_path, purge):
-    """({file_id: bytes} that deleting each file's versions would really free, total).
-    A chunk counts only if no completed version OUTSIDE the purge set uses it. A chunk shared
-    by two purged files shows in both per-file figures but once in the total."""
-    db = sqlite3.connect(db_path, timeout=30)
-    try:
-        db.execute("CREATE TEMP TABLE purge_v(version_id INTEGER PRIMARY KEY)")
-        db.executemany(
-            "INSERT INTO purge_v VALUES (?)", [(i,) for g in purge for i in g["ids"]]
-        )
-        # Both queries spell the "no completed version outside the purge set uses this chunk"
-        # test out in full: constant SQL only, nothing is interpolated.
-        per_file = {
-            fid: size or 0
-            for fid, size in db.execute(
-                "SELECT pv.file_id, SUM(o.size) FROM objects o "
-                "JOIN (SELECT DISTINCT vo.sha256, v.file_id FROM version_objects vo "
-                "      JOIN versions v ON v.version_id = vo.version_id "
-                "      WHERE vo.version_id IN (SELECT version_id FROM purge_v)) pv "
-                "  ON pv.sha256 = o.sha256 "
-                "WHERE NOT EXISTS (SELECT 1 FROM version_objects x "
-                "                  JOIN versions xv ON xv.version_id = x.version_id "
-                "                  WHERE x.sha256 = o.sha256 AND xv.status='completed' "
-                "                  AND x.version_id NOT IN (SELECT version_id FROM purge_v)) "
-                "GROUP BY pv.file_id"
-            )
-        }
-        total = db.execute(
-            "SELECT COALESCE(SUM(o.size), 0) FROM objects o "
-            "WHERE o.sha256 IN (SELECT sha256 FROM version_objects "
-            "                   WHERE version_id IN (SELECT version_id FROM purge_v)) "
-            "AND NOT EXISTS (SELECT 1 FROM version_objects x "
-            "                JOIN versions xv ON xv.version_id = x.version_id "
-            "                WHERE x.sha256 = o.sha256 AND xv.status='completed' "
-            "                AND x.version_id NOT IN (SELECT version_id FROM purge_v))"
-        ).fetchone()[0]
-        return per_file, total
-    finally:
-        db.close()
-
-
-def soft_delete(conn, ids, batch=_BATCH, pause=0.01, progress=None) -> int:
-    """status='completed' -> 'deleted' in short write transactions (the engine's own pattern);
-    returns how many rows really changed. progress(done, total) is called each time another
-    _PROGRESS_EVERY versions are done (never for small runs)."""
-    changed = 0
-    for start in range(0, len(ids), batch):
-        chunk = ids[start : start + batch]
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            for vid in chunk:
-                changed += conn.execute(
-                    "UPDATE versions SET status='deleted', error=? "
-                    "WHERE version_id=? AND status='completed'",
-                    (_MARK, vid),
-                ).rowcount
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        time.sleep(pause)  # let the engine's own writers in between batches
-        done = start + len(chunk)
-        if progress and done // _PROGRESS_EVERY > start // _PROGRESS_EVERY:
-            progress(done, len(ids))
-    return changed
-
-
-def undo_versions(conn, ids, engine_object_path, batch=_BATCH):
-    """Re-activate versions that an earlier --apply deleted, but only while every chunk of the
-    version is still stored. Returns (restored, skipped)."""
-    restored = skipped = 0
-    for start in range(0, len(ids), batch):
-        chunk = ids[start : start + batch]
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            for vid in chunk:
-                row = conn.execute(
-                    "SELECT status, error FROM versions WHERE version_id=?", (vid,)
-                ).fetchone()
-                if row is None or row[0] != "deleted" or row[1] != _MARK:
-                    skipped += 1
-                    continue
-                shas = [
-                    r[0]
-                    for r in conn.execute(
-                        "SELECT sha256 FROM version_objects WHERE version_id=?",
-                        (vid,),
-                    )
-                ]
-                intact = bool(shas) and all(
-                    conn.execute(
-                        "SELECT 1 FROM objects WHERE sha256=?", (s,)
-                    ).fetchone()
-                    is not None
-                    and os.path.exists(engine_object_path(s))
-                    for s in shas
-                )
-                if not intact:
-                    skipped += 1  # the chunks were already freed; nothing to bring back
-                    continue
-                conn.execute(
-                    "UPDATE versions SET status='completed', error=NULL "
-                    "WHERE version_id=?",
-                    (vid,),
-                )
-                conn.executemany(
-                    "UPDATE objects SET orphaned_since=NULL WHERE sha256=?",
-                    [(s,) for s in shas],
-                )
-                restored += 1
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-    return restored, skipped
-
-
 # ── the engine, and the report ───────────────────────────────────────────────
 
 
@@ -435,9 +171,7 @@ def _scope_dirs():
     """Every folder the engine is (or was) set to track, from config.py."""
     import config
 
-    dirs = list(getattr(config, "VERSION_TRACK_DIRECTORIES", []) or [])
-    dirs += list(getattr(config, "VERSION_TRACK_ROOTS", []) or [])
-    return dirs
+    return scope_dirs_from(config)
 
 
 def _print_report(scan: Scan, per_file, total, args):
@@ -708,33 +442,6 @@ def _run_undo(engine, path) -> int:
         "(chunks already freed or changed)."
     )
     return 0
-
-
-def _read_undo_file(path):
-    """(created, number of versions) of an undo file, or None when it cannot be read."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        return float(data.get("created", 0)), len(data["version_ids"])
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        return None
-
-
-def list_undo_files(directory):
-    """[(path, created, versions)] of the undo files in `directory`, newest first."""
-    try:
-        names = os.listdir(directory)
-    except OSError:
-        return []
-    found = []
-    for name in names:
-        if name.startswith("purge_undo_") and name.endswith(".json"):
-            path = os.path.join(directory, name)
-            info = _read_undo_file(path)
-            if info is not None:
-                found.append((path, info[0], info[1]))
-    found.sort(key=lambda item: item[1], reverse=True)
-    return found
 
 
 # -- the command line ------------------------------------------------------------
