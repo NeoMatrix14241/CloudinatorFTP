@@ -70,7 +70,7 @@ import time
 
 import config
 import logging_setup
-from helpers import parent_watch
+from helpers import parent_watch, version_purge
 
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 _SCRIPT_PATH = os.path.join(_PROJECT_DIR, "version_engine.py")
@@ -103,6 +103,17 @@ _WATCH_POLL_INTERVAL = 3  # seconds
 # than _MAX_PASS_WAIT between passes. A small tree (a pass under 1 s) still polls every 3 s.
 _PASS_BUSY_FACTOR = 3
 _MAX_PASS_WAIT = 900.0  # seconds
+
+# 5.45: the optional background purge of versions whose file no longer exists
+# (config.VERSION_PURGE_MISSING_*, on by default since the owner's decision). Its thread waits this long after the engine
+# starts before its first pass, so it never competes with crash recovery and the first scan.
+# Skipped passes (a tracked folder missing, empty or unreadable) are logged at most this often.
+_PURGE_START_DELAY = 300.0  # seconds
+_PURGE_SKIP_LOG_EVERY = 3600.0
+# Keys in engine_metadata (the same table _set_meta writes the watcher / scanner flags to).
+_META_PURGE_CURSOR = "purge_missing_cursor"
+_META_PURGE_RUNNING = "purge_missing_running"
+_META_PURGE_LAST = "purge_missing_last"
 
 
 def _next_pass_wait(base: float, pass_seconds: float) -> float:
@@ -565,11 +576,19 @@ class Engine:
         # 5.44.1: the watcher and the scanner run the SAME full pass (_reconcile_once); one at a
         # time is enough and halves the disk work when both fire together.
         self._pass_lock = threading.Lock()
+        # 5.45: the garbage collector and the background purge's WRITE phase take this lock, so
+        # the two never overlap (the purge's slow read-only checking does not hold it).
+        self._maintenance_lock = threading.Lock()
+        # One purge pass at a time, whoever asks (the ve-purge thread, a test).
+        self._purge_pass_lock = threading.Lock()
+        self._purge_thread = None
+        self._purge_skip_logged_at = None
 
         self._conn_local = threading.local()
 
         self._watcher_running = False
         self._scanner_running = False
+        self._purge_running = False
 
     # ------------------------------------------------------------------
     # Storage bootstrap + DB
@@ -1657,6 +1676,11 @@ class Engine:
         )
 
     def run_gc(self):
+        """Garbage collection; never overlaps the background purge's write phase (5.45)."""
+        with self._maintenance_lock:
+            self._run_gc_unlocked()
+
+    def _run_gc_unlocked(self):
         """Orphan marking / deletion, done in SHORT write transactions.
 
         All classification (which objects are live / newly orphaned / due for
@@ -1911,6 +1935,159 @@ class Engine:
         self.log.info("Scanner stopped.")
 
     # ------------------------------------------------------------------
+    # Background purge of versions whose file no longer exists (5.45, on by default)
+    #
+    # The engine never ages out the versions of a DELETED file (retention only runs when the
+    # same file gets a new snapshot). tools/purge_missing_versions.py does it by hand; this
+    # does it slowly in the engine's own `ve-purge` thread, built like the scanner: a plain
+    # thread of this worker process, stopped through _shutdown_event, no asyncio anywhere, no
+    # thread pool, nothing shared with the web server (a separate OS process). The decision
+    # logic is helpers/version_purge.py, the same code the tool runs.
+    # ------------------------------------------------------------------
+
+    def _purge_settings(self):
+        """The five settings, read at the start of every pass and clamped to safe values."""
+        return {
+            "min_age_days": max(
+                0.0, float(getattr(config, "VERSION_PURGE_MISSING_MIN_AGE_DAYS", 30))
+            ),
+            "interval": max(
+                60.0, float(getattr(config, "VERSION_PURGE_MISSING_INTERVAL", 3600))
+            ),
+            "max_files": max(
+                1,
+                int(getattr(config, "VERSION_PURGE_MISSING_MAX_FILES_PER_PASS", 5000)),
+            ),
+            "batch_pause": min(
+                5.0,
+                max(
+                    0.0,
+                    float(getattr(config, "VERSION_PURGE_MISSING_BATCH_PAUSE", 0.05)),
+                ),
+            ),
+        }
+
+    def _get_meta(self, key, default=None):
+        row = (
+            self._connect()
+            .execute("SELECT value FROM engine_metadata WHERE key=?", (key,))
+            .fetchone()
+        )
+        return default if row is None else row[0]
+
+    def run_purge_missing_pass(self):
+        """ONE pass of the background purge; returns the PassResult, or None when the feature
+        is off or another pass is running. Called by the `ve-purge` thread; public so a test
+        can drive a pass without waiting for the interval."""
+        if not getattr(config, "VERSION_PURGE_MISSING_ENABLED", False):
+            return None
+        if not self._purge_pass_lock.acquire(blocking=False):
+            return None
+        try:
+            settings = self._purge_settings()
+            try:
+                cursor = int(self._get_meta(_META_PURGE_CURSOR, 0))
+            except (TypeError, ValueError):
+                cursor = 0
+            result = version_purge.run_pass(
+                self._connect(),
+                version_purge.scope_dirs_from(config),
+                min_age_days=settings["min_age_days"],
+                max_files=settings["max_files"],
+                batch_pause=settings["batch_pause"],
+                undo_dir=self.storage_dir,
+                stop=self._shutdown_event,
+                cursor=cursor,
+                write_lock=self._maintenance_lock,
+            )
+            self._log_purge_result(result)
+            if result.status == "completed":
+                self._retry_locked(
+                    self._set_meta, _META_PURGE_CURSOR, result.cursor_next
+                )
+                self._retry_locked(
+                    self._set_meta,
+                    _META_PURGE_LAST,
+                    time.strftime("%Y-%m-%d %H:%M:%S")
+                    + f" examined={result.examined} purged_files={result.purged_files}"
+                    f" purged_versions={result.purged_versions}",
+                )
+            # An undo file is only useful while the chunks can still come back: the GC frees
+            # them VERSION_GC_GRACE_PERIOD after the soft-delete, so keep the file a day longer.
+            version_purge.prune_auto_undo_files(
+                self.storage_dir, config.VERSION_GC_GRACE_PERIOD + 86400
+            )
+            return result
+        finally:
+            self._purge_pass_lock.release()
+
+    def _log_purge_result(self, r):
+        if r.status == "skipped":
+            now = time.monotonic()
+            last = self._purge_skip_logged_at
+            if last is None or now - last >= _PURGE_SKIP_LOG_EVERY:
+                self._purge_skip_logged_at = now
+                self.log.warning(
+                    f"Purge-missing pass skipped, nothing was changed: {r.reason}. A tracked "
+                    'folder or drive that is missing, empty or unreadable means "cannot '
+                    'tell", so nothing is purged until it is back.'
+                )
+            return
+        if r.status == "stopped":
+            self.log.info(
+                f"Purge-missing pass stopped by the shutdown after {r.examined} file(s) "
+                f"({r.purged_versions} version(s) soft-deleted so far); it resumes at "
+                f"file_id {r.cursor_start} after the restart."
+            )
+            return
+        sweep = ", sweep of the whole table complete" if r.wrapped else ""
+        undo = f"; undo file {os.path.basename(r.undo_file)}" if r.undo_file else ""
+        sample = f" (for example {r.unsure_sample})" if r.unsure_sample else ""
+        self.log.info(
+            f"Purge-missing pass: looked at {r.examined} file(s) "
+            f"(file_id {r.cursor_start} -> {r.cursor_next}{sweep}), {r.present} present, "
+            f"{r.gone} gone, {r.unsure} left alone{sample}, {r.reappeared} reappeared; "
+            f"soft-deleted {r.purged_versions} version(s) of {r.purged_files} file(s), "
+            f"{r.logical_bytes} byte(s) of version data (the GC frees the disk space after "
+            f"{config.VERSION_GC_GRACE_PERIOD}s){undo}; took {r.seconds:.1f}s"
+        )
+
+    def _purge_loop(self):
+        self._purge_running = True
+        self._set_meta(_META_PURGE_RUNNING, "1")
+        self.log.info(
+            "Background purge of deleted files' versions started "
+            f"(every {self._purge_settings()['interval']:.0f}s, first pass in "
+            f"{_PURGE_START_DELAY:.0f}s, at most "
+            f"{self._purge_settings()['max_files']} files per pass)."
+        )
+        self._shutdown_event.wait(_PURGE_START_DELAY)
+        while not self._shutdown_event.is_set():
+            wait = self._purge_settings()["interval"]
+            if not self._stop_scheduling.is_set():
+                try:
+                    started = time.monotonic()
+                    self.run_purge_missing_pass()
+                    wait = _next_pass_wait(wait, time.monotonic() - started)
+                except Exception as e:
+                    try:
+                        self._connect().rollback()  # never leave a txn/gate held
+                    except sqlite3.Error:
+                        # Rollback on a broken connection can fail; the error below is what matters.
+                        pass
+                    if _is_lock_error(e):
+                        self.log.warning(
+                            f"Purge-missing pass hit a locked database ({e}); "
+                            "will retry at the next interval."
+                        )
+                    else:
+                        self.log.error(f"Purge-missing error: {e}", exc_info=True)
+            self._shutdown_event.wait(wait)
+        self._purge_running = False
+        self._set_meta(_META_PURGE_RUNNING, "0")
+        self.log.info("Background purge stopped.")
+
+    # ------------------------------------------------------------------
     # Workers
     # ------------------------------------------------------------------
 
@@ -1971,10 +2148,17 @@ class Engine:
             )
             self._watcher_thread.start()
 
+        if getattr(config, "VERSION_PURGE_MISSING_ENABLED", False):
+            self._purge_thread = threading.Thread(
+                target=self._purge_loop, daemon=True, name="ve-purge"
+            )
+            self._purge_thread.start()
+
         self.log.info(
             f"Version Engine started. pid={os.getpid()} db={self.db_path} "
             f"storage={self.storage_dir} workers={config.VERSION_WORKER_COUNT} "
-            f"watch={config.VERSION_WATCH_ENABLED} scan={config.VERSION_SCAN_ENABLED}"
+            f"watch={config.VERSION_WATCH_ENABLED} scan={config.VERSION_SCAN_ENABLED} "
+            f"purge_missing={getattr(config, 'VERSION_PURGE_MISSING_ENABLED', False)}"
         )
 
     def graceful_shutdown(self):
@@ -1999,6 +2183,10 @@ class Engine:
             self._scanner_thread.join(timeout=1)
         if self._watcher_thread:
             self._watcher_thread.join(timeout=1)
+        if self._purge_thread:
+            # It looks at _shutdown_event at every file and every write batch, so this is
+            # normally immediate; the deadline is the same drain window the workers get.
+            self._purge_thread.join(timeout=max(1, deadline - time.time()))
 
         try:
             conn = self._connect()
