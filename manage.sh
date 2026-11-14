@@ -1587,7 +1587,7 @@ cmd_menu() {
 		echo "   8) Restart WebDAV only  — recover a wedged WebDAV listener"
 		echo ""
 		echo -e "  ${BOLD}Version Engine${NC}  ${DIM}(file versions: browse, restore, clean up)${NC}"
-		echo "   9) version_manage.py    — List / restore / delete file versions"
+		echo "   9) version_manage.py    — List / restore / delete file versions, shrink the WAL file"
 		echo "  10) purge_missing_versions.py — Free the storage of versions whose file no longer exists"
 		echo ""
 		echo -e "  ${BOLD}Utilities${NC}"
@@ -1722,7 +1722,13 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
                           and delete file versions. No args → interactive menu.
                           subcommands: list [file_path] |
                           restore <version_id> <destination> [--overwrite] |
-                          delete <version_id> [--run-gc-now]
+                          delete <version_id> [--run-gc-now] |
+                          wal [--checkpoint [--mode passive|full|restart|truncate]
+                          [--timeout <seconds>] [--if-larger-mb <0-64>]]
+                          wal shows the size of the database's -wal file; with --checkpoint it
+                          runs PRAGMA wal_checkpoint(TRUNCATE) to shrink it (safe while the
+                          server runs, nothing can be lost; exit 1 if the database stayed busy).
+                          The engine also does this by itself above VERSION_WAL_SIZE_LIMIT_MB.
                           Ctrl-C at any prompt cancels that action and returns to
                           the menu (interactive mode) or exits cleanly (CLI mode) —
                           never leaves a partial restore/delete in place.
@@ -1828,7 +1834,7 @@ ${BOLD}MENU ↔ COMMAND MAP${NC}  (in ./manage.sh menu type the number; from the
    1  start server          2  start dev_server      3  stop
    4  restart               5  status                6  logs [server|dev_server] [-f]
    7  clean-logs            8  restart-webdav
-   9  version-manage
+   9  version-manage (browse / restore / delete versions, and the WAL file clean-up: wal)
   10  purge-versions (Version Engine clean-up: interactive menu, or flags; asks before changing anything)
   11  config                12  setup-smb            13  kick-sessions
   14  manage-users          15  reset-db             16  setup-storage
@@ -1865,6 +1871,9 @@ ${BOLD}EXAMPLES${NC}
     ./manage.sh version-manage restore <id> <dest>           # restore a version
     ./manage.sh version-manage restore <id> <dest> --overwrite  # ...replacing an existing file (asks to type a confirm phrase)
     ./manage.sh version-manage delete <id>       # permanently delete a version (asks to type a long confirm sentence)
+    ./manage.sh version-manage wal               # sizes of the database, -wal and -shm files (changes nothing)
+    ./manage.sh version-manage wal --checkpoint  # shrink the -wal file: PRAGMA wal_checkpoint(TRUNCATE)
+    ./manage.sh version-manage wal --checkpoint --if-larger-mb 64 --timeout 30  # only above 64 MB, wait up to 30 s
     ./manage.sh purge-versions                   # interactive menu: report, soft-delete, free now, undo
     ./manage.sh purge-versions --report          # report only: nothing is asked or changed
     ./manage.sh purge-versions --apply --free-now  # soft-delete and free the chunks now (asks y/N)

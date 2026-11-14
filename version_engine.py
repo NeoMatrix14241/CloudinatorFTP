@@ -70,7 +70,7 @@ import time
 
 import config
 import logging_setup
-from helpers import parent_watch, version_purge
+from helpers import parent_watch, version_purge, version_wal
 
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 _SCRIPT_PATH = os.path.join(_PROJECT_DIR, "version_engine.py")
@@ -114,6 +114,22 @@ _PURGE_SKIP_LOG_EVERY = 3600.0
 _META_PURGE_CURSOR = "purge_missing_cursor"
 _META_PURGE_RUNNING = "purge_missing_running"
 _META_PURGE_LAST = "purge_missing_last"
+
+# 5.45.1: the write-ahead log (version_engine.sqlite3-wal) never shrinks by itself: a checkpoint
+# reuses the file from its start, so it keeps the size of the biggest burst it ever saw (2.9 GB
+# on the owner's server after a purge and a GC). Two measures, see
+# helpers/version_wal.py: every connection sets `PRAGMA journal_size_limit`, and a pass that
+# wrote a lot ends with `wal_checkpoint(TRUNCATE)` when the file is above the same limit
+# (config.VERSION_WAL_SIZE_LIMIT_MB, never above 64 MB, 0 = off). The checkpoint waits at most
+# this long for readers and writers, then gives up until the next pass (the data is safe
+# either way); a busy answer is logged at most this often.
+_WAL_CHECKPOINT_BUSY_MS = 2000
+_WAL_BUSY_LOG_EVERY = 900.0
+
+
+def _wal_limit_bytes() -> int:
+    """The WAL size limit in bytes (config.VERSION_WAL_SIZE_LIMIT_MB, 0 = off, at most 64 MB)."""
+    return version_wal.limit_bytes(getattr(config, "VERSION_WAL_SIZE_LIMIT_MB", 64))
 
 
 def _next_pass_wait(base: float, pass_seconds: float) -> float:
@@ -583,6 +599,7 @@ class Engine:
         self._purge_pass_lock = threading.Lock()
         self._purge_thread = None
         self._purge_skip_logged_at = None
+        self._wal_busy_logged_at = None
 
         self._conn_local = threading.local()
 
@@ -625,6 +642,9 @@ class Engine:
         # already treats as 'interrupted' (never falsely 'completed').
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
+        # 5.45.1: a setting of THIS connection (not stored in the file): after a checkpoint
+        # resets the log SQLite cuts the -wal file back to this size.
+        version_wal.apply_journal_size_limit(conn, _wal_limit_bytes())
         self._conn_local.conn = conn
         return conn
 
@@ -1901,6 +1921,46 @@ class Engine:
         self._set_meta("watcher_running", "0")
         self.log.info("Watcher stopped.")
 
+    def checkpoint_wal_if_large(self, after: str):
+        """5.45.1: at the end of a GC or purge pass, merge the write-ahead log into the database
+        and truncate the file, but only when it is above the limit (VERSION_WAL_SIZE_LIMIT_MB,
+        at most 64 MB). Waits at most _WAL_CHECKPOINT_BUSY_MS for readers and writers: a busy
+        answer is not an error (nothing is lost, the next pass tries again). Runs in the calling
+        engine thread on its own connection, takes no lock and uses no asyncio. Never raises;
+        returns the CheckpointResult, or None when nothing was attempted."""
+        try:
+            result = version_wal.checkpoint_if_larger(
+                self._connect(),
+                self.db_path,
+                _wal_limit_bytes(),
+                busy_timeout_ms=_WAL_CHECKPOINT_BUSY_MS,
+            )
+        except Exception as e:
+            self.log.warning(f"WAL checkpoint after {after} failed: {e}")
+            return None
+        if result is None:
+            return None
+        limit = version_wal.human_bytes(_wal_limit_bytes())
+        if result.completed:
+            self.log.info(
+                f"WAL checkpoint after {after}: the log file was "
+                f"{version_wal.human_bytes(result.wal_before)} (limit {limit}); "
+                f"{result.mode} finished in {result.seconds:.1f}s, now "
+                f"{version_wal.human_bytes(result.wal_after)}."
+            )
+            return result
+        now = time.monotonic()
+        last = self._wal_busy_logged_at
+        if last is None or now - last >= _WAL_BUSY_LOG_EVERY:
+            self._wal_busy_logged_at = now
+            reason = result.error or "a reader or writer kept it busy"
+            self.log.warning(
+                f"WAL checkpoint after {after} did not finish ({reason}); the log file is "
+                f"{version_wal.human_bytes(result.wal_after)} (limit {limit}). Nothing is "
+                "lost; the next pass tries again."
+            )
+        return result
+
     def _scanner_loop(self):
         self._scanner_running = True
         self._set_meta("scanner_running", "1")
@@ -1916,6 +1976,7 @@ class Engine:
                     self._note_slow_pass("Scanner", took)
                     wait = _next_pass_wait(config.VERSION_SCAN_INTERVAL, took)
                     self._retry_locked(self.run_gc, delays=(2, 4, 8))
+                    self.checkpoint_wal_if_large("GC")
                     self._retry_locked(
                         self._set_meta,
                         "last_scan",
@@ -2068,6 +2129,7 @@ class Engine:
                 try:
                     started = time.monotonic()
                     self.run_purge_missing_pass()
+                    self.checkpoint_wal_if_large("purge")
                     wait = _next_pass_wait(wait, time.monotonic() - started)
                 except Exception as e:
                     try:

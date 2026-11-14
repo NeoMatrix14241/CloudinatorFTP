@@ -3,7 +3,8 @@ Tests for the Quality Assurance section of manage.sh (menu 22-26 and the `qa` co
 its Developer Tools section (menu 27-31: `dir-tree`, `smoke --save`, `qa audit`, `qa coverage` and,
 since 5.41, `qa lint`). Menu 10 / `purge-versions` (5.44.4) launches tools/purge_missing_versions.py.
 Since 5.44.7 the numbers 1..31 are contiguous in print order (a deliberate one-time renumbering: the
-entries after 9 moved, the named commands did not).
+entries after 9 moved, the named commands did not). 5.45.1 added the WAL clean-up INSIDE menu 9 /
+`version-manage wal` (no new number, so LAST_ENTRY and the numbering did not move).
 
 They read the real manage.sh and only run side-effect-free commands (`help`, `qa --version`,
 `qa bogus`, `qa layer nope`; `qa audit` and `qa lint` are only checked in the source: audit would use the network, lint would write Ruff's cache); no server is started and nothing is written. The numbering test
@@ -248,3 +249,29 @@ def test_purge_versions_is_menu_10_and_a_command():
     out = _run("help").stdout
     for text in ("purge-versions", "--report", "--undo <file>.json", "--force"):
         assert text in out, text
+
+
+def test_wal_cleanup_lives_under_version_manage_with_menu_cli_and_help():
+    """5.45.1: the WAL clean-up is `version-manage wal`, reachable from menu 9, with no new menu
+    number (the numbering tests above would catch one)."""
+    body = _function("cmd_menu")
+    assert re.search(
+        r'^\t\t9\) _menu_run run_utility "tools/version_manage.py" ;;$', body, re.M
+    )
+    assert re.search(r"9\) version_manage\.py .*WAL", body)
+    assert re.search(
+        r'^\tversion-manage\) run_utility "tools/version_manage.py" "\$@" ;;$',
+        _function("main"),
+        re.M,
+    )
+    out = _run("help").stdout
+    for text in (
+        "wal [--checkpoint",
+        "--if-larger-mb",
+        "--timeout",
+        "./manage.sh version-manage wal --checkpoint",
+        "VERSION_WAL_SIZE_LIMIT_MB",
+    ):
+        assert text in out, text
+    tool = (ROOT / "tools" / "version_manage.py").read_text(encoding="utf-8")
+    assert 'sub.add_parser(\n        "wal"' in tool

@@ -121,7 +121,7 @@ Utilities run in the **foreground** and are safe to use while the server is up. 
 
 | Command | Runs | Purpose |
 |---|---|---|
-| `version-manage` | `tools/version_manage.py` | Version Engine: list, restore, delete file versions (no arguments opens its own menu) |
+| `version-manage` | `tools/version_manage.py` | Version Engine: list, restore, delete file versions, shrink the WAL file (no arguments opens its own menu) |
 | `purge-versions` | `tools/purge_missing_versions.py` | Version Engine: free the storage of versions whose file no longer exists on disk. No arguments on a terminal: its own menu (1 report, 2 soft-delete, 3 soft-delete and free now, 4 undo, 5 minimum age, 6 scope check, 7 `--force`, 8 exit; asks before changing anything; the report reconciles database rows, files on disk and the tracked folder). Arguments keep the command line: `--menu` (the menu with starting settings), `--report` never asks, `--apply [--yes]`, `--free-now` (skip the 24 h grace), `--min-age-days N` (default 30), `--force` (also files on an unavailable drive, share or tracked folder), `--undo <file>.json` |
 | `setup-smb` | `tools/smb_setup.py` | One-time SMB setup (see `SMB_PROTOCOL_DEPLOYMENT.md`) |
 | `kick-sessions` | `tools/kick_sessions.py` | Force logout of every active session (server must be running) |
@@ -148,9 +148,14 @@ Per the script's built-in help:
 ./manage.sh version-manage restore <id> <dest> --overwrite   # replace an existing file
 ./manage.sh version-manage delete <id>                       # permanently delete a version
 ./manage.sh version-manage delete <id> --run-gc-now
+./manage.sh version-manage wal                               # sizes of the database, -wal and -shm files (changes nothing)
+./manage.sh version-manage wal --checkpoint                  # shrink the -wal file (PRAGMA wal_checkpoint(TRUNCATE))
+./manage.sh version-manage wal --checkpoint --if-larger-mb 64 --timeout 30
 ```
 
 `--overwrite` and `delete` ask you to type a confirmation phrase.
+
+**`wal`** (5.45.1; also option 6 of the `version-manage` menu, which asks before it runs the checkpoint). SQLite keeps the changes of `version_engine.sqlite3` in a side file, `version_engine.sqlite3-wal`, and never shrinks it by itself; after a big purge and GC it reached 2.9 GB. `wal` prints the three file sizes and the engine's limit (`VERSION_WAL_SIZE_LIMIT_MB`, default 64, never above 64). With `--checkpoint` it merges the log into the database and cuts the file to zero bytes, printing the before and after sizes. A checkpoint cannot lose data, so it asks for no confirmation, and it is safe while the server runs. Options (all need `--checkpoint`, otherwise exit code 2): `--mode passive|full|restart|truncate` (default `truncate`, the only one that shrinks the file), `--timeout SECONDS` (how long to wait for readers and writers, 0 to 600, default 10), `--if-larger-mb N` (do nothing unless the `-wal` file is above N MB, 0 to 64). Exit code 0 = shown, done or nothing to do; 1 = the database stayed busy within the timeout (repeat it, raise `--timeout`, or `./manage.sh stop` first), a failure, or no database. The engine runs the same checkpoint by itself at the end of a GC or purge pass when the file is above its limit.
 
 ### revoke-shares
 

@@ -384,7 +384,7 @@ Run any utility **while a server is running in the same terminal**:
 | `./manage.sh manage-users` | `python tools/manage_users.py` |
 | `./manage.sh reset-db` | `python tools/reset_db.py` |
 | `./manage.sh setup-storage` | `python tools/setup_storage.py` |
-| `./manage.sh version-manage` | `python tools/version_manage.py` (Version Engine: list, restore, delete file versions) |
+| `./manage.sh version-manage` | `python tools/version_manage.py` (Version Engine: list, restore, delete file versions, and `wal` to show / shrink the database's write-ahead log) |
 | `./manage.sh purge-versions` | `python tools/purge_missing_versions.py` (Version Engine: free the storage that versions of files which no longer exist still use; no arguments opens an interactive menu, flags keep the plain command line; reports first, asks before changing anything, undo brings a purge back) |
 | `./manage.sh setup-smb` | `python tools/smb_setup.py` (one-time SMB setup) |
 | `./manage.sh kick-sessions` | `python tools/kick_sessions.py` (force logout of every session; the server must be running) |
