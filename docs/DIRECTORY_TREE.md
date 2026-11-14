@@ -27,6 +27,7 @@ CloudinatorFTP
 │   ├── SERVER_MANAGEMENT_SCRIPT_GUIDE.md
 │   ├── SETUP_TUNNEL_ADVANCED.md
 │   ├── SMB_PROTOCOL_DEPLOYMENT.md
+│   ├── TESTING_STRATEGY.md
 │   ├── USER_GUIDE.md
 │   ├── VSCODE_SETUP.md
 │   └── WINDOWS_DEPLOYMENT.md
@@ -40,6 +41,7 @@ CloudinatorFTP
 │   ├── ssl_cert.py
 │   ├── upload_perf.py
 │   ├── version_purge.py
+│   ├── version_wal.py
 │   └── walk_executor.py
 ├── images
 │   └── ... (pdfjs dependency)
@@ -139,7 +141,6 @@ CloudinatorFTP
 │   │   ├── test_sftp_protocol.py
 │   │   ├── test_smb_protocol.py
 │   │   └── test_webdav_protocol.py
-│   ├── refactor
 │   ├── reliability
 │   │   ├── test_concurrency.py
 │   │   ├── test_restart.py
@@ -187,6 +188,7 @@ CloudinatorFTP
 │   │   ├── test_version_engine_backoff.py
 │   │   ├── test_version_engine_scope.py
 │   │   ├── test_version_purge.py
+│   │   ├── test_version_wal.py
 │   │   ├── test_versions_stream_close.py
 │   │   ├── test_walk_executor.py
 │   │   └── test_webdav_listener_binds.py

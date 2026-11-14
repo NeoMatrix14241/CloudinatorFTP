@@ -2,7 +2,7 @@
 """
 version_manage.py — Admin CLI + interactive menu for the Version Engine
 =========================================================================
-list / restore / delete against version_engine.sqlite3, deliberately kept
+list / restore / delete / wal against version_engine.sqlite3, deliberately kept
 SEPARATE from version_engine.py (which stays parent-API + --worker only —
 no interactive/admin surface belongs in the same file as the process
 lifecycle code).
@@ -16,13 +16,25 @@ plus the busy_timeout already set in Engine._connect() handles the
 concurrent access.
 
 Two ways to run it — same underlying logic either way (do_list/do_restore/
-do_delete), never duplicated:
+do_delete/do_wal), never duplicated:
 
     python tools/version_manage.py                          # interactive menu
     python tools/version_manage.py list                      # every tracked file + version count
     python tools/version_manage.py list <file_path>           # every version of one file
     python tools/version_manage.py restore <version_id> <destination> [--overwrite]
     python tools/version_manage.py delete <version_id> [--run-gc-now]
+    python tools/version_manage.py wal                       # sizes of the database, -wal and -shm files
+    python tools/version_manage.py wal --checkpoint          # PRAGMA wal_checkpoint(TRUNCATE): shrink the -wal file
+    python tools/version_manage.py wal --checkpoint [--mode passive|full|restart|truncate]
+                                       [--timeout SECONDS] [--if-larger-mb 0..64]
+
+`wal` (5.45.1): the write-ahead log `version_engine.sqlite3-wal` never shrinks by itself, it keeps
+the size of the biggest burst of writes it ever saw (2.9 GB after a purge and a GC). A checkpoint
+merges what is left into the database and truncates the file; nothing can be lost by it, so it
+asks for no confirmation. It is safe while the engine runs: if a reader or writer keeps it busy
+past --timeout it reports that (exit code 1) and you try again, or stop the server first.
+The engine does the same by itself when the file is above VERSION_WAL_SIZE_LIMIT_MB (at most 64).
+No asyncio, no thread: one short synchronous connection, like the other commands.
 
 Ctrl-C behavior (both modes): cancels whatever prompt/action is in progress
 and returns to the menu (interactive mode) or exits cleanly with code 130
@@ -52,6 +64,7 @@ sys.path.insert(0, _ROOT)
 
 import config
 import version_engine as ve
+from helpers import version_wal
 
 
 def _get_engine() -> ve.Engine:
@@ -317,6 +330,94 @@ def do_delete(version_id: int, run_gc_now: bool = False) -> int:
     return 0
 
 
+def _print_wal_sizes(db_path: str, sizes: dict) -> None:
+    print(f"\n🗄️  {db_path}")
+    print("=" * 78)
+    print(f"  database file  {config.format_bytes(sizes['db']):>10}")
+    print(f"  -wal file      {config.format_bytes(sizes['wal']):>10}")
+    print(f"  -shm file      {config.format_bytes(sizes['shm']):>10}")
+    limit = version_wal.limit_bytes(getattr(config, "VERSION_WAL_SIZE_LIMIT_MB", 64))
+    if limit:
+        print(
+            f"  engine limit   {config.format_bytes(limit):>10}   "
+            "(VERSION_WAL_SIZE_LIMIT_MB; above it the engine truncates the -wal after a GC / purge pass)"
+        )
+    else:
+        print("  engine limit        off   (VERSION_WAL_SIZE_LIMIT_MB = 0)")
+
+
+def do_wal(
+    checkpoint: bool = False,
+    mode: str = "truncate",
+    timeout: float = 10.0,
+    if_larger_mb=None,
+) -> int:
+    """Show the sizes of the database, -wal and -shm files; with checkpoint=True also run
+    PRAGMA wal_checkpoint(<mode>) (TRUNCATE by default) and show the before / after.
+    Exit code: 0 = shown, finished or nothing to do; 1 = busy / failed / no database."""
+    engine = ve.Engine()
+    db_path = engine.db_path
+    if not os.path.exists(db_path):
+        print(f"❌ No Version Engine database at: {db_path}")
+        return 1
+
+    sizes = version_wal.file_sizes(db_path)
+    _print_wal_sizes(db_path, sizes)
+    if not checkpoint:
+        print(
+            "\n  To shrink the -wal file: version-manage wal --checkpoint  "
+            "(safe while the server runs; nothing can be lost)"
+        )
+        return 0
+
+    if if_larger_mb is not None and sizes["wal"] <= if_larger_mb * version_wal.MB:
+        print(f"\nℹ️  The -wal file is not above {if_larger_mb:g} MB: nothing to do.")
+        return 0
+
+    conn = engine._connect()
+    try:
+        result = version_wal.checkpoint(
+            conn, db_path, mode, busy_timeout_ms=int(timeout * 1000)
+        )
+        db_after = version_wal.file_sizes(db_path)["db"]
+    finally:
+        conn.close()
+        engine._conn_local.conn = None
+
+    print(f"\n🧹 wal_checkpoint({result.mode}), waited up to {timeout:g}s for readers:")
+    print(
+        f"   -wal file:     {config.format_bytes(result.wal_before)} → "
+        f"{config.format_bytes(result.wal_after)}   (took {result.seconds:.1f}s)"
+    )
+    print(
+        f"   database file: {config.format_bytes(sizes['db'])} → "
+        f"{config.format_bytes(db_after)}"
+    )
+    if result.error:
+        print(f"❌ The checkpoint failed: {result.error}")
+        return 1
+    print(
+        f"   (busy, frames in the log, frames written back) = "
+        f"({result.busy}, {result.log_frames}, {result.checkpointed_frames})"
+    )
+    if result.busy:
+        print(
+            "⚠️  A reader or writer kept the checkpoint from finishing. Nothing is lost: run it "
+            "again, raise --timeout, or stop the server first (./manage.sh stop)."
+        )
+        return 1
+    if result.mode == "TRUNCATE":
+        print(
+            "✅ Done. The log is merged into the database and the -wal file is cut to zero."
+        )
+    else:
+        print(
+            f"✅ Done. The log is merged into the database. ({result.mode} does not shrink "
+            "the -wal file; use TRUNCATE for that.)"
+        )
+    return 0
+
+
 # =============================================================================
 # CLI subcommand wrappers (argparse Namespace -> core function call)
 # =============================================================================
@@ -332,6 +433,22 @@ def cmd_restore(args):
 
 def cmd_delete(args):
     return do_delete(args.version_id, run_gc_now=args.run_gc_now)
+
+
+def cmd_wal(args):
+    if not args.checkpoint and (
+        args.mode is not None
+        or args.timeout is not None
+        or args.if_larger_mb is not None
+    ):
+        print("❌ --mode, --timeout and --if-larger-mb only apply with --checkpoint.")
+        return 2
+    return do_wal(
+        checkpoint=args.checkpoint,
+        mode=args.mode or "truncate",
+        timeout=10.0 if args.timeout is None else args.timeout,
+        if_larger_mb=args.if_larger_mb,
+    )
 
 
 # =============================================================================
@@ -380,10 +497,11 @@ def interactive_menu():
         print("  3) Restore a version")
         print("  4) Delete a version")
         print("  5) Run garbage collection now")
-        print("  6) Exit")
+        print("  6) WAL file: show its size / shrink it (checkpoint)")
+        print("  7) Exit")
         print("=" * 60)
 
-        choice = _prompt("\nSelect option (1-6): ")
+        choice = _prompt("\nSelect option (1-7): ")
         if choice is None:
             print("👋 Goodbye!")
             return 0
@@ -435,7 +553,15 @@ def interactive_menu():
             engine.run_gc()
             print("Done.")
 
-        elif choice in ("6", "q", "Q"):
+        elif choice == "6":
+            do_wal()
+            if _read_yn(
+                "Run the checkpoint (TRUNCATE) now? Nothing can be lost (y/N): ",
+                default=False,
+            ):
+                do_wal(checkpoint=True)
+
+        elif choice in ("7", "q", "Q"):
             print("👋 Goodbye!")
             return 0
 
@@ -448,9 +574,31 @@ def interactive_menu():
 # =============================================================================
 
 
+def _seconds_arg(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+    if not 0 <= value <= 600:
+        raise argparse.ArgumentTypeError("must be from 0 to 600 seconds")
+    return value
+
+
+def _mb_arg(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+    if not 0 <= value <= version_wal.MAX_LIMIT_MB:
+        raise argparse.ArgumentTypeError(
+            f"must be from 0 to {version_wal.MAX_LIMIT_MB} MB"
+        )
+    return value
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(
-        description="Admin CLI for the Version Engine — list, restore, and delete versions. "
+        description="Admin CLI for the Version Engine — list, restore, delete versions and shrink the WAL file. "
         "Run with no arguments for an interactive menu instead.",
     )
     sub = parser.add_subparsers(dest="command", required=False)
@@ -484,6 +632,35 @@ def _build_parser():
         help="Also run a garbage-collection pass immediately after deleting",
     )
     p_delete.set_defaults(func=cmd_delete)
+
+    p_wal = sub.add_parser(
+        "wal",
+        help="Show the size of the database's write-ahead log (-wal file), or shrink it",
+    )
+    p_wal.add_argument(
+        "--checkpoint",
+        action="store_true",
+        help="Run PRAGMA wal_checkpoint (TRUNCATE by default); safe while the server runs",
+    )
+    p_wal.add_argument(
+        "--mode",
+        choices=["passive", "full", "restart", "truncate"],
+        default=None,
+        help="Checkpoint mode (default truncate: merge and cut the file to zero bytes)",
+    )
+    p_wal.add_argument(
+        "--timeout",
+        type=_seconds_arg,
+        default=None,
+        help="Seconds to wait for readers / writers (0 to 600, default 10)",
+    )
+    p_wal.add_argument(
+        "--if-larger-mb",
+        type=_mb_arg,
+        default=None,
+        help="Only checkpoint when the -wal file is above this many MB (0 to 64)",
+    )
+    p_wal.set_defaults(func=cmd_wal)
 
     return parser
 

@@ -225,6 +225,16 @@ VERSION_PURGE_MISSING_BATCH_PAUSE = (
     0.05  # seconds paused after each write batch (0 to 5)
 )
 
+# Size limit of the Version Engine database's write-ahead log, `version_engine.sqlite3-wal`
+# (5.45.1). SQLite never shrinks that file by itself: it keeps the size of the biggest burst of
+# writes it ever saw (2.9 GB after a purge and a GC on the owner's server).
+# The limit does two things inside the engine process: every connection sets
+# `PRAGMA journal_size_limit` to it, and a garbage-collection or purge pass that ends with the
+# file above it runs `wal_checkpoint(TRUNCATE)`. NEVER above 64 MB (a larger value in
+# server_config.json falls back to 64); 0 switches both off. `./manage.sh version-manage wal`
+# shows the sizes and runs the checkpoint by hand. Changes need a restart of the Version Engine.
+VERSION_WAL_SIZE_LIMIT_MB = 64  # 0 = off, 1 to 64
+
 
 def detect_platform():
     """Detect the current platform and return appropriate info"""
@@ -1138,6 +1148,7 @@ def save_server_config():
         "VERSION_PURGE_MISSING_INTERVAL": VERSION_PURGE_MISSING_INTERVAL,
         "VERSION_PURGE_MISSING_MAX_FILES_PER_PASS": VERSION_PURGE_MISSING_MAX_FILES_PER_PASS,
         "VERSION_PURGE_MISSING_BATCH_PAUSE": VERSION_PURGE_MISSING_BATCH_PAUSE,
+        "VERSION_WAL_SIZE_LIMIT_MB": VERSION_WAL_SIZE_LIMIT_MB,
         # ── Metadata ──────────────────────────────────────────────────────
         "configured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -1214,7 +1225,7 @@ def load_server_config():
     global VERSION_ALLOW_RESTORE_OVERWRITE, VERSION_SHUTDOWN_TIMEOUT
     global VERSION_PURGE_MISSING_ENABLED, VERSION_PURGE_MISSING_MIN_AGE_DAYS
     global VERSION_PURGE_MISSING_INTERVAL, VERSION_PURGE_MISSING_MAX_FILES_PER_PASS
-    global VERSION_PURGE_MISSING_BATCH_PAUSE
+    global VERSION_PURGE_MISSING_BATCH_PAUSE, VERSION_WAL_SIZE_LIMIT_MB
 
     try:
         if os.path.exists(_SERVER_CONFIG_FILE):
@@ -1379,6 +1390,14 @@ def load_server_config():
                 VERSION_PURGE_MISSING_BATCH_PAUSE,
                 0,
                 5,
+            )
+            # 0 = off, 1 to 64 MB; anything else (a string, a negative number, 500) keeps
+            # the default 64, so a hand-edited file can never set a limit above 64 MB.
+            VERSION_WAL_SIZE_LIMIT_MB = _bounded_number(
+                config.get("VERSION_WAL_SIZE_LIMIT_MB"),
+                VERSION_WAL_SIZE_LIMIT_MB,
+                0,
+                64,
             )
 
             print(f"✅ Server configuration loaded from {_SERVER_CONFIG_FILE}")

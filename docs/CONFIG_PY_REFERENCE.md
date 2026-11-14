@@ -439,6 +439,16 @@ The engine never ages out the versions of a file that no longer exists (retentio
 
 Safety rules (not settings): nothing runs while ANY tracked folder, drive or share is missing, empty or unreadable (a missing file outside every tracked folder counts as gone only while its parent folder exists); the tracked folders are probed again right before the first write and every candidate is checked once more (a file that is back is dropped); an undo record `purge_undo_auto_<time>.json` is written to the version storage folder before any row changes and kept until the GC grace period plus one day (`./manage.sh purge-versions --undo <file>` reads it); the GC and the purge's write phase never overlap; every pass logs what it did (files looked at, gone, left alone, soft-deleted versions and bytes, undo file, duration).
 
+### Size limit of the write-ahead log (5.45.1)
+
+SQLite appends every change of `version_engine.sqlite3` to a side file, `version_engine.sqlite3-wal`, and merges it into the main file in a "checkpoint". A checkpoint does **not** shrink that file: it is reused from its start and keeps the size of the biggest burst of writes it ever saw (it reached 2.9 GB next to a 730 MB database after a purge and a GC). One setting, read from `server_config.json`, **not** editable from the `config.py` menu, taking effect after a **restart of the Version Engine**:
+
+| Setting | Default | Purpose |
+|---|---:|---|
+| `VERSION_WAL_SIZE_LIMIT_MB` | `64` | The limit and the threshold in one. Every engine connection sets `PRAGMA journal_size_limit` to it (after a checkpoint SQLite cuts the file back to this size), and a garbage-collection or purge pass that ends with the `-wal` file **above** it runs `PRAGMA wal_checkpoint(TRUNCATE)`. **Never above 64**: a larger value, a negative number, a string or a typo falls back to 64. `0` switches both off. A value between 0 and 1 is raised to 1 |
+
+The engine's checkpoint waits at most 2 seconds for readers and writers and then gives up until the next pass (nothing is lost, the data is only moved from the log into the main file); it logs what it did, and a busy answer at most every 15 minutes. It takes no lock and runs in the engine's own threads, no asyncio. By hand, and for the file that is already too big: `./manage.sh version-manage wal` shows the sizes, `./manage.sh version-manage wal --checkpoint` runs the checkpoint (safe while the server runs; exit code 1 if the database stayed busy, then repeat it or stop the server first).
+
 ### Important note
 
 The comments in the config explicitly state that `VERSION_TRACK_FILES`, `VERSION_TRACK_DIRECTORIES`, and `VERSION_TRACK_ROOTS` all default to empty lists so the system does not accidentally version an entire drive or directory tree.
