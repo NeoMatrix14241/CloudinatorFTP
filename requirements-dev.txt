@@ -11,5 +11,5 @@ hypothesis>=6.170.15
 # 5.40: linter, REPORT-ONLY until its findings are triaged ([tool.ruff] in pyproject.toml). Pinned
 # EXACTLY: a new release adds rules, and a linter must not change a green build by itself. The
 # "Ruff (report only)" workflow reads this line, so this is the one place to bump it.
-ruff==0.17.4
+ruff==0.17.5
 playwright>=1.65.1
