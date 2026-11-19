@@ -490,6 +490,10 @@ class FakeEngine:
     def _object_path(self, sha):
         return str(self.objects / sha)
 
+    def _object_exists(self, sha):
+        """Stored in either form (5.46: raw, or compressed as <sha>.zst)."""
+        return (self.objects / sha).exists() or (self.objects / (sha + ".zst")).exists()
+
     def get_eligible_files(self):
         return []
 

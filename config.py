@@ -202,7 +202,25 @@ VERSION_GC_GRACE_PERIOD = (
 VERSION_RETRY_COUNT = 3
 VERSION_RETRY_DELAY = 2  # seconds
 
+# Object compression (5.46 reads it, 5.47 writes it; VERSION_COMPRESSION_PLAN.md). The switch
+# only controls WRITING: the Version Engine's own `ve-compress` thread (never the web server,
+# never asyncio) converts raw objects to zstd files, one verified object at a time. READING
+# always works on whatever is on disk, whatever the switch says, so turning it off or on can
+# never strand data. OFF by default; the owner turns it on in server_config.json (a real JSON
+# true: a string "true" means off). The level defaults to the MAXIMUM, 22 (owner's decision),
+# even where it gains nothing over 19. Changes need a restart of the Version Engine; not
+# editable from the config menu (edit server_config.json).
 VERSION_COMPRESSION_ENABLED = False
+VERSION_COMPRESSION_LEVEL = 22  # zstd level, 1 to 22
+VERSION_COMPRESSION_MIN_SAVING_PERCENT = (
+    5  # keep the compressed form only if it is at least this much smaller (0 to 50)
+)
+VERSION_COMPRESSION_BUSY_PERCENT = (
+    25  # duty cycle of the compress thread, 5 to 100 (100 = no pauses)
+)
+VERSION_COMPRESSION_INTERVAL = (
+    600  # seconds between two looks when nothing is left to compress (60 to 86400)
+)
 VERSION_FOLLOW_SYMLINKS = False
 VERSION_ALLOW_RESTORE_OVERWRITE = False
 VERSION_SHUTDOWN_TIMEOUT = 30  # seconds — graceful drain window before proc.kill()
@@ -1140,6 +1158,10 @@ def save_server_config():
         "VERSION_RETRY_COUNT": VERSION_RETRY_COUNT,
         "VERSION_RETRY_DELAY": VERSION_RETRY_DELAY,
         "VERSION_COMPRESSION_ENABLED": VERSION_COMPRESSION_ENABLED,
+        "VERSION_COMPRESSION_LEVEL": VERSION_COMPRESSION_LEVEL,
+        "VERSION_COMPRESSION_MIN_SAVING_PERCENT": VERSION_COMPRESSION_MIN_SAVING_PERCENT,
+        "VERSION_COMPRESSION_BUSY_PERCENT": VERSION_COMPRESSION_BUSY_PERCENT,
+        "VERSION_COMPRESSION_INTERVAL": VERSION_COMPRESSION_INTERVAL,
         "VERSION_FOLLOW_SYMLINKS": VERSION_FOLLOW_SYMLINKS,
         "VERSION_ALLOW_RESTORE_OVERWRITE": VERSION_ALLOW_RESTORE_OVERWRITE,
         "VERSION_SHUTDOWN_TIMEOUT": VERSION_SHUTDOWN_TIMEOUT,
@@ -1222,6 +1244,8 @@ def load_server_config():
     global VERSION_GC_ENABLED, VERSION_GC_GRACE_PERIOD
     global VERSION_RETRY_COUNT, VERSION_RETRY_DELAY
     global VERSION_COMPRESSION_ENABLED, VERSION_FOLLOW_SYMLINKS
+    global VERSION_COMPRESSION_LEVEL, VERSION_COMPRESSION_MIN_SAVING_PERCENT
+    global VERSION_COMPRESSION_BUSY_PERCENT, VERSION_COMPRESSION_INTERVAL
     global VERSION_ALLOW_RESTORE_OVERWRITE, VERSION_SHUTDOWN_TIMEOUT
     global VERSION_PURGE_MISSING_ENABLED, VERSION_PURGE_MISSING_MIN_AGE_DAYS
     global VERSION_PURGE_MISSING_INTERVAL, VERSION_PURGE_MISSING_MAX_FILES_PER_PASS
@@ -1349,8 +1373,37 @@ def load_server_config():
             )
             VERSION_RETRY_COUNT = config.get("VERSION_RETRY_COUNT", VERSION_RETRY_COUNT)
             VERSION_RETRY_DELAY = config.get("VERSION_RETRY_DELAY", VERSION_RETRY_DELAY)
-            VERSION_COMPRESSION_ENABLED = config.get(
-                "VERSION_COMPRESSION_ENABLED", VERSION_COMPRESSION_ENABLED
+            # A real JSON true/false is taken as written; anything else (the string "true",
+            # 1, null, a typo) means OFF: a hand-edited file can never start compression by
+            # accident. A missing key keeps the default (off).
+            VERSION_COMPRESSION_ENABLED = _bool_fail_safe(
+                config.get("VERSION_COMPRESSION_ENABLED"), VERSION_COMPRESSION_ENABLED
+            )
+            VERSION_COMPRESSION_LEVEL = int(
+                _bounded_number(
+                    config.get("VERSION_COMPRESSION_LEVEL"),
+                    VERSION_COMPRESSION_LEVEL,
+                    1,
+                    22,
+                )
+            )
+            VERSION_COMPRESSION_MIN_SAVING_PERCENT = _bounded_number(
+                config.get("VERSION_COMPRESSION_MIN_SAVING_PERCENT"),
+                VERSION_COMPRESSION_MIN_SAVING_PERCENT,
+                0,
+                50,
+            )
+            VERSION_COMPRESSION_BUSY_PERCENT = _bounded_number(
+                config.get("VERSION_COMPRESSION_BUSY_PERCENT"),
+                VERSION_COMPRESSION_BUSY_PERCENT,
+                5,
+                100,
+            )
+            VERSION_COMPRESSION_INTERVAL = _bounded_number(
+                config.get("VERSION_COMPRESSION_INTERVAL"),
+                VERSION_COMPRESSION_INTERVAL,
+                60,
+                86400,
             )
             VERSION_FOLLOW_SYMLINKS = config.get(
                 "VERSION_FOLLOW_SYMLINKS", VERSION_FOLLOW_SYMLINKS

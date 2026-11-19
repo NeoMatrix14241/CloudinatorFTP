@@ -420,7 +420,7 @@ The Version Engine is a separate subsystem for tracking historical file versions
 |---|---:|---|
 | `VERSION_RETRY_COUNT` | `3` | Retries for failed operations |
 | `VERSION_RETRY_DELAY` | `2` | Delay between retry attempts |
-| `VERSION_COMPRESSION_ENABLED` | `False` | Enables object compression |
+| `VERSION_COMPRESSION_ENABLED` | `False` | Starts the object compressor; see "Compression of the stored objects" below |
 | `VERSION_FOLLOW_SYMLINKS` | `False` | Whether symlinks are followed during version capture |
 | `VERSION_ALLOW_RESTORE_OVERWRITE` | `False` | Allows overwriting files during restore |
 | `VERSION_SHUTDOWN_TIMEOUT` | `30` | Grace period before process force-kill |
@@ -438,6 +438,22 @@ The engine never ages out the versions of a file that no longer exists (retentio
 | `VERSION_PURGE_MISSING_BATCH_PAUSE` | `0.05` | Seconds paused after every write batch of 500 versions, and the least pause between two slices of 200 existence checks (0 to 5). The pause after a slice is three times the slice's own duration if that is longer, so the disk is busy at most a quarter of the time |
 
 Safety rules (not settings): nothing runs while ANY tracked folder, drive or share is missing, empty or unreadable (a missing file outside every tracked folder counts as gone only while its parent folder exists); the tracked folders are probed again right before the first write and every candidate is checked once more (a file that is back is dropped); an undo record `purge_undo_auto_<time>.json` is written to the version storage folder before any row changes and kept until the GC grace period plus one day (`./manage.sh purge-versions --undo <file>` reads it); the GC and the purge's write phase never overlap; every pass logs what it did (files looked at, gone, left alone, soft-deleted versions and bytes, undo file, duration).
+
+### Compression of the stored objects (5.46 reads, 5.47 writes)
+
+The Version Engine's store (`objects/ab/<sha>`) can be shrunk with zstd without changing anything the user sees. An object's identity stays the SHA-256 of its RAW bytes; compression is only a storage encoding, kept in a NEW file `objects/ab/<sha>.zst` next to the raw one (never in place). The compressor is the engine's own `ve-compress` thread (inside the engine process like `ve-purge`; nothing runs in the web server, no asyncio, no thread pool): it reads a raw object, compresses it, decodes the result back and compares size and SHA-256, publishes the `.zst` atomically, and only minutes later, after verifying the `.zst` once more, removes the raw file. The web side only ever DEcompresses, one block at a time, while a version is restored or downloaded. **Reading always works on whatever is on disk, whatever `VERSION_COMPRESSION_ENABLED` says**: switching the setting off or on can never strand data. Five settings, read from `server_config.json`, **not** editable from the `config.py` menu, taking effect after a **restart of the Version Engine**:
+
+| Setting | Default | Purpose |
+|---|---:|---|
+| `VERSION_COMPRESSION_ENABLED` | `False` | Starts the `ve-compress` thread (writing). OFF by default; the owner switches it on. A missing key keeps the default; a real JSON `true` / `false` is taken as written; any other value (`"true"`, `1`, a typo) counts as OFF. |
+| `VERSION_COMPRESSION_LEVEL` | `22` | zstd level, 1 to 22 (the maximum, the owner's decision; it is used even where it gains nothing over 19). Slower levels only cost background CPU: decoding speed does not depend on the level. A value outside 1 to 22, a string or a typo keeps 22 |
+| `VERSION_COMPRESSION_MIN_SAVING_PERCENT` | `5` | The compressed form is kept only if it is at least this much smaller than the raw one (0 to 50); otherwise the object stays raw and is marked `skip` (never retried) |
+| `VERSION_COMPRESSION_BUSY_PERCENT` | `25` | Duty cycle of the thread, 5 to 100: after each object it pauses so it is busy at most this share of the time (100 = no pauses) |
+| `VERSION_COMPRESSION_INTERVAL` | `600` | Seconds between two looks when nothing is left to compress (60 to 86400) |
+
+Fixed values (not settings): objects below 4096 bytes are never compressed; a first attempt at zstd level 3 must save at least 1 % or the object (already-compressed data such as JPG, ZIP, many PDFs) is left raw without paying for the high level; the thread starts 10 minutes after the engine so it never competes with crash recovery, the first scan or the purge; the raw copy is removed only 5 minutes after the `.zst` was committed, and only after the `.zst` decoded and hashed correctly again. An object that fails its own SHA-256 is never touched, is marked `failed` and logged as an ERROR ("possible disk corruption"). Python 3.14 has `compression.zstd`; if the engine finds zstd unusable it logs one warning, does not start the thread and keeps storing raw objects.
+
+By hand (`./manage.sh version-manage compress ...`): `--probe` measures the real store read-only before anything is switched on, `--status` shows the backlog and the result, `--sweep` removes verified raw copies now, `--verify` re-reads and hash-checks every compressed object, and `--decompress` converts everything back to raw files (switch compression off first). An object's `compress_state` is `pending` (not looked at yet), `done` (compressed, raw copy still on disk), `swept` (compressed, raw copy gone: final), `skip` (stays raw on purpose: too small, already-compressed data or no real saving; never retried) or `failed` (it failed its own SHA-256 or the round trip: never touched, logged as an ERROR). Any compressed object can also be checked by hand: `zstd -d < objects/ab/<sha>.zst | sha256sum` prints `<sha>`.
 
 ### Size limit of the write-ahead log (5.45.1)
 

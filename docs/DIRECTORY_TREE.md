@@ -40,8 +40,11 @@ CloudinatorFTP
 │   ├── parent_watch.py
 │   ├── ssl_cert.py
 │   ├── upload_perf.py
+│   ├── version_compress.py
+│   ├── version_probe.py
 │   ├── version_purge.py
 │   ├── version_wal.py
+│   ├── version_zstd.py
 │   └── walk_executor.py
 ├── images
 │   └── ... (pdfjs dependency)
@@ -125,6 +128,8 @@ CloudinatorFTP
 │   │   ├── test_session_revocation.py
 │   │   ├── test_upload_integrity.py
 │   │   ├── test_upload_tuning.py
+│   │   ├── test_version_compress_thread.py
+│   │   ├── test_version_compression.py
 │   │   ├── test_version_restore.py
 │   │   └── test_version_routes.py
 │   ├── frontend
@@ -185,10 +190,13 @@ CloudinatorFTP
 │   │   ├── test_upload_perf_split.py
 │   │   ├── test_upload_progress_js.py
 │   │   ├── test_upload_settings.py
+│   │   ├── test_version_compress.py
 │   │   ├── test_version_engine_backoff.py
 │   │   ├── test_version_engine_scope.py
+│   │   ├── test_version_probe.py
 │   │   ├── test_version_purge.py
 │   │   ├── test_version_wal.py
+│   │   ├── test_version_zstd.py
 │   │   ├── test_versions_stream_close.py
 │   │   ├── test_walk_executor.py
 │   │   └── test_webdav_listener_binds.py
