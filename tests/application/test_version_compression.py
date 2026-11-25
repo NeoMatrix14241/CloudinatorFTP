@@ -192,11 +192,9 @@ def test_migrating_a_schema_1_database_keeps_every_row_and_is_idempotent(run):
     assert r["rows"][1]["orphaned_since"] == 5.0 and r["rows"][0]["size"] == 10
 
 
-def test_two_threads_migrating_the_same_old_database_at_once_both_succeed(run):
-    r = run(
-        OLD_DATABASE,
-        """
+_RACE = """
         errors = []
+        where = []
         barrier = threading.Barrier(4)
         def go():
             try:
@@ -205,16 +203,83 @@ def test_two_threads_migrating_the_same_old_database_at_once_both_succeed(run):
                 e._bootstrap_schema()
             except Exception as exc:    # noqa
                 errors.append(repr(exc))
+                tb = exc.__traceback__
+                while tb.tb_next is not None:
+                    tb = tb.tb_next
+                where.append(f"{os.path.basename(tb.tb_frame.f_code.co_filename)}:{tb.tb_lineno} "
+                             f"in {tb.tb_frame.f_code.co_name}")
         ts = [threading.Thread(target=go) for _ in range(4)]
         [t.start() for t in ts]; [t.join() for t in ts]
         c = sqlite3.connect(OLD)
         cols = [row[1] for row in c.execute("PRAGMA table_info(objects)")]
-        out(errors=errors, cols=cols,
+        out(errors=errors, where=where, cols=cols,
+            mode=c.execute("PRAGMA journal_mode").fetchone()[0],
+            ver=c.execute("SELECT value FROM engine_metadata WHERE key='schema_version'").fetchone()[0])
+        """
+
+
+def test_two_threads_migrating_the_same_old_database_at_once_both_succeed(run):
+    """Four connections open an OLD database that is still in rollback-journal mode, in the same
+    instant: they race to switch it to WAL AND to add the new columns. 5.47.1 failed here on the
+    owner's Windows machine with 'database is locked' (3 of 4 threads): SQLite does not use
+    busy_timeout for the switch to WAL, see helpers/version_wal.enable_wal. `where` names the
+    last frame of every failure, so a recurrence points at the statement."""
+    r = run(OLD_DATABASE, _RACE)
+    assert r["errors"] == [], r["where"]
+    assert sorted(r["cols"]) == sorted(set(r["cols"]))
+    assert r["mode"].lower() == "wal"
+    assert r["ver"] == "3"
+
+
+def test_two_threads_migrating_an_old_database_that_is_already_wal_both_succeed(run):
+    """The migration race alone (a real schema-1 database was made by the engine, so it is
+    already in WAL mode): the four threads only compete for ALTER TABLE and the version row."""
+    r = run(
+        OLD_DATABASE,
+        """
+        c = sqlite3.connect(OLD)
+        c.execute("PRAGMA journal_mode=WAL")
+        c.close()
+        """,
+        _RACE,
+    )
+    assert r["errors"] == [], r["where"]
+    assert sorted(r["cols"]) == sorted(set(r["cols"]))
+    assert r["mode"].lower() == "wal"
+    assert r["ver"] == "3"
+
+
+def test_opening_an_old_database_waits_for_a_writer_instead_of_failing_at_once(run):
+    """The race of the test above, made deterministic: another connection holds the write lock of
+    the rollback-mode database for 1.5 s. The engine's first connection must wait it out (the
+    bare `PRAGMA journal_mode=WAL` fails in 0 ms whatever busy_timeout says) and then migrate."""
+    r = run(
+        OLD_DATABASE,
+        """
+        holder = sqlite3.connect(OLD, isolation_level=None, check_same_thread=False)
+        holder.execute("BEGIN IMMEDIATE")
+        holder.execute("INSERT INTO objects VALUES ('cc', 30, 3.0, NULL)")
+        threading.Timer(1.5, lambda: holder.execute("COMMIT")).start()
+        e = engine_on(OLD)
+        started = time.monotonic()
+        error = None
+        try:
+            e._bootstrap_schema()
+        except Exception as exc:   # noqa
+            error = repr(exc)
+        waited = time.monotonic() - started
+        time.sleep(0.2)
+        c = sqlite3.connect(OLD)
+        out(error=error, waited=waited,
+            mode=c.execute("PRAGMA journal_mode").fetchone()[0],
+            shas=[x[0] for x in c.execute("SELECT sha256 FROM objects ORDER BY sha256")],
             ver=c.execute("SELECT value FROM engine_metadata WHERE key='schema_version'").fetchone()[0])
         """,
     )
-    assert r["errors"] == []
-    assert sorted(r["cols"]) == sorted(set(r["cols"]))
+    assert r["error"] is None
+    assert r["waited"] >= 1.0  # it really waited for the writer, it did not skip anything
+    assert r["mode"].lower() == "wal"
+    assert r["shas"] == ["aa", "bb", "cc"]  # the writer's row was committed and kept
     assert r["ver"] == "3"
 
 

@@ -13,11 +13,16 @@ data folder on import) and run against a real temporary SQLite file through a re
 
 import ast
 import sqlite3
+import sys
 import threading
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(ROOT))
+
+from helpers import version_wal  # noqa: E402
+
 DATABASE_PATH = ROOT / "database.py"
 NAMES = {"_SLOW_OPEN_SECS", "_slow_open_state", "_connect"}
 
@@ -85,6 +90,7 @@ def _load(tmp_path, slow_secs=None):
         "_bootstrap_state": state,
         "_bootstrap_lock": threading.Lock(),
         "_do_bootstrap": fake_bootstrap,
+        "version_wal": version_wal,  # 5.47.3: the WAL switch goes through enable_wal
         "print": lambda *a, **k: printed.append(" ".join(str(x) for x in a)),
     }
     exec(
@@ -144,3 +150,43 @@ def test_a_fast_open_logs_nothing(tmp_path):
     ns, _log, printed, _state = _load(tmp_path, slow_secs=60.0)
     ns["_connect"]()
     assert not printed
+
+
+def test_the_wal_switch_is_the_helpers_bounded_retry_not_a_bare_pragma():
+    """5.47.3: SQLite ignores busy_timeout for the switch of a brand-new database to WAL, so
+    threads that open the first connection in the same instant need helpers.version_wal's
+    retry. The statement is still executed exactly once on the first open (test above)."""
+    source = ast.unparse(
+        next(
+            n
+            for n in ast.parse(DATABASE_PATH.read_text(encoding="utf-8")).body
+            if isinstance(n, ast.FunctionDef) and n.name == "_connect"
+        )
+    )
+    assert "version_wal.enable_wal(conn)" in source
+    assert "journal_mode" not in source
+
+
+def test_first_connections_opened_at_the_same_instant_all_succeed(tmp_path):
+    """Eight threads open the first connection of a brand-new database together: none of them
+    may fail with 'database is locked', and the file ends up in WAL mode."""
+    ns, _log, _printed, _state = _load(tmp_path)
+    barrier = threading.Barrier(8)
+    errors = []
+
+    def go():
+        try:
+            barrier.wait()
+            ns["_connect"]()
+        except Exception as exc:  # noqa: BLE001 - the test reports whatever happened
+            errors.append(repr(exc))
+
+    threads = [threading.Thread(target=go) for _ in range(8)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert errors == []
+    later = sqlite3.connect(ns["DB_PATH"])
+    try:
+        assert later.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    finally:
+        later.close()

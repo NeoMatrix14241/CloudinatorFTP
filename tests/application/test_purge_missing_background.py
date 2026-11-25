@@ -142,8 +142,17 @@ elif scenario == "disabled":
 
 elif scenario == "stop":
     write("anchor.txt", "the tracked folder is not empty")
+    # 5.47.3: the 1200 rows go in ONE transaction. They used to be 1200 autocommit statements,
+    # and each of them is a commit with a disk sync (the engine's database is in WAL mode):
+    # cheap on a fast disk, but on the owner's Windows machine the child sat in this very loop
+    # when the 90 s faulthandler fired (stack: main thread only, line 116 = the second INSERT,
+    # the engine not even started), so the test timed out before it reached the purge thread.
+    # What is measured here (the shutdown) does not depend on how the rows were written.
+    seeding_started = time.monotonic()
     db = sqlite3.connect(engine.db_path, isolation_level=None)
+    db.execute("PRAGMA synchronous=OFF")  # this connection only; nothing here must survive a power cut
     old = time.time() - 90 * 86400
+    db.execute("BEGIN")
     for i in range(600):
         cur = db.execute(
             "INSERT INTO files(path, norm_key, tracking_source, created_at, last_seen_at) "
@@ -155,7 +164,9 @@ elif scenario == "stop":
             "VALUES (?, 'x', 1, 'full', 'completed', ?)",
             (cur.lastrowid, old),
         )
+    db.execute("COMMIT")
     db.close()
+    out["seed_seconds"] = time.monotonic() - seeding_started
     config.VERSION_PURGE_MISSING_BATCH_PAUSE = 2.0  # a long throttle wait after each slice
     ve._PURGE_START_DELAY = 0
     engine.start()
@@ -286,13 +297,13 @@ def test_the_purge_thread_stops_promptly_on_shutdown_even_inside_a_throttle_wait
     tmp_path,
 ):
     out = _run(tmp_path, "stop")
-    assert out["alive_before"] is True
+    assert out["alive_before"] is True, out
     assert (
         out["shutdown_seconds"] < 5
-    )  # far below the 2 s pauses and VERSION_SHUTDOWN_TIMEOUT
-    assert out["alive_after"] is False
+    ), out  # far below the 2 s pauses and VERSION_SHUTDOWN_TIMEOUT
+    assert out["alive_after"] is False, out
     # it was still checking (the writes come after the checks): nothing was half-done
-    assert out["deleted"] == 0 and out["completed"] == 600
+    assert out["deleted"] == 0 and out["completed"] == 600, out
 
 
 def test_the_garbage_collector_and_the_purge_never_overlap(tmp_path):

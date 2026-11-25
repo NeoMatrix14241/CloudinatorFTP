@@ -38,6 +38,7 @@ import time
 from datetime import datetime
 from typing import Optional
 
+from helpers import version_wal  # stdlib-only leaf: enable_wal (5.47.3)
 from paths import get_db_dir
 from config import ROOT_DIR
 
@@ -81,7 +82,9 @@ def _connect() -> sqlite3.Connection:
     os.makedirs(_DB_DIR, exist_ok=True)
     conn = sqlite3.connect(SEARCH_INDEX_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    # 5.47.3: bounded retry of a lock answer (SQLite ignores busy_timeout for the switch of a
+    # brand-new database to WAL when several threads open it in the same instant).
+    version_wal.enable_wal(conn)
     conn.execute("PRAGMA synchronous=NORMAL")  # safe with WAL, faster than FULL
     conn.execute("PRAGMA cache_size=-8000")  # 8 MB page cache
     if not _bootstrap_state["done"]:

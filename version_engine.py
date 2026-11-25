@@ -718,7 +718,10 @@ class Engine:
         # busy_timeout FIRST: the journal_mode pragma below can itself need
         # a lock, and should wait rather than fail instantly.
         conn.execute("PRAGMA busy_timeout=30000")
-        conn.execute("PRAGMA journal_mode=WAL")
+        # 5.47.2: switching a database that is still in rollback-journal mode to WAL does NOT
+        # honour busy_timeout (SQLite answers "database is locked" at once when another
+        # connection is doing the same); enable_wal retries that one answer for a bounded time.
+        version_wal.enable_wal(conn)
         # WAL + NORMAL: no fsync on every commit (WAL is still fsync'd at
         # checkpoints). Every snapshot does ~8 commits, so on Windows/HDD
         # the default FULL made each write-lock window several times longer.
