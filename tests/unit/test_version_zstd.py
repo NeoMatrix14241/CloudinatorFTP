@@ -247,7 +247,9 @@ def test_compress_verified_refuses_when_the_hash_does_not_match():
 def test_compress_verified_refuses_when_the_decode_differs(monkeypatch):
     """A library bug or a RAM fault: whatever comes back is compared, never trusted."""
     raw = _sample()
-    monkeypatch.setattr(vz, "decode_bounded", lambda frame, max_size: raw[:-1] + b"?")
+    monkeypatch.setattr(
+        vz, "decode_bounded", lambda frame, max_size, **kw: raw[:-1] + b"?"
+    )
     with pytest.raises(vz.CodecError, match="verification failed"):
         vz.compress_verified(raw, _sha(raw), 19)
 
@@ -401,3 +403,72 @@ def test_every_text_file_of_the_feature_is_lf():
         "tests/unit/test_version_probe.py",
     ):
         assert b"\r" not in (ROOT / name).read_bytes(), name
+
+
+# -- the delta (5.47.1): decoding and verifying with a base ------------------------------
+
+
+@needs_zstd
+def test_iter_decode_with_the_base_decodes_a_delta_and_without_it_fails():
+    base = os.urandom(300_000)
+    new = bytearray(base)
+    new[1000:1016] = b"X" * 16
+    new = bytes(new)
+    zdict = vz.raw_dictionary(base)
+    frame = vz.compress(
+        new, 19, zstd_dict=zdict, window_log=vz.delta_window_log(300_000, 300_000)
+    )
+    assert len(frame) < 2_000  # a few hundred bytes of difference, not 300 KB
+    got = b"".join(vz.iter_decode(io.BytesIO(frame), len(new), zstd_dict=zdict))
+    assert got == new
+    with pytest.raises(vz.CodecError):
+        list(vz.iter_decode(io.BytesIO(frame), len(new)))  # no base: never wrong bytes
+    other = vz.raw_dictionary(os.urandom(300_000))
+    with pytest.raises(vz.CodecError):
+        list(
+            vz.iter_decode(io.BytesIO(frame), len(new), zstd_dict=other)
+        )  # another base too
+
+
+@needs_zstd
+def test_compress_verified_checks_a_delta_with_its_base_and_refuses_a_wrong_hash():
+    base = os.urandom(200_000)
+    new = base[:5000] + b"changed" + base[5007:]
+    zdict = vz.raw_dictionary(base)
+    frame = vz.compress_verified(new, _sha(new), 19, zstd_dict=zdict, window_log=19)
+    assert b"".join(vz.iter_decode(io.BytesIO(frame), len(new), zstd_dict=zdict)) == new
+    with pytest.raises(vz.CodecError, match="verification failed"):
+        vz.compress_verified(new, _sha(new + b"!"), 19, zstd_dict=zdict, window_log=19)
+
+
+@pytest.mark.parametrize(
+    "base, data, expected",
+    [
+        (1, 1, 10),  # never below the smallest window zstd allows
+        (1024 * 1024, 1024 * 1024, 21),  # 2 MiB of base + data
+        (1024 * 1024, 1000, 21),
+        (
+            64 * 1024 * 1024,
+            64 * 1024 * 1024,
+            27,
+        ),  # clamped to what a stock decoder accepts
+        (2**40, 2**40, 27),
+    ],
+)
+def test_the_delta_window_reaches_the_whole_base_and_stays_inside_the_decoder_limit(
+    base, data, expected
+):
+    assert vz.delta_window_log(base, data) == expected
+
+
+def test_a_delta_never_gets_a_dictionary_it_cannot_describe():
+    """The frame of a raw-content dictionary carries no dictionary id, so the base MUST come
+    from the database; nothing in this helper reads or writes a database."""
+    tree = _tree("helpers/version_zstd.py")
+    imported = {
+        a.name.split(".")[0]
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Import)
+        for a in n.names
+    }
+    assert "sqlite3" not in imported

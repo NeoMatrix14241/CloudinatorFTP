@@ -487,8 +487,8 @@ def test_a_gc_that_removed_the_object_meanwhile_leaves_no_stray_zst_behind(run):
         v = snap(p)
         (a,) = shas(v)
         real = vz.compress_verified
-        def gc_strikes(raw, sha, level):
-            frame = real(raw, sha, level)
+        def gc_strikes(raw, sha, level, **kw):
+            frame = real(raw, sha, level, **kw)
             c = eng._connect()          # the GC removes an unreferenced object: row, references
             c.execute("DELETE FROM version_objects WHERE sha256=?", (sha,))
             c.execute("DELETE FROM objects WHERE sha256=?", (sha,)); c.commit()
@@ -610,7 +610,7 @@ def test_the_duty_cycle_pauses_between_objects_and_a_true_return_stops_the_batch
             stop_after.append(seconds)
             return True
         stopped = eng.run_compress_batch(pause=stopper, limit=10)
-        out(looked=res["looked_at"], npauses=len(pauses), pauses_ok=all(0 < x <= 60 for x in pauses),
+        out(looked=res["looked_at"], npauses=len(pauses), pauses_ok=all(0 <= x <= 60 for x in pauses),   # Windows clocks tick ~15 ms: 0 is possible
             none=none, stopped=stopped, stop_calls=len(stop_after))
         """)
     assert r["looked"] == 3 and r["npauses"] >= 3 and r["pauses_ok"]

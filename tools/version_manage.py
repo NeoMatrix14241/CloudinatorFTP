@@ -489,6 +489,9 @@ def do_compress_probe(
             dictionary_test=dictionary_test,
             delta_test=delta_test,
             delta_pairs=delta_pairs,
+            estimate_busy_percent=float(
+                getattr(config, "VERSION_COMPRESSION_BUSY_PERCENT", 25)
+            ),
             progress=lambda text: print(text, flush=True),
         )
     except version_probe.ProbeError as exc:
@@ -515,6 +518,11 @@ def _compress_settings_now() -> dict:
         "min_saving": getattr(config, "VERSION_COMPRESSION_MIN_SAVING_PERCENT", 5),
         "busy": getattr(config, "VERSION_COMPRESSION_BUSY_PERCENT", 25),
         "interval": getattr(config, "VERSION_COMPRESSION_INTERVAL", 600),
+        "delta_enabled": getattr(config, "VERSION_COMPRESSION_DELTA_ENABLED", False)
+        is True,
+        "delta_min_gain": getattr(
+            config, "VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT", 20
+        ),
     }
 
 

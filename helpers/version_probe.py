@@ -521,7 +521,7 @@ class _Probe:
                 ),
                 "migration_seconds": st["pipeline_s"]
                 * scale
-                / (max(o["busy_percent"], 1) / 100.0),
+                / (max(o["estimate_busy_percent"], 1) / 100.0),
             }
         return {
             "zstd_version": vz.version(),
@@ -530,6 +530,7 @@ class _Probe:
             "ref_level": self.ref_level,
             "min_saving_percent": o["min_saving_percent"],
             "busy_percent": o["busy_percent"],
+            "estimate_busy_percent": o["estimate_busy_percent"],
             "store": store,
             "sample": sample,
             "findings": self.findings.as_dict(),
@@ -581,6 +582,7 @@ def run_probe(
     dict_train_bytes=DEFAULT_DICT_TRAIN_BYTES,
     dict_test_bytes=DEFAULT_DICT_TEST_BYTES,
     dict_test_objects=DEFAULT_DICT_TEST_OBJECTS,
+    estimate_busy_percent=None,
     progress=None,
     sleep=time.sleep,
     clock=time.perf_counter,
@@ -603,6 +605,11 @@ def run_probe(
         "levels": tuple(sorted({vz.clamp_level(x) for x in levels})),
         "min_saving_percent": float(min_saving_percent),
         "busy_percent": busy_percent,
+        # The migration-time ESTIMATE is for the engine's own thread, which keeps its own duty
+        # cycle (VERSION_COMPRESSION_BUSY_PERCENT, 25 by default), not for the probe's.
+        "estimate_busy_percent": (
+            busy_percent if estimate_busy_percent is None else estimate_busy_percent
+        ),
         "dictionary_test": dictionary_test,
         "delta_test": delta_test,
         "delta_pairs": int(delta_pairs),
@@ -701,9 +708,7 @@ def _dictionary_test(train, test, level, busy_percent, sleep, clock):
 
 
 def _window_log_for(n_bytes):
-    return max(
-        vz.MIN_WINDOW_LOG, min(vz.MAX_WINDOW_LOG, (max(n_bytes, 1) - 1).bit_length())
-    )
+    return vz.delta_window_log(n_bytes, 0)
 
 
 def _delta_test(
@@ -920,8 +925,9 @@ def format_report(report, db_path="", objects_dir="") -> str:
         f"compress + verify decode,"
     )
     add(
-        f"  at {report['busy_percent']} % duty cycle; writing the new files is NOT included "
-        "(add a safety margin)."
+        f"  at {report['estimate_busy_percent']:g} % duty cycle (the engine thread's "
+        "VERSION_COMPRESSION_BUSY_PERCENT); writing the new files is NOT included "
+        "(add a safety margin). The speeds depend on how busy the machine was during the run."
     )
     add("  level |  expected stored |   saving |  % saved | migration time")
     for lv in levels:
@@ -970,6 +976,13 @@ def format_report(report, db_path="", objects_dir="") -> str:
     return "\n".join(out)
 
 
+def _vs_plain(gain_percent) -> str:
+    """'1.03 % smaller than without' / '0.50 % LARGER than without' (a positive gain = smaller)."""
+    if gain_percent >= 0:
+        return f"{gain_percent:.2f} % smaller than without a dictionary"
+    return f"{-gain_percent:.2f} % LARGER than without a dictionary"
+
+
 def _format_dictionary(d, add):
     if not d:
         add("  not run")
@@ -989,7 +1002,7 @@ def _format_dictionary(d, add):
             add(f"  {label}: {e['error']}")
         else:
             add(
-                f"  {label}: {fmt_bytes(e['bytes'])}  ({e['gain_percent']:+.2f} % vs none, "
+                f"  {label}: {fmt_bytes(e['bytes'])}  ({_vs_plain(e['gain_percent'])}, "
                 f"trained in {fmt_duration(e['train_s'])})"
             )
 

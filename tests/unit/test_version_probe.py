@@ -1015,3 +1015,108 @@ def test_the_new_options_are_range_checked(tool):
 def test_the_hand_tools_never_use_threads_asyncio_or_the_engine_loop():
     """The CLI runs one synchronous loop (time.sleep is fine in a plain CLI process)."""
     assert _async_findings(_tree("tools/version_manage.py")) == []
+
+
+# -- 5.47.1: the estimate is for the ENGINE's duty cycle, the dictionary line is plain ---
+
+
+@needs_zstd
+def test_the_migration_estimate_uses_the_engines_duty_cycle_not_the_probes(store):
+    at_probe = _probe(
+        store, busy_percent=100, estimate_busy_percent=None, delta_test=False
+    )
+    at_engine = _probe(
+        store, busy_percent=100, estimate_busy_percent=25, delta_test=False
+    )
+    assert (
+        at_probe["estimate_busy_percent"] == 100
+        and at_engine["estimate_busy_percent"] == 25
+    )
+    for lv in (1, 3, 19):
+        # the same measured work takes 4 times as long at a quarter of the time
+        a, b = at_probe["estimate"][lv], at_engine["estimate"][lv]
+        assert b["migration_seconds"] > 0
+        assert (
+            b["expected_stored_bytes"] == a["expected_stored_bytes"]
+        )  # only the time differs
+    text = vp.format_report(at_engine)
+    assert (
+        "at 25 % duty cycle (the engine thread's VERSION_COMPRESSION_BUSY_PERCENT)"
+        in text
+    )
+
+
+def test_the_estimate_scales_with_the_duty_cycle(monkeypatch):
+    """Pure arithmetic of the report: 100 s of work at 25 % is 400 s on the wall clock."""
+    stats = {
+        "pipeline_s": 100.0,
+        "kept_bytes": 50,
+        "stored_bytes": 50,
+        "raw_bytes": 100,
+    }
+    run = vp._Probe.__new__(vp._Probe)
+    run.o = {
+        "estimate_busy_percent": 25,
+        "busy_percent": 100,
+        "min_saving_percent": 5.0,
+    }
+    run.levels = (3,)
+    run.stats = {3: stats}
+    run.store = {
+        "eligible_bytes": 100,
+        "all_objects": 1,
+        "all_bytes": 100,
+        "eligible_objects": 1,
+    }
+    run.sample = {"bytes": 100, "usable": 1, "tiny_objects": 0, "picked": 1}
+    run.ext_stats = {}
+    run.findings = vp._Findings()
+    run.budget = vp._Budget(0, 0, lambda: 0.0)
+    run.ref_level = 3
+    run.dictionary = run.delta = None
+    run.interrupted = False
+    report = run.report(1)
+    assert report["estimate"][3]["migration_seconds"] == pytest.approx(400.0)
+
+
+@pytest.mark.parametrize(
+    "gain, expected",
+    [
+        (1.03, "1.03 % smaller than without a dictionary"),
+        (0.0, "0.00 % smaller than without a dictionary"),
+        (-0.5, "0.50 % LARGER than without a dictionary"),
+    ],
+)
+def test_the_dictionary_line_says_smaller_or_larger_in_words(gain, expected):
+    assert vp._vs_plain(gain) == expected
+    lines = []
+    vp._format_dictionary(
+        {
+            "level": 19,
+            "train_objects": 10,
+            "train_bytes": 1024,
+            "test_objects": 5,
+            "test_bytes": 512,
+            "plain_bytes": 1000,
+            "sizes": [
+                {"dict_size": 1024, "bytes": 990, "gain_percent": gain, "train_s": 1.0}
+            ],
+        },
+        lines.append,
+    )
+    assert any(expected in line for line in lines)
+    assert not any("vs none" in line for line in lines)
+
+
+def test_do_compress_probe_passes_the_configured_engine_duty_cycle(tool, monkeypatch):
+    seen = {}
+
+    def fake(db, objects, **kw):
+        seen.update(kw)
+        raise vp.ProbeError("stop here")
+
+    monkeypatch.setattr(tool.version_probe, "run_probe", fake)
+    tool.config.VERSION_COMPRESSION_BUSY_PERCENT = 10
+    assert tool.do_compress_probe() == 1
+    assert seen["estimate_busy_percent"] == 10.0
+    tool.config.VERSION_COMPRESSION_BUSY_PERCENT = 25

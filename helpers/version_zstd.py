@@ -12,9 +12,13 @@ SHA-256 of the RAW bytes (VERSION_COMPRESSION_PLAN.md D1). This module is only t
   * `compress_verified()`               compress, decode it back, compare size and SHA-256
                                           BEFORE the frame is returned (a frame that was never
                                           verified is never published);
-  * `raw_dictionary()` / `train_dictionary()`   used by the read-only probe (Phase 0) to measure
-                                          the previous-version delta and a trained dictionary.
-                                          The engine's Phase 1 / 2 objects never use them.
+  * `raw_dictionary()` / `delta_window_log()`  the previous-version DELTA (5.47.1, Phase 4): a
+                                          changed chunk compressed with the same chunk of an
+                                          earlier version as a raw dictionary. `compress`,
+                                          `iter_decode`, `decode_bounded` and `compress_verified`
+                                          take that dictionary as `zstd_dict`;
+  * `train_dictionary()`                used by the read-only probe only (a trained dictionary
+                                          gained about 1 % on the owner's data: not used).
 
 Rules of this file (smoke rule 7b, CODING_GUIDELINES "Background work inside the Version Engine"):
 standard library only (the optional `backports.zstd` import sits inside a try), no import of
@@ -117,6 +121,16 @@ def compress(raw, level, zstd_dict=None, window_log=None) -> bytes:
         raise CodecError(f"zstd could not compress: {exc}") from exc
 
 
+def delta_window_log(base_len: int, data_len: int) -> int:
+    """The window (log2 bytes) a delta frame needs so that the whole base stays reachable while
+    the new data is compressed: enough for base + data, inside the 2**27 a stock decoder
+    accepts. A caller must not build a delta when base + data exceeds 2**27 bytes."""
+    return max(
+        MIN_WINDOW_LOG,
+        min(MAX_WINDOW_LOG, (max(base_len + data_len, 1) - 1).bit_length()),
+    )
+
+
 def decode_bounded(frame, max_size: int, zstd_dict=None) -> bytes:
     """Decode exactly ONE frame and never produce more than `max_size` bytes (bomb guard).
 
@@ -146,16 +160,18 @@ def decode_bounded(frame, max_size: int, zstd_dict=None) -> bytes:
     return b"".join(out)
 
 
-def iter_decode(fileobj, max_size: int, block: int = BLOCK):
+def iter_decode(fileobj, max_size: int, block: int = BLOCK, zstd_dict=None):
     """Decode ONE frame read from the open binary file `fileobj`, yielding the raw bytes in
     pieces of at most `block` bytes (never an empty piece). Memory stays at about one block
     of input plus one of output, whatever the object's size.
 
     Raises CodecError for a truncated frame, a corrupt frame (bad checksum or data), output
     beyond `max_size` (a decompression bomb) or bytes after the frame. The caller still owns
-    the SHA-256 comparison: this only guarantees that the frame itself was sound."""
+    the SHA-256 comparison: this only guarantees that the frame itself was sound. `zstd_dict`
+    is the base of a delta frame (raw_dictionary(base_bytes)); a delta frame decoded without it
+    (or with another base) fails here or, at the latest, at the SHA-256 comparison."""
     _require()
-    dec = _z.ZstdDecompressor()
+    dec = _z.ZstdDecompressor(zstd_dict=zstd_dict)
     total = 0
     try:
         while not dec.eof:
@@ -177,11 +193,14 @@ def iter_decode(fileobj, max_size: int, block: int = BLOCK):
         raise CodecError("unexpected bytes after the compressed frame")
 
 
-def compress_verified(raw, sha256_hex: str, level) -> bytes:
+def compress_verified(
+    raw, sha256_hex: str, level, zstd_dict=None, window_log=None
+) -> bytes:
     """Compress, decode the frame back and compare size and SHA-256 BEFORE returning it.
-    Raises CodecError when anything differs."""
-    frame = compress(raw, level)
-    back = decode_bounded(frame, len(raw))
+    Raises CodecError when anything differs. With `zstd_dict` (a delta against a base) the
+    frame is decoded back WITH that same dictionary."""
+    frame = compress(raw, level, zstd_dict=zstd_dict, window_log=window_log)
+    back = decode_bounded(frame, len(raw), zstd_dict=zstd_dict)
     if len(back) != len(raw) or hashlib.sha256(back).hexdigest() != sha256_hex:
         raise CodecError("round-trip verification failed")
     return frame

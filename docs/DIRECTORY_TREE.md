@@ -130,6 +130,7 @@ CloudinatorFTP
 │   │   ├── test_upload_tuning.py
 │   │   ├── test_version_compress_thread.py
 │   │   ├── test_version_compression.py
+│   │   ├── test_version_delta.py
 │   │   ├── test_version_restore.py
 │   │   └── test_version_routes.py
 │   ├── frontend

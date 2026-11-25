@@ -248,6 +248,20 @@ def scan_tracked(
 # from this closed pair of constants (never from user input).
 _DISK_SIZE_SQL = {True: "COALESCE(o.stored_size, o.size)", False: "o.size"}
 
+# 5.47.1: an object that some delta object uses as its base is not freed while that delta is
+# still used by a completed version OUTSIDE the purge set (the delta stays, so its base must).
+# Only on a schema-3 database (the `base_sha` column); a closed pair of constants as well.
+_BASE_GUARD_SQL = {
+    True: (
+        " AND NOT EXISTS (SELECT 1 FROM objects d WHERE d.base_sha = o.sha256 "
+        "AND EXISTS (SELECT 1 FROM version_objects dx "
+        "            JOIN versions dv ON dv.version_id = dx.version_id "
+        "            WHERE dx.sha256 = d.sha256 AND dv.status='completed' "
+        "            AND dx.version_id NOT IN (SELECT version_id FROM purge_v)))"
+    ),
+    False: "",
+}
+
 
 def reclaimable(db_path, purge):
     """({file_id: bytes} that deleting each file's versions would really free, total).
@@ -269,6 +283,11 @@ def reclaimable_detail(db_path, purge):
             row[1] == "stored_size" for row in db.execute("PRAGMA table_info(objects)")
         )
         disk = _DISK_SIZE_SQL[has_stored]
+        base_guard = _BASE_GUARD_SQL[
+            any(
+                row[1] == "base_sha" for row in db.execute("PRAGMA table_info(objects)")
+            )
+        ]
         db.execute("CREATE TEMP TABLE purge_v(version_id INTEGER PRIMARY KEY)")
         db.executemany(
             "INSERT INTO purge_v VALUES (?)", [(i,) for g in purge for i in g["ids"]]
@@ -287,7 +306,8 @@ def reclaimable_detail(db_path, purge):
                 "                  JOIN versions xv ON xv.version_id = x.version_id "
                 "                  WHERE x.sha256 = o.sha256 AND xv.status='completed' "
                 "                  AND x.version_id NOT IN (SELECT version_id FROM purge_v)) "
-                "GROUP BY pv.file_id"
+                + base_guard
+                + " GROUP BY pv.file_id"
             )
         }
         total, logical = db.execute(
@@ -299,6 +319,7 @@ def reclaimable_detail(db_path, purge):
             "                JOIN versions xv ON xv.version_id = x.version_id "
             "                WHERE x.sha256 = o.sha256 AND xv.status='completed' "
             "                AND x.version_id NOT IN (SELECT version_id FROM purge_v))"
+            + base_guard
         ).fetchone()
         return per_file, total, logical
     finally:

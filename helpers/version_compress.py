@@ -81,6 +81,11 @@ def status_counts(conn: sqlite3.Connection, min_size: int = 4096) -> dict:
         "pending_eligible": 0,
         "pending_eligible_bytes": 0,
         "raw_copies_waiting": 0,  # compressed, raw copy not swept yet
+        # 5.47.1: objects stored as a delta against another object (schema 3)
+        "delta_objects": 0,
+        "delta_raw_bytes": 0,
+        "delta_stored_bytes": 0,
+        "delta_bases": 0,
     }
     if not out["schema2"]:
         # nothing was ever compressed; every object is raw and waiting
@@ -122,6 +127,20 @@ def status_counts(conn: sqlite3.Connection, min_size: int = 4096) -> dict:
         (int(min_size),),
     ).fetchone()
     out["raw_copies_waiting"] = out["states"].get("done", {}).get("objects", 0)
+    if any(row[1] == "base_sha" for row in conn.execute("PRAGMA table_info(objects)")):
+        dn, draw, dstored = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(size), 0), "
+            "COALESCE(SUM(COALESCE(stored_size, size)), 0) "
+            "FROM objects WHERE base_sha IS NOT NULL"
+        ).fetchone()
+        out["delta_objects"], out["delta_raw_bytes"], out["delta_stored_bytes"] = (
+            dn,
+            draw,
+            dstored,
+        )
+        out["delta_bases"] = conn.execute(
+            "SELECT COUNT(DISTINCT base_sha) FROM objects WHERE base_sha IS NOT NULL"
+        ).fetchone()[0]
     return out
 
 
@@ -154,14 +173,25 @@ def format_status(
     )
     lines.append(f"  zstd    : {zstd_version or 'NOT AVAILABLE in this Python'}")
     running = meta.get("compress_running") == "1"
-    lines.append(
-        "  thread  : "
-        + (
-            "ve-compress reported running (the engine is up and compression is on)"
-            if running
-            else "ve-compress is not running (off in the settings, or the engine is stopped)"
+    enabled = bool(settings.get("enabled"))
+    if running and enabled:
+        thread = "ve-compress reported running (the engine is up and compression is on)"
+    elif running:
+        thread = (
+            "ve-compress reported running, but the setting is now OFF: it stops at the next "
+            "restart of the Version Engine"
         )
-    )
+    elif enabled:
+        thread = (
+            "the setting is ON but ve-compress has not reported running: the Version Engine is "
+            "stopped, or has not been restarted since the setting was changed (the setting is "
+            "only read when the engine starts)"
+        )
+    else:
+        thread = (
+            "ve-compress is not running (compression is switched off in the settings)"
+        )
+    lines.append("  thread  : " + thread)
     if meta.get("compress_last"):
         lines.append(f"  last    : {meta['compress_last']}")
     lines.append("")
@@ -203,6 +233,21 @@ def format_status(
                     )
                 )
             )
+    if c["delta_objects"]:
+        lines.append(
+            f"  deltas  : {c['delta_objects']:,} object(s) are stored as a delta against "
+            f"{c['delta_bases']:,} base object(s) (a base stays on disk as long as a delta "
+            f"needs it): {_fmt_bytes(c['delta_raw_bytes'])} raw -> "
+            f"{_fmt_bytes(c['delta_stored_bytes'])} on disk "
+            f"({_pct(c['delta_stored_bytes'], c['delta_raw_bytes']):.1f} % of raw)"
+        )
+    if settings.get("delta_enabled") is not None:
+        lines.append(
+            "  delta   : previous-version delta is "
+            + ("ON" if settings.get("delta_enabled") else "OFF")
+            + f" (VERSION_COMPRESSION_DELTA_ENABLED; a delta must be at least "
+            f"{settings.get('delta_min_gain', 20)} % smaller than the plain compressed chunk)"
+        )
     if st["failed"]["objects"]:
         lines.append(
             "  WARNING : objects marked failed were not changed; look for 'possible disk "

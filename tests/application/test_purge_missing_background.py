@@ -36,7 +36,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 _DRIVER = r"""
-import json, os, sqlite3, sys, threading, time
+import faulthandler, json, os, sqlite3, sys, threading, time
+
+# A hang here must show WHERE (the child's own stacks on stderr), not just a 120 s timeout:
+# after 90 s every thread's stack is written to stderr and the child exits.
+faulthandler.dump_traceback_later(90, exit=True, file=sys.stderr)
 
 scratch, scenario = sys.argv[1], sys.argv[2]
 sys.path.insert(0, scratch)

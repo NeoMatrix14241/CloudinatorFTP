@@ -122,7 +122,7 @@ def run(lab, scratch_tools):
 # ------------------------------------------------------------------------ schema 2
 
 
-def test_a_new_database_is_schema_2_with_the_compression_columns(run):
+def test_a_new_database_is_schema_3_with_the_compression_and_delta_columns(run):
     r = run("""
         conn = eng._connect()
         cols = [row[1] for row in conn.execute("PRAGMA table_info(objects)")]
@@ -132,17 +132,19 @@ def test_a_new_database_is_schema_2_with_the_compression_columns(run):
         row = dict(conn.execute("SELECT * FROM objects LIMIT 1").fetchone())
         out(cols=cols, ver=ver, row=row, schema=ve._SCHEMA_VERSION)
         """)
-    assert r["ver"] == "2" and r["schema"] == 2
+    assert r["ver"] == "3" and r["schema"] == 3
     for col in (
         "codec",
         "stored_size",
         "compress_state",
         "codec_level",
         "compressed_at",
+        "base_sha",
     ):
         assert r["cols"].count(col) == 1, col
     assert r["row"]["codec"] == "raw" and r["row"]["compress_state"] == "pending"
     assert r["row"]["stored_size"] is None and r["row"]["compressed_at"] is None
+    assert r["row"]["base_sha"] is None
 
 
 OLD_DATABASE = """
@@ -180,8 +182,9 @@ def test_migrating_a_schema_1_database_keeps_every_row_and_is_idempotent(run):
         out(cols=cols, rows=rows, ver=ver)
         """,
     )
-    assert r["ver"] == "2"
+    assert r["ver"] == "3"
     assert len(r["cols"]) == len(set(r["cols"])) and "compress_state" in r["cols"]
+    assert "base_sha" in r["cols"]
     assert [x["sha256"] for x in r["rows"]] == ["aa", "bb"]
     assert all(
         x["codec"] == "raw" and x["compress_state"] == "pending" for x in r["rows"]
@@ -212,7 +215,68 @@ def test_two_threads_migrating_the_same_old_database_at_once_both_succeed(run):
     )
     assert r["errors"] == []
     assert sorted(r["cols"]) == sorted(set(r["cols"]))
-    assert r["ver"] == "2"
+    assert r["ver"] == "3"
+
+
+def test_a_schema_2_database_migrates_to_3_with_its_rows_and_a_partial_index(run):
+    r = run(
+        OLD_DATABASE,
+        """
+        c = sqlite3.connect(OLD)
+        for ddl in (
+            "ALTER TABLE objects ADD COLUMN codec TEXT NOT NULL DEFAULT 'raw'",
+            "ALTER TABLE objects ADD COLUMN stored_size INTEGER",
+            "ALTER TABLE objects ADD COLUMN compress_state TEXT NOT NULL DEFAULT 'pending'",
+            "ALTER TABLE objects ADD COLUMN codec_level INTEGER",
+            "ALTER TABLE objects ADD COLUMN compressed_at REAL",
+        ):
+            c.execute(ddl)
+        c.execute("UPDATE objects SET codec='zstd', stored_size=3, compress_state='done' WHERE sha256='aa'")
+        c.execute("UPDATE engine_metadata SET value='2' WHERE key='schema_version'")
+        c.commit(); c.close()
+        e = engine_on(OLD)
+        e._bootstrap_schema()
+        e._bootstrap_schema()
+        conn = e._connect()
+        rows = [dict(x) for x in conn.execute("SELECT * FROM objects ORDER BY sha256")]
+        idx = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_objects_base_sha'"
+        ).fetchone()
+        ver = conn.execute("SELECT value FROM engine_metadata WHERE key='schema_version'").fetchone()[0]
+        out(rows=rows, idx=idx[0] if idx else None, ver=ver)
+        """,
+    )
+    assert r["ver"] == "3"
+    assert [x["codec"] for x in r["rows"]] == [
+        "zstd",
+        "raw",
+    ]  # the 5.46 / 5.47 data is kept
+    assert all(x["base_sha"] is None for x in r["rows"])
+    assert r["idx"] and "WHERE base_sha IS NOT NULL" in r["idx"]
+
+
+def test_bootstrapping_a_current_database_writes_nothing(run):
+    """bootstrap runs at every start of the worker, the web process and every CLI tool: on a
+    database that is already current it must only READ (a write transaction would compete for
+    SQLite's one write lock with the engine's own work, for nothing)."""
+    r = run("""
+        writes = []
+        import re as _re
+        real = ve._GatedConnection.execute
+        pattern = _re.compile(r"^\\s*(insert|update|delete|replace|alter|create|drop)\\b", _re.I)
+        def spy(self, sql, *a, **k):
+            if pattern.match(sql):
+                writes.append(sql.strip().split("\\n")[0][:70])
+            return real(self, sql, *a, **k)
+        ve._GatedConnection.execute = spy
+        try:
+            eng._bootstrap_schema()
+            eng._bootstrap_schema()
+        finally:
+            ve._GatedConnection.execute = real
+        out(writes=writes)
+        """)
+    assert r["writes"] == []
 
 
 def test_a_newer_schema_number_is_never_lowered_and_the_old_insert_still_works(run):
@@ -726,13 +790,18 @@ def test_the_settings_survive_a_save_and_a_load_and_are_written_to_the_file(run)
         "VERSION_COMPRESSION_MIN_SAVING_PERCENT": 10,
         "VERSION_COMPRESSION_BUSY_PERCENT": 50,
         "VERSION_COMPRESSION_INTERVAL": 120,
+        "VERSION_COMPRESSION_DELTA_ENABLED": False,
+        "VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT": 20,
     }
     assert r["back"] == [True, 19]
 
 
-def test_the_shipped_server_config_json_carries_the_defaults_and_the_switch_is_off():
-    """The file the owner edits: the switch stays false in the repository (the owner turns it
-    on and commits that), the other four are the documented defaults."""
+def test_the_shipped_server_config_json_holds_valid_compression_settings():
+    """The file the owner edits. Whether compression is switched ON is the OWNER's decision (he
+    turns it on and commits it), so this test never looks at the value of the switch, only that
+    it is a real JSON boolean (anything else would count as OFF) and that the other settings, if
+    present, are inside the bounds the loader accepts (a value outside them is ignored).
+    """
     from pathlib import Path
 
     cfg = json.loads(
@@ -740,8 +809,15 @@ def test_the_shipped_server_config_json_carries_the_defaults_and_the_switch_is_o
             Path(__file__).resolve().parent.parent.parent / "server_config.json"
         ).read_text(encoding="utf-8")
     )
-    assert cfg["VERSION_COMPRESSION_ENABLED"] is False
-    assert cfg["VERSION_COMPRESSION_LEVEL"] == 22
-    assert cfg["VERSION_COMPRESSION_MIN_SAVING_PERCENT"] == 5
-    assert cfg["VERSION_COMPRESSION_BUSY_PERCENT"] == 25
-    assert cfg["VERSION_COMPRESSION_INTERVAL"] == 600
+    assert isinstance(cfg.get("VERSION_COMPRESSION_ENABLED", False), bool)
+    bounds = {
+        "VERSION_COMPRESSION_LEVEL": (1, 22),
+        "VERSION_COMPRESSION_MIN_SAVING_PERCENT": (0, 50),
+        "VERSION_COMPRESSION_BUSY_PERCENT": (5, 100),
+        "VERSION_COMPRESSION_INTERVAL": (60, 86400),
+    }
+    for key, (low, high) in bounds.items():
+        if key in cfg:
+            value = cfg[key]
+            assert not isinstance(value, bool) and isinstance(value, (int, float)), key
+            assert low <= value <= high, (key, value)

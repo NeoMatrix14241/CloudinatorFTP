@@ -221,6 +221,14 @@ VERSION_COMPRESSION_BUSY_PERCENT = (
 VERSION_COMPRESSION_INTERVAL = (
     600  # seconds between two looks when nothing is left to compress (60 to 86400)
 )
+# 5.47.1 (Phase 4): a CHANGED chunk of a file may be stored as a delta against the same chunk of
+# the previous version (zstd with the old chunk as a raw dictionary): a small change then costs
+# a few KB instead of a whole compressed chunk. Its own switch (a real JSON true; OFF by
+# default), only used while VERSION_COMPRESSION_ENABLED is on. READING deltas works whatever
+# either switch says. The delta must be at least this much smaller than the plain compressed
+# chunk (quick attempt at level 3) to be worth the dependency on the old chunk.
+VERSION_COMPRESSION_DELTA_ENABLED = False
+VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT = 20  # 1 to 90
 VERSION_FOLLOW_SYMLINKS = False
 VERSION_ALLOW_RESTORE_OVERWRITE = False
 VERSION_SHUTDOWN_TIMEOUT = 30  # seconds — graceful drain window before proc.kill()
@@ -1162,6 +1170,8 @@ def save_server_config():
         "VERSION_COMPRESSION_MIN_SAVING_PERCENT": VERSION_COMPRESSION_MIN_SAVING_PERCENT,
         "VERSION_COMPRESSION_BUSY_PERCENT": VERSION_COMPRESSION_BUSY_PERCENT,
         "VERSION_COMPRESSION_INTERVAL": VERSION_COMPRESSION_INTERVAL,
+        "VERSION_COMPRESSION_DELTA_ENABLED": VERSION_COMPRESSION_DELTA_ENABLED,
+        "VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT": VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT,
         "VERSION_FOLLOW_SYMLINKS": VERSION_FOLLOW_SYMLINKS,
         "VERSION_ALLOW_RESTORE_OVERWRITE": VERSION_ALLOW_RESTORE_OVERWRITE,
         "VERSION_SHUTDOWN_TIMEOUT": VERSION_SHUTDOWN_TIMEOUT,
@@ -1246,6 +1256,7 @@ def load_server_config():
     global VERSION_COMPRESSION_ENABLED, VERSION_FOLLOW_SYMLINKS
     global VERSION_COMPRESSION_LEVEL, VERSION_COMPRESSION_MIN_SAVING_PERCENT
     global VERSION_COMPRESSION_BUSY_PERCENT, VERSION_COMPRESSION_INTERVAL
+    global VERSION_COMPRESSION_DELTA_ENABLED, VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT
     global VERSION_ALLOW_RESTORE_OVERWRITE, VERSION_SHUTDOWN_TIMEOUT
     global VERSION_PURGE_MISSING_ENABLED, VERSION_PURGE_MISSING_MIN_AGE_DAYS
     global VERSION_PURGE_MISSING_INTERVAL, VERSION_PURGE_MISSING_MAX_FILES_PER_PASS
@@ -1404,6 +1415,16 @@ def load_server_config():
                 VERSION_COMPRESSION_INTERVAL,
                 60,
                 86400,
+            )
+            VERSION_COMPRESSION_DELTA_ENABLED = _bool_fail_safe(
+                config.get("VERSION_COMPRESSION_DELTA_ENABLED"),
+                VERSION_COMPRESSION_DELTA_ENABLED,
+            )
+            VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT = _bounded_number(
+                config.get("VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT"),
+                VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT,
+                1,
+                90,
             )
             VERSION_FOLLOW_SYMLINKS = config.get(
                 "VERSION_FOLLOW_SYMLINKS", VERSION_FOLLOW_SYMLINKS
