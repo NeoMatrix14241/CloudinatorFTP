@@ -136,11 +136,13 @@ async def _stream_version_blocks(chunks):
 @login_required
 async def api_versions_download():
     """Stream a past version's content directly to the browser WITHOUT
-    restoring anything — reconstructed into a throwaway temp dir, read
-    into memory, and cleaned up, all inside version_history.prepare_download()
-    (see its docstring for why this buffers rather than streams: Quart's
-    Response has no call_on_close/equivalent completion hook — confirmed
-    against the actual installed Quart version, not assumed)."""
+    restoring anything: `version_history.open_download_stream()` returns a generator over
+    `Engine.iter_version_bytes()`, which `_stream_version_blocks` pulls one 1 MB block at a
+    time on a worker thread (since 5.44 nothing is buffered, no temp file is made). Every
+    object is hash-verified as it streams; any mismatch raises and aborts the response. Since
+    5.46 an object may be stored compressed: the engine decodes it block by block inside that
+    same worker hop, the bytes and the Content-Length (the version's raw size) are unchanged.
+    """
     path = request.args.get("path", "")
     version_id_raw = request.args.get("version_id", "")
     if not path or not storage.is_safe_path(path) or not version_id_raw.isdigit():

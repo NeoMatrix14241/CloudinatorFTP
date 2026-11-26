@@ -1834,7 +1834,7 @@ ${BOLD}MENU ↔ COMMAND MAP${NC}  (in ./manage.sh menu type the number; from the
    1  start server          2  start dev_server      3  stop
    4  restart               5  status                6  logs [server|dev_server] [-f]
    7  clean-logs            8  restart-webdav
-   9  version-manage (browse / restore / delete versions, and the WAL file clean-up: wal)
+   9  version-manage (browse / restore / delete versions, the WAL file clean-up: wal, the object compression tools: compress --probe / --status / --sweep / --verify / --decompress)
   10  purge-versions (Version Engine clean-up: interactive menu, or flags; asks before changing anything)
   11  config                12  setup-smb            13  kick-sessions
   14  manage-users          15  reset-db             16  setup-storage
@@ -1874,6 +1874,12 @@ ${BOLD}EXAMPLES${NC}
     ./manage.sh version-manage wal               # sizes of the database, -wal and -shm files (changes nothing)
     ./manage.sh version-manage wal --checkpoint  # shrink the -wal file: PRAGMA wal_checkpoint(TRUNCATE)
     ./manage.sh version-manage wal --checkpoint --if-larger-mb 64 --timeout 30  # only above 64 MB, wait up to 30 s
+    ./manage.sh version-manage compress --probe  # READ-ONLY: what would zstd save on the real store? (sample, levels, estimate)
+    ./manage.sh version-manage compress --probe --samples 200 --seconds 600  # smaller / time-limited run (--busy-percent, --seed, --levels ...)
+    ./manage.sh version-manage compress --status  # READ-ONLY: how much is compressed, the backlog, is the thread running
+    ./manage.sh version-manage compress --sweep   # remove raw copies whose compressed copy verifies (the thread does this itself)
+    ./manage.sh version-manage compress --verify  # re-read and hash-check every compressed object (changes nothing)
+    ./manage.sh version-manage compress --decompress  # the way back: every object a plain raw file again (switch compression off first)
     ./manage.sh purge-versions                   # interactive menu: report, soft-delete, free now, undo
     ./manage.sh purge-versions --report          # report only: nothing is asked or changed
     ./manage.sh purge-versions --apply --free-now  # soft-delete and free the chunks now (asks y/N)

@@ -455,8 +455,13 @@ def test_a_created_file_in_the_apps_own_folder_is_ignored(lab):
 
 
 def test_a_burst_of_created_files_arms_the_settle_walk(lab):
-    for n in range(200):  # BURST_THRESHOLD
-        lab.handler.on_created(_event(_make_file(lab.root / f"f{n}.txt", 1)))
+    # 5.47.5: the files are made FIRST and the events fired afterwards in a tight loop (like the
+    # control test below). Making each file inside the event loop let a slow disk (Windows with a
+    # virus scanner) spread the 200 events over more than BURST_WINDOW (5 s); the burst counter
+    # then restarted its window and never reached the threshold (the owner's qa quick of 5.47.4).
+    files = [_make_file(lab.root / f"f{n}.txt", 1) for n in range(lab.burst)]
+    for path in files:
+        lab.handler.on_created(_event(path))
     assert lab.monitor._pending_reconcile is True
 
 

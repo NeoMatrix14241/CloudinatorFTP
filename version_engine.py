@@ -57,9 +57,11 @@ Design decisions explicitly recorded (see CLAUDE.md for the full log):
 import argparse
 import fnmatch
 import hashlib
+import math
 import os
 import queue
 import re
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -70,13 +72,21 @@ import time
 
 import config
 import logging_setup
-from helpers import parent_watch, version_purge, version_wal
+from helpers import (
+    parent_watch,
+    version_compress,
+    version_purge,
+    version_wal,
+    version_zstd,
+)
 
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 _SCRIPT_PATH = os.path.join(_PROJECT_DIR, "version_engine.py")
 
 _ENGINE_VERSION = "1.0.0"
-_SCHEMA_VERSION = 1
+# 5.46: schema 2 adds the object-compression columns (see _OBJECT_V2_COLUMNS / _migrate_schema).
+# 5.47.1: schema 3 adds `base_sha` (the previous-version delta, see _OBJECT_V3_COLUMNS).
+_SCHEMA_VERSION = 3
 
 # Folder names that are never tracked, whatever VERSION_EXCLUDE_DIRECTORIES says (5.41). `.chunks`
 # is where the web server keeps the pieces of an upload that is still arriving (<root>/.chunks/):
@@ -125,6 +135,60 @@ _META_PURGE_LAST = "purge_missing_last"
 # either way); a busy answer is logged at most this often.
 _WAL_CHECKPOINT_BUSY_MS = 2000
 _WAL_BUSY_LOG_EVERY = 900.0
+
+
+# 5.46: object compression (VERSION_COMPRESSION_PLAN.md). An object's IDENTITY is always the
+# SHA-256 of its RAW bytes; compression is only a storage encoding. A compressed object is the
+# NEW file `objects/ab/<sha>.zst` next to (never replacing) the raw `objects/ab/<sha>`; the file
+# name says which form it is. The columns below are BOOKKEEPING: readers go by the files and the
+# SHA-256 of the decoded bytes decides whether an object is correct.
+_OBJECT_V2_COLUMNS = (
+    ("codec", "TEXT NOT NULL DEFAULT 'raw'"),  # 'raw' | 'zstd'
+    (
+        "stored_size",
+        "INTEGER",
+    ),  # bytes on disk when codec='zstd'; NULL = same as `size`
+    ("compress_state", "TEXT NOT NULL DEFAULT 'pending'"),  # pending|done|skip|failed
+    ("codec_level", "INTEGER"),  # the level used or attempted
+    ("compressed_at", "REAL"),  # when the swap committed
+)
+# 5.47.1 (Phase 4): an object compressed as a DELTA against another object (its "base") has the
+# base's sha256 here; NULL for every other object. The delta is the new chunk compressed with
+# the base's raw bytes as a raw zstd dictionary, so decoding needs the base. The base is always a
+# PLAIN object (never itself a delta: depth 1, a read needs at most two objects and chains never
+# form), the GC treats a base as referenced for as long as any delta needs it, and nothing is
+# ever stored in a delta that is not also verified against its base before it is published.
+_OBJECT_V3_COLUMNS = (("base_sha", "TEXT"),)
+_READ_BLOCK = 1024 * 1024
+# A delta is only built when base + data fit the 2**27-byte window a stock decoder accepts.
+_DELTA_MAX_OBJECT_BYTES = 32 * 1024 * 1024
+# Upper bound for a decoded object whose size is not known (no `objects` row): far above
+# anything the engine stores (chunk and small-file sizes are at most a few MiB); it only has to
+# stop a decompression bomb.
+_MAX_DECODED_BYTES = 1 << 40
+
+# 5.47: the object compressor, the engine's own `ve-compress` thread (config.VERSION_COMPRESSION_*,
+# OFF by default). Built like `ve-purge`: a plain daemon thread of this worker process, stopped
+# through _shutdown_event, every wait is `_shutdown_event.wait(...)` (never time.sleep), no
+# asyncio, no thread pool. It starts this long after the engine so it never competes with crash
+# recovery, the first scan or the purge.
+_COMPRESS_START_DELAY = 600.0  # seconds
+# The raw copy of a compressed object is removed this long after the `.zst` was committed.
+_COMPRESS_SWEEP_GRACE = 300.0  # seconds
+_COMPRESS_MAX_PAUSE = 60.0  # one duty-cycle pause is never longer than this
+_COMPRESS_PAGE = 50  # rows looked at per query
+_COMPRESS_PROGRESS_EVERY = (
+    500  # objects between a log line, a cursor save and a WAL check
+)
+# An object above this size is not compressed at all (it would have to be held in memory); above
+# the second one the level is capped (level 22 needs a window as big as the object).
+_COMPRESS_MAX_OBJECT_BYTES = 256 * 1024 * 1024
+_COMPRESS_HIGH_LEVEL_BYTES = 32 * 1024 * 1024
+_COMPRESS_HIGH_LEVEL_CAP = 19
+# Keys in engine_metadata (shown by `version-manage compress --status` and status()).
+_META_COMPRESS_CURSOR = "compress_cursor"
+_META_COMPRESS_RUNNING = "compress_running"
+_META_COMPRESS_LAST = "compress_last"
 
 
 def _wal_limit_bytes() -> int:
@@ -346,6 +410,8 @@ def status() -> dict:
         "active_jobs": 0,
         "failed_jobs": 0,
         "last_scan": None,
+        "compress_running": False,
+        "compress_last": None,
         "storage_path": getattr(config, "VERSION_STORAGE_DIR", None),
         "database_path": os.path.join(
             getattr(config, "DB_DIR", ""),
@@ -371,6 +437,8 @@ def status() -> dict:
                 result["watcher_running"] = meta.get("watcher_running") == "1"
                 result["scanner_running"] = meta.get("scanner_running") == "1"
                 result["last_scan"] = meta.get("last_scan")
+                result["compress_running"] = meta.get("compress_running") == "1"
+                result["compress_last"] = meta.get("compress_last")
             finally:
                 conn.close()
         except Exception:
@@ -567,6 +635,20 @@ class VersionEngineError(Exception):
     pass
 
 
+class _ObjectError(VersionEngineError):
+    """One stored object could not be read back correctly (5.46). `kind` is 'missing',
+    'unreadable' or 'corrupted'; the callers (restore, download) turn it into the message
+    they have always used."""
+
+    def __init__(self, kind: str, sha256_hex: str, detail: str = ""):
+        super().__init__(
+            f"object {sha256_hex[:12]}... {kind}" + (f": {detail}" if detail else "")
+        )
+        self.kind = kind
+        self.sha256_hex = sha256_hex
+        self.detail = detail
+
+
 class Engine:
     """The Version Engine's core logic. One instance lives inside the
     worker process; not imported/instantiated by the parent process."""
@@ -599,6 +681,9 @@ class Engine:
         self._purge_pass_lock = threading.Lock()
         self._purge_thread = None
         self._purge_skip_logged_at = None
+        # 5.47: one compression batch at a time, whoever asks (the ve-compress thread, a test).
+        self._compress_pass_lock = threading.Lock()
+        self._compress_thread = None
         self._wal_busy_logged_at = None
 
         self._conn_local = threading.local()
@@ -606,6 +691,7 @@ class Engine:
         self._watcher_running = False
         self._scanner_running = False
         self._purge_running = False
+        self._compress_running = False
 
     # ------------------------------------------------------------------
     # Storage bootstrap + DB
@@ -633,7 +719,10 @@ class Engine:
         # busy_timeout FIRST: the journal_mode pragma below can itself need
         # a lock, and should wait rather than fail instantly.
         conn.execute("PRAGMA busy_timeout=30000")
-        conn.execute("PRAGMA journal_mode=WAL")
+        # 5.47.2: switching a database that is still in rollback-journal mode to WAL does NOT
+        # honour busy_timeout (SQLite answers "database is locked" at once when another
+        # connection is doing the same); enable_wal retries that one answer for a bounded time.
+        version_wal.enable_wal(conn)
         # WAL + NORMAL: no fsync on every commit (WAL is still fsync'd at
         # checkpoints). Every snapshot does ~8 commits, so on Windows/HDD
         # the default FULL made each write-lock window several times longer.
@@ -661,21 +750,70 @@ class Engine:
         conn = self._connect()
         conn.executescript(_SCHEMA_SQL)
         conn.commit()
+        self._migrate_schema(conn)
 
+    def _migrate_schema(self, conn):
+        """Bring the database up to _SCHEMA_VERSION (5.46: schema 2, the object-compression
+        columns). Idempotent and race-safe: the engine worker, the web process
+        (version_history.init) and the CLI tools all call _bootstrap_schema, so two processes
+        can get here at the same moment; the loser's `duplicate column name` is success.
+        Existing rows get the column defaults ('raw', 'pending'), so the compression backlog is
+        defined by one WHERE and no row is rewritten. An older engine reading a schema-2
+        database keeps working for raw objects (it never selects the new columns)."""
+        have = {row[1] for row in conn.execute("PRAGMA table_info(objects)")}
+        altered = False
+        for name, ddl in _OBJECT_V2_COLUMNS + _OBJECT_V3_COLUMNS:
+            if name in have:
+                continue
+            try:
+                conn.execute(
+                    f"ALTER TABLE objects ADD COLUMN {name} {ddl}"
+                )  # noqa: S608
+                altered = True
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
+        if altered:
+            conn.commit()
+
+        # A database that is already current is only READ: bootstrap runs at every start of the
+        # worker, of the web process and of every CLI tool, and a write transaction there would
+        # compete for SQLite's one write lock with the engine's own work for nothing.
         row = conn.execute(
             "SELECT value FROM engine_metadata WHERE key='schema_version'"
         ).fetchone()
-        if row is None:
+        try:
+            current = int(row[0]) if row is not None else None
+        except (TypeError, ValueError):
+            current = (
+                0  # an unreadable number is older than anything: write the right one
+            )
+        if current is not None and current >= _SCHEMA_VERSION:
+            return  # (a number written by a newer release is never lowered)
+        # a partial index: only the few delta objects are in it (the GC and the purge ask "does
+        # anything use this object as its base?")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_objects_base_sha ON objects(base_sha) "
+            "WHERE base_sha IS NOT NULL"
+        )
+        if current is None:
             conn.execute(
-                "INSERT INTO engine_metadata(key, value) VALUES ('schema_version', ?)",
+                "INSERT OR IGNORE INTO engine_metadata(key, value) "
+                "VALUES ('schema_version', ?)",
                 (str(_SCHEMA_VERSION),),
             )
             conn.execute(
-                "INSERT INTO engine_metadata(key, value) VALUES ('engine_version', ?)",
+                "INSERT OR IGNORE INTO engine_metadata(key, value) "
+                "VALUES ('engine_version', ?)",
                 (_ENGINE_VERSION,),
             )
-            conn.commit()
-        # else: forward-compat — a future version bump would migrate here.
+        else:
+            conn.execute(
+                "UPDATE engine_metadata SET value=? "
+                "WHERE key='schema_version' AND CAST(value AS INTEGER) < ?",
+                (str(_SCHEMA_VERSION), _SCHEMA_VERSION),
+            )
+        conn.commit()
 
     def _set_meta(self, key, value):
         conn = self._connect()
@@ -749,7 +887,7 @@ class Engine:
         ).fetchall()
         missing = 0
         for row in rows:
-            if not os.path.exists(self._object_path(row["sha256"])):
+            if not self._object_exists(row["sha256"]):
                 missing += 1
         if missing:
             self.log.warning(
@@ -757,24 +895,200 @@ class Engine:
                 "affected versions will fail integrity checks on restore."
             )
 
+        # 5. (5.47.1) A delta object needs its base: report one whose base row or files are gone.
+        try:
+            deltas = conn.execute(
+                "SELECT sha256, base_sha FROM objects WHERE base_sha IS NOT NULL"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            deltas = []  # a database without the base_sha column has no deltas
+        no_base = [
+            row["sha256"]
+            for row in deltas
+            if not self._object_exists(row["base_sha"])
+            or conn.execute(
+                "SELECT 1 FROM objects WHERE sha256=?", (row["base_sha"],)
+            ).fetchone()
+            is None
+        ]
+        if no_base:
+            self.log.error(
+                f"Crash recovery: {len(no_base)} delta object(s) have no base object "
+                f"(first: {no_base[0][:12]}...): possible disk corruption; those versions "
+                "cannot be read."
+            )
+
     # ------------------------------------------------------------------
     # Content-addressed object storage
     # ------------------------------------------------------------------
 
     def _object_path(self, sha256_hex: str) -> str:
+        """Path of the RAW form of an object (the only form before 5.46)."""
         return os.path.join(self.objects_dir, sha256_hex[:2], sha256_hex)
+
+    def _zst_path(self, sha256_hex: str) -> str:
+        """Path of the COMPRESSED form of an object (5.46): the raw path plus `.zst`."""
+        return self._object_path(sha256_hex) + version_zstd.SUFFIX
+
+    def _object_exists(self, sha256_hex: str) -> bool:
+        """True when the object is stored in EITHER form."""
+        return os.path.exists(self._object_path(sha256_hex)) or os.path.exists(
+            self._zst_path(sha256_hex)
+        )
+
+    def _find_object(self, sha256_hex: str):
+        """(path, is_zstd) of the form a reader should open, or None. The filesystem decides,
+        never the database column. When both forms exist (the few minutes between the
+        compressor publishing the `.zst` and the sweep removing the raw file) the RAW one is
+        read: it needs no decoding and it is the verified original."""
+        raw = self._object_path(sha256_hex)
+        if os.path.exists(raw):
+            return raw, False
+        zst = self._zst_path(sha256_hex)
+        if os.path.exists(zst):
+            return zst, True
+        return None
+
+    def _open_object(self, sha256_hex: str):
+        """(open binary file, is_zstd). A file that vanishes between the check and the open (the
+        raw form was just swept, a `.zst` was just published) is retried ONCE with the other
+        form. Raises _ObjectError('missing' | 'unreadable')."""
+        for attempt in (0, 1):
+            found = self._find_object(sha256_hex)
+            if found is None:
+                raise _ObjectError("missing", sha256_hex)
+            path, is_zst = found
+            try:
+                return open(path, "rb"), is_zst
+            except FileNotFoundError:
+                if attempt == 0:
+                    continue
+                raise _ObjectError("missing", sha256_hex) from None
+            except OSError as e:
+                raise _ObjectError("unreadable", sha256_hex, str(e)) from e
+        raise _ObjectError("missing", sha256_hex)  # pragma: no cover
+
+    def _object_size(self, sha256_hex: str):
+        """The RAW size recorded for an object, or None when it has no `objects` row."""
+        row = (
+            self._connect()
+            .execute("SELECT size FROM objects WHERE sha256=?", (sha256_hex,))
+            .fetchone()
+        )
+        return None if row is None else row[0]
+
+    def _object_base(self, sha256_hex: str):
+        """The base of a delta object, or None for every other object (and on a database that
+        has no `base_sha` column yet)."""
+        try:
+            row = (
+                self._connect()
+                .execute("SELECT base_sha FROM objects WHERE sha256=?", (sha256_hex,))
+                .fetchone()
+            )
+        except sqlite3.OperationalError:
+            return None
+        return None if row is None else row[0]
+
+    def _base_dictionary(self, sha256_hex: str, base_sha: str, depth: int = 0):
+        """The raw zstd dictionary made of a delta's base object (read through the same one
+        read path, so the base is hash-verified like everything else). A base that is itself a
+        delta is refused (depth 1: no chains, so no loop can ever form). Raises _ObjectError
+        with the DELTA's name: 'missing' when the base is gone, else 'corrupted'."""
+        if depth >= 1:
+            raise _ObjectError(
+                "corrupted",
+                sha256_hex,
+                "its base object is itself stored as a delta (chains are not allowed)",
+            )
+        try:
+            base_bytes = b"".join(
+                self._iter_object_bytes(
+                    base_sha, self._object_size(base_sha), _READ_BLOCK, depth + 1
+                )
+            )
+        except _ObjectError as e:
+            raise _ObjectError(
+                "missing" if e.kind == "missing" else "corrupted",
+                sha256_hex,
+                f"its base object {base_sha[:12]}... is {e.kind}",
+            ) from e
+        return version_zstd.raw_dictionary(base_bytes)
+
+    def _iter_object_bytes(
+        self,
+        sha256_hex: str,
+        expected_size=None,
+        block_size: int = _READ_BLOCK,
+        _depth: int = 0,
+    ):
+        """Yield an object's RAW bytes in blocks, whichever form is stored, hashing as it goes.
+        The ONE read path of the engine: restore, download and the integrity check all use it.
+
+        A compressed object is decoded one bounded block at a time (never held whole); the
+        decoder refuses a frame that is truncated, corrupt, followed by other bytes or that
+        expands beyond `expected_size` (decompression bomb). After the last block the SHA-256
+        of the bytes that were yielded must equal the object's name: the hash is the arbiter,
+        for a raw file as for a decoded one. Raises _ObjectError (kind 'missing', 'unreadable'
+        or 'corrupted'); a consumer has already received the earlier blocks by then, so it must
+        discard what it wrote (restore removes its temp file; a download is aborted).
+        Synchronous: runs wherever the caller already runs."""
+        fh, is_zst = self._open_object(sha256_hex)
+        digest = hashlib.sha256()
+        try:
+            if is_zst:
+                if not version_zstd.available():
+                    raise _ObjectError(
+                        "unreadable",
+                        sha256_hex,
+                        "this object is compressed and zstd is not available in this Python",
+                    )
+                limit = _MAX_DECODED_BYTES if expected_size is None else expected_size
+                base_sha = self._object_base(sha256_hex)
+                zdict = (
+                    None
+                    if base_sha is None
+                    else self._base_dictionary(sha256_hex, base_sha, _depth)
+                )
+                pieces = version_zstd.iter_decode(
+                    fh, limit, block_size, zstd_dict=zdict
+                )
+            else:
+                pieces = iter(lambda: fh.read(block_size), b"")
+            try:
+                for piece in pieces:
+                    digest.update(piece)
+                    yield piece
+            except version_zstd.CodecError as e:
+                raise _ObjectError("corrupted", sha256_hex, str(e)) from e
+            except OSError as e:
+                raise _ObjectError("unreadable", sha256_hex, str(e)) from e
+        finally:
+            fh.close()
+        if digest.hexdigest() != sha256_hex:
+            raise _ObjectError("corrupted", sha256_hex, "SHA-256 mismatch")
+
+    def _upsert_object_row(self, sha256_hex: str, size: int):
+        """The `objects` row of a stored object: new rows start as raw / pending, an existing row
+        (of either form) only loses its orphan mark. `size` is always the RAW size."""
+        self._connect().execute(
+            "INSERT INTO objects(sha256, size, created_at, orphaned_since) "
+            "VALUES (?, ?, ?, NULL) "
+            "ON CONFLICT(sha256) DO UPDATE SET orphaned_since=NULL",
+            (sha256_hex, size, time.time()),
+        )
 
     def _store_object_from_tmp(
         self, tmp_path: str, sha256_hex: str, size: int, commit: bool = True
     ):
         """Atomically publish a fully-written temp file as the
         content-addressed object for `sha256_hex`. Dedup: if the object
-        already exists on disk, the incoming tmp is just discarded — the
-        existing bytes are already known-good (verified when THEY were
-        written)."""
+        already exists on disk in EITHER form (raw, or compressed since 5.46), the
+        incoming tmp is just discarded - the existing bytes are already known-good
+        (verified when THEY were written)."""
         final_path = self._object_path(sha256_hex)
         os.makedirs(os.path.dirname(final_path), exist_ok=True)
-        if os.path.exists(final_path):
+        if self._object_exists(sha256_hex):
             try:
                 os.remove(tmp_path)
             except OSError:
@@ -783,26 +1097,20 @@ class Engine:
         else:
             os.replace(tmp_path, final_path)  # atomic on the same filesystem
 
-        conn = self._connect()
-        conn.execute(
-            "INSERT INTO objects(sha256, size, created_at, orphaned_since) "
-            "VALUES (?, ?, ?, NULL) "
-            "ON CONFLICT(sha256) DO UPDATE SET orphaned_since=NULL",
-            (sha256_hex, size, time.time()),
-        )
+        self._upsert_object_row(sha256_hex, size)
         if commit:
-            conn.commit()
+            self._connect().commit()
 
     def _verify_object(self, sha256_hex: str) -> bool:
         """Integrity check: hash-verify an object on read (spec:
         'every object is hash-verified on read; reject missing/truncated/
-        corrupted/hash-mismatched objects')."""
-        path = self._object_path(sha256_hex)
-        if not os.path.exists(path):
+        corrupted/hash-mismatched objects'). Works on either form."""
+        try:
+            for _ in self._iter_object_bytes(sha256_hex, self._object_size(sha256_hex)):
+                pass
+        except _ObjectError:
             return False
-        with open(path, "rb") as f:
-            actual = sha256_stream(f)
-        return actual == sha256_hex
+        return True
 
     # ------------------------------------------------------------------
     # Tracking scope resolution (spec §14)
@@ -1266,6 +1574,18 @@ class Engine:
 
                 chunk_h = hashlib.sha256(buf)
                 chunk_sha = chunk_h.hexdigest()
+                # 5.46: a chunk that is already stored (in either form) needs no temp file,
+                # no write and no fsync: only its row is refreshed, exactly what
+                # _store_object_from_tmp does for a duplicate.
+                if self._object_exists(chunk_sha):
+                    self._upsert_object_row(chunk_sha, len(buf))
+                    conn.execute(
+                        "INSERT OR IGNORE INTO version_objects(version_id, chunk_index, sha256) VALUES (?, ?, ?)",
+                        (version_id, chunk_index, chunk_sha),
+                    )
+                    conn.commit()
+                    chunk_index += 1
+                    continue
                 fd, tmp_path = tempfile.mkstemp(dir=self.tmp_dir, prefix="chunk_")
                 try:
                     with os.fdopen(fd, "wb") as out:
@@ -1511,28 +1831,26 @@ class Engine:
         )
         os.close(_fd)
 
-        objects = conn.execute(
-            "SELECT chunk_index, sha256 FROM version_objects WHERE version_id=? ORDER BY chunk_index",
-            (version_id,),
-        ).fetchall()
+        objects = self._version_object_rows(version_id)
 
         h = hashlib.sha256()
         total = 0
         try:
             with open(tmp_dest, "wb") as out:
                 for row in objects:
-                    if not self._verify_object(row["sha256"]):
-                        raise VersionEngineError(
-                            f"object {row['sha256'][:12]}… missing or corrupted — restore aborted"
-                        )
-                    with open(self._object_path(row["sha256"]), "rb") as obj_f:
-                        while True:
-                            buf = obj_f.read(1024 * 1024)
-                            if not buf:
-                                break
+                    # One read per object (5.46): the shared reader hashes every object
+                    # as it goes and raises on any mismatch; the temp file is removed below.
+                    try:
+                        for buf in self._iter_object_bytes(
+                            row["sha256"], row["osize"] or version["size"]
+                        ):
                             h.update(buf)
                             out.write(buf)
                             total += len(buf)
+                    except _ObjectError as e:
+                        raise VersionEngineError(
+                            f"object {row['sha256'][:12]}… missing or corrupted — restore aborted"
+                        ) from e
                 out.flush()
                 os.fsync(out.fileno())
         except Exception as e:
@@ -1588,6 +1906,21 @@ class Engine:
         )
         return destination
 
+    def _version_object_rows(self, version_id: int):
+        """A version's chunks in order, each with the RAW size recorded for its object
+        (`osize`, NULL when the object has no row): the decoder's bound (5.46)."""
+        return (
+            self._connect()
+            .execute(
+                "SELECT vo.chunk_index AS chunk_index, vo.sha256 AS sha256, "
+                "o.size AS osize FROM version_objects vo "
+                "LEFT JOIN objects o ON o.sha256 = vo.sha256 "
+                "WHERE vo.version_id=? ORDER BY vo.chunk_index",
+                (version_id,),
+            )
+            .fetchall()
+        )
+
     def iter_version_bytes(self, version_id: int, block_size: int = 1024 * 1024):
         """Yield a completed version's bytes straight from the object store
         - no temp file, no rebuild-then-read (the old download path rebuilt
@@ -1603,33 +1936,25 @@ class Engine:
         ).fetchone()
         if version is None or version["status"] != "completed":
             raise VersionEngineError("version not found or not completed")
-        objects = conn.execute(
-            "SELECT chunk_index, sha256 FROM version_objects WHERE version_id=? ORDER BY chunk_index",
-            (version_id,),
-        ).fetchall()
+        objects = self._version_object_rows(version_id)
         whole = hashlib.sha256()
         total = 0
         for row in objects:
-            path = self._object_path(row["sha256"])
-            obj_h = hashlib.sha256()
             try:
-                with open(path, "rb") as f:
-                    while True:
-                        buf = f.read(block_size)
-                        if not buf:
-                            break
-                        obj_h.update(buf)
-                        whole.update(buf)
-                        total += len(buf)
-                        yield buf
-            except OSError as e:
+                for buf in self._iter_object_bytes(
+                    row["sha256"], row["osize"] or version["size"], block_size
+                ):
+                    whole.update(buf)
+                    total += len(buf)
+                    yield buf
+            except _ObjectError as e:
+                if e.kind == "corrupted":
+                    raise VersionEngineError(
+                        f"object {row['sha256'][:12]}... corrupted - download aborted"
+                    ) from e
                 raise VersionEngineError(
-                    f"object {row['sha256'][:12]}... unreadable: {e}"
+                    f"object {row['sha256'][:12]}... unreadable: {e.detail or e.kind}"
                 ) from e
-            if obj_h.hexdigest() != row["sha256"]:
-                raise VersionEngineError(
-                    f"object {row['sha256'][:12]}... corrupted - download aborted"
-                )
         if whole.hexdigest() != version["sha256"] or total != version["size"]:
             raise VersionEngineError("download verification failed - aborted")
 
@@ -1695,6 +2020,31 @@ class Engine:
             f"VERSION_MAX_VERSIONS={config.VERSION_MAX_VERSIONS} for file_id={file_id}"
         )
 
+    @staticmethod
+    def _delta_bases(conn) -> set:
+        """sha256 of every object that some delta object needs as its base."""
+        try:
+            return {
+                row[0]
+                for row in conn.execute(
+                    "SELECT DISTINCT base_sha FROM objects WHERE base_sha IS NOT NULL"
+                )
+            }
+        except sqlite3.OperationalError:
+            return set()  # a database without the base_sha column has no deltas
+
+    @staticmethod
+    def _is_delta_base(conn, sha256_hex: str) -> bool:
+        try:
+            return (
+                conn.execute(
+                    "SELECT 1 FROM objects WHERE base_sha=? LIMIT 1", (sha256_hex,)
+                ).fetchone()
+                is not None
+            )
+        except sqlite3.OperationalError:
+            return False
+
     def run_gc(self):
         """Garbage collection; never overlaps the background purge's write phase (5.45)."""
         with self._maintenance_lock:
@@ -1726,6 +2076,11 @@ class Engine:
                 "WHERE v.status='completed'"
             ).fetchall()
         }
+        # 5.47.1: an object that a delta object needs as its base counts as referenced for as
+        # long as that delta row EXISTS (even an orphaned one: a snapshot may still re-reference
+        # it during the grace period). The delta goes first; its base becomes an ordinary orphan
+        # on a later pass.
+        live |= self._delta_bases(conn)
         all_objects = conn.execute(
             "SELECT sha256, orphaned_since FROM objects"
         ).fetchall()
@@ -1794,11 +2149,14 @@ class Engine:
             ).fetchone()
             if still_referenced is not None:
                 return 0
-            try:
-                os.remove(self._object_path(sha))
-            except OSError:
-                # Object file already removed; the DB row is what counts.
-                pass
+            if self._is_delta_base(conn, sha):
+                return 0  # a delta that was recorded meanwhile needs this object
+            for form in (self._object_path(sha), self._zst_path(sha)):
+                try:
+                    os.remove(form)
+                except OSError:
+                    # That form is already removed (or never existed); the DB row is what counts.
+                    pass
             # version_objects rows from non-completed (failed/deleted)
             # versions still FK-reference this object; their bytes are gone
             # now, so the links are meaningless bookkeeping. The versions row
@@ -2150,6 +2508,906 @@ class Engine:
         self.log.info("Background purge stopped.")
 
     # ------------------------------------------------------------------
+    # Object compression (5.47) - VERSION_COMPRESSION_PLAN.md sections 6.5 to 6.8
+    #
+    # The `ve-compress` thread turns raw objects into `<sha>.zst` files, one object at a time,
+    # and never changes an object in place: the raw file stays until the `.zst` was decoded
+    # back and compared (size + SHA-256) when it was made, and again just before the raw copy is
+    # removed by the sweep. At every instant at least one complete valid form exists, so a
+    # crash, a kill or a full disk at any point leaves the store readable; the next pass only
+    # has to finish or redo the step. All of it is synchronous code of THIS process' thread
+    # (or of a CLI tool); the web server never compresses, it only decodes while it reads.
+    # ------------------------------------------------------------------
+
+    def _compress_settings(self):
+        """The four settings, read at the start of every batch and clamped to safe values."""
+
+        def number(name, default, low, high):
+            try:
+                value = float(getattr(config, name, default))
+            except (TypeError, ValueError):
+                value = float(default)
+            if math.isnan(value):
+                value = float(default)
+            return min(high, max(low, value))
+
+        return {
+            "level": version_zstd.clamp_level(
+                getattr(config, "VERSION_COMPRESSION_LEVEL", version_zstd.DEFAULT_LEVEL)
+            ),
+            "min_saving": number("VERSION_COMPRESSION_MIN_SAVING_PERCENT", 5, 0, 50),
+            "busy": number("VERSION_COMPRESSION_BUSY_PERCENT", 25, 5, 100),
+            "interval": number("VERSION_COMPRESSION_INTERVAL", 600, 60, 86400),
+            # 5.47.1: the previous-version delta, its own switch (OFF by default)
+            "delta": getattr(config, "VERSION_COMPRESSION_DELTA_ENABLED", False)
+            is True,
+            "delta_min_gain": number(
+                "VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT", 20, 1, 90
+            ),
+        }
+
+    @staticmethod
+    def _saving_percent(raw_size: int, stored_size: int) -> float:
+        return 100.0 * (raw_size - stored_size) / raw_size if raw_size else 0.0
+
+    @staticmethod
+    def _remove_quietly(path: str) -> bool:
+        try:
+            os.remove(path)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError:
+            # Locked (Windows: a reader has it open) or not allowed: the caller decides.
+            return False
+
+    def _read_raw_verified(self, sha256_hex: str, size: int):
+        """(bytes, None) when the raw file is whole and matches its SHA-256, else (None, reason)
+        with reason 'missing' | 'unreadable' | 'size_mismatch' | 'hash_mismatch'."""
+        try:
+            with open(self._object_path(sha256_hex), "rb") as f:
+                data = f.read(size + 1)
+        except FileNotFoundError:
+            return None, "missing"
+        except OSError:
+            return None, "unreadable"
+        if len(data) != size:
+            return None, "size_mismatch"
+        if hashlib.sha256(data).hexdigest() != sha256_hex:
+            return None, "hash_mismatch"
+        return data, None
+
+    def _zst_is_valid(self, sha256_hex: str, size: int, base_sha=None) -> bool:
+        """True when `<sha>.zst` decodes to exactly `size` bytes whose SHA-256 is the object's
+        name. Streams the decode, so a big object is never held whole. For a delta object
+        `base_sha` is its base: that object is read (and hash-verified) first and the frame is
+        decoded with it as the dictionary; a base that is missing or damaged is not valid.
+        """
+        digest = hashlib.sha256()
+        total = 0
+        zdict = None
+        try:
+            if base_sha:
+                zdict = self._base_dictionary(sha256_hex, base_sha)
+            with open(self._zst_path(sha256_hex), "rb") as f:
+                for piece in version_zstd.iter_decode(f, size, zstd_dict=zdict):
+                    digest.update(piece)
+                    total += len(piece)
+        except (OSError, version_zstd.CodecError, _ObjectError):
+            return False
+        return total == size and digest.hexdigest() == sha256_hex
+
+    def _mark_compress_state(self, sha256_hex: str, state: str, level=None):
+        """pending -> skip | failed for a raw object (never touches a compressed row)."""
+
+        def write():
+            conn = self._connect()
+            conn.execute(
+                "UPDATE objects SET compress_state=?, codec_level=? "
+                "WHERE sha256=? AND codec='raw'",
+                (state, level, sha256_hex),
+            )
+            conn.commit()
+
+        self._retry_locked(write)
+
+    def _log_corrupt(self, sha256_hex: str, what: str):
+        self.log.error(
+            f"Compression: object {sha256_hex[:12]}... {what}: possible disk corruption. "
+            "The object was NOT changed and is marked 'failed'; "
+            "./manage.sh version-manage compress --verify checks every compressed object."
+        )
+
+    def _commit_compressed(
+        self, sha256_hex: str, stored_size: int, level, base_sha=None
+    ):
+        """Step 7: the `.zst` is published and verified; record it in ONE short transaction,
+        under the lock the GC also takes, so a GC that deleted the object a moment ago cannot
+        be followed by a row that points at nothing. Returns 'compressed' | 'already' |
+        'dropped' (the object is gone: the stray `.zst` is removed) | 'base_unusable' (a delta
+        whose base is no longer a plain, stored object, or that is itself somebody's base: the
+        stray `.zst` is removed and nothing is recorded).
+
+        For a delta (`base_sha` given) the same transaction re-checks everything the choice of
+        the base rested on, because the GC and other writers may have moved since: the base is
+        still a PLAIN object that is stored in some form, this object is not itself a base, and a
+        base the GC had marked as an orphan is put back in use (the GC cannot run now).
+        """
+
+        def write():
+            with self._maintenance_lock:
+                conn = self._connect()
+                if base_sha is not None:
+                    base_row = conn.execute(
+                        "SELECT base_sha FROM objects WHERE sha256=?", (base_sha,)
+                    ).fetchone()
+                    if (
+                        base_row is None
+                        or base_row[0] is not None
+                        or base_sha == sha256_hex
+                        or self._is_delta_base(conn, sha256_hex)
+                        or not self._object_exists(base_sha)
+                    ):
+                        return "base_unusable"
+                    conn.execute(
+                        "UPDATE objects SET orphaned_since=NULL WHERE sha256=?",
+                        (base_sha,),
+                    )
+                cur = conn.execute(
+                    "UPDATE objects SET codec='zstd', stored_size=?, compress_state='done', "
+                    "codec_level=?, compressed_at=?, base_sha=? WHERE sha256=? AND codec='raw'",
+                    (stored_size, level, time.time(), base_sha, sha256_hex),
+                )
+                changed = cur.rowcount
+                conn.commit()
+                if changed:
+                    return "compressed"
+                gone = (
+                    conn.execute(
+                        "SELECT 1 FROM objects WHERE sha256=?", (sha256_hex,)
+                    ).fetchone()
+                    is None
+                )
+                return "dropped" if gone else "already"
+
+        outcome = self._retry_locked(write)
+        if outcome in ("dropped", "base_unusable"):
+            self._remove_quietly(self._zst_path(sha256_hex))
+        return outcome
+
+    def _pick_delta_base(self, sha256_hex: str):
+        """(base_sha, base_bytes) when this object can be stored as a delta, else None.
+
+        The base is the SAME chunk of the file's previous completed version: the OLDEST
+        completed version that uses this object is the one that INTRODUCED it (the newest one
+        may well share the chunk with its own predecessor: the next edit touched another
+        chunk), its predecessor, the same chunk index. When that chunk is itself a delta, its own base is used (so every delta of a chain of
+        versions hangs on ONE plain object: depth 1). The base must be a plain object, stored,
+        readable and hash-verified (it is read through the one read path), of a sane size, and
+        this object must not itself be a base of another delta."""
+        conn = self._connect()
+        try:
+            if self._is_delta_base(conn, sha256_hex):
+                return None
+            ref = conn.execute(
+                "SELECT vo.version_id, vo.chunk_index, v.file_id FROM version_objects vo "
+                "JOIN versions v ON v.version_id = vo.version_id "
+                "WHERE vo.sha256=? AND v.status='completed' "
+                "ORDER BY vo.version_id ASC LIMIT 1",
+                (sha256_hex,),
+            ).fetchone()
+            if ref is None:
+                return None
+            prev = conn.execute(
+                "SELECT version_id FROM versions WHERE file_id=? AND status='completed' "
+                "AND version_id < ? ORDER BY version_id DESC LIMIT 1",
+                (ref["file_id"], ref["version_id"]),
+            ).fetchone()
+            if prev is None:
+                return None
+            chunk = conn.execute(
+                "SELECT sha256 FROM version_objects WHERE version_id=? AND chunk_index=?",
+                (prev["version_id"], ref["chunk_index"]),
+            ).fetchone()
+            if chunk is None or chunk[0] == sha256_hex:
+                return None
+            base_sha = chunk[0]
+            base_row = conn.execute(
+                "SELECT size, base_sha FROM objects WHERE sha256=?", (base_sha,)
+            ).fetchone()
+            if base_row is not None and base_row["base_sha"]:
+                base_sha = base_row["base_sha"]  # the anchor of the chain: depth 1
+                base_row = conn.execute(
+                    "SELECT size, base_sha FROM objects WHERE sha256=?", (base_sha,)
+                ).fetchone()
+            if (
+                base_row is None
+                or base_row["base_sha"] is not None
+                or base_sha == sha256_hex
+                or not version_zstd.MIN_OBJECT_SIZE
+                <= base_row["size"]
+                <= _DELTA_MAX_OBJECT_BYTES
+            ):
+                return None
+            base_bytes = b"".join(
+                self._iter_object_bytes(base_sha, base_row["size"], _READ_BLOCK, 1)
+            )
+        except (sqlite3.Error, _ObjectError):
+            return None  # no usable base: the object is simply stored as a plain object
+        return base_sha, base_bytes
+
+    def _publish_and_commit(
+        self, data, sha256_hex, size, level, min_saving, zdict=None, base_sha=None
+    ) -> str:
+        """Steps 5-7 for ONE candidate frame (plain, or a delta when `zdict` / `base_sha` are
+        given): compress and PROVE it (decode with the same dictionary, compare size and
+        SHA-256), keep it only if it saves enough, write it to tmp/, fsync, publish with an
+        atomic rename, record it. A delta that cannot be used for any reason returns
+        'delta_failed' | 'no_gain' | 'base_unusable' and the caller stores a plain object.
+        """
+        window_log = (
+            version_zstd.delta_window_log(len(zdict.dict_content), size)
+            if zdict is not None
+            else None
+        )
+        try:
+            frame = version_zstd.compress_verified(
+                data, sha256_hex, level, zstd_dict=zdict, window_log=window_log
+            )
+        except version_zstd.CodecError as e:
+            if zdict is not None:
+                self.log.warning(
+                    f"Compression: the delta of {sha256_hex[:12]}... did not survive its "
+                    f"round trip check ({e}); it is stored as a plain object instead."
+                )
+                return "delta_failed"
+            self._mark_compress_state(sha256_hex, "failed", level)
+            self.log.error(
+                f"Compression: object {sha256_hex[:12]}... did not survive the round trip "
+                f"check at level {level} ({e}). It was NOT changed and is marked 'failed'."
+            )
+            return "failed"
+        if len(frame) >= size or self._saving_percent(size, len(frame)) < min_saving:
+            if zdict is not None:
+                return "no_gain"
+            self._mark_compress_state(sha256_hex, "skip", level)
+            return "skipped"
+
+        # write to tmp/, flush, fsync, then publish with an atomic rename: a reader or a crash
+        # sees either no `.zst` or a complete one
+        tmp_path = None
+        try:
+            fd, tmp_path = tempfile.mkstemp(dir=self.tmp_dir, prefix="zst_")
+            with os.fdopen(fd, "wb") as out:
+                out.write(frame)
+                out.flush()
+                os.fsync(out.fileno())
+            os.replace(tmp_path, self._zst_path(sha256_hex))
+        except OSError as e:
+            if tmp_path:
+                self._remove_quietly(tmp_path)
+            self.log.warning(
+                f"Compression: could not write the compressed copy of {sha256_hex[:12]}... "
+                f"({e}); nothing was changed, it is tried again later."
+            )
+            return "error"
+        return self._commit_compressed(sha256_hex, len(frame), level, base_sha)
+
+    def compress_object(self, sha256_hex: str, level=None, min_saving=None) -> str:
+        """Compress ONE object (plan 6.5). Returns:
+        'compressed' (a verified `.zst` was published and recorded), 'skipped' (stays raw on
+        purpose: too small / too big / already-compressed data / no real saving), 'failed' (the
+        object failed its own SHA-256 or the round trip: marked, logged as an ERROR, never
+        retried), 'adopted' / 'compressed' for an object whose `.zst` already existed (a crash
+        between the publish and the record), 'missing' (the GC or another process removed it),
+        'already' / 'dropped', or 'error' (a disk problem such as a full disk: nothing was
+        recorded, the next batch tries again). Synchronous; the caller is a plain thread.
+        """
+        settings = self._compress_settings()
+        level = settings["level"] if level is None else version_zstd.clamp_level(level)
+        min_saving = settings["min_saving"] if min_saving is None else float(min_saving)
+        row = (
+            self._connect()
+            .execute("SELECT size, codec FROM objects WHERE sha256=?", (sha256_hex,))
+            .fetchone()
+        )
+        if row is None:
+            return "missing"
+        size, codec = row[0], row[1]
+        if codec != "raw":
+            return "already"
+        has_raw = os.path.exists(self._object_path(sha256_hex))
+        has_zst = os.path.exists(self._zst_path(sha256_hex))
+        if not has_raw and not has_zst:
+            return "missing"
+
+        # Only a `.zst` is on disk (a crash after the sweep but before the record, or an
+        # object restored from a copy): it is the only form there is, so adopt it only if it
+        # is whole, else say so loudly.
+        if not has_raw:
+            if self._zst_is_valid(sha256_hex, size):
+                self._commit_compressed(
+                    sha256_hex, os.path.getsize(self._zst_path(sha256_hex)), None
+                )
+                return "adopted"
+            self._mark_compress_state(sha256_hex, "failed")
+            self._log_corrupt(
+                sha256_hex,
+                "exists only as a compressed file and that file does not verify",
+            )
+            return "failed"
+
+        if size < version_zstd.MIN_OBJECT_SIZE or size > _COMPRESS_MAX_OBJECT_BYTES:
+            self._mark_compress_state(sha256_hex, "skip")
+            return "skipped"
+
+        # Step 1: the raw object must be whole and match its name BEFORE anything is built
+        # from it. A damaged object is reported and left exactly as it is.
+        data, why = self._read_raw_verified(sha256_hex, size)
+        if why == "missing":
+            return "missing"
+        if why == "unreadable":
+            self.log.warning(
+                f"Compression: object {sha256_hex[:12]}... could not be read right now; "
+                "it is tried again later."
+            )
+            return "error"
+        if why in ("size_mismatch", "hash_mismatch"):
+            self._mark_compress_state(sha256_hex, "failed")
+            self._log_corrupt(
+                sha256_hex,
+                (
+                    "does not match its recorded size"
+                    if why == "size_mismatch"
+                    else "fails its own SHA-256"
+                ),
+            )
+            return "failed"
+
+        # A `.zst` next to a raw copy that is still 'raw' in the database: a crash between the
+        # publish and the record. If it verifies, just record it; if not, it is rebuilt below.
+        if has_zst:
+            if self._zst_is_valid(sha256_hex, size):
+                outcome = self._commit_compressed(
+                    sha256_hex, os.path.getsize(self._zst_path(sha256_hex)), None
+                )
+                return "compressed" if outcome == "compressed" else outcome
+            self._remove_quietly(self._zst_path(sha256_hex))
+
+        effective = level
+        if size > _COMPRESS_HIGH_LEVEL_BYTES:
+            effective = min(level, _COMPRESS_HIGH_LEVEL_CAP)
+
+        # Phase 4 (5.47.1, its own switch, OFF by default): is this object a changed chunk whose
+        # earlier version is stored? Then it may be kept as a DELTA against that chunk.
+        delta = None
+        if settings["delta"] and size <= _DELTA_MAX_OBJECT_BYTES:
+            delta = self._pick_delta_base(sha256_hex)
+
+        # Steps 3-4: a quick attempt at a low level; data that does not even shrink by 1 %
+        # (jpg, zip, many pdf) stays raw without paying for the slow level, unless a delta
+        # against its earlier version is far smaller (a changed chunk of an incompressible file).
+        plain_probe = None
+        if effective > version_zstd.PROBE_LEVEL or delta is not None:
+            try:
+                plain_probe = len(version_zstd.compress(data, version_zstd.PROBE_LEVEL))
+            except version_zstd.CodecError as e:
+                self.log.warning(
+                    f"Compression: zstd failed on {sha256_hex[:12]}...: {e}"
+                )
+                return "error"
+        plain_ok = (
+            plain_probe is None
+            or self._saving_percent(size, plain_probe)
+            >= version_zstd.PROBE_MIN_SAVING_PERCENT
+        )
+
+        zdict = None
+        if delta is not None:
+            zdict = version_zstd.raw_dictionary(delta[1])
+            try:
+                delta_probe = len(
+                    version_zstd.compress(
+                        data,
+                        version_zstd.PROBE_LEVEL,
+                        zstd_dict=zdict,
+                        window_log=version_zstd.delta_window_log(len(delta[1]), size),
+                    )
+                )
+            except version_zstd.CodecError:
+                delta_probe = None
+            if (
+                delta_probe is None
+                or delta_probe > plain_probe * (1 - settings["delta_min_gain"] / 100.0)
+                or self._saving_percent(size, delta_probe)
+                < version_zstd.PROBE_MIN_SAVING_PERCENT
+            ):
+                zdict = None  # not worth a dependency on another object
+
+        if zdict is not None:
+            outcome = self._publish_and_commit(
+                data, sha256_hex, size, effective, min_saving, zdict, delta[0]
+            )
+            if outcome not in ("delta_failed", "no_gain", "base_unusable"):
+                return outcome
+            # the delta could not be used: fall through to a plain object
+
+        if not plain_ok:
+            self._mark_compress_state(sha256_hex, "skip", version_zstd.PROBE_LEVEL)
+            return "skipped"
+        return self._publish_and_commit(data, sha256_hex, size, effective, min_saving)
+
+    # ---- the sweep: remove raw copies whose compressed copy is proven good --------------------
+
+    def _revert_to_raw(self, sha256_hex: str):
+        """A compressed row whose `.zst` is not good but whose raw copy still exists: put the
+        row back to raw and mark it failed (never compress it again by itself)."""
+
+        def write():
+            with self._maintenance_lock:
+                conn = self._connect()
+                conn.execute(
+                    "UPDATE objects SET codec='raw', stored_size=NULL, "
+                    "compress_state='failed', codec_level=NULL, compressed_at=NULL, "
+                    "base_sha=NULL WHERE sha256=? AND codec='zstd'",
+                    (sha256_hex,),
+                )
+                conn.commit()
+
+        self._retry_locked(write)
+
+    def sweep_raw_copies(self, grace=None, limit=None, pause=None, busy=100.0) -> dict:
+        """Remove the raw copy of every object that was compressed more than `grace` seconds ago
+        (default _COMPRESS_SWEEP_GRACE), but ONLY after the `.zst` was decoded and hashed once
+        more: the raw file is the last other copy, so it goes only on proof. Returns counts:
+        checked, removed, already_gone (the raw copy was not there), busy (the file could not be
+        removed now, e.g. a reader has it open on Windows: next time), bad (the `.zst` did not
+        verify: the row went back to raw), lost (neither form is good: ERROR, nothing to do).
+        `pause(seconds)` is called between objects to keep a duty cycle (return True = stop).
+        """
+        grace = _COMPRESS_SWEEP_GRACE if grace is None else float(grace)
+        cutoff = time.time() - grace
+        result = dict.fromkeys(
+            ("checked", "removed", "already_gone", "busy", "bad", "lost"), 0
+        )
+        conn = self._connect()
+        last_rowid = 0
+        while limit is None or result["checked"] < limit:
+            rows = conn.execute(
+                "SELECT rowid, sha256, size, base_sha FROM objects WHERE rowid > ? "
+                "AND codec='zstd' AND compress_state='done' AND compressed_at <= ? "
+                "ORDER BY rowid LIMIT ?",
+                (last_rowid, cutoff, _COMPRESS_PAGE),
+            ).fetchall()
+            if not rows:
+                break
+            for rowid, sha, size, base_sha in rows:
+                last_rowid = rowid
+                if self._shutdown_event.is_set():
+                    return result
+                started = time.monotonic()
+                result["checked"] += 1
+                raw_path = self._object_path(sha)
+                if not self._zst_is_valid(sha, size, base_sha):
+                    # The compressed copy does not verify. The raw copy (if it still exists
+                    # AND verifies) is the only good one: keep it and put the row back to
+                    # raw. The bad `.zst` is left where it is (readers prefer the raw file,
+                    # the GC removes both forms later): one failed read, which may be a
+                    # transient error, never deletes a file.
+                    if self._read_raw_verified(sha, size)[1] is None:
+                        self.log.error(
+                            f"Compression: the compressed copy of object {sha[:12]}... does not "
+                            "verify; the raw copy is kept and the object is marked 'failed'."
+                        )
+                        self._revert_to_raw(sha)
+                        result["bad"] += 1
+                    else:
+                        self.log.error(
+                            f"Compression: object {sha[:12]}... has no good copy in either "
+                            "form: possible disk corruption. Nothing can be done by the engine."
+                        )
+                        result["lost"] += 1
+                    continue
+                if os.path.exists(raw_path):
+                    if not self._remove_quietly(raw_path):
+                        result["busy"] += 1
+                        continue
+                    result["removed"] += 1
+                else:
+                    result["already_gone"] += 1
+
+                def swept(sha=sha):
+                    c = self._connect()
+                    c.execute(
+                        "UPDATE objects SET compress_state='swept' "
+                        "WHERE sha256=? AND codec='zstd'",
+                        (sha,),
+                    )
+                    c.commit()
+
+                self._retry_locked(swept)
+                if pause and 0 < busy < 100:
+                    elapsed = time.monotonic() - started
+                    if pause(min(_COMPRESS_MAX_PAUSE, elapsed * (100.0 / busy - 1.0))):
+                        return result
+        return result
+
+    # ---- the batch: what the thread (and the tests) run ---------------------------------------
+
+    def run_compress_batch(self, limit=None, pause=None) -> dict:
+        """Compress the next raw objects, in row order, resuming where the last batch stopped
+        (`compress_cursor` in engine_metadata), until nothing is left, `limit` objects were
+        looked at, an 'error' outcome (disk full ...), or the shutdown. Returns a dict of
+        counts, or None when compression is off / zstd is unusable / another batch is running.
+        `pause(seconds)` keeps the duty cycle between objects (the thread passes
+        `_shutdown_event.wait`; returning True means stop). The raw copies of objects compressed
+        earlier are swept first and last."""
+        if not getattr(config, "VERSION_COMPRESSION_ENABLED", False):
+            return None
+        if not version_zstd.available():
+            return None
+        if not self._compress_pass_lock.acquire(blocking=False):
+            return None
+        try:
+            return self._run_compress_batch(limit, pause)
+        finally:
+            self._compress_pass_lock.release()
+
+    def _run_compress_batch(self, limit, pause):
+        settings = self._compress_settings()
+        busy = settings["busy"]
+        started = time.monotonic()
+        counts = {
+            "looked_at": 0,
+            "compressed": 0,
+            "skipped": 0,
+            "failed": 0,
+            "missing": 0,
+            "error": 0,
+            "adopted": 0,
+            "delta": 0,
+            "saved_bytes": 0,
+            "swept": 0,
+            "stopped": False,
+        }
+        conn = self._connect()
+        try:
+            cursor = int(self._get_meta(_META_COMPRESS_CURSOR, 0))
+        except (TypeError, ValueError):
+            cursor = 0
+
+        sweep = self.sweep_raw_copies(pause=pause, busy=busy)
+        counts["swept"] += sweep["removed"]
+
+        if cursor == 0:
+            # the start of a sweep through the table: say once that tiny objects stay raw
+            with self._maintenance_lock:
+                version_compress.mark_small_objects_skipped(
+                    conn, version_zstd.MIN_OBJECT_SIZE
+                )
+                conn.commit()
+
+        wrapped = False
+        while not self._shutdown_event.is_set() and (
+            limit is None or counts["looked_at"] < limit
+        ):
+            rows = version_compress.candidate_batch(
+                conn, cursor, _COMPRESS_PAGE, version_zstd.MIN_OBJECT_SIZE
+            )
+            if not rows:
+                if cursor == 0 or wrapped:
+                    break  # nothing pending anywhere: idle until the next interval
+                wrapped = True
+                cursor = 0
+                self._retry_locked(self._set_meta, _META_COMPRESS_CURSOR, 0)
+                continue
+            for rowid, sha, size in rows:
+                if self._shutdown_event.is_set() or (
+                    limit is not None and counts["looked_at"] >= limit
+                ):
+                    counts["stopped"] = self._shutdown_event.is_set()
+                    break
+                t0 = time.monotonic()
+                outcome = self.compress_object(sha)
+                cursor = rowid
+                counts["looked_at"] += 1
+                if outcome == "compressed":
+                    counts["compressed"] += 1
+                    stored = conn.execute(
+                        "SELECT stored_size, base_sha FROM objects WHERE sha256=?",
+                        (sha,),
+                    ).fetchone()
+                    if stored and stored[0] is not None:
+                        counts["saved_bytes"] += size - stored[0]
+                    if stored and stored[1]:
+                        counts["delta"] += 1
+                elif outcome in counts:
+                    counts[outcome] += 1
+                if outcome == "error":
+                    break  # a disk problem: stop, wait for the next interval
+                if counts["looked_at"] % _COMPRESS_PROGRESS_EVERY == 0:
+                    self._retry_locked(self._set_meta, _META_COMPRESS_CURSOR, cursor)
+                    self._log_compress_progress(counts, started, settings)
+                    self.checkpoint_wal_if_large("compress")
+                if pause and 0 < busy < 100:
+                    elapsed = time.monotonic() - t0
+                    if pause(min(_COMPRESS_MAX_PAUSE, elapsed * (100.0 / busy - 1.0))):
+                        counts["stopped"] = True
+                        break
+            else:
+                continue
+            break  # the inner loop was left early (error, limit, shutdown)
+
+        self._retry_locked(self._set_meta, _META_COMPRESS_CURSOR, cursor)
+        if counts["looked_at"] or counts["swept"]:
+            sweep = self.sweep_raw_copies(pause=pause, busy=busy)
+            counts["swept"] += sweep["removed"]
+            self._log_compress_progress(counts, started, settings, final=True)
+            self._retry_locked(
+                self._set_meta,
+                _META_COMPRESS_LAST,
+                time.strftime("%Y-%m-%d %H:%M:%S")
+                + f" looked_at={counts['looked_at']} compressed={counts['compressed']}"
+                f" skipped={counts['skipped']} failed={counts['failed']}"
+                f" delta={counts['delta']}"
+                f" saved_bytes={counts['saved_bytes']} raw_copies_removed={counts['swept']}",
+            )
+        return counts
+
+    def _log_compress_progress(self, counts, started, settings, final=False):
+        saved_mib = counts["saved_bytes"] / (1024 * 1024)
+        self.log.info(
+            f"Compression{' batch finished' if final else ' progress'}: looked at "
+            f"{counts['looked_at']} object(s) (level {settings['level']}), "
+            f"{counts['compressed']} compressed ({counts['delta']} as deltas), "
+            f"{counts['skipped']} left raw, "
+            f"{counts['failed']} failed, {saved_mib:.1f} MiB saved so far, "
+            f"{counts['swept']} raw copy(ies) removed; took {time.monotonic() - started:.0f}s"
+        )
+
+    def _compress_loop(self):
+        self._compress_running = True
+        self._set_meta(_META_COMPRESS_RUNNING, "1")
+        s = self._compress_settings()
+        self.log.info(
+            f"Background compression of stored objects started (zstd level {s['level']}, "
+            f"busy at most {s['busy']:.0f}% of the time, looks again every "
+            f"{s['interval']:.0f}s when idle, first pass in {_COMPRESS_START_DELAY:.0f}s)."
+        )
+        self._shutdown_event.wait(_COMPRESS_START_DELAY)
+        while not self._shutdown_event.is_set():
+            wait = self._compress_settings()["interval"]
+            if not self._stop_scheduling.is_set():
+                try:
+                    self.run_compress_batch(pause=self._shutdown_event.wait)
+                    self.checkpoint_wal_if_large("compress")
+                except Exception as e:
+                    try:
+                        self._connect().rollback()  # never leave a txn/gate held
+                    except sqlite3.Error:
+                        # Rollback on a broken connection can fail; the error below is what matters.
+                        pass
+                    if _is_lock_error(e):
+                        self.log.warning(
+                            f"Compression hit a locked database ({e}); will retry at the "
+                            "next interval."
+                        )
+                    else:
+                        self.log.error(f"Compression error: {e}", exc_info=True)
+            self._shutdown_event.wait(wait)
+        self._compress_running = False
+        self._set_meta(_META_COMPRESS_RUNNING, "0")
+        self.log.info("Background compression stopped.")
+
+    # ---- by hand: verify everything, and the way back to raw files ----------------------------
+
+    def verify_compressed(self, limit=None, pause=None, busy=100.0) -> dict:
+        """Read-only integrity check of every compressed object: decode the `.zst` and compare
+        size and SHA-256. Changes nothing. Returns counts: checked, ok, bad (the `.zst` does
+        not verify but a good raw copy exists), lost (no good copy at all) and `examples`.
+        """
+        result = {"checked": 0, "ok": 0, "bad": 0, "lost": 0, "examples": []}
+        conn = self._connect()
+        last_rowid = 0
+        while limit is None or result["checked"] < limit:
+            rows = conn.execute(
+                "SELECT rowid, sha256, size, base_sha FROM objects WHERE rowid > ? "
+                "AND codec='zstd' ORDER BY rowid LIMIT ?",
+                (last_rowid, _COMPRESS_PAGE),
+            ).fetchall()
+            if not rows:
+                break
+            for rowid, sha, size, base_sha in rows:
+                last_rowid = rowid
+                started = time.monotonic()
+                result["checked"] += 1
+                if self._zst_is_valid(sha, size, base_sha):
+                    result["ok"] += 1
+                else:
+                    raw_ok = self._read_raw_verified(sha, size)[1] is None
+                    result["bad" if raw_ok else "lost"] += 1
+                    if len(result["examples"]) < 10:
+                        result["examples"].append(sha[:16])
+                if pause and 0 < busy < 100:
+                    elapsed = time.monotonic() - started
+                    if pause(min(_COMPRESS_MAX_PAUSE, elapsed * (100.0 / busy - 1.0))):
+                        return result
+        return result
+
+    def decompress_plan(self) -> dict:
+        """What converting every compressed object back to a raw file would need:
+        {'objects', 'raw_bytes' (the bytes that have to be written: only objects whose raw
+        copy is gone count), 'free_bytes' (on the drive of the object store)}."""
+        conn = self._connect()
+        need_n = need_b = 0
+        last_rowid = 0
+        while True:
+            rows = conn.execute(
+                "SELECT rowid, sha256, size FROM objects WHERE rowid > ? AND codec='zstd' "
+                "ORDER BY rowid LIMIT 500",
+                (last_rowid,),
+            ).fetchall()
+            if not rows:
+                break
+            for rowid, sha, size in rows:
+                last_rowid = rowid
+                if not os.path.exists(self._object_path(sha)):
+                    need_n += 1
+                    need_b += size
+        total_n = conn.execute(
+            "SELECT COUNT(*) FROM objects WHERE codec='zstd'"
+        ).fetchone()[0]
+        try:
+            free = shutil.disk_usage(self.objects_dir).free
+        except OSError:
+            free = 0
+        return {
+            "compressed_objects": total_n,
+            "objects": need_n,
+            "raw_bytes": need_b,
+            "free_bytes": free,
+        }
+
+    def _commit_raw(self, sha256_hex: str) -> bool:
+        """The row of a decompressed object goes back to raw; 'skip' keeps the compressor from
+        picking it up again. False when the row is gone or already changed."""
+
+        def write():
+            with self._maintenance_lock:
+                conn = self._connect()
+                cur = conn.execute(
+                    "UPDATE objects SET codec='raw', stored_size=NULL, compress_state='skip', "
+                    "codec_level=NULL, compressed_at=NULL, base_sha=NULL "
+                    "WHERE sha256=? AND codec='zstd'",
+                    (sha256_hex,),
+                )
+                changed = cur.rowcount
+                conn.commit()
+                return changed
+
+        return bool(self._retry_locked(write))
+
+    def decompress_object(self, sha256_hex: str) -> str:
+        """Turn ONE compressed object back into a raw file (the way back to the 5.45.1 layout).
+        Returns 'decompressed', 'not_compressed', 'lost' (no good copy of it: ERROR) or 'error'
+        (disk problem: nothing recorded, safe to run again). The raw file is built from the
+        `.zst` into tmp/, verified against the SHA-256 while it is written, fsynced and renamed
+        into place; only then is the row changed and the `.zst` removed, so every step can be
+        interrupted and repeated."""
+        row = (
+            self._connect()
+            .execute(
+                "SELECT size, codec, base_sha FROM objects WHERE sha256=?",
+                (sha256_hex,),
+            )
+            .fetchone()
+        )
+        if row is None or row[1] != "zstd":
+            return "not_compressed"
+        size, base_sha = row[0], row[2]
+        raw_path = self._object_path(sha256_hex)
+        zst_path = self._zst_path(sha256_hex)
+        raw_ok = False
+        if os.path.exists(raw_path):
+            why = self._read_raw_verified(sha256_hex, size)[1]
+            raw_ok = why is None
+            if why == "unreadable":
+                return "error"  # maybe a transient problem: touch nothing, run again
+            if why in ("size_mismatch", "hash_mismatch"):
+                self._remove_quietly(
+                    raw_path
+                )  # definitely damaged: rebuilt from the .zst
+        if not raw_ok:
+            if not os.path.exists(zst_path):
+                self.log.error(
+                    f"Decompress: object {sha256_hex[:12]}... has no good copy in either form."
+                )
+                return "lost"
+            tmp_path = None
+            try:
+                digest = hashlib.sha256()
+                total = 0
+                zdict = (
+                    self._base_dictionary(sha256_hex, base_sha) if base_sha else None
+                )
+                fd, tmp_path = tempfile.mkstemp(dir=self.tmp_dir, prefix="raw_")
+                with os.fdopen(fd, "wb") as out, open(zst_path, "rb") as src:
+                    for piece in version_zstd.iter_decode(src, size, zstd_dict=zdict):
+                        digest.update(piece)
+                        total += len(piece)
+                        out.write(piece)
+                    out.flush()
+                    os.fsync(out.fileno())
+                if total != size or digest.hexdigest() != sha256_hex:
+                    self._remove_quietly(tmp_path)
+                    self.log.error(
+                        f"Decompress: the compressed copy of object {sha256_hex[:12]}... "
+                        "does not verify: possible disk corruption. It was NOT changed."
+                    )
+                    return "lost"
+                os.makedirs(os.path.dirname(raw_path), exist_ok=True)
+                os.replace(tmp_path, raw_path)
+            except _ObjectError as e:
+                if tmp_path:
+                    self._remove_quietly(tmp_path)
+                self.log.error(
+                    f"Decompress: object {sha256_hex[:12]}... is stored as a delta and "
+                    f"cannot be rebuilt ({e.detail or e.kind}): possible disk corruption. "
+                    "It was NOT changed."
+                )
+                return "lost"
+            except version_zstd.CodecError:
+                if tmp_path:
+                    self._remove_quietly(tmp_path)
+                self.log.error(
+                    f"Decompress: the compressed copy of object {sha256_hex[:12]}... is "
+                    "damaged: possible disk corruption. It was NOT changed."
+                )
+                return "lost"
+            except OSError as e:
+                if tmp_path:
+                    self._remove_quietly(tmp_path)
+                self.log.warning(
+                    f"Decompress: could not write the raw file of {sha256_hex[:12]}... "
+                    f"({e}); nothing was changed."
+                )
+                return "error"
+        if not self._commit_raw(sha256_hex):
+            # The row is gone (the GC removed the object) or already raw: tidy only what we made.
+            if not os.path.exists(zst_path):
+                return "not_compressed"
+        self._remove_quietly(zst_path)
+        return "decompressed"
+
+    def decompress_all(self, pause=None, busy=100.0, limit=None) -> dict:
+        """decompress_object() for every compressed object, in row order. Returns counts:
+        decompressed, lost, error, other."""
+        result = dict.fromkeys(("decompressed", "lost", "error", "other", "checked"), 0)
+        conn = self._connect()
+        last_rowid = 0
+        while limit is None or result["checked"] < limit:
+            rows = conn.execute(
+                "SELECT rowid, sha256 FROM objects WHERE rowid > ? AND codec='zstd' "
+                "ORDER BY rowid LIMIT ?",
+                (last_rowid, _COMPRESS_PAGE),
+            ).fetchall()
+            if not rows:
+                break
+            for rowid, sha in rows:
+                last_rowid = rowid
+                started = time.monotonic()
+                outcome = self.decompress_object(sha)
+                result["checked"] += 1
+                result[outcome if outcome in result else "other"] += 1
+                if outcome == "error":
+                    return result  # disk problem: stop, nothing is lost, run again
+                if pause and 0 < busy < 100:
+                    elapsed = time.monotonic() - started
+                    if pause(min(_COMPRESS_MAX_PAUSE, elapsed * (100.0 / busy - 1.0))):
+                        return result
+        return result
+
+    # ------------------------------------------------------------------
     # Workers
     # ------------------------------------------------------------------
 
@@ -2216,11 +3474,26 @@ class Engine:
             )
             self._purge_thread.start()
 
+        if getattr(config, "VERSION_COMPRESSION_ENABLED", False):
+            if version_zstd.self_test():
+                self._compress_thread = threading.Thread(
+                    target=self._compress_loop, daemon=True, name="ve-compress"
+                )
+                self._compress_thread.start()
+            else:
+                self.log.warning(
+                    "VERSION_COMPRESSION_ENABLED is true but zstd is not usable in this "
+                    "Python (it needs Python 3.14 or `pip install backports.zstd`): "
+                    "compression stays off and objects are stored raw. Compressed objects, "
+                    "if there are any, cannot be read until zstd works."
+                )
+
         self.log.info(
             f"Version Engine started. pid={os.getpid()} db={self.db_path} "
             f"storage={self.storage_dir} workers={config.VERSION_WORKER_COUNT} "
             f"watch={config.VERSION_WATCH_ENABLED} scan={config.VERSION_SCAN_ENABLED} "
-            f"purge_missing={getattr(config, 'VERSION_PURGE_MISSING_ENABLED', False)}"
+            f"purge_missing={getattr(config, 'VERSION_PURGE_MISSING_ENABLED', False)} "
+            f"compress={self._compress_thread is not None}"
         )
 
     def graceful_shutdown(self):
@@ -2249,6 +3522,11 @@ class Engine:
             # It looks at _shutdown_event at every file and every write batch, so this is
             # normally immediate; the deadline is the same drain window the workers get.
             self._purge_thread.join(timeout=max(1, deadline - time.time()))
+        if self._compress_thread:
+            # It looks at _shutdown_event between objects and every pause is
+            # _shutdown_event.wait, so this ends after the object in hand (a few seconds at
+            # level 22 at the very most).
+            self._compress_thread.join(timeout=max(1, deadline - time.time()))
 
         try:
             conn = self._connect()

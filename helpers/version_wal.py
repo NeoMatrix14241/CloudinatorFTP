@@ -11,7 +11,7 @@ owner's server a burst of purging and garbage collection left a 2.9 GB -wal file
 frames still had to be merged.) The engine is stopped with a hard kill, so SQLite never got
 the chance to remove the file on a clean close either.
 
-Two plain mechanisms, both here:
+Three plain mechanisms, all here (1 and 2 keep the log small, 3 is about opening the file):
 
   1. `apply_journal_size_limit(conn, limit)`: `PRAGMA journal_size_limit`. After a checkpoint has
      reset the log, SQLite cuts the file back to this size. It is a setting of ONE connection
@@ -20,6 +20,14 @@ Two plain mechanisms, both here:
      merges whatever is left and truncates the file to zero bytes. The engine calls
      `checkpoint_if_larger` at the end of a garbage-collection or purge pass; the
      `version-manage wal` command calls `checkpoint` by hand.
+  3. `enable_wal(conn)`: `PRAGMA journal_mode=WAL` with a bounded retry (5.47.2). Switching a
+     database that is still in rollback-journal mode to WAL needs the write lock for a moment,
+     and SQLite does NOT wait for it with `busy_timeout`: the connection already holds the read
+     lock, so waiting could deadlock the other writer and SQLite answers "database is locked"
+     at once. Two connections that open a brand-new database in the same instant (the engine
+     worker and the web process on the very first start, or four threads in a test) therefore
+     make the loser fail with no wait at all. Once any connection has switched the file, the
+     same pragma is a no-op, so retrying for a short bounded time is exactly right.
 
 The limit is never above MAX_LIMIT_MB (64 MB), whatever a settings file says.
 
@@ -41,6 +49,12 @@ MB = 1024 * 1024
 MAX_LIMIT_MB = 64  # the hard ceiling: neither the limit nor the threshold goes above it
 MIN_LIMIT_MB = 1  # a non-zero setting below this is raised to it
 DEFAULT_LIMIT_MB = 64
+
+# enable_wal: how long a lock answer is retried (the same 30 s as the engine's busy_timeout), and
+# the pause between two attempts (doubles from the first value up to the second).
+ENABLE_WAL_MAX_WAIT_SECONDS = 30.0
+_ENABLE_WAL_FIRST_DELAY = 0.01
+_ENABLE_WAL_MAX_DELAY = 0.25
 
 # `PRAGMA wal_checkpoint(<mode>)` cannot take a bound parameter, so the mode is checked against
 # this list before it is put into the statement.
@@ -94,6 +108,42 @@ def file_sizes(db_path) -> dict:
         "wal": _size(wal_path(db_path)),
         "shm": _size(f"{db_path}-shm"),
     }
+
+
+def _is_busy(exc) -> bool:
+    """True for SQLite's transient 'database is locked' / 'busy' answers."""
+    if not isinstance(exc, sqlite3.OperationalError):
+        return False
+    code = getattr(exc, "sqlite_errorcode", None)  # Python 3.11 and newer
+    if isinstance(code, int) and code & 0xFF == 5:  # SQLITE_BUSY (5), also its sub-codes
+        return True
+    return any(word in str(exc).lower() for word in ("locked", "busy"))
+
+
+def enable_wal(
+    conn,
+    max_wait_seconds=ENABLE_WAL_MAX_WAIT_SECONDS,
+    sleep=time.sleep,
+    clock=time.monotonic,
+) -> str:
+    """Run `PRAGMA journal_mode=WAL` on `conn` and return the journal mode SQLite reports
+    (lower case, normally 'wal'). A lock answer is retried with a short, growing pause for at
+    most `max_wait_seconds`, then raised as it was; any other error is raised at once. On a
+    database that is already in WAL mode the pragma changes nothing, so the retry only ever
+    matters while another connection is switching the file over (see the module docstring).
+    `sleep` and `clock` exist so a test does not have to wait for real."""
+    deadline = clock() + max(0.0, float(max_wait_seconds))
+    delay = _ENABLE_WAL_FIRST_DELAY
+    while True:
+        try:
+            row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+            return str(row[0]).lower() if row else ""
+        except sqlite3.OperationalError as e:
+            remaining = deadline - clock()
+            if not _is_busy(e) or remaining <= 0:
+                raise
+        sleep(min(delay, remaining))
+        delay = min(delay * 2, _ENABLE_WAL_MAX_DELAY)
 
 
 def apply_journal_size_limit(conn, limit) -> None:

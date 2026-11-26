@@ -243,22 +243,61 @@ def scan_tracked(
         db.close()
 
 
+# The size of an object ON DISK (5.46): `stored_size` when the object is compressed, else its
+# raw `size`. A database that predates schema 2 has no such column, so the expression is picked
+# from this closed pair of constants (never from user input).
+_DISK_SIZE_SQL = {True: "COALESCE(o.stored_size, o.size)", False: "o.size"}
+
+# 5.47.1: an object that some delta object uses as its base is not freed while that delta is
+# still used by a completed version OUTSIDE the purge set (the delta stays, so its base must).
+# Only on a schema-3 database (the `base_sha` column); a closed pair of constants as well.
+_BASE_GUARD_SQL = {
+    True: (
+        " AND NOT EXISTS (SELECT 1 FROM objects d WHERE d.base_sha = o.sha256 "
+        "AND EXISTS (SELECT 1 FROM version_objects dx "
+        "            JOIN versions dv ON dv.version_id = dx.version_id "
+        "            WHERE dx.sha256 = d.sha256 AND dv.status='completed' "
+        "            AND dx.version_id NOT IN (SELECT version_id FROM purge_v)))"
+    ),
+    False: "",
+}
+
+
 def reclaimable(db_path, purge):
     """({file_id: bytes} that deleting each file's versions would really free, total).
     A chunk counts only if no completed version OUTSIDE the purge set uses it. A chunk shared
-    by two purged files shows in both per-file figures but once in the total."""
+    by two purged files shows in both per-file figures but once in the total. Since 5.46 the
+    figures are the bytes ON DISK (a compressed chunk counts its compressed size); with nothing
+    compressed they are the raw sizes, exactly as before. See reclaimable_detail() for the raw
+    total next to them."""
+    per_file, total, _logical = reclaimable_detail(db_path, purge)
+    return per_file, total
+
+
+def reclaimable_detail(db_path, purge):
+    """(per-file on-disk bytes, total on-disk bytes, total RAW bytes) of what deleting these
+    versions would free (see reclaimable)."""
     db = sqlite3.connect(db_path, timeout=30)
     try:
+        has_stored = any(
+            row[1] == "stored_size" for row in db.execute("PRAGMA table_info(objects)")
+        )
+        disk = _DISK_SIZE_SQL[has_stored]
+        base_guard = _BASE_GUARD_SQL[
+            any(
+                row[1] == "base_sha" for row in db.execute("PRAGMA table_info(objects)")
+            )
+        ]
         db.execute("CREATE TEMP TABLE purge_v(version_id INTEGER PRIMARY KEY)")
         db.executemany(
             "INSERT INTO purge_v VALUES (?)", [(i,) for g in purge for i in g["ids"]]
         )
         # Both queries spell the "no completed version outside the purge set uses this chunk"
-        # test out in full: constant SQL only, nothing is interpolated.
+        # test out in full; the only interpolated text is `disk`, one of two constants above.
         per_file = {
             fid: size or 0
             for fid, size in db.execute(
-                "SELECT pv.file_id, SUM(o.size) FROM objects o "
+                f"SELECT pv.file_id, SUM({disk}) FROM objects o "  # noqa: S608
                 "JOIN (SELECT DISTINCT vo.sha256, v.file_id FROM version_objects vo "
                 "      JOIN versions v ON v.version_id = vo.version_id "
                 "      WHERE vo.version_id IN (SELECT version_id FROM purge_v)) pv "
@@ -267,19 +306,22 @@ def reclaimable(db_path, purge):
                 "                  JOIN versions xv ON xv.version_id = x.version_id "
                 "                  WHERE x.sha256 = o.sha256 AND xv.status='completed' "
                 "                  AND x.version_id NOT IN (SELECT version_id FROM purge_v)) "
-                "GROUP BY pv.file_id"
+                + base_guard
+                + " GROUP BY pv.file_id"
             )
         }
-        total = db.execute(
-            "SELECT COALESCE(SUM(o.size), 0) FROM objects o "
+        total, logical = db.execute(
+            f"SELECT COALESCE(SUM({disk}), 0), COALESCE(SUM(o.size), 0) "  # noqa: S608
+            "FROM objects o "
             "WHERE o.sha256 IN (SELECT sha256 FROM version_objects "
             "                   WHERE version_id IN (SELECT version_id FROM purge_v)) "
             "AND NOT EXISTS (SELECT 1 FROM version_objects x "
             "                JOIN versions xv ON xv.version_id = x.version_id "
             "                WHERE x.sha256 = o.sha256 AND xv.status='completed' "
             "                AND x.version_id NOT IN (SELECT version_id FROM purge_v))"
-        ).fetchone()[0]
-        return per_file, total
+            + base_guard
+        ).fetchone()
+        return per_file, total, logical
     finally:
         db.close()
 
@@ -317,9 +359,19 @@ def soft_delete(
     return changed
 
 
-def undo_versions(conn, ids, engine_object_path, batch=BATCH):
+def undo_versions(conn, ids, engine_object_path, batch=BATCH, object_exists=None):
     """Re-activate versions that an earlier --apply deleted, but only while every chunk of the
-    version is still stored. Returns (restored, skipped)."""
+    version is still stored. Returns (restored, skipped).
+
+    `engine_object_path(sha)` gives the RAW form's path. Since 5.46 an object can also be stored
+    compressed (`<sha>.zst`), so the engine passes `object_exists(sha)` -> bool for \"stored in
+    either form\"; without it only the raw path is looked at (the pre-5.46 behaviour).
+    """
+    if object_exists is None:
+
+        def object_exists(sha):
+            return os.path.exists(engine_object_path(sha))
+
     restored = skipped = 0
     for start in range(0, len(ids), batch):
         chunk = ids[start : start + batch]
@@ -344,7 +396,7 @@ def undo_versions(conn, ids, engine_object_path, batch=BATCH):
                         "SELECT 1 FROM objects WHERE sha256=?", (s,)
                     ).fetchone()
                     is not None
-                    and os.path.exists(engine_object_path(s))
+                    and object_exists(s)
                     for s in shas
                 )
                 if not intact:

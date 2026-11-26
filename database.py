@@ -50,6 +50,7 @@ except ImportError:
 # ------------------------------------------------------------------
 # Paths — create=False: dirs NOT created on import
 # ------------------------------------------------------------------
+from helpers import version_wal  # stdlib-only leaf: enable_wal (5.47.3)
 from paths import get_db_dir
 
 _DB_DIR = get_db_dir(create=False)
@@ -204,7 +205,12 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     if not _bootstrap_state["done"]:
-        conn.execute("PRAGMA journal_mode=WAL")
+        # 5.47.3: threads that open the FIRST connection in the same instant (see the lock
+        # below) race to switch a brand-new database to WAL, and SQLite ignores busy_timeout
+        # for that switch (the loser gets "database is locked" at once): enable_wal retries
+        # exactly that answer for a bounded time. On a database that is already WAL it is
+        # the same single statement as before.
+        version_wal.enable_wal(conn)
     conn.execute("PRAGMA foreign_keys=ON")
     if not _bootstrap_state["done"]:
         # Double-checked locking: file_monitor, search_index, and the

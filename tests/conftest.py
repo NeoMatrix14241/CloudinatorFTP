@@ -268,6 +268,34 @@ def pytest_collection_finish(session):
         )
 
 
+def _name_the_running_test(item, phase):
+    sys.stderr.write(f"[{phase}] {item.nodeid}\n")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    """5.47.6: name the running test and its phase in the captured stderr.
+
+    pytest-timeout's `thread` method (the one used on Windows) prints every thread's stack and
+    kills the process with `os._exit(1)`: no summary and NO test name, and when the stuck call is
+    inside a Playwright greenlet the stack of the main thread shows no pytest frame either. The
+    owner's `qa quick` of 5.47.5 died that way at test 1656 of 1661 without saying which one.
+    pytest-timeout prints the captured stderr, so each phase (pytest resets its capture between
+    setup, call and teardown) writes one line first; on a pass it is captured and never shown.
+    """
+    _name_the_running_test(item, "setup")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_call(item):
+    _name_the_running_test(item, "call")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_teardown(item):
+    _name_the_running_test(item, "teardown")
+
+
 @pytest.fixture(autouse=True)
 def _no_real_app_modules():
     yield

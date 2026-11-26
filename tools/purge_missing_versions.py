@@ -97,6 +97,7 @@ from helpers.version_purge import (  # noqa: E402  (after the sys.path line abov
     list_undo_files,
     read_undo_file as _read_undo_file,
     reclaimable,
+    reclaimable_detail,
     scan_tracked,
     scope_dirs_from,
     soft_delete,
@@ -115,6 +116,7 @@ __all__ = [
     "_under",
     "list_undo_files",
     "reclaimable",
+    "reclaimable_detail",
     "scan_tracked",
     "soft_delete",
     "undo_versions",
@@ -174,7 +176,7 @@ def _scope_dirs():
     return scope_dirs_from(config)
 
 
-def _print_report(scan: Scan, per_file, total, args):
+def _print_report(scan: Scan, per_file, total, args, logical=0):
     def line(label, value, indent=0):
         print(f"  {' ' * indent}{label:<{52 - indent}} {value:>10,}")
 
@@ -239,6 +241,11 @@ def _print_report(scan: Scan, per_file, total, args):
         f"\nWould soft-delete {len(scan.purge_ids):,} version(s) of {len(scan.purge):,} file(s)"
         f" and free {_fmt_bytes(total)} of chunk storage"
     )
+    if logical and logical != total:
+        print(
+            f"  (on disk: some of those chunks are stored compressed; their raw size is "
+            f"{_fmt_bytes(logical)})"
+        )
     top = sorted(scan.purge, key=lambda g: per_file.get(g["file_id"], 0), reverse=True)
     for g in top[: args.show]:
         print(
@@ -266,11 +273,16 @@ def _orphan_count(engine) -> int:
 
 
 def _object_totals(engine):
-    row = (
-        engine._connect()
-        .execute("SELECT COUNT(*), COALESCE(SUM(size), 0) FROM objects")
-        .fetchone()
+    """(object count, bytes ON DISK): the stored (compressed) size where an object is
+    compressed (5.46), its raw size otherwise."""
+    conn = engine._connect()
+    has_stored = any(
+        r[1] == "stored_size" for r in conn.execute("PRAGMA table_info(objects)")
     )
+    expr = "COALESCE(stored_size, size)" if has_stored else "size"
+    row = conn.execute(
+        f"SELECT COUNT(*), COALESCE(SUM({expr}), 0) FROM objects"  # noqa: S608
+    ).fetchone()
     return row[0], row[1]
 
 
@@ -359,6 +371,9 @@ class Collected:
     total: int
     key: tuple
     when: float
+    logical: int = (
+        0  # the same chunks' RAW size; differs from `total` when some are compressed
+    )
 
 
 def _settings_key(s):
@@ -384,17 +399,17 @@ def _collect(engine, scope_dirs, s) -> Collected:
         force=s.force,
         progress=lambda done, total: print(f"  checked {done:,} of {total:,}"),
     )
-    per_file, total = {}, 0
+    per_file, total, logical = {}, 0, 0
     if scan.purge:
         print(
             f"Working out how much space {len(scan.purge):,} file(s) would free "
             "(this can take a few minutes)..."
         )
-        per_file, total = _with_progress(
+        per_file, total, logical = _with_progress(
             "still working out the space",
-            lambda: reclaimable(engine.db_path, scan.purge),
+            lambda: reclaimable_detail(engine.db_path, scan.purge),
         )
-    return Collected(scan, per_file, total, _settings_key(s), time.time())
+    return Collected(scan, per_file, total, _settings_key(s), time.time(), logical)
 
 
 def _drop_reappeared(scan, exists=os.path.lexists) -> int:
@@ -436,7 +451,12 @@ def _apply(engine, scan, free_now) -> None:
 def _run_undo(engine, path) -> int:
     with open(path, encoding="utf-8") as f:
         ids = json.load(f)["version_ids"]
-    restored, skipped = undo_versions(engine._connect(), ids, engine._object_path)
+    restored, skipped = undo_versions(
+        engine._connect(),
+        ids,
+        engine._object_path,
+        object_exists=engine._object_exists,  # 5.46: a chunk may be stored compressed
+    )
     print(
         f"Restored {restored:,} version(s); skipped {skipped:,} "
         "(chunks already freed or changed)."
@@ -450,7 +470,7 @@ def _run_undo(engine, path) -> int:
 def cmd_report_or_apply(args) -> int:
     engine = _get_engine()
     c = _collect(engine, _scope_dirs(), args)
-    _print_report(c.scan, c.per_file, c.total, args)
+    _print_report(c.scan, c.per_file, c.total, args, c.logical)
     if not c.scan.purge:
         return 0
 
@@ -482,7 +502,7 @@ def cmd_undo(args) -> int:
 
 def _menu_report(engine, scope_dirs, s):
     c = _collect(engine, scope_dirs, s)
-    _print_report(c.scan, c.per_file, c.total, s)
+    _print_report(c.scan, c.per_file, c.total, s, c.logical)
     return c
 
 

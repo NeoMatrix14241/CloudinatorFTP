@@ -15,6 +15,7 @@ import importlib.util
 import os
 import sqlite3
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -203,6 +204,185 @@ def test_a_limit_of_zero_switches_the_checkpoint_off(db):
 
 # -- the hard rule: no asyncio -----------------------------------------------------------
 
+# -- enable_wal: the WAL switch of a database that is still in rollback mode (5.47.2) -----------
+
+
+def _journal_mode(path):
+    conn = sqlite3.connect(path)
+    try:
+        return conn.execute("PRAGMA journal_mode").fetchone()[0].lower()
+    finally:
+        conn.close()
+
+
+def _rollback_database(tmp_path):
+    """A database in the default (rollback-journal) mode, like one created by plain sqlite3."""
+    path = str(tmp_path / "old.sqlite3")
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE t(x)")
+    conn.commit()
+    conn.close()
+    assert _journal_mode(path) == "delete"
+    return path
+
+
+class _FakeConn:
+    """execute(...).fetchone() answers from a script: an exception is raised, anything else
+    is the one row of the answer."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.statements = []
+
+    def execute(self, sql):
+        self.statements.append(sql)
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return types.SimpleNamespace(fetchone=lambda: answer)
+
+
+class _FakeClock:
+    """A clock that only moves when the code under test sleeps."""
+
+    def __init__(self):
+        self.now = 1000.0
+        self.pauses = []
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.pauses.append(seconds)
+        self.now += seconds
+
+
+LOCKED = sqlite3.OperationalError("database is locked")
+
+
+def test_enable_wal_switches_a_rollback_database_and_reports_the_mode(tmp_path):
+    path = _rollback_database(tmp_path)
+    conn = sqlite3.connect(path)
+    try:
+        assert vw.enable_wal(conn) == "wal"
+    finally:
+        conn.close()
+    assert _journal_mode(path) == "wal"
+
+
+def test_enable_wal_on_a_wal_database_changes_nothing_and_never_sleeps(db):
+    path, conn = db
+    slept = []
+    assert vw.enable_wal(conn, sleep=slept.append) == "wal"
+    assert slept == []
+
+
+def test_the_bare_pragma_ignores_busy_timeout_when_another_writer_is_active(tmp_path):
+    """The reason enable_wal exists, as a fact about SQLite: another connection holds the write
+    lock of a rollback-mode database and a second one asks for WAL with a 2 s busy timeout. The
+    answer is 'database is locked' AT ONCE (the busy handler is not used), not after 2 s."""
+    path = _rollback_database(tmp_path)
+    holder = sqlite3.connect(path, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    other = sqlite3.connect(path)
+    try:
+        other.execute("PRAGMA busy_timeout=2000")
+        started = time.monotonic()
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            other.execute("PRAGMA journal_mode=WAL")
+        assert time.monotonic() - started < 1.0
+    finally:
+        other.close()
+        holder.close()
+    assert _journal_mode(path) == "delete"  # nothing was half-switched
+
+
+def test_enable_wal_waits_out_a_real_writer_and_then_switches(tmp_path):
+    """The same situation, with the helper: the writer lets go during the first pause (the fake
+    sleep commits it, so no thread and no real waiting), the second attempt switches the file."""
+    path = _rollback_database(tmp_path)
+    holder = sqlite3.connect(path, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    holder.execute("INSERT INTO t VALUES (1)")
+    pauses = []
+
+    def release_on_first_pause(seconds):
+        pauses.append(seconds)
+        if len(pauses) == 1:
+            holder.execute("COMMIT")
+
+    other = sqlite3.connect(path)
+    try:
+        other.execute("PRAGMA busy_timeout=2000")
+        assert vw.enable_wal(other, sleep=release_on_first_pause) == "wal"
+        # the connection is clean afterwards: it can read and write
+        other.execute("INSERT INTO t VALUES (2)")
+        other.commit()
+        assert other.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 2
+    finally:
+        other.close()
+        holder.close()
+    assert len(pauses) == 1
+    assert _journal_mode(path) == "wal"
+
+
+def test_enable_wal_retries_a_lock_answer_with_growing_pauses():
+    clock = _FakeClock()
+    conn = _FakeConn(LOCKED, LOCKED, LOCKED, LOCKED, LOCKED, LOCKED, LOCKED, ("wal",))
+    assert vw.enable_wal(conn, 30, sleep=clock.sleep, clock=clock) == "wal"
+    assert len(conn.statements) == 8
+    assert all(sql == "PRAGMA journal_mode=WAL" for sql in conn.statements)
+    assert clock.pauses == [0.01, 0.02, 0.04, 0.08, 0.16, 0.25, 0.25]
+
+
+def test_enable_wal_gives_up_after_the_wait_and_raises_the_lock_answer():
+    clock = _FakeClock()
+    conn = _FakeConn(*([LOCKED] * 1000))
+    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        vw.enable_wal(conn, 1.0, sleep=clock.sleep, clock=clock)
+    assert 1.0 <= clock.now - 1000.0 <= 1.0 + 1e-9  # waited the whole second, not more
+    assert sum(clock.pauses) <= 1.0 + 1e-9
+
+
+def test_enable_wal_with_a_wait_of_zero_tries_once():
+    clock = _FakeClock()
+    conn = _FakeConn(LOCKED, ("wal",))
+    with pytest.raises(sqlite3.OperationalError):
+        vw.enable_wal(conn, 0, sleep=clock.sleep, clock=clock)
+    assert len(conn.statements) == 1 and clock.pauses == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        sqlite3.OperationalError("disk I/O error"),
+        sqlite3.OperationalError("unable to open database file"),
+        sqlite3.OperationalError("attempt to write a readonly database"),
+        sqlite3.DatabaseError("file is not a database"),
+    ],
+)
+def test_enable_wal_does_not_retry_anything_but_a_lock_answer(error):
+    clock = _FakeClock()
+    conn = _FakeConn(error, ("wal",))
+    with pytest.raises(sqlite3.DatabaseError) as raised:
+        vw.enable_wal(conn, 30, sleep=clock.sleep, clock=clock)
+    assert raised.value is error
+    assert len(conn.statements) == 1 and clock.pauses == []
+
+
+def test_enable_wal_also_retries_a_busy_answer_worded_as_busy():
+    clock = _FakeClock()
+    conn = _FakeConn(sqlite3.OperationalError("database table is busy"), ("wal",))
+    assert vw.enable_wal(conn, 30, sleep=clock.sleep, clock=clock) == "wal"
+    assert len(clock.pauses) == 1
+
+
+def test_enable_wal_returns_the_mode_sqlite_reports_even_when_it_is_not_wal():
+    # e.g. a filesystem without shared memory answers 'delete': the caller sees it, nothing raises
+    assert vw.enable_wal(_FakeConn(("delete",))) == "delete"
+    assert vw.enable_wal(_FakeConn(None)) == ""
+
+
 _FORBIDDEN_MODULES = {"asyncio", "concurrent", "anyio", "trio", "quart", "hypercorn"}
 _FORBIDDEN_CALLS = {
     "to_thread",
@@ -264,6 +444,26 @@ def test_the_helper_is_a_stdlib_only_leaf():
             assert (node.module or "").split(".")[0] in allowed
 
 
+@pytest.mark.parametrize("name", ["database.py", "search_index.py"])
+def test_the_other_databases_switch_to_wal_through_the_helper_too(name):
+    """5.47.3: database.py and search_index.py had the same bare `PRAGMA journal_mode=WAL`;
+    SQLite ignores busy_timeout for that switch, so a second thread opening a brand-new file
+    in the same instant failed at once. No bare pragma may come back."""
+    tree = _tree(name)
+    connect = next(
+        n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_connect"
+    )
+    source = ast.unparse(connect)
+    assert "version_wal.enable_wal(conn)" in source
+    assert "journal_mode" not in source
+    imports = [
+        n
+        for n in tree.body
+        if isinstance(n, ast.ImportFrom) and n.module == "helpers"
+    ]
+    assert any(a.name == "version_wal" for n in imports for a in n.names)
+
+
 # -- how the engine wires it in ----------------------------------------------------------
 
 
@@ -283,7 +483,10 @@ def _source(node):
 def test_every_engine_connection_sets_the_journal_size_limit():
     connect = _source(_engine_method("_connect"))
     assert "version_wal.apply_journal_size_limit(conn, _wal_limit_bytes())" in connect
-    assert connect.index("journal_mode=WAL") < connect.index("apply_journal_size_limit")
+    # 5.47.2: the WAL switch goes through the helper's bounded retry, never a bare pragma
+    assert "version_wal.enable_wal(conn)" in connect
+    assert "journal_mode" not in connect
+    assert connect.index("enable_wal") < connect.index("apply_journal_size_limit")
     assert connect.index("apply_journal_size_limit") < connect.index(
         "self._conn_local.conn = conn"
     )

@@ -27,6 +27,15 @@ do_delete/do_wal), never duplicated:
     python tools/version_manage.py wal --checkpoint          # PRAGMA wal_checkpoint(TRUNCATE): shrink the -wal file
     python tools/version_manage.py wal --checkpoint [--mode passive|full|restart|truncate]
                                        [--timeout SECONDS] [--if-larger-mb 0..64]
+    python tools/version_manage.py compress --probe          # READ-ONLY: measure what zstd would save on the real store
+    python tools/version_manage.py compress --probe [--samples N] [--levels 1,3,9,15,19,22] [--seed N]
+                                       [--seconds S] [--max-bytes MB] [--busy-percent 5..100]
+                                       [--min-saving 0..50] [--no-dictionary] [--no-delta]
+                                       [--delta-pairs N] [--db PATH] [--objects DIR]
+    python tools/version_manage.py compress --status         # READ-ONLY: how much is compressed, the backlog, the thread
+    python tools/version_manage.py compress --sweep [--grace SECONDS] [--busy-percent 5..100]
+    python tools/version_manage.py compress --verify [--busy-percent 5..100]
+    python tools/version_manage.py compress --decompress [--yes] [--force] [--busy-percent 5..100]
 
 `wal` (5.45.1): the write-ahead log `version_engine.sqlite3-wal` never shrinks by itself, it keeps
 the size of the biggest burst of writes it ever saw (2.9 GB after a purge and a GC). A checkpoint
@@ -35,6 +44,24 @@ asks for no confirmation. It is safe while the engine runs: if a reader or write
 past --timeout it reports that (exit code 1) and you try again, or stop the server first.
 The engine does the same by itself when the file is above VERSION_WAL_SIZE_LIMIT_MB (at most 64).
 No asyncio, no thread: one short synchronous connection, like the other commands.
+
+`compress --probe` (5.46, Phase 0 of VERSION_COMPRESSION_PLAN.md): a READ-ONLY measurement. It opens the
+database with mode=ro, reads a random sample of raw objects (SHA-256 verified), compresses them in memory
+at several zstd levels and prints the size, the speeds, an estimate for the whole store, a trained-dictionary
+test and the previous-version delta test. It writes nothing into the object store, sleeps between samples
+(--busy-percent, default 50) and is safe while the server runs. The output is what the owner pastes back
+before the level / dictionary / delta decisions are made. No asyncio, no thread: one synchronous loop.
+
+`compress --status|--sweep|--verify|--decompress` (5.47, release B of VERSION_COMPRESSION_PLAN.md): the
+hand tools of the object compressor that the Version Engine's `ve-compress` thread runs when
+VERSION_COMPRESSION_ENABLED is true. `--status` only reads. `--sweep` removes the raw copy of every
+compressed object, but only after the `.zst` was decoded and hashed once more (the thread does the
+same, 5 minutes after compressing). `--verify` re-reads every compressed object and compares size and
+SHA-256 (changes nothing). `--decompress` turns every compressed object back into a plain raw file
+(verified while it is written; the way back to the 5.45.1 layout): it refuses while compression is
+switched on (switch it off in server_config.json and restart the engine first), checks the free space,
+and asks for a typed confirmation unless --yes. Every step is safe to interrupt (Ctrl-C) and to run
+again. No asyncio, no thread: one synchronous loop with an optional duty cycle (--busy-percent).
 
 Ctrl-C behavior (both modes): cancels whatever prompt/action is in progress
 and returns to the menu (interactive mode) or exits cleanly with code 130
@@ -64,7 +91,7 @@ sys.path.insert(0, _ROOT)
 
 import config
 import version_engine as ve
-from helpers import version_wal
+from helpers import version_compress, version_probe, version_wal, version_zstd
 
 
 def _get_engine() -> ve.Engine:
@@ -423,6 +450,234 @@ def do_wal(
 # =============================================================================
 
 
+def do_compress_probe(
+    samples=version_probe.DEFAULT_SAMPLES,
+    levels=version_probe.DEFAULT_LEVELS,
+    seed=None,
+    seconds=0.0,
+    max_mb=0.0,
+    busy_percent=version_probe.DEFAULT_BUSY_PERCENT,
+    min_saving=version_probe.DEFAULT_MIN_SAVING,
+    dictionary_test=True,
+    delta_test=True,
+    delta_pairs=version_probe.DEFAULT_DELTA_PAIRS,
+    db_path=None,
+    objects_dir=None,
+) -> int:
+    """READ-ONLY compression probe (VERSION_COMPRESSION_PLAN.md Phase 0). Never calls
+    _get_engine(): that creates folders and tables, and the probe must change nothing.
+    Exit code: 0 = report printed, 1 = cannot run (no zstd / no database), 130 = Ctrl-C
+    (the partial report is still printed)."""
+    engine = ve.Engine()  # paths only: its constructor starts nothing and opens nothing
+    db_path = db_path or engine.db_path
+    objects_dir = objects_dir or engine.objects_dir
+    print("\n🔬 Compression probe: READ-ONLY, nothing in the object store is changed.")
+    print(
+        f"   Safe while the server runs; it works at about {busy_percent:g} % duty cycle."
+    )
+    try:
+        report = version_probe.run_probe(
+            db_path,
+            objects_dir,
+            samples=samples,
+            levels=levels,
+            seed=seed,
+            min_saving_percent=min_saving,
+            busy_percent=busy_percent,
+            max_seconds=seconds,
+            max_bytes=int(max_mb * 1024 * 1024),
+            dictionary_test=dictionary_test,
+            delta_test=delta_test,
+            delta_pairs=delta_pairs,
+            estimate_busy_percent=float(
+                getattr(config, "VERSION_COMPRESSION_BUSY_PERCENT", 25)
+            ),
+            progress=lambda text: print(text, flush=True),
+        )
+    except version_probe.ProbeError as exc:
+        print(f"❌ {exc}")
+        return 1
+    print()
+    print(version_probe.format_report(report, db_path, objects_dir))
+    return 130 if report["interrupted"] else 0
+
+
+def _pause(seconds: float) -> bool:
+    """The duty-cycle pause of the compress hand tools (a plain CLI process: time.sleep is fine
+    here; the engine's own thread uses _shutdown_event.wait). False = keep going."""
+    time.sleep(seconds)
+    return False
+
+
+def _compress_settings_now() -> dict:
+    return {
+        "enabled": bool(getattr(config, "VERSION_COMPRESSION_ENABLED", False)),
+        "level": getattr(
+            config, "VERSION_COMPRESSION_LEVEL", version_zstd.DEFAULT_LEVEL
+        ),
+        "min_saving": getattr(config, "VERSION_COMPRESSION_MIN_SAVING_PERCENT", 5),
+        "busy": getattr(config, "VERSION_COMPRESSION_BUSY_PERCENT", 25),
+        "interval": getattr(config, "VERSION_COMPRESSION_INTERVAL", 600),
+        "delta_enabled": getattr(config, "VERSION_COMPRESSION_DELTA_ENABLED", False)
+        is True,
+        "delta_min_gain": getattr(
+            config, "VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT", 20
+        ),
+    }
+
+
+def do_compress_status(db_path=None) -> int:
+    """READ-ONLY: the numbers behind the compressor. Never calls _get_engine() (that creates
+    folders and tables)."""
+    engine = ve.Engine()  # paths only: its constructor starts nothing and opens nothing
+    db_path = db_path or engine.db_path
+    try:
+        conn = version_probe.open_readonly(db_path)
+    except version_probe.ProbeError as exc:
+        print(f"❌ {exc}")
+        return 1
+    try:
+        counts = version_compress.status_counts(conn, version_zstd.MIN_OBJECT_SIZE)
+        meta = dict(conn.execute("SELECT key, value FROM engine_metadata").fetchall())
+    finally:
+        conn.close()
+    print()
+    print(
+        version_compress.format_status(
+            counts, meta, _compress_settings_now(), version_zstd.version()
+        )
+    )
+    return 0
+
+
+def _busy_or(value, default):
+    return default if value is None else value
+
+
+def do_compress_sweep(grace=0.0, busy_percent=100.0) -> int:
+    """Remove the raw copy of every compressed object whose `.zst` verifies (again, now)."""
+    engine = _get_engine()
+    if not version_zstd.available():
+        print("❌ zstd is not available in this Python: nothing can be verified.")
+        return 1
+    print(
+        "\n🧹 Sweeping: the raw copy of an object is removed only after its compressed"
+    )
+    print("   copy was decoded and its SHA-256 compared again. Safe to interrupt.")
+    try:
+        res = engine.sweep_raw_copies(grace=grace, pause=_pause, busy=busy_percent)
+    except KeyboardInterrupt:
+        print(
+            "\n⏹️  Interrupted. Every object handled so far is final and safe; run it again."
+        )
+        return 130
+    print(
+        f"\n  looked at {res['checked']:,} object(s): {res['removed']:,} raw copy(ies) removed, "
+        f"{res['already_gone']:,} already gone, {res['busy']:,} busy (try again later)"
+    )
+    if res["bad"] or res["lost"]:
+        print(
+            f"  ⚠️  {res['bad']:,} compressed copy(ies) did not verify (the raw copy was kept), "
+            f"{res['lost']:,} object(s) have no good copy at all: see the Version Engine log."
+        )
+        return 1
+    print("  ✅ done.")
+    return 0
+
+
+def do_compress_verify(busy_percent=50.0) -> int:
+    """Read-only integrity check of every compressed object."""
+    engine = _get_engine()
+    if not version_zstd.available():
+        print("❌ zstd is not available in this Python: nothing can be verified.")
+        return 1
+    print(
+        "\n🔎 Verifying every compressed object (decode + size + SHA-256); changes nothing."
+    )
+    try:
+        res = engine.verify_compressed(pause=_pause, busy=busy_percent)
+    except KeyboardInterrupt:
+        print("\n⏹️  Interrupted; nothing was changed.")
+        return 130
+    print(
+        f"\n  checked {res['checked']:,}: {res['ok']:,} ok, {res['bad']:,} with a bad "
+        f"compressed copy (a good raw copy exists), {res['lost']:,} with NO good copy"
+    )
+    if res["examples"]:
+        print(f"  first problems: {', '.join(res['examples'])}")
+    if res["bad"] or res["lost"]:
+        print("  ⚠️  see 'possible disk corruption' in the Version Engine log.")
+        return 1
+    print("  ✅ every compressed object is intact.")
+    return 0
+
+
+def do_compress_decompress(yes=False, force=False, busy_percent=100.0) -> int:
+    """The way back: every compressed object becomes a plain raw file again."""
+    engine = _get_engine()
+    if not version_zstd.available():
+        print(
+            "❌ zstd is not available in this Python: compressed objects cannot be read."
+        )
+        return 1
+    running = engine._get_meta("compress_running", "0") == "1"
+    switched_on = bool(getattr(config, "VERSION_COMPRESSION_ENABLED", False))
+    if (switched_on or running) and not force:
+        print(
+            "❌ Compression is still switched on"
+            + (" and the engine reports its compress thread running" if running else "")
+            + '.\n   Set "VERSION_COMPRESSION_ENABLED": false in server_config.json and\n'
+            "   restart the Version Engine first (or stop the server), then run this again.\n"
+            "   (--force skips this check: only if you know the engine is stopped.)"
+        )
+        return 1
+    plan = engine.decompress_plan()
+    if not plan["compressed_objects"]:
+        print("ℹ️  No compressed objects: nothing to do.")
+        return 0
+    margin = max(512 * 1024 * 1024, plan["raw_bytes"] // 20)
+    print("\n↩️  Decompress: turn every compressed object back into a plain raw file.")
+    print(
+        f"   {plan['compressed_objects']:,} compressed object(s); {plan['objects']:,} of them "
+        f"have no raw copy and need to be written: {config.format_bytes(plan['raw_bytes'])}."
+    )
+    print(
+        f"   Free space where the objects live: {config.format_bytes(plan['free_bytes'])}."
+    )
+    if plan["free_bytes"] < plan["raw_bytes"] + margin:
+        print(
+            f"❌ Not enough free space (needs {config.format_bytes(plan['raw_bytes'] + margin)} "
+            "including a safety margin). Nothing was touched."
+        )
+        return 1
+    if not yes:
+        phrase = f"decompress {plan['compressed_objects']} objects"
+        print(f"\nTo proceed, type exactly:  {phrase}\n")
+        typed = _prompt("> ")
+        if typed is None or typed.strip() != phrase:
+            print("\n❌ Cancelled: nothing was touched.")
+            return 1
+    try:
+        res = engine.decompress_all(pause=_pause, busy=busy_percent)
+    except KeyboardInterrupt:
+        print(
+            "\n⏹️  Interrupted. Every object is either still compressed or already raw and"
+        )
+        print("   verified; run it again to finish.")
+        return 130
+    print(
+        f"\n  {res['decompressed']:,} object(s) are raw files again, {res['lost']:,} could not "
+        f"be restored (no good copy: see the Version Engine log), {res['error']:,} stopped by a "
+        "disk problem (run again)."
+    )
+    if res["lost"] or res["error"]:
+        return 1
+    print(
+        "  ✅ done. Leave VERSION_COMPRESSION_ENABLED off, or the compressor starts again."
+    )
+    return 0
+
+
 def cmd_list(args):
     return do_list(args.file_path)
 
@@ -448,6 +703,98 @@ def cmd_wal(args):
         mode=args.mode or "truncate",
         timeout=10.0 if args.timeout is None else args.timeout,
         if_larger_mb=args.if_larger_mb,
+    )
+
+
+def cmd_compress(args):
+    probe_only = {
+        "--samples": args.samples,
+        "--levels": args.levels,
+        "--seed": args.seed,
+        "--seconds": args.seconds,
+        "--max-bytes": args.max_bytes,
+        "--min-saving": args.min_saving,
+        "--delta-pairs": args.delta_pairs,
+        "--objects": args.objects,
+        "--no-dictionary": args.no_dictionary or None,
+        "--no-delta": args.no_delta or None,
+    }
+    actions = [
+        name
+        for name, on in (
+            ("--probe", args.probe),
+            ("--status", args.status),
+            ("--sweep", args.sweep),
+            ("--verify", args.verify),
+            ("--decompress", args.decompress),
+        )
+        if on
+    ]
+    if len(actions) > 1:
+        print(f"❌ Choose ONE action, not {' and '.join(actions)}.")
+        return 2
+    action = actions[0] if actions else None
+    given_probe_only = [n for n, v in probe_only.items() if v is not None]
+    if action != "--probe" and (
+        given_probe_only or (args.db is not None and action != "--status")
+    ):
+        print("❌ These options only apply with --probe.")
+        return 2
+    if action is None:
+        if (
+            args.busy_percent is not None
+            or args.grace is not None
+            or args.yes
+            or args.force
+        ):
+            print("❌ Choose an action first.")
+            return 2
+        print(
+            "❌ Choose an action: --probe, --status, --sweep, --verify or --decompress."
+        )
+        return 2
+    if args.grace is not None and action != "--sweep":
+        print("❌ --grace only applies with --sweep.")
+        return 2
+    if (args.yes or args.force) and action != "--decompress":
+        print("❌ --yes and --force only apply with --decompress.")
+        return 2
+    if args.busy_percent is not None and action == "--status":
+        print("❌ --busy-percent does not apply to --status.")
+        return 2
+
+    if action == "--status":
+        return do_compress_status(db_path=args.db)
+    if action == "--sweep":
+        return do_compress_sweep(
+            grace=_busy_or(args.grace, 0.0),
+            busy_percent=_busy_or(args.busy_percent, 100.0),
+        )
+    if action == "--verify":
+        return do_compress_verify(busy_percent=_busy_or(args.busy_percent, 50.0))
+    if action == "--decompress":
+        return do_compress_decompress(
+            yes=args.yes,
+            force=args.force,
+            busy_percent=_busy_or(args.busy_percent, 100.0),
+        )
+
+    def given(value, default):
+        return default if value is None else value
+
+    return do_compress_probe(
+        samples=given(args.samples, version_probe.DEFAULT_SAMPLES),
+        levels=given(args.levels, version_probe.DEFAULT_LEVELS),
+        seed=args.seed,
+        seconds=given(args.seconds, 0.0),
+        max_mb=given(args.max_bytes, 0.0),
+        busy_percent=given(args.busy_percent, version_probe.DEFAULT_BUSY_PERCENT),
+        min_saving=given(args.min_saving, version_probe.DEFAULT_MIN_SAVING),
+        dictionary_test=not args.no_dictionary,
+        delta_test=not args.no_delta,
+        delta_pairs=given(args.delta_pairs, version_probe.DEFAULT_DELTA_PAIRS),
+        db_path=args.db,
+        objects_dir=args.objects,
     )
 
 
@@ -596,6 +943,28 @@ def _mb_arg(text: str) -> float:
     return value
 
 
+def _ranged_number(low, high, kind=float, unit=""):
+    """An argparse type: a number from `low` to `high` (inclusive)."""
+
+    def convert(text):
+        try:
+            value = kind(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+        if not low <= value <= high:
+            raise argparse.ArgumentTypeError(f"must be from {low:g} to {high:g}{unit}")
+        return value
+
+    return convert
+
+
+def _levels_arg(text: str):
+    try:
+        return version_probe.parse_levels(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(
         description="Admin CLI for the Version Engine — list, restore, delete versions and shrink the WAL file. "
@@ -661,6 +1030,121 @@ def _build_parser():
         help="Only checkpoint when the -wal file is above this many MB (0 to 64)",
     )
     p_wal.set_defaults(func=cmd_wal)
+
+    p_compress = sub.add_parser(
+        "compress",
+        help="Object compression: --probe measures the real store, --status / --sweep / "
+        "--verify / --decompress manage the compressed objects",
+    )
+    p_compress.add_argument(
+        "--probe",
+        action="store_true",
+        help="Read-only measurement of zstd on a random sample of the real objects",
+    )
+    p_compress.add_argument(
+        "--status",
+        action="store_true",
+        help="Read-only: how much is compressed, the backlog and the thread (5.47)",
+    )
+    p_compress.add_argument(
+        "--sweep",
+        action="store_true",
+        help="Remove the raw copy of every compressed object whose compressed copy verifies",
+    )
+    p_compress.add_argument(
+        "--verify",
+        action="store_true",
+        help="Re-read and hash-check every compressed object (changes nothing)",
+    )
+    p_compress.add_argument(
+        "--decompress",
+        action="store_true",
+        help="Turn every compressed object back into a plain raw file (the way back to 5.45.1)",
+    )
+    p_compress.add_argument(
+        "--grace",
+        type=_ranged_number(0, 86400),
+        default=None,
+        metavar="SECONDS",
+        help="With --sweep: only objects compressed at least this long ago (default 0)",
+    )
+    p_compress.add_argument(
+        "--yes",
+        action="store_true",
+        help="With --decompress: do not ask for the typed phrase",
+    )
+    p_compress.add_argument(
+        "--force",
+        action="store_true",
+        help="With --decompress: skip the 'compression is switched on' check (engine stopped)",
+    )
+    p_compress.add_argument(
+        "--samples",
+        type=_ranged_number(1, 100000, int),
+        default=None,
+        help="Objects to sample at random (1 to 100000, default 400)",
+    )
+    p_compress.add_argument(
+        "--levels",
+        type=_levels_arg,
+        default=None,
+        help="Comma-separated zstd levels, each 1 to 22 (default 1,3,9,15,19,22)",
+    )
+    p_compress.add_argument(
+        "--seed",
+        type=_ranged_number(1, 2**31 - 1, int),
+        default=None,
+        help="Repeat an earlier sample (the report prints its seed)",
+    )
+    p_compress.add_argument(
+        "--seconds",
+        type=_ranged_number(0, 86400),
+        default=None,
+        help="Stop after about this many seconds (0 = no limit); the report covers what was read",
+    )
+    p_compress.add_argument(
+        "--max-bytes",
+        type=_ranged_number(0, 10**9),
+        default=None,
+        metavar="MB",
+        help="Stop after reading about this many MB from the store (0 = no limit)",
+    )
+    p_compress.add_argument(
+        "--busy-percent",
+        type=_ranged_number(5, 100, float, " %"),
+        default=None,
+        help="Duty cycle: 50 = pause as long as it works; 100 = no pauses (defaults: probe 50, "
+        "verify 50, sweep and decompress 100)",
+    )
+    p_compress.add_argument(
+        "--min-saving",
+        type=_ranged_number(0, 50, float, " %"),
+        default=None,
+        help="An object only counts as shrunk if it is at least this much smaller (default 5)",
+    )
+    p_compress.add_argument(
+        "--no-dictionary", action="store_true", help="Skip the trained-dictionary test"
+    )
+    p_compress.add_argument(
+        "--no-delta", action="store_true", help="Skip the previous-version delta test"
+    )
+    p_compress.add_argument(
+        "--delta-pairs",
+        type=_ranged_number(1, 5000, int),
+        default=None,
+        help="Chunk pairs for the delta test (default 200)",
+    )
+    p_compress.add_argument(
+        "--db",
+        default=None,
+        help="Probe / show this database file instead of the configured one",
+    )
+    p_compress.add_argument(
+        "--objects",
+        default=None,
+        help="Use this objects folder instead of the configured one",
+    )
+    p_compress.set_defaults(func=cmd_compress)
 
     return parser
 
