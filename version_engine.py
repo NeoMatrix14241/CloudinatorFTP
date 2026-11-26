@@ -57,6 +57,7 @@ Design decisions explicitly recorded (see CLAUDE.md for the full log):
 import argparse
 import fnmatch
 import hashlib
+import math
 import os
 import queue
 import re
@@ -2526,7 +2527,7 @@ class Engine:
                 value = float(getattr(config, name, default))
             except (TypeError, ValueError):
                 value = float(default)
-            if value != value:  # NaN
+            if math.isnan(value):
                 value = float(default)
             return min(high, max(low, value))
 
@@ -2782,7 +2783,6 @@ class Engine:
                 out.flush()
                 os.fsync(out.fileno())
             os.replace(tmp_path, self._zst_path(sha256_hex))
-            tmp_path = None
         except OSError as e:
             if tmp_path:
                 self._remove_quietly(tmp_path)
@@ -3347,7 +3347,6 @@ class Engine:
                     return "lost"
                 os.makedirs(os.path.dirname(raw_path), exist_ok=True)
                 os.replace(tmp_path, raw_path)
-                tmp_path = None
             except _ObjectError as e:
                 if tmp_path:
                     self._remove_quietly(tmp_path)
