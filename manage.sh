@@ -1587,7 +1587,7 @@ cmd_menu() {
 		echo "   8) Restart WebDAV only  — recover a wedged WebDAV listener"
 		echo ""
 		echo -e "  ${BOLD}Version Engine${NC}  ${DIM}(file versions: browse, restore, clean up)${NC}"
-		echo "   9) version_manage.py    — List / restore / delete file versions, shrink the WAL file"
+		echo "   9) version_manage.py    — List / restore / delete file versions, shrink the WAL file, object compression tools"
 		echo "  10) purge_missing_versions.py — Free the storage of versions whose file no longer exists"
 		echo ""
 		echo -e "  ${BOLD}Utilities${NC}"
@@ -1729,6 +1729,13 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
                           runs PRAGMA wal_checkpoint(TRUNCATE) to shrink it (safe while the
                           server runs, nothing can be lost; exit 1 if the database stayed busy).
                           The engine also does this by itself above VERSION_WAL_SIZE_LIMIT_MB.
+                          compress --probe | --status | --sweep | --verify | --decompress
+                          [--yes] [--force]: the object-compression tools (probe and status
+                          only read). The interactive menu has the same five as option 7
+                          (sweep asks y/N, decompress asks for its typed phrase) and shows the
+                          compression settings; the settings are edited in the config menu
+                          (Version Engine > Engine settings > 13) and need a Version
+                          Engine restart.
                           Ctrl-C at any prompt cancels that action and returns to
                           the menu (interactive mode) or exits cleanly (CLI mode) —
                           never leaves a partial restore/delete in place.
@@ -1750,7 +1757,9 @@ ${BOLD}UTILITY COMMANDS${NC}  (foreground — safe to run while server is up)
   setup-smb             python tools/smb_setup.py — Configure SMB protocol storage (Windows/Linux)
   kick-sessions         python tools/kick_sessions.py — Force logout of all active
                           sessions (server must be running)
-  config                python config.py
+  config                python config.py — menus for the server settings; Version Engine >
+                          Engine settings > 13 edits the seven VERSION_COMPRESSION_* settings
+                          (shows current / default / range; writes only the keys it changes)
   manage-users          python tools/manage_users.py
   reset-db              python tools/reset_db.py
   setup-storage         python tools/setup_storage.py
@@ -1834,9 +1843,9 @@ ${BOLD}MENU ↔ COMMAND MAP${NC}  (in ./manage.sh menu type the number; from the
    1  start server          2  start dev_server      3  stop
    4  restart               5  status                6  logs [server|dev_server] [-f]
    7  clean-logs            8  restart-webdav
-   9  version-manage (browse / restore / delete versions, the WAL file clean-up: wal, the object compression tools: compress --probe / --status / --sweep / --verify / --decompress)
+   9  version-manage (browse / restore / delete versions, the WAL file clean-up: wal, the object compression tools: compress --probe / --status / --sweep / --verify / --decompress; menu option 7 has the same compression tools)
   10  purge-versions (Version Engine clean-up: interactive menu, or flags; asks before changing anything)
-  11  config                12  setup-smb            13  kick-sessions
+  11  config (Version Engine > Engine settings > 13: compression settings)   12  setup-smb            13  kick-sessions
   14  manage-users          15  reset-db             16  setup-storage
   17  update-modules        18  revoke-shares        19  security-txt
   20  termux-setup (Android/Termux only; shown dimmed elsewhere)
@@ -1865,7 +1874,7 @@ ${BOLD}EXAMPLES${NC}
     ./manage.sh logs dev_server -f               # same, for the dev server
     ./manage.sh clean-logs                       # delete old log files
   Utilities
-    ./manage.sh version-manage                   # interactive menu: browse/restore/delete versions
+    ./manage.sh version-manage                   # interactive menu: browse/restore/delete versions, WAL, option 7 = object compression
     ./manage.sh version-manage list              # every tracked file + version count
     ./manage.sh version-manage list <path>       # one file's full version history
     ./manage.sh version-manage restore <id> <dest>           # restore a version

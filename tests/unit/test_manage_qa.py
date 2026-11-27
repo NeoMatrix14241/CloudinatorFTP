@@ -5,6 +5,9 @@ since 5.41, `qa lint`). Menu 10 / `purge-versions` (5.44.4) launches tools/purge
 Since 5.44.7 the numbers 1..31 are contiguous in print order (a deliberate one-time renumbering: the
 entries after 9 moved, the named commands did not). 5.45.1 added the WAL clean-up INSIDE menu 9 /
 `version-manage wal` (no new number, so LAST_ENTRY and the numbering did not move).
+5.47.7 made the object-compression tools reachable from the `version-manage` menu (its option 7) and
+the compression settings from `config` (Version Engine > Engine settings > 13): manage.sh only got
+text (menu 9's line, the help, the command map), so LAST_ENTRY and the numbering did not move.
 
 They read the real manage.sh and only run side-effect-free commands (`help`, `qa --version`,
 `qa bogus`, `qa layer nope`; `qa audit` and `qa lint` are only checked in the source: audit would use the network, lint would write Ruff's cache); no server is started and nothing is written. The numbering test
@@ -275,3 +278,22 @@ def test_wal_cleanup_lives_under_version_manage_with_menu_cli_and_help():
         assert text in out, text
     tool = (ROOT / "tools" / "version_manage.py").read_text(encoding="utf-8")
     assert 'sub.add_parser(\n        "wal"' in tool
+
+
+def test_compression_is_reachable_from_menu_9_and_the_help_names_both_menus():
+    """5.47.7: text only. Menu 9's line mentions the compression tools, the version-manage help
+    lists the subcommands and says the version-manage menu has them as option 7, and the config
+    help says where the settings are edited (the command line itself is unchanged)."""
+    assert re.search(r"9\) version_manage\.py .*compression", _function("cmd_menu"))
+    out = _run("help").stdout
+    for text in (
+        "compress --probe | --status | --sweep | --verify | --decompress",
+        "menu option 7",
+        "as option 7",
+        "Engine settings > 13",
+        "VERSION_COMPRESSION_*",
+        "compression settings",
+    ):
+        assert text in out, text
+    block = out.split("COMMAND MAP", 1)[1].split("EXAMPLES", 1)[0]
+    assert "11  config (Version Engine > Engine settings > 13" in block

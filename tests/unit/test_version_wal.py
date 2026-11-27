@@ -723,8 +723,10 @@ def test_wal_reports_busy_with_exit_1_and_loses_nothing(tool, capsys):
         keep.close()
 
 
-def test_the_interactive_menu_offers_the_wal_option_and_exit_moved_to_7(tool):
+def test_the_interactive_menu_offers_the_wal_option_and_exit_moved_to_8(tool):
     text = (ROOT / "tools" / "version_manage.py").read_text(encoding="utf-8")
     assert "6) WAL file: show its size / shrink it (checkpoint)" in text
-    assert '"  7) Exit"' in text and "Select option (1-7)" in text
-    assert 'elif choice in ("7", "q", "Q"):' in text
+    # 5.47.7: option 7 is the compression sub-menu, so Exit moved from 7 to 8
+    assert '"  8) Exit"' in text and "Select option (1-8)" in text
+    assert 'elif choice in ("8", "q", "Q"):' in text
+    assert 'elif choice == "7":' in text and "compression_menu()" in text

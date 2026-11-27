@@ -892,11 +892,14 @@ def test_the_probe_command_never_calls_get_engine():
     assert checked == 2
 
 
-def test_compress_is_a_subcommand_only_the_menu_is_unchanged():
-    """Plan 6.11: no new top-level menu entry."""
+def test_compress_is_a_subcommand_and_the_menu_has_one_compression_entry():
+    """Plan 6.11 said no top-level menu entry; 5.47.7 deliberately added exactly one (option 7, the
+    compression sub-menu). The `compress` subcommand itself is unchanged (tests below)."""
     source = (ROOT / "tools" / "version_manage.py").read_text(encoding="utf-8")
     menu = source.split("def interactive_menu", 1)[1].split("def _seconds_arg", 1)[0]
-    assert "compress" not in menu.lower()
+    assert "7) Object compression" in menu
+    assert "compression_menu()" in menu
+    assert "do_compress_" not in menu  # the main menu only opens the sub-menu
 
 
 # -- the other actions of `compress` (5.47): dispatch and argument checks ----------------

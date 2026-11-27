@@ -158,6 +158,7 @@ CloudinatorFTP
 │   │   ├── test_async_handlers_no_blocking.py
 │   │   ├── test_chunk_tracker_lock.py
 │   │   ├── test_client_ip_trust.py
+│   │   ├── test_config_compression_menu.py
 │   │   ├── test_database_connect.py
 │   │   ├── test_dev_server_coverage_save.py
 │   │   ├── test_dev_server_identity.py
@@ -193,6 +194,7 @@ CloudinatorFTP
 │   │   ├── test_version_compress.py
 │   │   ├── test_version_engine_backoff.py
 │   │   ├── test_version_engine_scope.py
+│   │   ├── test_version_manage_compress_menu.py
 │   │   ├── test_version_probe.py
 │   │   ├── test_version_purge.py
 │   │   ├── test_version_wal.py
