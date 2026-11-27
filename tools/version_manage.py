@@ -63,6 +63,13 @@ switched on (switch it off in server_config.json and restart the engine first), 
 and asks for a typed confirmation unless --yes. Every step is safe to interrupt (Ctrl-C) and to run
 again. No asyncio, no thread: one synchronous loop with an optional duty cycle (--busy-percent).
 
+The interactive menu (option 7, 5.47.7) has a compression sub-menu with the same hand tools:
+status and probe (both read-only), sweep (asks y/N first), verify, and decompress (asks for the
+same typed phrase as the command line). It calls the very same do_compress_* functions with the
+command line's defaults; the options (--samples, --grace, --yes, --force ...) stay command-line
+only. The settings are shown there read-only: change them in `./manage.sh config` (Version
+Engine > Engine settings > 13).
+
 Ctrl-C behavior (both modes): cancels whatever prompt/action is in progress
 and returns to the menu (interactive mode) or exits cleanly with code 130
 (CLI mode / top-level menu prompt) — never a raw traceback, never a
@@ -831,6 +838,86 @@ def _read_yn(msg: str, default=False) -> bool:
     return raw in ("y", "yes")
 
 
+def _print_compress_settings() -> None:
+    """The seven compression settings as the loader read them, read-only (this script never
+    edits config: `./manage.sh config` > Version Engine > Engine settings > 13 does)."""
+    s = _compress_settings_now()
+    print(
+        f"   Compression: {'ON' if s['enabled'] else 'OFF'}, zstd level {s['level']}, "
+        f"min saving {s['min_saving']} %, busy {s['busy']} %, idle look every {s['interval']} s"
+    )
+    print(
+        f"   Delta: {'ON' if s['delta_enabled'] else 'OFF'}, min gain {s['delta_min_gain']} %"
+    )
+    print(
+        "   (change them in ./manage.sh config > Version Engine > Engine settings > 13;"
+        " restart the Version Engine afterwards)"
+    )
+
+
+def compression_menu() -> None:
+    """Sub-menu of the interactive menu: the object-compression hand tools. Each entry calls the
+    same do_compress_* function as `compress --status|--probe|--sweep|--verify|--decompress`
+    with that command's defaults, so nothing is duplicated and the command line is unchanged.
+    Ctrl-C / Ctrl-D at the sub-menu prompt goes back to the main menu."""
+    while True:
+        print("\n" + "=" * 60)
+        print("  Object compression (zstd)")
+        _print_compress_settings()
+        print("=" * 60)
+        print(
+            "  1) Status             (read-only: compressed so far, backlog, the thread)"
+        )
+        print(
+            "  2) Probe              (read-only: what would zstd save on the real store)"
+        )
+        print(
+            "  3) Sweep              (remove raw copies whose compressed copy verifies)"
+        )
+        print(
+            "  4) Verify             (re-read and hash-check every compressed object)"
+        )
+        print(
+            "  5) Decompress         (the way back: every object a plain raw file again)"
+        )
+        print("  6) Back")
+        print("=" * 60)
+
+        choice = _prompt("\nSelect option (1-6): ")
+        if choice is None:
+            return
+        choice = choice.strip()
+
+        if choice == "1":
+            do_compress_status()
+        elif choice == "2":
+            print(
+                "\nThe probe can take several minutes; Ctrl-C stops it and prints what it read."
+            )
+            do_compress_probe()
+        elif choice == "3":
+            if not _read_yn(
+                "Remove the raw copy of every compressed object whose compressed copy "
+                "verifies now? (y/N): ",
+                default=False,
+            ):
+                print("❌ Cancelled: nothing was touched.")
+                continue
+            do_compress_sweep()
+        elif choice == "4":
+            do_compress_verify()
+        elif choice == "5":
+            # asks for the typed phrase itself (and refuses while compression is switched on)
+            do_compress_decompress()
+        elif choice in ("6", "b", "B", "q", "Q"):
+            return
+        else:
+            print(f"❌ Invalid option: {choice}")
+            continue
+
+        _prompt("\nPress Enter to return to the menu…")
+
+
 def interactive_menu():
     print("\n🕓 Version Engine — interactive management")
     print(
@@ -845,10 +932,11 @@ def interactive_menu():
         print("  4) Delete a version")
         print("  5) Run garbage collection now")
         print("  6) WAL file: show its size / shrink it (checkpoint)")
-        print("  7) Exit")
+        print("  7) Object compression: status / probe / sweep / verify / decompress")
+        print("  8) Exit")
         print("=" * 60)
 
-        choice = _prompt("\nSelect option (1-7): ")
+        choice = _prompt("\nSelect option (1-8): ")
         if choice is None:
             print("👋 Goodbye!")
             return 0
@@ -908,7 +996,11 @@ def interactive_menu():
             ):
                 do_wal(checkpoint=True)
 
-        elif choice in ("7", "q", "Q"):
+        elif choice == "7":
+            compression_menu()
+            continue
+
+        elif choice in ("8", "q", "Q"):
             print("👋 Goodbye!")
             return 0
 

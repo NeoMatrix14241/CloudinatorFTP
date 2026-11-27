@@ -209,7 +209,9 @@ VERSION_RETRY_DELAY = 2  # seconds
 # never strand data. OFF by default; the owner turns it on in server_config.json (a real JSON
 # true: a string "true" means off). The level defaults to the MAXIMUM, 22 (owner's decision),
 # even where it gains nothing over 19. Changes need a restart of the Version Engine; not
-# editable from the config menu (edit server_config.json).
+# editable by hand in server_config.json OR (5.47.7) from the config menu: Version Engine >
+# Engine settings > 13 (see VERSION_COMPRESSION_SETTINGS below; the menu writes only the keys it
+# changed and keeps every other key of the file as it is).
 VERSION_COMPRESSION_ENABLED = False
 VERSION_COMPRESSION_LEVEL = 22  # zstd level, 1 to 22
 VERSION_COMPRESSION_MIN_SAVING_PERCENT = (
@@ -229,6 +231,89 @@ VERSION_COMPRESSION_INTERVAL = (
 # chunk (quick attempt at level 3) to be worth the dependency on the old chunk.
 VERSION_COMPRESSION_DELTA_ENABLED = False
 VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT = 20  # 1 to 90
+
+# 5.47.7: the ONE table of the seven compression settings: key, kind ("bool" or "int"), the
+# default (captured HERE, before load_server_config() overwrites the globals above), the loader's
+# own bounds, and the texts the config menu shows. load_server_config() reads its bounds from
+# this table and configure_version_compression() validates against it, so the loader and the
+# menu can never disagree (tests/unit/test_config_compression_menu.py pins it).
+VERSION_COMPRESSION_SETTINGS = (
+    {
+        "key": "VERSION_COMPRESSION_ENABLED",
+        "kind": "bool",
+        "default": VERSION_COMPRESSION_ENABLED,
+        "low": None,
+        "high": None,
+        "unit": "",
+        "label": "Compression (ve-compress thread)",
+        "help": "starts the thread that writes compressed objects; reading always works",
+    },
+    {
+        "key": "VERSION_COMPRESSION_LEVEL",
+        "kind": "int",
+        "default": VERSION_COMPRESSION_LEVEL,
+        "low": 1,
+        "high": 22,
+        "unit": "",
+        "label": "zstd level",
+        "help": "22 is the maximum; slower levels only cost background CPU",
+    },
+    {
+        "key": "VERSION_COMPRESSION_MIN_SAVING_PERCENT",
+        "kind": "int",
+        "default": VERSION_COMPRESSION_MIN_SAVING_PERCENT,
+        "low": 0,
+        "high": 50,
+        "unit": " %",
+        "label": "Minimum saving",
+        "help": "keep the compressed form only if it is at least this much smaller",
+    },
+    {
+        "key": "VERSION_COMPRESSION_BUSY_PERCENT",
+        "kind": "int",
+        "default": VERSION_COMPRESSION_BUSY_PERCENT,
+        "low": 5,
+        "high": 100,
+        "unit": " %",
+        "label": "Busy share (duty cycle)",
+        "help": "how much of the time the thread may work; 100 = no pauses",
+    },
+    {
+        "key": "VERSION_COMPRESSION_INTERVAL",
+        "kind": "int",
+        "default": VERSION_COMPRESSION_INTERVAL,
+        "low": 60,
+        "high": 86400,
+        "unit": " s",
+        "label": "Idle look interval",
+        "help": "seconds between two looks when nothing is left to compress",
+    },
+    {
+        "key": "VERSION_COMPRESSION_DELTA_ENABLED",
+        "kind": "bool",
+        "default": VERSION_COMPRESSION_DELTA_ENABLED,
+        "low": None,
+        "high": None,
+        "unit": "",
+        "label": "Previous-version delta",
+        "help": "store a changed chunk against the previous version's chunk; only used while compression is on",
+    },
+    {
+        "key": "VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT",
+        "kind": "int",
+        "default": VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT,
+        "low": 1,
+        "high": 90,
+        "unit": " %",
+        "label": "Delta minimum gain",
+        "help": "a delta is used only if it is at least this much smaller than the plain chunk",
+    },
+)
+VERSION_COMPRESSION_BOUNDS = {
+    s["key"]: (s["low"], s["high"])
+    for s in VERSION_COMPRESSION_SETTINGS
+    if s["kind"] == "int"
+}
 VERSION_FOLLOW_SYMLINKS = False
 VERSION_ALLOW_RESTORE_OVERWRITE = False
 VERSION_SHUTDOWN_TIMEOUT = 30  # seconds — graceful drain window before proc.kill()
@@ -1394,27 +1479,23 @@ def load_server_config():
                 _bounded_number(
                     config.get("VERSION_COMPRESSION_LEVEL"),
                     VERSION_COMPRESSION_LEVEL,
-                    1,
-                    22,
+                    *VERSION_COMPRESSION_BOUNDS["VERSION_COMPRESSION_LEVEL"],
                 )
             )
             VERSION_COMPRESSION_MIN_SAVING_PERCENT = _bounded_number(
                 config.get("VERSION_COMPRESSION_MIN_SAVING_PERCENT"),
                 VERSION_COMPRESSION_MIN_SAVING_PERCENT,
-                0,
-                50,
+                *VERSION_COMPRESSION_BOUNDS["VERSION_COMPRESSION_MIN_SAVING_PERCENT"],
             )
             VERSION_COMPRESSION_BUSY_PERCENT = _bounded_number(
                 config.get("VERSION_COMPRESSION_BUSY_PERCENT"),
                 VERSION_COMPRESSION_BUSY_PERCENT,
-                5,
-                100,
+                *VERSION_COMPRESSION_BOUNDS["VERSION_COMPRESSION_BUSY_PERCENT"],
             )
             VERSION_COMPRESSION_INTERVAL = _bounded_number(
                 config.get("VERSION_COMPRESSION_INTERVAL"),
                 VERSION_COMPRESSION_INTERVAL,
-                60,
-                86400,
+                *VERSION_COMPRESSION_BOUNDS["VERSION_COMPRESSION_INTERVAL"],
             )
             VERSION_COMPRESSION_DELTA_ENABLED = _bool_fail_safe(
                 config.get("VERSION_COMPRESSION_DELTA_ENABLED"),
@@ -1423,8 +1504,9 @@ def load_server_config():
             VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT = _bounded_number(
                 config.get("VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT"),
                 VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT,
-                1,
-                90,
+                *VERSION_COMPRESSION_BOUNDS[
+                    "VERSION_COMPRESSION_DELTA_MIN_GAIN_PERCENT"
+                ],
             )
             VERSION_FOLLOW_SYMLINKS = config.get(
                 "VERSION_FOLLOW_SYMLINKS", VERSION_FOLLOW_SYMLINKS
@@ -1869,11 +1951,15 @@ def configure_version_engine_settings():
         )
         print(f" 9. Allow restore overwrite: {_yon(VERSION_ALLOW_RESTORE_OVERWRITE)}")
         print(f"10. Follow symlinks:       {_yon(VERSION_FOLLOW_SYMLINKS)}")
+        print(
+            f"13. Compression (zstd):    {_yon(VERSION_COMPRESSION_ENABLED)}  level {VERSION_COMPRESSION_LEVEL}"
+            f"  → opens its own menu; it saves only the keys it changes"
+        )
         print("11. Save & Exit")
         print("12. Exit Without Saving")
         print()
 
-        choice = input("Select option (1-12): ").strip()
+        choice = input("Select option (1-13): ").strip()
 
         if choice == "1":
             VERSION_ENGINE_ENABLED = not VERSION_ENGINE_ENABLED
@@ -1914,6 +2000,8 @@ def configure_version_engine_settings():
             VERSION_ALLOW_RESTORE_OVERWRITE = not VERSION_ALLOW_RESTORE_OVERWRITE
         elif choice == "10":
             VERSION_FOLLOW_SYMLINKS = not VERSION_FOLLOW_SYMLINKS
+        elif choice == "13":
+            configure_version_compression()
         elif choice == "11":
             save_server_config()
             print("✅ Version Engine configuration saved!")
@@ -1921,6 +2009,205 @@ def configure_version_engine_settings():
         elif choice == "12":
             print("↩️  Cancelled")
             break
+        else:
+            print("❌ Invalid option")
+
+
+def _read_server_config_file():
+    """(settings dict, None) for a readable server_config.json, (None, None) when the file does
+    not exist, (None, error text) when it exists but is not a JSON object. Never writes.
+    """
+    try:
+        with open(_SERVER_CONFIG_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return None, None
+    except (OSError, ValueError) as e:
+        return None, str(e)
+    if not isinstance(data, dict):
+        return None, "the file does not hold a JSON object"
+    return data, None
+
+
+def save_server_config_keys(updates):
+    """Write ONLY the keys in `updates` into server_config.json and keep everything else.
+
+    save_server_config() rebuilds the whole file from the module's variables (it drops a key
+    config.py does not know, turns a value the loader refused into the default, adds every
+    missing key and refreshes configured_at). This function is the other way: it reads the file
+    as it is on disk, changes the named keys, and leaves every other key, its value and its
+    position alone (configured_at too). An absent key stays absent unless it is in `updates`.
+    A file that is not valid JSON is never overwritten. A missing file is created with just
+    these keys (the loader takes every other key from its defaults). The new text is checked
+    (parsed and compared with what was intended) in a temporary file next to the real one, then
+    put in place with os.replace, so a failed write leaves the old file untouched. LF line
+    endings. Returns True when the file now holds the new values."""
+    current, error = _read_server_config_file()
+    if error is not None:
+        print(f"❌ {_SERVER_CONFIG_FILE} cannot be read ({error}).")
+        print("   Nothing was written: fix or restore the file first.")
+        return False
+    merged = dict(current) if current is not None else {}
+    merged.update(updates)
+    text = json.dumps(merged, indent=2)
+    tmp_path = _SERVER_CONFIG_FILE + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        with open(tmp_path, encoding="utf-8") as f:
+            if json.load(f) != merged:
+                raise ValueError("the temporary file does not hold what was intended")
+        os.replace(tmp_path, _SERVER_CONFIG_FILE)
+    except Exception as e:
+        print(f"❌ Error saving configuration: {e}")
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError as cleanup_error:
+                print(f"⚠️  Could not remove {tmp_path}: {cleanup_error}")
+        return False
+    print(f"✅ Saved {', '.join(sorted(updates))} to {_SERVER_CONFIG_FILE}")
+    return True
+
+
+def parse_compression_value(key, text):
+    """(value, None) for a valid entry, (None, error text) otherwise. Whole numbers only, inside
+    the loader's own bounds (VERSION_COMPRESSION_BOUNDS): the menu can never write what the
+    loader would refuse."""
+    low, high = VERSION_COMPRESSION_BOUNDS[key]
+    raw = text.strip()
+    if not (raw.isascii() and raw.isdigit()):
+        return None, f"enter a whole number from {low} to {high}"
+    value = int(raw)
+    if not low <= value <= high:
+        return None, f"{value} is outside {low} to {high}"
+    return value, None
+
+
+def _ask(prompt):
+    """input() that returns None on Ctrl-C / Ctrl-D / closed stdin instead of a traceback."""
+    try:
+        return input(prompt)
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return None
+
+
+def _compression_value_text(setting, value):
+    if setting["kind"] == "bool":
+        return "✅ ON" if value else "🚫 OFF"
+    return f"{value}{setting['unit']}"
+
+
+def _compression_file_note(setting, file_cfg):
+    """Where the value comes from: the file, the default, or a file value the loader ignores."""
+    key = setting["key"]
+    if file_cfg is None:
+        return "no server_config.json: default applies"
+    if key not in file_cfg:
+        return "not in server_config.json: default applies"
+    raw = file_cfg[key]
+    if setting["kind"] == "bool":
+        if raw is None or isinstance(raw, bool):
+            return "in server_config.json"
+        return f"⚠️ file holds {raw!r}: only a real true/false counts, this is OFF"
+    low, high = setting["low"], setting["high"]
+    if _bounded_number(raw, None, low, high) is None:
+        return f"⚠️ file holds {raw!r}: not a number from {low} to {high}, the default is used"
+    return "in server_config.json"
+
+
+def configure_version_compression():
+    """Version Engine > Engine settings > 13: the seven VERSION_COMPRESSION_* settings.
+
+    Shows the current value, the default, the allowed range and where the value comes from.
+    Changes are held until "Save & Back", which writes ONLY the keys that were changed
+    (save_server_config_keys): every other key of server_config.json stays as it is, and a key
+    that is absent stays absent. A running Version Engine reads these settings at start, so a
+    change needs a restart of the Version Engine."""
+    pending = {}
+    print("\n🗜️  Version Engine — Compression settings (zstd)")
+    print("=" * 50)
+    print("A change needs a RESTART of the Version Engine (./manage.sh restart).")
+    print(
+        "Reading compressed objects always works; these settings only control writing."
+    )
+
+    while True:
+        file_cfg, file_error = _read_server_config_file()
+        if file_error is not None:
+            print(
+                f"\n⚠️  server_config.json cannot be read ({file_error}): saving is blocked."
+            )
+        print("\nSettings (* = changed, not saved yet):")
+        for n, setting in enumerate(VERSION_COMPRESSION_SETTINGS, 1):
+            key = setting["key"]
+            value = pending.get(key, globals()[key])
+            mark = "*" if key in pending else " "
+            print(
+                f"{mark}{n}. {setting['label']}: {_compression_value_text(setting, value)}"
+            )
+            if setting["kind"] == "bool":
+                allowed = "on / off"
+            else:
+                allowed = f"{setting['low']} to {setting['high']}"
+            print(
+                f"      default {_compression_value_text(setting, setting['default'])}"
+                f" · allowed {allowed} · {key}"
+            )
+            print(f"      {setting['help']}")
+            print(f"      [{_compression_file_note(setting, file_cfg)}]")
+        print("8. Save & Back   (writes only the changed keys)")
+        print("9. Back Without Saving")
+        print()
+
+        choice = _ask("Select option (1-9): ")
+        if choice is None:
+            print("↩️  Back (nothing saved)")
+            return
+        choice = choice.strip()
+
+        if choice in {"1", "2", "3", "4", "5", "6", "7"}:
+            setting = VERSION_COMPRESSION_SETTINGS[int(choice) - 1]
+            key = setting["key"]
+            if setting["kind"] == "bool":
+                new_value = not pending.get(key, globals()[key])
+                print(
+                    f"{setting['label']}: {'ON' if new_value else 'OFF'}"
+                    " (takes effect when the Version Engine restarts)"
+                )
+            else:
+                current = pending.get(key, globals()[key])
+                answer = _ask(
+                    f"{setting['label']} ({setting['low']} to {setting['high']}"
+                    f"{setting['unit']}), Enter keeps {current}: "
+                )
+                if answer is None or not answer.strip():
+                    continue
+                new_value, error = parse_compression_value(key, answer)
+                if error:
+                    print(f"❌ {error}: nothing changed")
+                    continue
+            if new_value == globals()[key]:
+                pending.pop(key, None)
+            else:
+                pending[key] = new_value
+        elif choice == "8":
+            if not pending:
+                print("ℹ️  Nothing changed: nothing written.")
+                return
+            if save_server_config_keys(pending):
+                for key, value in pending.items():
+                    globals()[key] = value
+                print(
+                    "✅ Compression settings saved. Restart the Version Engine to apply."
+                )
+                return
+        elif choice == "9":
+            print("↩️  Back (nothing saved)")
+            return
         else:
             print("❌ Invalid option")
 
@@ -2606,6 +2893,11 @@ def view_current_settings():
     print(
         f"   Retention: {_yon(VERSION_RETENTION_ENABLED)} (max {VERSION_MAX_VERSIONS}/file)   "
         f"GC: {_yon(VERSION_GC_ENABLED)} (grace {VERSION_GC_GRACE_PERIOD}s)"
+    )
+    print(
+        f"   Compression: {_yon(VERSION_COMPRESSION_ENABLED)} (zstd level {VERSION_COMPRESSION_LEVEL}, "
+        f"min saving {VERSION_COMPRESSION_MIN_SAVING_PERCENT} %, busy {VERSION_COMPRESSION_BUSY_PERCENT} %, "
+        f"delta: {_yon(VERSION_COMPRESSION_DELTA_ENABLED)})"
     )
     print(f"   Tracked files:       {len(VERSION_TRACK_FILES)}")
     print(f"   Tracked directories: {len(VERSION_TRACK_DIRECTORIES)}")
