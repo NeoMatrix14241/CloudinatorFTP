@@ -1,3 +1,55 @@
+// 5.48 - THE PAGE LIFECYCLE. This whole file is ONE function so that the page shell
+// (static/js/shell.js) can run it again after a login without a page refresh, and stop it again
+// at a logout, with nothing of the first run left behind. Everything that used to be a browser
+// global and could outlive the page now goes through the lifecycle of the shell:
+//   - window / document listeners          -> __listen / __unlisten / __onReady
+//   - timers, frames, fetch, EventSource,  -> the constants declared right below, which shadow the
+//     XMLHttpRequest, observers              browser globals of the same name
+//   - what the file publishes on window    -> __patch (restored) / __exportGlobals / __ownGlobals
+// Rules for new code (tests/unit/test_shell_contract.py enforces them): never call
+// document.addEventListener / window.addEventListener / window.setTimeout directly, never
+// navigate to /login or /logout yourself (use __goLogin / logout()), and add every new top-level
+// function that a data-fn attribute or the console needs to the export list at the end.
+// Without the shell (it failed to load) every helper falls back to the plain browser call.
+(function () {
+const __shell = window.CloudinatorShell || null;
+const __life = __shell ? __shell.createLifecycle('file-manager') : null;
+const __listen = __life ? __life.listen : function (target, type, fn, options) { target.addEventListener(type, fn, options); };
+const __unlisten = __life ? __life.unlisten : function (target, type, fn, options) { target.removeEventListener(type, fn, options); };
+const __onReady = __life ? __life.onReady : function (fn) {
+    if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', fn, { once: true }); } else { window.setTimeout(fn, 0); }
+};
+const __patch = __life ? __life.patch : function (obj, key, value) { obj[key] = value; };
+const __exportGlobals = __life ? __life.exportGlobals : function (map) { Object.assign(window, map); };
+const __ownGlobals = __life ? __life.ownGlobals : function () { };
+const __createObjectURL = __life ? __life.createObjectURL : function (blob) { return URL.createObjectURL(blob); };
+const __timers = __life ? __life.globals : {
+    setTimeout: window.setTimeout.bind(window),
+    clearTimeout: window.clearTimeout.bind(window),
+    setInterval: window.setInterval.bind(window),
+    clearInterval: window.clearInterval.bind(window),
+    requestAnimationFrame: window.requestAnimationFrame.bind(window),
+    cancelAnimationFrame: window.cancelAnimationFrame.bind(window),
+    fetch: function () { return window.fetch.apply(window, arguments); },
+    EventSource: window.EventSource,
+    XMLHttpRequest: window.XMLHttpRequest,
+    MutationObserver: window.MutationObserver,
+    ResizeObserver: window.ResizeObserver,
+    IntersectionObserver: window.IntersectionObserver
+};
+const {
+    setTimeout, clearTimeout, setInterval, clearInterval, requestAnimationFrame, cancelAnimationFrame,
+    fetch, EventSource, XMLHttpRequest, MutationObserver, ResizeObserver, IntersectionObserver
+} = __timers;
+// The session is over (or was ended elsewhere): show the login view in this document.
+const __goLogin = function (reason) {
+    if (__shell) { __shell.sessionExpired(reason); } else { window.location.replace('/login'); }
+};
+// "Reload the page" without leaving it: the shell fetches the same view again and mounts it.
+const __softReload = function (url) {
+    if (__shell) { __shell.reload(url); } else { window.location.assign(url || window.location.href); }
+};
+
 // ---------------------------------------------------------------------------
 // CSRF token injection for every fetch() call in this file.
 // Rather than touching all 50+ call sites individually, wrap window.fetch
@@ -103,15 +155,15 @@
         return response;
     }
 
-    window.fetch = function (input, init) {
+    __patch(window, 'fetch', function (input, init) {
         return fetchWithCsrf(input, init);
-    };
+    });
 
     // Exposed so non-fetch call sites (e.g. the XMLHttpRequest upload path
     // below) can resync the meta tag through the same mechanism instead of
     // duplicating the refresh logic.
-    window._refreshCsrfToken = refreshCsrfToken;
-    window._getCsrfToken = getCsrfToken;
+    __patch(window, '_refreshCsrfToken', refreshCsrfToken);
+    __patch(window, '_getCsrfToken', getCsrfToken);
 })();
 
 // ---------------------------------------------------------------------------
@@ -165,7 +217,7 @@ function _invoke(fnName, args, thisArg) {
     console.warn('dispatchAction: no such function on window:', fnName);
 }
 
-document.addEventListener('click', function (e) {
+__listen(document, 'click', function (e) {
     const el = e.target.closest('[data-fn]');
     if (!el) return;
     if (el.dataset.stop === '1') e.stopPropagation();
@@ -174,14 +226,14 @@ document.addEventListener('click', function (e) {
     _invoke(el.dataset.fn, args, el);
 });
 
-document.addEventListener('change', function (e) {
+__listen(document, 'change', function (e) {
     const el = e.target.closest('[data-fn-change]');
     if (!el) return;
     const args = el.dataset.argsChange ? JSON.parse(el.dataset.argsChange) : [];
     _invoke(el.dataset.fnChange, args, el);
 });
 
-document.addEventListener('keyup', function (e) {
+__listen(document, 'keyup', function (e) {
     const el = e.target.closest('[data-fn-keyup]');
     if (!el) return;
     _invoke(el.dataset.fnKeyup, [el.value], el);
@@ -189,7 +241,7 @@ document.addEventListener('keyup', function (e) {
 
 // 'error' events on elements like <img> don't bubble, so this listener
 // must use the capture phase to see them via delegation.
-document.addEventListener('error', function (e) {
+__listen(document, 'error', function (e) {
     const el = e.target;
     if (el && el.dataset && el.dataset.fnError) {
         _invoke(el.dataset.fnError, [], el);
@@ -215,7 +267,7 @@ const CURRENT_PATH = configElement.dataset.currentPath || "";
 const USER_ROLE = configElement.dataset.userRole || "readonly";
 
 // Browser history management for authentication
-document.addEventListener('DOMContentLoaded', function () {
+__onReady(function () {
     // Immediate authentication check on page load
     checkAuthenticationOnPageLoad();
 
@@ -294,19 +346,19 @@ function initTapTooltips() {
     const SEL = '.actions-cell .btn-sm[data-label], #filesTable .actions .btn-sm[data-label]';
 
     // ── Desktop: mouseenter / mouseleave ─────────────────────────────────────
-    document.addEventListener('mouseenter', e => {
+    __listen(document, 'mouseenter', e => {
         if (!e.target || e.target.nodeType !== 1) return;
         const btn = e.target.closest(SEL);
         if (btn) showTip(btn);
     }, true);
 
-    document.addEventListener('mouseleave', e => {
+    __listen(document, 'mouseleave', e => {
         if (!e.target || e.target.nodeType !== 1) return;
         if (e.target.closest(SEL)) hideTip(80);
     }, true);
 
     // ── Mobile: touchstart shows label, hides after 1.3s or on move ──────────
-    document.addEventListener('touchstart', e => {
+    __listen(document, 'touchstart', e => {
         if (!e.target || e.target.nodeType !== 1) return;
         const btn = e.target.closest(SEL);
         if (btn) {
@@ -317,7 +369,7 @@ function initTapTooltips() {
         }
     }, { passive: true });
 
-    document.addEventListener('touchmove', () => hideTip(0), { passive: true });
+    __listen(document, 'touchmove', () => hideTip(0), { passive: true });
 }
 
 let _smartColumnizerRO = null; // ResizeObserver reference
@@ -552,7 +604,7 @@ function smartTableColumnizer() {
 
     _smartColumnizerRO = new ResizeObserver(() => applyWidths());
     _smartColumnizerRO.observe(wrapper);
-    window.addEventListener('resize', applyWidths, { passive: true });
+    __listen(window, 'resize', applyWidths, { passive: true });
 }
 
 function applyColumnWidths(row) {
@@ -582,7 +634,7 @@ function protectModalInputs() {
 }
 
 // Call this after DOM is loaded or after modals are created
-document.addEventListener('DOMContentLoaded', protectModalInputs);
+__onReady(protectModalInputs);
 
 async function checkAuthenticationOnPageLoad() {
     try {
@@ -600,7 +652,7 @@ async function checkAuthenticationOnPageLoad() {
                 return;
             }
             console.log('🔒 Not authenticated, redirecting to login...');
-            window.location.replace('/login');
+            __goLogin();
             return;
         }
 
@@ -611,7 +663,7 @@ async function checkAuthenticationOnPageLoad() {
             return;
         }
         console.log('🔒 Authentication check failed, redirecting to login...');
-        window.location.replace('/login');
+        __goLogin();
     }
 }
 
@@ -630,7 +682,7 @@ function cleanupAuthenticationHistory() {
         window.history.pushState({ authenticated: true }, '', currentUrl);
 
         // Handle popstate events to prevent going back to login
-        window.addEventListener('popstate', function (event) {
+        __listen(window, 'popstate', function (event) {
             if (event.state && event.state.authenticated) {
                 // User is authenticated, prevent going back to login
                 console.log('🔒 Preventing navigation back to login page');
@@ -650,7 +702,7 @@ function cleanupAuthenticationHistory() {
     //
     // If you want SOME client-side check, re-enable checkAuthenticationStatus()
     // below, but only run it when the tab regains visibility, never on an interval.
-    // document.addEventListener('visibilitychange', () => {
+    // __listen(document, 'visibilitychange', () => {
     //     if (document.visibilityState === 'visible') checkAuthenticationStatus();
     // });
 }
@@ -667,7 +719,7 @@ async function checkAuthenticationStatus() {
         });
         if ((!response.ok || response.url.includes('/login')) && !isUploading) {
             console.log('🔒 Session expired, redirecting to login...');
-            window.location.replace('/login');
+            __goLogin();
         }
     } catch (error) {
         // Network hiccup — ignore silently, don't redirect on a single failed ping.
@@ -959,7 +1011,7 @@ function _dsAttachScrollHandler() {
         clearTimeout(_dsResizeTimer);
         _dsResizeTimer = setTimeout(_dsOnResize, _DS_RESIZE_DEBOUNCE_MS);
     };
-    window.addEventListener('resize', _dsResizeHandler);
+    __listen(window, 'resize', _dsResizeHandler);
 }
 
 function _dsDetachScrollHandler() {
@@ -967,7 +1019,7 @@ function _dsDetachScrollHandler() {
     if (wrapper && _dsScrollHandler) wrapper.removeEventListener('scroll', _dsScrollHandler);
     _dsScrollHandler = null;
     _dsScrollRafPending = false;
-    if (_dsResizeHandler) window.removeEventListener('resize', _dsResizeHandler);
+    if (_dsResizeHandler) __unlisten(window, 'resize', _dsResizeHandler);
     _dsResizeHandler = null;
     clearTimeout(_dsResizeTimer);
 }
@@ -1271,10 +1323,10 @@ function _syncClearButton(value) {
 }
 
 // Typing only updates the clear (X) button; Enter starts the search.
-document.addEventListener('input', function (e) {
+__listen(document, 'input', function (e) {
     if (e.target && e.target.id === 'tableSearch') _syncClearButton(e.target.value);
 });
-document.addEventListener('keydown', function (e) {
+__listen(document, 'keydown', function (e) {
     if (e.target && e.target.id === 'tableSearch' && e.key === 'Enter' && !e.isComposing) {
         e.preventDefault();
         runSearch();
@@ -1990,7 +2042,7 @@ async function navigateToFolder(newPath) {
             if (response.status === 401) {
                 showUploadStatus('⚠️ Session expired — please log in again', 'error');
                 if (!isUploading) {
-                    setTimeout(() => { window.location.href = '/login'; }, 1500);
+                    setTimeout(() => { __goLogin(); }, 1500);
                 }
                 return;
             }
@@ -2003,7 +2055,7 @@ async function navigateToFolder(newPath) {
         if (!contentType.includes('application/json')) {
             showUploadStatus('⚠️ Session expired — please log in again', 'error');
             if (!isUploading) {
-                setTimeout(() => { window.location.href = '/login'; }, 1500);
+                setTimeout(() => { __goLogin(); }, 1500);
             }
             return;
         }
@@ -2088,14 +2140,14 @@ async function navigateToFolder(newPath) {
         // Only fallback-reload if not uploading — a reload kills the active upload
         if (!isUploading) {
             setTimeout(() => {
-                window.location.href = newPath ? `/${newPath}` : '/';
+                __softReload(newPath ? `/${newPath}` : '/');
             }, 2000);
         }
     }
 }
 
 // Handle browser back/forward buttons
-window.addEventListener('popstate', function (event) {
+__listen(window, 'popstate', function (event) {
     const path = event.state?.path || '';
     console.log('🔄 POPSTATE EVENT FIRED - Browser back/forward navigation to:', path);
     navigateToFolder(path);
@@ -2640,7 +2692,7 @@ const VT = (() => {
                 clearTimeout(_resizeTimer);
                 _resizeTimer = setTimeout(_onResize, RESIZE_DEBOUNCE_MS);
             };
-            window.addEventListener('resize', _resizeHandler);
+            __listen(window, 'resize', _resizeHandler);
         }
     }
 
@@ -3227,7 +3279,7 @@ function updateStorageDisplay(stats) {
 // Track if user is actively downloading to avoid false beforeunload warnings
 let activeDownloads = new Set();
 
-window.addEventListener('beforeunload', function (e) {
+__listen(window, 'beforeunload', function (e) {
     // Only show warning if uploads are in progress AND user is actually navigating away
     // Don't interfere with downloads
     if ((isUploading || uploadQueue.some(item => item.status === 'pending')) && activeDownloads.size === 0) {
@@ -3243,7 +3295,7 @@ window.addEventListener('beforeunload', function (e) {
 });
 
 // Page visibility handling
-document.addEventListener('visibilitychange', function () {
+__listen(document, 'visibilitychange', function () {
     if (document.visibilityState === 'hidden') {
         // Only cleanup if NOT uploading — never interrupt active uploads
         if (!isUploading && uploadQueue.some(item => item.status === 'pending' || item.status === 'error')) {
@@ -3301,7 +3353,7 @@ async function _serverReachable() {
     }
 }
 
-window.addEventListener('online', function () {
+__listen(window, 'online', function () {
     if (_offlineConfirmTimer) {
         clearTimeout(_offlineConfirmTimer);
         _offlineConfirmTimer = null;
@@ -3328,7 +3380,7 @@ window.addEventListener('online', function () {
     showUploadStatus(restoredMsg, 'success');
 });
 
-window.addEventListener('offline', function () {
+__listen(window, 'offline', function () {
     console.log('📡 Browser reported offline - verifying with the server before telling the user');
     if (_offlineConfirmTimer) return;   // one check at a time
     _offlineConfirmTimer = setTimeout(async () => {
@@ -3660,8 +3712,8 @@ async function _uploadFolderGroupLazy(group, startFrom = 0) {
                     updateItemStatus(queueItem.id, 'pending', 'Waiting to retry…');
                     if (document.hidden) {
                         await new Promise(resolve => {
-                            const handler = () => { document.removeEventListener('visibilitychange', handler); resolve(); };
-                            document.addEventListener('visibilitychange', handler);
+                            const handler = () => { __unlisten(document, 'visibilitychange', handler); resolve(); };
+                            __listen(document, 'visibilitychange', handler);
                         });
                     }
                     await new Promise(r => setTimeout(r, 1500));
@@ -5107,13 +5159,13 @@ function _initImageZoom(img, wrap) {
         e.preventDefault();
     }, sig);
 
-    window.addEventListener('mousemove', e => {
+    __listen(window, 'mousemove', e => {
         if (!dragging) return;
         scroller.scrollLeft = dragSL - (e.clientX - dragSX);
         scroller.scrollTop = dragST - (e.clientY - dragSY);
     }, sig);
 
-    window.addEventListener('mouseup', () => {
+    __listen(window, 'mouseup', () => {
         if (!dragging) return;
         dragging = false;
         const { vw, vh } = vp();
@@ -5185,8 +5237,8 @@ function _initImageZoom(img, wrap) {
             }
         }, sig);
     }
-    document.addEventListener('fullscreenchange', updateFsIcon, sig);
-    document.addEventListener('webkitfullscreenchange', updateFsIcon, sig);
+    __listen(document, 'fullscreenchange', updateFsIcon, sig);
+    __listen(document, 'webkitfullscreenchange', updateFsIcon, sig);
 
     // ── Initial synchronous size — image is already visible (opacity:1 !important
     // set above), so just size it correctly before the first paint.  rAF below
@@ -5468,11 +5520,11 @@ function _renderOfficePreview(body, data) {
             if (e.key === 'ArrowRight' || e.key === 'ArrowDown') nextBtn.click();
             if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') prevBtn.click();
         };
-        document.addEventListener('keydown', _pptxKeyHandler);
+        __listen(document, 'keydown', _pptxKeyHandler);
         // Clean up key handler when modal closes
         const _origClose = window._pptxCloseCleanup;
         window._pptxCloseCleanup = () => {
-            document.removeEventListener('keydown', _pptxKeyHandler);
+            __unlisten(document, 'keydown', _pptxKeyHandler);
             if (_origClose) _origClose();
         };
 
@@ -5487,13 +5539,13 @@ function _renderOfficePreview(body, data) {
 }
 
 // Close viewer on outside-click
-document.addEventListener('click', function (e) {
+__listen(document, 'click', function (e) {
     const modal = document.getElementById('fileViewerModal');
     if (modal && e.target === modal) closeFileViewer();
 });
 
 // Close viewer on Escape key (registers alongside other modal listeners)
-document.addEventListener('keydown', function (e) {
+__listen(document, 'keydown', function (e) {
     if (e.key === 'Escape') {
         const modal = document.getElementById('fileViewerModal');
         if (modal && modal.classList.contains('show')) closeFileViewer();
@@ -6028,7 +6080,7 @@ async function refreshFileTable(opts) {
 
         showUploadStatus('❌ Failed to refresh file list, reloading page...', 'error');
         setTimeout(() => {
-            window.location.reload();
+            __softReload();
         }, 1000);
     }
 }
@@ -6473,8 +6525,8 @@ async function _runFileWorker() {
                 updateItemStatus(item.id, 'pending', 'Waiting to retry…');
                 if (document.hidden) {
                     await new Promise(resolve => {
-                        const handler = () => { document.removeEventListener('visibilitychange', handler); resolve(); };
-                        document.addEventListener('visibilitychange', handler);
+                        const handler = () => { __unlisten(document, 'visibilitychange', handler); resolve(); };
+                        __listen(document, 'visibilitychange', handler);
                     });
                 }
                 await new Promise(r => setTimeout(r, 1500));
@@ -6907,7 +6959,7 @@ function _resumeStalledUploads() {
 }
 
 // Page Lifecycle API — fires when a frozen tab is unfrozen
-window.addEventListener('resume', () => {
+__listen(window, 'resume', () => {
     if (!isUploading) return;
     console.log('▶️ Page resumed from frozen state — checking for stalled uploads');
     // Give the browser 500 ms to settle promise queues before we intervene
@@ -6921,7 +6973,7 @@ window.addEventListener('resume', () => {
 });
 
 // visibilitychange — fires every time the tab becomes visible (including after freeze)
-document.addEventListener('visibilitychange', () => {
+__listen(document, 'visibilitychange', () => {
     if (document.hidden || !isUploading) return;
     const stalledMs = Date.now() - _lastUploadActivity;
     // If no file completed in the last 10 seconds and we're supposed to be uploading,
@@ -8987,7 +9039,7 @@ function _initShareSecurityPanelEvents() {
         });
     }
 }
-document.addEventListener('DOMContentLoaded', _initShareSecurityPanelEvents);
+__onReady(_initShareSecurityPanelEvents);
 
 function _computeExpiresAt(presetValue, customValue) {
     if (presetValue === 'never') return null;
@@ -9530,7 +9582,7 @@ function closeDownloadOptionsModal() {
 // single static element in index.html (not re-created per row) — matches
 // how the rest of this file's one-off modals (share, move, rename...)
 // attach their static-button handlers.
-document.addEventListener('DOMContentLoaded', () => {
+__onReady(() => {
     const currentBtn = document.getElementById('downloadOptionCurrent');
     const historyBtn = document.getElementById('downloadOptionHistory');
 
@@ -9963,12 +10015,12 @@ function _startManageSharedVisibilityRefresh() {
         else if (reqPanel && reqPanel.style.display !== 'none') loadManageSharedRequests();
         _refreshManageSharedCounts();
     };
-    document.addEventListener('visibilitychange', _manageSharedVisibilityHandler);
+    __listen(document, 'visibilitychange', _manageSharedVisibilityHandler);
 }
 
 function _stopManageSharedVisibilityRefresh() {
     if (!_manageSharedVisibilityHandler) return;
-    document.removeEventListener('visibilitychange', _manageSharedVisibilityHandler);
+    __unlisten(document, 'visibilitychange', _manageSharedVisibilityHandler);
     _manageSharedVisibilityHandler = null;
 }
 
@@ -10174,7 +10226,7 @@ function _fallBackToBadgePolling() {
     // focused can sit un-polled well past the 30s interval. Force a fresh
     // check the instant the tab regains focus, so switching back always
     // reflects reality immediately instead of waiting on a throttled timer.
-    document.addEventListener('visibilitychange', () => {
+    __listen(document, 'visibilitychange', () => {
         if (document.visibilityState === 'visible') _pollManageSharedBadge();
     });
 }
@@ -10462,7 +10514,7 @@ async function runSpeedTest() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', function () {
+__onReady(function () {
     // Store original table order for reset functionality
     storeOriginalTableOrder();
 
@@ -10703,7 +10755,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (fileInputDisplay && fileInput && !isAndroid) {
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
             fileInputDisplay.addEventListener(eventName, preventDefaults, false);
-            document.body.addEventListener(eventName, preventDefaults, false);
+            __listen(document.body, eventName, preventDefaults, false);
         });
 
         ['dragenter', 'dragover'].forEach(eventName => {
@@ -10719,9 +10771,9 @@ document.addEventListener('DOMContentLoaded', function () {
         // fileInputDisplay not found — attach drop to document.body as fallback
         console.warn('⚠️ .file-input-display not found — attaching drag-drop to body as fallback');
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-            document.body.addEventListener(eventName, preventDefaults, false);
+            __listen(document.body, eventName, preventDefaults, false);
         });
-        document.body.addEventListener('drop', handleDrop, false);
+        __listen(document.body, 'drop', handleDrop, false);
     } else {
         console.log('📱 Android detected: Drag & drop disabled due to limited browser support');
     }
@@ -11147,7 +11199,7 @@ function getFileFromEntry(fileEntry) {
 }
 
 // Enhanced keyboard shortcuts
-document.addEventListener('keydown', function (e) {
+__listen(document, 'keydown', function (e) {
     // Ctrl/Cmd + U for upload file/folder selection
     if ((e.ctrlKey || e.metaKey) && e.key === 'u' && !isUploading) {
         e.preventDefault();
@@ -11232,7 +11284,7 @@ document.addEventListener('keydown', function (e) {
                 const pathParts = currentPath.split('/');
                 pathParts.pop();
                 const parentPath = pathParts.join('/');
-                window.location.href = parentPath ? `/${parentPath}` : '/';
+                navigateToFolder(parentPath);
             }
         }
     }
@@ -11245,7 +11297,7 @@ document.addEventListener('keydown', function (e) {
             if (shouldRefresh) {
                 // Try cleanup before refresh
                 cleanupUnfinishedChunks().finally(() => {
-                    window.location.reload();
+                    __softReload();
                 });
             }
         }
@@ -11253,7 +11305,7 @@ document.addEventListener('keydown', function (e) {
 });
 
 // Modal close on outside click
-document.addEventListener('click', function (e) {
+__listen(document, 'click', function (e) {
     const modal = document.getElementById('moveModal');
     if (modal && e.target === modal) {
         closeModal();
@@ -11278,8 +11330,8 @@ setInterval(() => {
 // event listeners — see the comment there for why.)
 
 // Monitor connection changes
-window.addEventListener('online', updateConnectionStatus);
-window.addEventListener('offline', updateConnectionStatus);
+__listen(window, 'online', updateConnectionStatus);
+__listen(window, 'offline', updateConnectionStatus);
 
 // Ping server periodically to detect connection issues.
 // FIX: was setInterval — see startAssemblyPolling for why that stacks
@@ -11308,7 +11360,7 @@ window.addEventListener('offline', updateConnectionStatus);
 })();
 
 // Global error handler for unhandled promise rejections
-window.addEventListener('unhandledrejection', function (event) {
+__listen(window, 'unhandledrejection', function (event) {
     console.error('🚨 Unhandled promise rejection:', event.reason);
 
     // If it's related to cleanup, try to handle gracefully
@@ -11320,9 +11372,21 @@ window.addEventListener('unhandledrejection', function (event) {
 
 // Utility functions
 function logout() {
+    // The browser used to ask this itself (beforeunload) when the page navigated to /logout.
+    if (isUploading || uploadQueue.some(item => item.status === 'pending')) {
+        const proceed = confirm('⚠️ Upload in progress. Logging out will cancel uploads and clean up temporary files. Continue?');
+        if (!proceed) return;
+    }
     // Cleanup before logout
     cleanupUnfinishedChunks().finally(() => {
-        window.location.href = LOGOUT_URL;
+        // 5.48: no page navigation. The shell ends the session (POST /logout), tears this page
+        // down and puts the login view into the same document. Without the shell, or when any
+        // step fails, it falls back to the classic GET /logout.
+        if (__shell) {
+            __shell.logout();
+        } else {
+            window.location.href = LOGOUT_URL;
+        }
     });
 }
 
@@ -11567,7 +11631,7 @@ async function checkExistingAssemblies() {
 }
 
 // Cleanup polling on page unload
-window.addEventListener('beforeunload', () => {
+__listen(window, 'beforeunload', () => {
     assemblyPollers.forEach(intervalId => clearInterval(intervalId));
     assemblyPollers.clear();
 });
@@ -11630,7 +11694,7 @@ function autoCleanupCompletedItems() {
 setInterval(autoCleanupCompletedItems, 10000);
 
 // Also run cleanup when page becomes visible
-document.addEventListener('visibilitychange', () => {
+__listen(document, 'visibilitychange', () => {
     if (!document.hidden) {
         setTimeout(autoCleanupCompletedItems, 1000);
     }
@@ -11676,7 +11740,7 @@ function initializeRealTimeMonitoring() {
     window.storageMonitoringInitialized = true;
 
     // Add Page Visibility API handling to prevent issues on tab switching
-    document.addEventListener('visibilitychange', function () {
+    __listen(document, 'visibilitychange', function () {
         if (document.hidden) {
             console.log('📱 Tab became hidden - monitoring continues in background');
         } else {
@@ -12127,7 +12191,7 @@ function _resumeLiveStreams() {
     if (typeof _resumeShareEventsStream === 'function') _resumeShareEventsStream();
 }
 
-document.addEventListener('visibilitychange', () => {
+__listen(document, 'visibilitychange', () => {
     if (document.hidden) {
         if (!_streamPauseTimer && !_streamsPaused) {
             _streamPauseTimer = setTimeout(_pauseLiveStreams, STREAM_PAUSE_AFTER_HIDDEN_MS);
@@ -12478,7 +12542,7 @@ function updateConnectionStatus() {
 }
 
 // Cleanup on page unload
-window.addEventListener('beforeunload', () => {
+__listen(window, 'beforeunload', () => {
     if (storageEventSource) {
         storageEventSource.close();
         storageEventSource = null;
@@ -12486,7 +12550,7 @@ window.addEventListener('beforeunload', () => {
 });
 
 // Reconnect when page becomes visible (in case connection was lost)
-document.addEventListener('visibilitychange', () => {
+__listen(document, 'visibilitychange', () => {
     if (!document.hidden && connectionStatus === 'error' && storageEventSource === null) {
         console.log('📡 Page visible - attempting to reconnect to storage stream');
         reconnectAttempts = 0;
@@ -13728,7 +13792,7 @@ function _buildTrackSelectors(playerEl, audioMeta, subMeta, cacheKey) {
         }
         video.setAttribute('data-cloudinator-subs', '');
 
-        const _emptyVtt = URL.createObjectURL(
+        const _emptyVtt = __createObjectURL(
             new Blob(['WEBVTT\n\n'], { type: 'text/vtt' })
         );
         const _vttUrls = subMeta.map(s =>
@@ -13992,7 +14056,7 @@ function _hlsSleep(ms) { return new Promise(resolve => setTimeout(resolve, ms));
         const mo = new MutationObserver(updateDocHeight);
         mo.observe(document.body, { childList: true, subtree: true });
     }
-    window.addEventListener('resize', updateDocHeight, { passive: true });
+    __listen(window, 'resize', updateDocHeight, { passive: true });
     updateDocHeight();
 
     if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -14104,9 +14168,9 @@ function _hlsSleep(ms) { return new Promise(resolve => setTimeout(resolve, ms));
     // touch/device-toolbar emulation, where plain hover mousemove mostly
     // doesn't fire and the glow would otherwise get stuck at the last
     // real coordinate it received.
-    window.addEventListener('pointermove', onPointerMove, { passive: true });
-    window.addEventListener('scroll', updateScrollTarget, { passive: true });
-    window.addEventListener('resize', updateScrollTarget, { passive: true });
+    __listen(window, 'pointermove', onPointerMove, { passive: true });
+    __listen(window, 'scroll', updateScrollTarget, { passive: true });
+    __listen(window, 'resize', updateScrollTarget, { passive: true });
 
     applyVars();
     updateScrollTarget();
@@ -14251,12 +14315,12 @@ function _hlsSleep(ms) { return new Promise(resolve => setTimeout(resolve, ms));
     // here means --hx/--hy simply stay wherever they last were, and the
     // next pointermove (or the pointerup handler below, if the modal
     // closed while the cursor was away) re-syncs it.
-    document.addEventListener('pointermove', onMove, { passive: true });
+    __listen(document, 'pointermove', onMove, { passive: true });
 
     // A modal closing out from under the cursor (Esc, clicking the backdrop,
     // a save/cancel button) should also clear the spotlight immediately
     // rather than waiting for the next pointermove.
-    document.addEventListener('pointerup', () => {
+    __listen(document, 'pointerup', () => {
         if (activeEl && !activeEl.closest('.modal.show')) {
             clearActive();
         }
@@ -14279,4 +14343,120 @@ function _hlsSleep(ms) { return new Promise(resolve => setTimeout(resolve, ms));
     document.querySelectorAll('.modal').forEach((modalEl) => {
         modalOpenObserver.observe(modalEl, { attributes: true, attributeFilter: ['class'] });
     });
+})();
+
+// ---------------------------------------------------------------------------
+// 5.48 - what the page publishes, and how it ends. KEEP IN SYNC: every top-level
+// function declaration of this file is listed below (they were browser globals before the file
+// became a function: the data-fn dispatcher looks them up on window, and the console help text
+// names some of them). tests/unit/test_shell_contract.py fails when the list and the file differ.
+// ---------------------------------------------------------------------------
+// @@shell-exports-begin
+__exportGlobals({
+    _actionsColWidth, _addFolderFilesToQueue, _applyShareRowState, _attachQualitySelector, _buildConflictDialog,
+    _buildQualityBar, _buildTrackSelectors, _cancelFolderGroup, _chunkShownBytes, _classifyChangedDirs,
+    _clearShareExpiryTimers, _computeExpiresAt, _createFolderGroupRow, _dirInfoFmtSize, _dirInfoHtml,
+    _dirInfoSig, _dsApplySort, _dsAttachScrollHandler, _dsBuildWindow, _dsCompare,
+    _dsCreateRow, _dsDetachScrollHandler, _dsFetchNextPage, _dsFindIndexAtOffset, _dsHeaderCountLabel,
+    _dsLoadAllPages, _dsMakeLoadingRow, _dsMakeSpacerRow, _dsMeasureListBase, _dsModifiedKey,
+    _dsMountRange, _dsOnResize, _dsPositionSpacers, _dsRebuildOffsets, _dsRemoveResults,
+    _dsRenderWindow, _dsResetSort, _dsRestoreSortHeaders, _dsScheduleMeasure, _dsSortResults,
+    _dsSyncLoadingRow, _dsUpdateCount, _fallBackToBadgePolling, _finalizeGroupCleanup, _findFreeName,
+    _fmtAgo, _fmtEpoch, _folderRowContent, _followRebuild, _formatDisplayPath,
+    _freeSeen, _handleImgConvError, _hlsSkip, _hlsSleep, _hlsStartStream,
+    _imgStartPreview, _initImageZoom, _initMobileDoubleTapSeek, _initShareSecurityPanelEvents, _initVTFromPageData,
+    _injectMobileSpeedHide, _invoke, _isFolderAlreadyQueued, _loadArchivePreview, _makeChunkProgress,
+    _manageRequestRowTemplate, _manageSharedRowTemplate, _maybeFinalizeGroup, _modeBadge, _noteChangeSeq,
+    _noteChunkRate, _onShareExpiredClientSide, _openDangerZone, _paintRebuildBtn, _paintVersionHistory,
+    _parseDisplayDate, _parseDisplaySize, _parseSearchQuery, _pauseLiveStreams, _pauseShareEventsStream,
+    _pdfjsReady, _pollManageSharedBadge, _populateSelectedItemsVT, _promptFolderConflict, _promptMoveOrCopyConflicts,
+    _promptOverwrite, _randomHex, _readJsonSafe, _readShareSecurityPanel, _rebuildBtn,
+    _rebuildDetail, _recordSpeedSample, _refreshManageSharedCounts, _registerDirEntryLazy, _registerFolderGroup,
+    _renderArchivePasswordPrompt, _renderArchivePreview, _renderOfficePreview, _renderShareModalRows, _renderVersionHistoryList,
+    _resolveFileConflict, _resumeLiveStreams, _resumeShareEventsStream, _resumeStalledUploads, _revalidateDirCells,
+    _revokeShareForPath, _rollingSpeed, _runFileWorker, _runFolderWorker, _sameListing,
+    _scanSizeChunked, _scheduleShareExpiryTimers, _scheduleSseReconnect, _scheduleSseRetryFromPolling, _scheduleSseTableRefresh,
+    _scheduleSseUpdate, _sendXhrUploadOnce, _serverReachable, _setManageSharedBadge, _setStatusContent,
+    _shareModalRowTemplate, _showRowPasskeyReveal, _spawnFileWorkersIfNeeded, _spawnFolderWorkersIfNeeded, _startManageSharedBadgePolling,
+    _startManageSharedVisibilityRefresh, _startSessionKeepAlive, _startShareEventsStream, _stopFolderGroup, _stopManageSharedVisibilityRefresh,
+    _switchAudioTrack, _syncClearButton, _syncRebuildButton, _titleBase, _unmuteWhenReady,
+    _updateGroupRowInPlace, _uploadFolderGroupLazy, _versionHistoryRowTemplate, _versionStatusBadge, _vhIsRestoring,
+    _vhJson, _vhRepaintIfOpen, _vhResetState, _vhWaitForRestoreToFinish, _vtListDisconnect,
+    _vtListRenderChunk, _waitForFolderWorkers, _wireShareRowEditorEvents, _wireStreamButton, addFilesToQueue,
+    addManualCleanupButton, addToUploadQueue, applyColumnWidths, approveShareRequest, autoCleanupCompletedItems,
+    bulkDelete, bulkDownload, bulkShareAll, bulkUnshareAll, cancelUpload,
+    cancelVersionDeleteConfirm, checkAuthenticationOnPageLoad, checkAuthenticationStatus, checkExistingAssemblies, cleanupAuthenticationHistory,
+    cleanupSingleFile, cleanupUnfinishedChunks, clearAllQueue, clearCompletedItems, clearFailedAction,
+    clearNotificationQueue, clearNotificationsByType, clearSearch, clearSelection, closeConfirmationModal,
+    closeDeleteModal, closeDownloadOptionsModal, closeFileViewer, closeManageSharedModal, closeModal,
+    closeNotificationModal, closeRenameModal, closeShareModal, closeSpeedTestModal, closeVersionHistoryModal,
+    confirmDelete, confirmDeleteVersionAction, confirmMoveOrCopy, confirmRename, confirmRevokeAllShares,
+    connectToStorageStream, copyManageShareLink, copyRevealedPasskey, copyShareLink, createEmptyFolderRow,
+    createFileTableRow, createFolder, createNewFolderInBrowser, createQueueItemElement, createSearchResultRow,
+    createSearchResultsHeaderDiv, dataArgs, deleteItem, denyShareRequest, displayDeepSearchResults,
+    displayFolders, downloadFolderAsZip, downloadItem, downloadVersionAction, encodePathForUrl,
+    escAttr, escapeHtml, executeConfirmedAction, formatFileSize, formatTime,
+    formatTimestamp, generateFileId, getFileColor, getFileFromEntry, getFileIcon,
+    getFileType, getViewerType, goToRoot, goUpOneLevel, handleDeleteClick,
+    handleDrop, handleStatsUpdate, handleStorageUpdate, hideDeepSearchResults, hideLocalResults,
+    highlight, highlightSearchTerm, highlightText, initTapTooltips, initializeFolderBrowser,
+    initializeRealTimeMonitoring, initializeRenameButtonVisibility, initializeStorageStats, isValidFilename, isValidPath,
+    loadDirInfoCells, loadFolderContents, loadManageSharedActive, loadManageSharedRequests, loadStorageStats,
+    lockTableColumnWidths, logout, navigateFolderBrowser, navigateToFolder, onShareRevokeClicked,
+    onShareToggleChanged, openFileLocation, openFileViewer, openManageSharedModal, openSpeedTestModal,
+    parseSize, performBulkCopy, performBulkDelete, performBulkMove, performBulkZipDownload,
+    performDeepSearch, performLocalSearch, performPollingCheck, performRename, performSingleDelete,
+    postBulkJob, preventDefaults, protectModalInputs, refreshFileTable, refreshStorageStats,
+    reinitializeTableControls, removeFromQueue, removeNotification, repositionNotifications, resetSorting,
+    restoreVersionAction, retrySnapshotAction, retryStorageStats, revokeManageShare, runSearch,
+    runSpeedTest, saveShareRowSettings, searchTable, setNotificationTimer, setParallelUploadConfig,
+    setUploadingState, setupFallbackPolling, showBulkShareModal, showConfirmationModal, showCopyModal,
+    showDeleteModal, showDownloadOptionsModal, showMoveModal, showNotification, showRenameModal,
+    showSearchLoading, showSingleCopyModal, showSingleDeleteModal, showSingleMoveModal, showSingleRenameModal,
+    showSingleShareModal, showStorageError, showUploadStatus, showVersionDeleteConfirm, showVersionHistoryModal,
+    smartTableColumnizer, sortTable, startAssemblyPolling, startBatchUpload, startParallelUploads,
+    startSequentialUploads, stopPolling, storeOriginalTableOrder, switchManageSharedTab, toggleSelectAll,
+    toggleShareRowEdit, toggleVersionHistoryHidden, transformInitialRows, unhighlight, updateBreadcrumb,
+    updateConnectionStatus, updateCurrentPathDisplay, updateFileTable, updateItemProgress, updateItemStatus,
+    updateManualCleanupButton, updateOverallProgress, updateProgressSummary, updateQueueDisplay, updateSelection,
+    updateSortHeaders, updateSortInfo, updateStorageDisplay, updateUpButton, updateVisibleCount,
+    uploadSingleFile, xhrUpload,
+});
+// @@shell-exports-end
+// Globals this file assigns as window.<name> = ... : removed again when the page ends.
+// @@shell-owned-begin
+__ownGlobals([
+    'CloudinatorUpload', '_audioActiveNodes', '_audioCtx', '_audioCtxResumeListener', '_audioGain',
+    '_audioGeneration', '_audioRunning', '_audioTrackEl', '_audioTrackHls', '_audioTrackIdx',
+    '_audioTrackSync', '_hlsAudioIdx', '_hlsCacheKey', '_hlsMasterUrl', '_hlsPollCancel',
+    '_hlsRestoreTime', '_hlsUserAudioIdx', '_imgZoomAbortCtrl', '_pptxCloseCleanup', '_videoGain',
+    '_videoGainCapture', '_vjsCurrentPlayer', 'storageMonitoringInitialized', 'storageStatsInitialized',
+]);
+// @@shell-owned-end
+
+// Ends the file manager: stops the viewers, then everything the lifecycle tracked. The result
+// says whether the teardown was complete; the shell navigates normally when it was not.
+async function __disposePage() {
+    try {
+        const app = window.PDFViewerApplication;
+        if (app && typeof app.close === 'function') {
+            await Promise.race([Promise.resolve(app.close()), new Promise((resolve) => setTimeout(resolve, 2000))]);
+        }
+    } catch (e) { /* the viewer was not open */ }
+    const pdfRoot = document.getElementById('pdfjsViewerRoot');
+    if (pdfRoot) pdfRoot.style.display = 'none';
+    try {
+        if (window._audioCtx && typeof window._audioCtx.close === 'function') window._audioCtx.close();
+    } catch (e) { /* already closed */ }
+    document.querySelectorAll('video, audio').forEach((media) => {
+        if (media.hasAttribute('data-shell-persist')) return;
+        try { media.pause(); media.removeAttribute('src'); media.load(); } catch (e) { /* not a media element any more */ }
+    });
+    return __life ? __life.dispose() : { clean: true };
+}
+
+if (__shell) {
+    __shell.setUser(configElement.dataset.username || '');
+    __shell.registerPage({ name: 'file-manager', dispose: __disposePage, stats: () => (__life ? __life.stats() : null) });
+}
 })();

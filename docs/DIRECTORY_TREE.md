@@ -100,6 +100,7 @@ CloudinatorFTP
 │   │   ├── pdf.worker.mjs (pdfjs dependency)
 │   │   ├── pdfjs-worker-init.mjs
 │   │   ├── shared.js
+│   │   ├── shell.js
 │   │   ├── video.js (video.js dependency)
 │   │   └── viewer.mjs (pdf.js dependency)
 │   ├── webfonts
@@ -119,11 +120,13 @@ CloudinatorFTP
 │   │   ├── test_file_index_recovery.py
 │   │   ├── test_file_monitor_recovery.py
 │   │   ├── test_login.py
+│   │   ├── test_login_json.py
 │   │   ├── test_path_containment.py
 │   │   ├── test_purge_missing_background.py
 │   │   ├── test_purge_missing_versions.py
 │   │   ├── test_recover_uploads.py
 │   │   ├── test_revoke_code_generation.py
+│   │   ├── test_security_headers_snapshot.py
 │   │   ├── test_session_revocation.py
 │   │   ├── test_upload_integrity.py
 │   │   ├── test_upload_tuning.py
@@ -133,6 +136,7 @@ CloudinatorFTP
 │   │   ├── test_version_restore.py
 │   │   └── test_version_routes.py
 │   ├── frontend
+│   │   ├── test_browser_auth_flow.py
 │   │   ├── test_browser_flows.py
 │   │   └── test_browser_smoke.py
 │   ├── performance
@@ -182,6 +186,8 @@ CloudinatorFTP
 │   │   ├── test_scratch_copy.py
 │   │   ├── test_scratch_environment.py
 │   │   ├── test_setup_pymodules.py
+│   │   ├── test_shell_contract.py
+│   │   ├── test_shell_lifecycle_js.py
 │   │   ├── test_static_check_skip_dirs.py
 │   │   ├── test_storage_stats_cache.py
 │   │   ├── test_stream_from_thread.py
@@ -225,6 +231,7 @@ CloudinatorFTP
 ├── .gitignore
 ├── app.py
 ├── auth.py
+├── CloudinatorFTP.zip
 ├── config.py
 ├── core.py
 ├── database.py

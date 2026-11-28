@@ -41,9 +41,10 @@
         integrity="sha384-2T13ucA7lv1FsCTEZmWI6IBbONXPR1IAN6saW21qRiNvOsQaUCPlUbTRDQybiboN"></script>
     <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp"
         integrity="sha384-mTiIzUOmh2SfP6u6yyTJHcQnVqctGnma9JMZGwuIrFkKfjVtO7Ok8CMTjA8szFUp">
+    <script src="{{ url_for('static', filename='js/shell.js') }}" integrity="sha384-2kI731Gx+FQZmRM+I6crg9v+Tsw5NtAivcMpOTNRiJFla8L/apw175WQyeqkIECH"></script>
 </head>
 
-<body>
+<body data-shell-view="app">
     <!-- Header -->
     <header class="header">
         <div class="header-left">
@@ -796,7 +797,7 @@
             </div>
             <div class="modal-body file-viewer-body" id="fileViewerBody"></div>
             <!-- ================= PDF.js official viewer (merged, no iframe) ================= -->
-            <div id="pdfjsViewerRoot">
+            <div id="pdfjsViewerRoot" data-shell-persist>
                 <!-- PDFJS-VIEWER-BODY:START — everything from here down to
                      PDFJS-VIEWER-BODY:END is copied verbatim from the stock
                      viewer.html of the pdf.js release (the <body> content,
@@ -1986,15 +1987,15 @@
     <!-- Store Flask template values in HTML data attributes for JavaScript access -->
     <div id="flask-config" data-chunk-size="{{ CHUNK_SIZE }}" data-upload-url="{{ url_for('upload') }}"
         data-current-path="{{ path }}" data-user-role="{{ role }}" data-logout-url="{{ url_for('logout') }}"
-        style="display: none;"></div>
+        data-username="{{ session.username }}" style="display: none;"></div>
 
     <!-- Initial file listing JSON for virtual scroll seeding (avoids rendering 50k DOM rows) -->
     <script id="initialFilesData" type="application/json">{{ items | tojson if items else '[]' }}</script>
 
     <!-- External JavaScript files -->
-    <script src="{{ url_for('static', filename='js/index.js') }}"
-        integrity="sha384-V4WBShui5AbcxDAtZBGoSq3fVlEq34e1c9+aBRJwNLD8iM1CdI6A7h2L7SwTDNUA"></script>
-    <audio id="bgMusic" autoplay loop preload="auto">
+    <script src="{{ url_for('static', filename='js/index.js') }}" data-shell="page"
+        integrity="sha384-hpJgu3lM84dgDRPMRE4jCKc8/vniKlGO1gvXNpMp12Pz8A0vr8Lc/o24Sccmh+Pn"></script>
+    <audio id="bgMusic" data-shell-persist autoplay loop preload="auto">
         <source src="{{ url_for('static', filename='audio/bg_mus.opus') }}" type="audio/ogg">
     </audio>
     <script src="{{ url_for('static', filename='js/bg_audio.js') }}"

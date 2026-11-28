@@ -2,6 +2,14 @@
 routes/login.py - login, logout, session check and the CSRF token endpoint: /login, /logout,
 /check_session, /csrf-token (Phase 10 of the split, CLAUDE.md 4.78).
 
+5.48: no-refresh login and logout. `POST /login` and `POST /logout` also answer JSON (the
+front end asks for it with `Accept: application/json` or `X-Requested-With: XMLHttpRequest`);
+the classic form flow (302 / rendered page with a flash message) is unchanged and stays the
+fallback for a browser without JavaScript. `GET /login` called by the page shell
+(`static/js/shell.js`, header `X-Requested-With: XMLHttpRequest`) is the same HTML without
+the `Clear-Site-Data` header, which would otherwise reload the very page that is fetching it.
+No other header is touched: every security header still comes from `after_request`.
+
 Moved from app.py in Phase 10. Since 4.89 the Clear-Site-Data header on /login and /logout is
 "executionContexts" only (see CLAUDE.md, part 39). Gets shared objects via `from core import ...`;
 imports no other route module.
@@ -66,21 +74,87 @@ async def check_session():
     return jsonify({"status": "ok"}), 200
 
 
+def _wants_json() -> bool:
+    """True when the caller asked for the JSON flavour of /login or /logout."""
+    return (
+        request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        or request.accept_mimetypes.best == "application/json"
+    )
+
+
+def _is_fragment_fetch() -> bool:
+    """True for the page shell's in-page fetch of a view (static/js/shell.js)."""
+    return request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+
+def _no_store(response):
+    response.headers.update(
+        {
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+    )
+    return response
+
+
+async def _credentials() -> tuple[str, str]:
+    """Username (trimmed) and password (exact) from a JSON body or a form."""
+    if request.is_json:
+        data = await request.get_json(silent=True)
+        if isinstance(data, dict):
+            username = data.get("username", "")
+            password = data.get("password", "")
+            if isinstance(username, str) and isinstance(password, str):
+                return username.strip(), password
+            return "", ""
+    form = await request.form
+    return form.get("username", "").strip(), form.get("password", "")
+
+
+def _login_failure_json(message: str, status: int, **extra):
+    body = {"success": False, "error": message, "message": message}
+    body.update(extra)
+    response = jsonify(body)
+    response.status_code = status
+    if status == 429:
+        response.headers["Retry-After"] = str(extra.get("retry_after", 0))
+    return _no_store(response)
+
+
 @app.route("/login", methods=["GET", "POST"])
 async def login():
+    wants_json = _wants_json()
+
     # If user is already logged in, redirect to index
     if session.get("logged_in"):
+        if wants_json and request.method == "POST":
+            # Same rule as the classic flow: a POST never switches a logged-in session to
+            # another account. The caller learns who is logged in and goes on to the app.
+            return _no_store(
+                jsonify(
+                    {
+                        "success": True,
+                        "already_logged_in": True,
+                        "username": session.get("username"),
+                        "role": session.get("role"),
+                        "redirect": url_for("index"),
+                    }
+                )
+            )
         return redirect(url_for("index"))
 
     if request.method == "POST":
         # Check brute-force lockout before touching DB
         if rate_limiter.is_blocked():
             remaining = rate_limiter.remaining_lockout()
-            await flash(f"Too many failed attempts. Try again in {remaining} seconds.")
+            message = f"Too many failed attempts. Try again in {remaining} seconds."
+            if wants_json:
+                return _login_failure_json(message, 429, retry_after=remaining)
+            await flash(message)
             return await render_template("login.html"), 429
 
-        username = (await request.form).get("username", "").strip()
-        password = (await request.form).get("password", "")
+        username, password = await _credentials()
 
         if await asyncio.to_thread(check_login, username, password):
             rate_limiter.record_success()
@@ -94,18 +168,35 @@ async def login():
             session["login_time"] = int(time.time())
             session.modified = True
 
+            if wants_json:
+                return _no_store(
+                    jsonify(
+                        {
+                            "success": True,
+                            "username": session.get("username"),
+                            "role": session.get("role"),
+                            "redirect": url_for("index"),
+                            # session.clear() above dropped the old token: hand out the new
+                            # one so the page does not have to ask for it.
+                            "csrf_token": generate_csrf(),
+                        }
+                    )
+                )
             return redirect(url_for("index"))
         else:
             rate_limiter.record_failure()
             left = rate_limiter.attempts_remaining()
             if left > 0:
-                await flash(
-                    f"Invalid username or password. {left} attempt(s) remaining."
-                )
+                message = f"Invalid username or password. {left} attempt(s) remaining."
             else:
-                await flash(
-                    f"Too many failed attempts. Try again in {RateLimiter.LOCKOUT} seconds."
+                message = f"Too many failed attempts. Try again in {RateLimiter.LOCKOUT} seconds."
+            if wants_json:
+                if left > 0:
+                    return _login_failure_json(message, 401, attempts_remaining=left)
+                return _login_failure_json(
+                    message, 429, retry_after=rate_limiter.remaining_lockout()
                 )
+            await flash(message)
             return await render_template("login.html"), 401
 
     # Render login page with no-cache headers
@@ -134,27 +225,47 @@ async def login():
     #     directives present on this header.
     # /logout below is the state-ending action; see the comment there for
     # what replaced the old "cache", "cookies", "storage" header.
-    if _request_is_secure():
+    #
+    # 5.48: NOT on the page shell's in-page fetch of this view (X-Requested-With:
+    # XMLHttpRequest). The header makes the browser reload the page that receives it, which
+    # would undo the no-refresh logout it is part of. A scanner or a browser navigation
+    # never sends that request header, so the header stays exactly where it was.
+    if _request_is_secure() and not _is_fragment_fetch():
         response.headers["Clear-Site-Data"] = '"executionContexts"'
     return response
 
 
-@app.route("/logout")
+async def _end_session() -> None:
+    """Everything a logout does on the server, shared by GET and POST /logout."""
+    # Clean up any upload chunks
+    session_id = session.get("session_id")
+    if session_id:
+        # An rmtree per tracked upload: worker thread since 5.44. session / request
+        # stay on the loop (the value is passed in as a plain string).
+        await asyncio.to_thread(chunk_tracker.cleanup_session_chunks, session_id)
+
+    # End the session on the SERVER too (5.17): a copy of the cookie taken before this
+    # logout is refused from now on. Must run before session.clear(); never raises.
+    revoke_current_session()
+
+    # Clear the session completely
+    session.clear()
+
+
+@app.route("/logout", methods=["GET", "POST"])
 async def logout():
+    # POST (5.48, CSRF-protected like every state-changing route): the in-page logout of the
+    # page shell. JSON answer, no redirect, no Clear-Site-Data (see /login above); the page
+    # tears itself down in JavaScript. GET stays as the classic, fully-clearing logout.
+    in_page = request.method == "POST" and _wants_json()
     try:
-        # Clean up any upload chunks
-        session_id = session.get("session_id")
-        if session_id:
-            # An rmtree per tracked upload: worker thread since 5.44. session / request
-            # stay on the loop (the value is passed in as a plain string).
-            await asyncio.to_thread(chunk_tracker.cleanup_session_chunks, session_id)
+        await _end_session()
 
-        # End the session on the SERVER too (5.17): a copy of the cookie taken before this
-        # logout is refused from now on. Must run before session.clear(); never raises.
-        revoke_current_session()
-
-        # Clear the session completely
-        session.clear()
+        if in_page:
+            response = jsonify({"success": True, "redirect": url_for("login")})
+            response.delete_cookie("cloudinator_session")
+            response.delete_cookie("session_check")
+            return _no_store(response)
 
         # Create response with session-clearing headers
         response = await make_response(redirect(url_for("login", logged_out="1")))
@@ -162,13 +273,7 @@ async def logout():
         response.delete_cookie("session_check")
 
         # Add cache-control headers to prevent caching
-        response.headers.update(
-            {
-                "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
-                "Pragma": "no-cache",
-                "Expires": "0",
-            }
-        )
+        _no_store(response)
 
         # Clear-Site-Data: "executionContexts" only (4.89). The old
         # '"cache", "cookies", "storage"' made the browser do synchronous
@@ -188,4 +293,9 @@ async def logout():
         # Still try to end and clear the session even if other operations fail
         revoke_current_session()
         session.clear()
+        if in_page:
+            return (
+                _no_store(jsonify({"success": False, "redirect": url_for("login")})),
+                500,
+            )
         return redirect(url_for("login", logged_out="1"))
