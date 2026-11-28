@@ -142,22 +142,41 @@ def test_a_database_error_never_blocks_the_logout():
     _auth(_login(), Broken())["revoke_current_session"]()  # must not raise
 
 
-def test_the_logout_route_revokes_before_it_clears_the_session():
-    source = _source("routes/login.py")
-    logout = next(
+def _route_function(tree, name):
+    return next(
         n
-        for n in ast.parse(source).body
-        if isinstance(n, ast.AsyncFunctionDef) and n.name == "logout"
+        for n in tree.body
+        if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef)) and n.name == name
     )
-    try_block = logout.body[0]
-    assert isinstance(try_block, ast.Try)
-    calls = []
-    for node in ast.walk(ast.Module(body=try_block.body, type_ignores=[])):
-        if isinstance(node, ast.Call):
-            calls.append((node.lineno, ast.unparse(node.func)))
-    revoke = [line for line, name in calls if name == "revoke_current_session"]
-    clear = [line for line, name in calls if name == "session.clear"]
-    assert revoke and clear and min(revoke) < min(clear)
+
+
+def _call_lines(node):
+    return [
+        (n.lineno, ast.unparse(n.func))
+        for n in ast.walk(node)
+        if isinstance(n, ast.Call)
+    ]
+
+
+def test_the_logout_route_revokes_before_it_clears_the_session():
+    # 5.48: GET /logout (classic) and POST /logout (the in-page logout of the page shell) end
+    # the session through ONE function, _end_session(). Revoking on the server must come
+    # before clearing the cookie there, and also in the route's own error path.
+    tree = ast.parse(_source("routes/login.py"))
+    for name in ("_end_session", "logout"):
+        calls = _call_lines(_route_function(tree, name))
+        revoke = [line for line, called in calls if called == "revoke_current_session"]
+        clear = [line for line, called in calls if called == "session.clear"]
+        assert revoke and clear and min(revoke) < min(clear), name
+
+    logout = _route_function(tree, "logout")
+    try_block = next(n for n in logout.body if isinstance(n, ast.Try))
+    ended = [
+        n
+        for n in ast.walk(ast.Module(body=try_block.body, type_ignores=[]))
+        if isinstance(n, ast.Await) and ast.unparse(n.value) == "_end_session()"
+    ]
+    assert ended, "logout() must end the session through _end_session() inside its try"
 
 
 # ---- the two database methods, on a real SQLite file ----------------------------------

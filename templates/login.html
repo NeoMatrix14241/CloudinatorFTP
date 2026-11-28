@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="robots" content="noindex, nofollow">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>Login - Cloudinator FTP</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/all.min.css') }}"
         integrity="sha384-qrALq7+6jBOZIQsNnT6xGkMDru64qD6uTlDra39xrt2SoXl4pO3FX6Roz/RpR/BS" />
@@ -12,9 +13,10 @@
         integrity="sha384-LfElkWDWZyegzViJSQCRZf0jX/RTeH8OCZo0Cx4c/XnzZXtaLRgVc3IBbnUe+m9H" />
     <link rel="icon" href="{{ url_for('static', filename='icons/icon.webp') }}" type="image/webp"
         integrity="sha384-mTiIzUOmh2SfP6u6yyTJHcQnVqctGnma9JMZGwuIrFkKfjVtO7Ok8CMTjA8szFUp" />
+    <script src="{{ url_for('static', filename='js/shell.js') }}" integrity="sha384-2kI731Gx+FQZmRM+I6crg9v+Tsw5NtAivcMpOTNRiJFla8L/apw175WQyeqkIECH"></script>
 </head>
 
-<body>
+<body data-shell-view="login">
     <div class="login-container">
         <div class="login-header">
             <h2><i class="fas fa-cloud-upload-alt"></i> The Cloudinator</h2>
@@ -64,9 +66,9 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/login.js') }}"
-        integrity="sha384-1qzK0/5tSwZbb6wsOZwO5kI0j4Gq2TLlxKRR4ksJdTVrpgYAtJ0aGs+xKluj9UM4"></script>
-    <audio id="bgMusic" autoplay loop preload="auto">
+    <script src="{{ url_for('static', filename='js/login.js') }}" data-shell="page"
+        integrity="sha384-/Ea7YQ4STicG7H9iQ4lQ4arJxOgx4chxgv/FXGQbEsnaHNJowNa6shJFiKRCFBMX"></script>
+    <audio id="bgMusic" data-shell-persist autoplay loop preload="auto">
         <source src="{{ url_for('static', filename='audio/bg_mus.opus') }}" type="audio/ogg">
     </audio>
     <script src="{{ url_for('static', filename='js/bg_audio.js') }}"
